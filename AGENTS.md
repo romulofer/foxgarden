@@ -1,0 +1,173 @@
+# AGENTS.md
+
+Guidance for AI coding agents working in this repository. See `README.md` for
+a human-facing overview.
+
+## Constraints
+
+- **Do not author commits. Do not push upstream.** (Carried over from
+  `CLAUDE.md` — these apply regardless of which agent is working here.)
+- `PLAN.md` and `SPEC.md` are intentionally gitignored (local planning docs,
+  not part of the published repo). Don't assume they exist in a fresh clone.
+
+## Commands
+
+```sh
+cargo build --workspace        # build everything
+cargo test --workspace         # run all tests (core + syntax + app)
+cargo run -p app               # launch the editor
+cargo test -p <core|syntax|app>  # test a single crate
+```
+
+A stable Rust toolchain is required (`rustup` if none is installed). This
+project was scaffolded against Rust 1.97 / edition 2024.
+
+## Architecture
+
+Three-crate workspace, dependency direction is strict:
+
+```
+core  <-  syntax  <-  app
+```
+
+- **`crates/core`** (package name `fg-core`, crate name `fg_core` — named to
+  avoid colliding with Rust's built-in `core` crate): `Document`, `Project`/
+  `FileNode`, `EditorState`, `Diagnostic`. No `egui` or `tree-sitter`
+  dependency — everything here is unit-testable headless. Dirty state is
+  *derived* (`buffer != saved_buffer`), never a manually toggled flag.
+- **`crates/syntax`**: wraps tree-sitter. `IncrementalParser` owns a
+  `tree_sitter::Parser` + cached `Tree` per document. `highlight_spans()` and
+  `syntax_errors()` walk/query that tree. `diff_edit(old, new)` computes an
+  `InputEdit` from two full-text snapshots by common-prefix/suffix diffing —
+  needed because egui's `TextEdit` hands back a plain `String`, not a
+  structured edit op.
+- **`crates/app`**: eframe/egui shell. `app.rs` owns `EditorState` plus a
+  `parsers: Vec<IncrementalParser>` kept **index-aligned** with
+  `state.open_tabs` — every tab open/close must update both in lockstep, or
+  the wrong parser ends up attached to the wrong document. `editor_widget.rs`
+  is the custom highlighted/squiggled text widget (SPEC.md §5.4–5.5).
+
+## Non-obvious gotchas (learned the hard way this session)
+
+- **egui 0.35's `App` trait is not the "classic" egui API you'll find in most
+  tutorials/training data.** `eframe::App::ui` takes `&mut egui::Ui` directly
+  — there is no `fn update(&mut self, ctx: &Context, frame: &mut Frame)`
+  anymore. Likewise `egui::SidePanel` no longer exists as its own type; use
+  the unified `egui::Panel::left(id)` / `::right(id)` / `::top(id)` /
+  `::bottom(id)`, and `.show(ui, ...)` (not `.show_inside`, which is
+  deprecated). `CentralPanel` is unchanged. If something from an older egui
+  example doesn't compile, check `~/.cargo/registry/src/*/egui-<version>/src/`
+  directly rather than trusting memorized API shape.
+- **Kotlin tree-sitter grammar crate**: plain `tree-sitter-kotlin` (0.3.x)
+  only supports `tree-sitter` 0.21–0.22 and conflicts (via Cargo's `links =
+  "tree-sitter"` uniqueness rule) with `tree-sitter-java` 0.23+, which needs
+  `tree-sitter` 0.26. Use `tree-sitter-kotlin-ng` instead — it tracks current
+  `tree-sitter`. It also ships **no bundled highlight query**
+  (`queries/highlights_kotlin.scm` here is hand-written); Java's grammar
+  crate does bundle one (`tree_sitter_java::HIGHLIGHTS_QUERY`).
+- **`QueryCursor::captures` returns a `StreamingIterator`**, not a normal
+  `Iterator` — `use tree_sitter::StreamingIterator` and call `.next()` in a
+  `while let` loop, not a `for` loop.
+- **One-frame highlighting lag is expected and fine.** The editor widget's
+  layouter runs against the tree from *before* the current frame's edit
+  (reparsing happens after `response.changed()` is known). Highlighting and
+  squiggles catch up on the next frame. Don't try to eliminate this lag; it's
+  the standard immediate-mode-editor tradeoff, and SPEC.md's "recomputed on
+  re-parse" language already assumes it.
+- **New tabs must get their initial diagnostics computed at open time**, not
+  only on first edit — `Document::open` never runs `syntax_errors` itself
+  (core has no `syntax` dependency), so `app::open_parser_for` does it after
+  the first `parser.parse(...)`. Skipping this means a file opened with a
+  pre-existing syntax error shows no squiggle until the user types something
+  (a real bug caught via a screenshot smoke test during initial
+  implementation — easy to reintroduce if this helper is bypassed).
+- **Bracket/quote auto-close cannot be implemented by diffing
+  `old_text`/`text` full-buffer snapshots** — a prefix/suffix diff of the two
+  strings is ambiguous in exactly the case it needs to detect: typing a
+  closer immediately before an identical existing one (e.g. `(a|)` -> type
+  `)`) produces the same two strings as appending a new `)` at the end,
+  so the diff can't tell them apart. `editor_widget::apply_auto_pair` instead
+  uses egui's real post-edit cursor position (`TextEditOutput.cursor_range`)
+  to locate the just-typed character unambiguously. `syntax::diff_edit` is
+  still used afterward, but only to feed the *already-corrected* text to
+  `IncrementalParser::reparse` — not to detect the correction itself.
+- **Auto-pair and auto-indent insert on opposite sides of the cursor, and
+  only one of them needs manual cursor correction because of it.** Auto-pair
+  (`apply_auto_pair`) always inserts its closer *after* the cursor's current
+  char-index, so that index stays valid without touching anything else.
+  Auto-indent (`apply_auto_indent`) inserts whitespace *before* where egui
+  already placed the cursor (right after the newline), so skipping the
+  cursor fix-up there would leave the cursor sitting before the
+  auto-inserted indentation instead of after it. `editor_widget::show` fixes
+  this via `output.state.cursor.set_char_range(...)` +
+  `output.state.store(ui.ctx(), id)` — the exact pattern from egui's own
+  `TextEditState` doc example. If you add another edit-time correction,
+  check which side of the cursor it inserts on before assuming either
+  approach (or lack of one) carries over.
+- **eframe's file-backed persistence stores a plain `HashMap<String, String>`
+  as RON, which means `{ "key": "value" }` (map/brace syntax), not
+  `("key": "value")` (RON's tuple/struct syntax) — easy to get backwards when
+  hand-editing or seeding `~/.local/share/foxgarden/app.ron` for testing.
+  Wrong syntax fails silently: `ron::de::from_reader` errors are swallowed
+  and treated as "no stored value" rather than a visible error, so a bad seed
+  file just looks like persistence isn't working at all, with no panic or
+  log to point at the real cause.
+- **The window icon (`main.rs`'s `ICON_PNG`) is bundled from a small resized
+  copy, not the pristine source `icon.png` — but this is a likely fix, not a
+  confirmed one.** winit's X11 backend writes the icon via `_NET_WM_ICON`
+  (an X property holding raw ARGB pixels), and the call to set it is wrapped
+  in `.ignore_error()` on the egui-winit side — so if the property write
+  fails (plausible for the source `icon.png`, 1024x1024 / ~4MB once expanded
+  to ARGB), the window silently falls back to the WM's default icon with
+  **no error, panic, or log anywhere**. `xprop -id <window> _NET_WM_ICON`
+  came back empty both before *and after* switching to the resized
+  `icon_256.png` in this sandbox's nested X11 setup — so the size theory is
+  unverified here; it needs checking on a real desktop (it was seen showing
+  a generic fallback icon on the user's real Linux Mint/Cinnamon session
+  before the resize). If it's still wrong after that, look past property
+  size at whether this sandbox's X server/WM simply doesn't apply
+  `_NET_WM_ICON` at all, rather than assuming the size fix is sufficient.
+  Regenerate `icon_256.png` via `convert icon.png -resize 256x256
+  icon_256.png` if the source art changes.
+- **A `grammar.js` literal string is not proof that `tree_sitter::Query` can
+  match it.** `queries/highlights_kotlin.scm` originally listed `"break"`,
+  `"continue"`, and `"reified"` as keyword tokens — all three appear as
+  literal strings in `tree-sitter-kotlin-ng`'s `grammar.js` source, but none
+  of them survive as matchable node types in the grammar crate's *compiled*
+  parser (no corresponding entry in `node-types.json` either). `Query::new`
+  panicked with "Invalid node type" the first time the app actually rendered
+  a `.kt` file — none of the existing tests caught it because
+  `highlight_spans_cover_expected_keyword_string_comment_ranges` only
+  exercised Java. If you touch either language's highlight query, bisect
+  candidate tokens individually through `tree_sitter::Query::new(&lang,
+  "(\"token\")")` rather than trusting the grammar source, and make sure
+  `crates/syntax/tests/syntax_tests.rs` has a `highlight_spans` test for
+  *each* language, not just one.
+- **JetBrains Mono is registered under a custom `FontFamily::Name(...)`, not
+  merged into `FontFamily::Monospace`** (see `fonts.rs`), so both it and
+  egui's built-in monospace font (Hack) stay independently selectable via
+  `EditorFont`. This means `egui::__run_test_ui` — which runs against a
+  fresh `Context` with an *empty* `FontDefinitions` (no families registered
+  at all beyond the hardcoded `Monospace`/`Proportional` slots) — panics
+  with `"FontFamily::Name(\"JetBrainsMono\") is not bound to any fonts"` if
+  a test passes `EditorFont::JetBrainsMono` to `editor_widget::show`. Tests
+  must pass `EditorFont::Default` instead; only real `main()` (via
+  `fonts::install`) registers the custom family.
+
+## Testing conventions
+
+- `core` and `syntax` are fully headless-testable; prefer adding coverage
+  there over the `app` crate when the logic doesn't strictly need a GUI.
+- `app` is a binary crate (no `[lib]` target), so its tests live as
+  `#[cfg(test)] mod tests` inside the relevant `src/*.rs` file, not under
+  `tests/` (integration tests there can't `use` binary-crate internals).
+- GUI widget logic (highlighting, squiggle painting) can be exercised
+  headlessly via `egui::__run_test_ui(|ui| { ... })` — it runs a real egui
+  frame without needing a window, so panics/layout bugs surface in `cargo
+  test` without any display or click-automation tooling. See
+  `crates/app/src/editor_widget.rs`'s test module for the pattern.
+- There is no click-automation tool available in this environment (no
+  `xdotool`). Verifying actual mouse-driven flows (native "Open Folder"
+  dialog, clicking a tree node) requires a human running `cargo run -p app`
+  by hand — don't claim those flows are verified without either doing that
+  or clearly disclosing that they weren't.

@@ -1,0 +1,88 @@
+# FoxGarden
+
+A light, native code editor for `.java` and `.kt` files, built entirely in Rust.
+This is checkpoint 1 of a longer-term goal: a full-featured Spring Boot IDE for
+Maven/Kotlin/Java projects. This checkpoint proves out the editor core —
+project tree, tabs, dirty-state tracking, syntax highlighting, and syntax-error
+squiggles — that later checkpoints (Maven awareness, LSP, build/run) will
+layer on top of.
+
+## Features
+
+- Menu bar: File (New File, Open Folder, Save, Close Tab, Exit), Settings
+  (Light/Dark theme), Help (About)
+- Side panel with the open project's file tree; remembers and reopens the
+  last project folder on restart
+- Create, rename, and delete files from the side panel — via the "New File…"
+  button or right-click on a file/folder (delete asks for confirmation first)
+- Files open in tabs; clicking an already-open file focuses its tab instead
+  of duplicating it
+- Dirty files show an asterisk (`*name.kt`) until saved (`Ctrl+S`)
+- Closing a dirty tab prompts to save, discard, or cancel
+- Syntax highlighting for Java and Kotlin (tree-sitter based)
+- Red squiggly underlines on syntax errors, updated live as you type
+- Auto-closing brackets and quotes (`{`, `(`, `[`, `"`, `'`)
+- Auto-indent on Enter (matches the previous line, plus one level after `{`)
+- New Java/Kotlin files get boilerplate: a class declaration named after the
+  file, plus a `package` line inferred from a Maven/Gradle-style
+  `src/main/java|kotlin` (or `src/test/...`) path
+- Editor font is selectable (Settings > Font); defaults to bundled JetBrains
+  Mono (SIL OFL 1.1 — license included alongside the font under
+  `crates/app/assets/fonts/`)
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Language | Rust (backend and frontend) |
+| GUI | [`egui`](https://github.com/emilk/egui) + [`eframe`](https://github.com/emilk/egui) |
+| Text buffer | [`ropey`](https://github.com/cessen/ropey) |
+| Parsing | [`tree-sitter`](https://github.com/tree-sitter/tree-sitter) (Java + Kotlin grammars) |
+| File dialogs | [`rfd`](https://github.com/PolyMeilex/rfd) |
+
+## Project structure
+
+```
+foxgarden/
+  crates/
+    core/     # Document, Project, EditorState, Diagnostic — no GUI dependency
+    syntax/   # tree-sitter integration: parsing, highlighting, error extraction
+    app/      # eframe/egui application: side panel, tabs, editor widget
+```
+
+`core` has no dependency on the other two crates and is fully unit-testable
+headless. `syntax` depends on `core` for its `Document`/`Diagnostic` types.
+`app` is a thin rendering layer over both.
+
+## Building and running
+
+Requires a stable Rust toolchain (install via [rustup](https://rustup.rs) if
+you don't have one).
+
+```sh
+cargo build --workspace
+cargo run -p app
+```
+
+## Testing
+
+```sh
+cargo test --workspace
+```
+
+Automated tests cover `core` (data model, dirty-state, tab lifecycle) and
+`syntax` (parsing, incremental reparse, highlighting, error detection)
+headlessly. The `app` crate has a handful of headless widget tests (via
+egui's own test harness) that exercise highlighting and error-squiggle
+rendering without needing a window. Full end-to-end GUI interaction (opening
+folders, clicking files, editing) is verified manually.
+
+## Non-goals (checkpoint 1)
+
+Maven awareness, build/run, LSP integration, deprecation warnings, git
+integration, and autosave/crash-recovery are explicitly out of scope for this
+checkpoint.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

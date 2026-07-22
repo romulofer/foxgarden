@@ -1,0 +1,18 @@
+# Cargo build output
+/target
+**/*.rs.bk
+*.pdb
+
+# Checkpoint planning docs (local only, not tracked)
+PLAN.md
+SPEC.md
+
+# Claude Code local (personal) settings
+.claude/settings.local.json
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# OS cruft
+.DS_Store

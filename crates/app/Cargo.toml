@@ -1,0 +1,15 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.35.0", features = ["persistence"] }
+egui = "0.35.0"
+fg-core = { path = "../core" }
+rfd = "0.17.2"
+ropey = "1.6.1"
+syntax = { path = "../syntax" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
