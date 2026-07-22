@@ -1,11 +1,7 @@
 mod app;
-mod editor_widget;
-mod fonts;
-mod menu_bar;
-mod multi_cursor;
-mod side_panel;
-mod tabs;
-mod theme;
+mod panels;
+mod style;
+mod widgets;
 
 use app::FoxGardenApp;
 
@@ -27,7 +23,7 @@ fn main() -> eframe::Result {
         "FoxGarden",
         native_options,
         Box::new(|cc| {
-            fonts::install(&cc.egui_ctx);
+            style::fonts::install(&cc.egui_ctx);
             Ok(Box::new(FoxGardenApp::new(cc)))
         }),
     )

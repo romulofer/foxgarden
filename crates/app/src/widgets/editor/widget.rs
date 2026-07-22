@@ -1,14 +1,14 @@
-use std::ops::Range;
-
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Color32, Event, FontId, Key, Shape, Stroke};
-use fg_core::{Diagnostic, Document};
+use egui::{Event, FontId, Key};
+use fg_core::Document;
 use ropey::Rope;
 use syntax::IncrementalParser;
 
-use crate::fonts::EditorFont;
-use crate::multi_cursor::{self, MultiEditOp};
-use crate::theme;
+use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte};
+use super::multi_cursor::{self, MultiEditOp};
+use super::painting::{paint_diagnostics, paint_extra_selections};
+use crate::style::fonts::EditorFont;
+use crate::style::theme;
 
 fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
     TextFormat {
@@ -26,11 +26,13 @@ fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextF
     }
 }
 
-/// Renders `doc`'s buffer as an editable, syntax-highlighted text area with
-/// squiggly underlines under its syntax errors, keeping `parser`'s
+/// Renders `doc`'s buffer as an editable text area, keeping `parser`'s
 /// incremental tree in sync with edits (SPEC.md sections 5.4 and 5.5).
-pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParser, editor_font: EditorFont) {
-    let language = doc.language;
+/// `parser` is `None` for files with no recognized language (anything other
+/// than `.java`/`.kt`) — such files still open and edit normally, they just
+/// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
+/// are language-agnostic and keep working regardless.
+pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<IncrementalParser>, editor_font: EditorFont) {
     let old_text = doc.buffer.to_string();
     let mut text = old_text.clone();
     // A stable id (rather than the default position-based auto id) keeps
@@ -61,7 +63,8 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
         let font_id = FontId::new(14.0, editor_font.family());
         let dark_mode = ui.visuals().dark_mode;
 
-        if let Some(tree) = parser.tree() {
+        let tree_and_language = parser.as_ref().and_then(|p| p.tree().map(|tree| (tree, p.language())));
+        if let Some((tree, language)) = tree_and_language {
             let spans = syntax::highlight_spans(tree, &old_text, language);
             let mut cursor = 0usize;
             for (range, scope) in spans {
@@ -117,10 +120,12 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
 
             let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
 
-            let edit = syntax::diff_edit(&old_text, &new_text);
-            parser.reparse(&new_text, edit);
             doc.buffer = Rope::from_str(&new_text);
-            doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+            if let Some(parser) = parser.as_mut() {
+                let edit = syntax::diff_edit(&old_text, &new_text);
+                parser.reparse(&new_text, edit);
+                doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+            }
 
             manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
             doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
@@ -151,10 +156,12 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
             apply_auto_pair(&old_text, &text, cursor_char)
         };
 
-        let edit = syntax::diff_edit(&old_text, &corrected);
-        parser.reparse(&corrected, edit);
         doc.buffer = Rope::from_str(&corrected);
-        doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+        if let Some(parser) = parser.as_mut() {
+            let edit = syntax::diff_edit(&old_text, &corrected);
+            parser.reparse(&corrected, edit);
+            doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+        }
     }
 
     let modifiers = ui.input(|i| i.modifiers);
@@ -262,204 +269,6 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
     )
 }
 
-/// Auto-indents after Enter: matches the new line's indentation to the line
-/// just ended, plus one extra level if that line ends in `{`. Only fires on
-/// a pure single-character insertion of `\n` (same guard as
-/// `apply_auto_pair`, for the same reasons — pastes/IME/selection-replace
-/// are left alone). Returns `(text, None)` unchanged if it doesn't apply.
-fn apply_auto_indent(old_text: &str, text: &str, cursor_char: Option<usize>) -> (String, Option<usize>) {
-    let old_chars = old_text.chars().count();
-    let new_chars = text.chars().count();
-    if new_chars != old_chars + 1 {
-        return (text.to_string(), None);
-    }
-    let Some(cursor_char) = cursor_char.filter(|&c| c > 0 && c <= new_chars) else {
-        return (text.to_string(), None);
-    };
-
-    let inserted_start = char_to_byte(text, cursor_char - 1);
-    let inserted_end = char_to_byte(text, cursor_char);
-    let inserted = text[inserted_start..inserted_end]
-        .chars()
-        .next()
-        .expect("cursor_char > 0 guarantees a preceding char");
-    if inserted != '\n' {
-        return (text.to_string(), None);
-    }
-
-    // The old cursor position (before Enter) is where the line being ended
-    // sits; find that line's start and its content up to the cursor.
-    let old_cursor_char = cursor_char - 1;
-    let old_cursor_byte = char_to_byte(old_text, old_cursor_char);
-    let line_start_byte = old_text[..old_cursor_byte].rfind('\n').map_or(0, |i| i + 1);
-    let current_line_before_cursor = &old_text[line_start_byte..old_cursor_byte];
-
-    let leading_ws_len = current_line_before_cursor
-        .find(|c: char| c != ' ' && c != '\t')
-        .unwrap_or(current_line_before_cursor.len());
-    let leading_ws = &current_line_before_cursor[..leading_ws_len];
-    let extra_indent = if current_line_before_cursor.trim_end().ends_with('{') {
-        "    "
-    } else {
-        ""
-    };
-    let new_indent = format!("{leading_ws}{extra_indent}");
-    if new_indent.is_empty() {
-        return (text.to_string(), None);
-    }
-
-    let corrected = format!("{}{new_indent}{}", &text[..inserted_end], &text[inserted_end..]);
-    let new_cursor_char = cursor_char + new_indent.chars().count();
-    (corrected, Some(new_cursor_char))
-}
-
-pub(crate) fn char_to_byte(text: &str, char_idx: usize) -> usize {
-    text.char_indices()
-        .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
-}
-
-/// Auto-closes brackets/quotes: typing an opener (`{`, `(`, `[`, `"`, `'`)
-/// inserts its matching closer right after the cursor, and typing a closer
-/// that's already sitting right there just types over it instead of
-/// duplicating it. Only fires on a pure single-character insertion (so
-/// pastes, multi-char IME commits, and replacing a selection are untouched).
-///
-/// Deliberately locates the just-typed character via `cursor_char` (egui's
-/// own post-edit cursor position) rather than by diffing `old_text`/`text`:
-/// a prefix/suffix diff of the two full-text snapshots is ambiguous exactly
-/// in the case this needs to detect — typing a closer immediately before an
-/// identical existing one (e.g. `(a|)` -> type `)`) is indistinguishable, by
-/// pure text diffing, from appending a new `)` at the end. Only the real
-/// cursor position disambiguates it.
-fn apply_auto_pair(old_text: &str, text: &str, cursor_char: Option<usize>) -> String {
-    let old_chars = old_text.chars().count();
-    let new_chars = text.chars().count();
-    if new_chars != old_chars + 1 {
-        return text.to_string();
-    }
-    let Some(cursor_char) = cursor_char.filter(|&c| c > 0 && c <= new_chars) else {
-        return text.to_string();
-    };
-
-    let inserted_start = char_to_byte(text, cursor_char - 1);
-    let inserted_end = char_to_byte(text, cursor_char);
-    let inserted = text[inserted_start..inserted_end]
-        .chars()
-        .next()
-        .expect("cursor_char > 0 guarantees a preceding char");
-
-    let old_char_at_same_pos = old_text.chars().nth(cursor_char - 1);
-
-    match inserted {
-        '{' | '(' | '[' => {
-            let closer = match inserted {
-                '{' => '}',
-                '(' => ')',
-                _ => ']',
-            };
-            format!("{}{closer}{}", &text[..inserted_end], &text[inserted_end..])
-        }
-        '"' | '\'' if old_char_at_same_pos == Some(inserted) => {
-            // Typing over an existing quote: drop the duplicate, cursor
-            // effectively moves past the original.
-            format!("{}{}", &text[..inserted_start], &text[inserted_end..])
-        }
-        '"' | '\'' => format!("{}{inserted}{}", &text[..inserted_end], &text[inserted_end..]),
-        '}' | ')' | ']' if old_char_at_same_pos == Some(inserted) => {
-            format!("{}{}", &text[..inserted_start], &text[inserted_end..])
-        }
-        _ => text.to_string(),
-    }
-}
-
-fn paint_diagnostics(
-    ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
-    text: &str,
-    diagnostics: &[Diagnostic],
-) {
-    let painter = ui.painter();
-    let squiggle_color = theme::error_squiggle(ui.visuals().dark_mode);
-    for diag in diagnostics {
-        let start = diag.range.start.min(text.len());
-        let end = diag.range.end.min(text.len()).max(start);
-        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-            continue;
-        }
-
-        let char_start = text[..start].chars().count();
-        let char_end = text[..end].chars().count().max(char_start + 1);
-
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
-        let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
-
-        let top = output.galley_pos.y + start_rect.top();
-        let y = output.galley_pos.y + start_rect.bottom();
-        let x_start = output.galley_pos.x + start_rect.left();
-        let x_end = (output.galley_pos.x + end_rect.left()).max(x_start + 4.0);
-
-        paint_squiggle(painter, y, x_start, x_end, squiggle_color);
-
-        // Sense::hover() only — this must not steal clicks/drags from the
-        // TextEdit underneath, just report when the pointer is sitting over
-        // this squiggle so its message can show as a tooltip.
-        let hover_rect = egui::Rect::from_min_max(egui::pos2(x_start, top), egui::pos2(x_end, y));
-        let id = egui::Id::new(("diagnostic_tooltip", start, end));
-        ui.interact(hover_rect, id, egui::Sense::hover())
-            .on_hover_text(&diag.message);
-    }
-}
-
-fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, color: Color32) {
-    let amplitude = 2.0;
-    let step = 3.0;
-    let mut points = vec![egui::pos2(x_start, y)];
-    let mut x = x_start;
-    let mut up = true;
-    while x < x_end {
-        x = (x + step).min(x_end);
-        let yy = if up { y - amplitude } else { y + amplitude };
-        points.push(egui::pos2(x, yy));
-        up = !up;
-    }
-    painter.add(Shape::line(points, Stroke::new(1.5, color)));
-}
-
-/// Paints the Ctrl+D secondary cursors/selections: a thin caret for a bare
-/// position, or a translucent rect for a claimed occurrence — same
-/// `galley.pos_from_cursor` technique `paint_diagnostics` uses, just
-/// char-index based instead of byte based since `extra_selections` is
-/// already in char space.
-fn paint_extra_selections(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, extra_selections: &[Range<usize>]) {
-    let painter = ui.painter();
-    let caret_color = ui.visuals().text_cursor.stroke.color;
-    let selection_color = ui.visuals().selection.bg_fill;
-
-    for range in extra_selections {
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(range.start));
-        let y_top = output.galley_pos.y + start_rect.top();
-        let y_bottom = output.galley_pos.y + start_rect.bottom();
-        let x_start = output.galley_pos.x + start_rect.left();
-
-        if range.is_empty() {
-            painter.line_segment(
-                [egui::pos2(x_start, y_top), egui::pos2(x_start, y_bottom)],
-                Stroke::new(1.5, caret_color),
-            );
-        } else {
-            let end_rect = output.galley.pos_from_cursor(CCursor::new(range.end));
-            let x_end = output.galley_pos.x + end_rect.left();
-            painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(x_start, y_top), egui::pos2(x_end, y_bottom)),
-                0.0,
-                selection_color,
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,111 +282,14 @@ mod tests {
         (dir, doc)
     }
 
-    #[test]
-    fn enter_matches_previous_line_indentation() {
-        let old = "    int x = 1;";
-        let new = "    int x = 1;\n";
-        let cursor_char = new.chars().count(); // cursor right after the newline
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
-        assert_eq!(corrected, "    int x = 1;\n    ");
-        assert_eq!(new_cursor, Some(cursor_char + 4));
-    }
-
-    #[test]
-    fn enter_after_open_brace_adds_one_extra_indent_level() {
-        let old = "public class Foo {";
-        let new = "public class Foo {\n";
-        let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
-        assert_eq!(corrected, "public class Foo {\n    ");
-        assert_eq!(new_cursor, Some(cursor_char + 4));
-    }
-
-    #[test]
-    fn enter_after_open_brace_stacks_on_existing_indentation() {
-        let old = "    public void foo() {";
-        let new = "    public void foo() {\n";
-        let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
-        assert_eq!(corrected, "    public void foo() {\n        ");
-        assert_eq!(new_cursor, Some(cursor_char + 8));
-    }
-
-    #[test]
-    fn enter_on_unindented_line_with_no_brace_is_a_no_op() {
-        let old = "foo();";
-        let new = "foo();\n";
-        let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
-        assert_eq!(corrected, new);
-        assert_eq!(new_cursor, None);
-    }
-
-    #[test]
-    fn non_newline_insertion_is_left_to_auto_pair() {
-        let (corrected, cursor) = apply_auto_indent("foo ", "foo {", Some(5));
-        assert_eq!(corrected, "foo {");
-        assert_eq!(cursor, None);
-    }
-
-    #[test]
-    fn typing_opener_inserts_matching_closer() {
-        assert_eq!(apply_auto_pair("foo ", "foo {", Some(5)), "foo {}");
-        assert_eq!(apply_auto_pair("", "(", Some(1)), "()");
-        assert_eq!(apply_auto_pair("x", "x[", Some(2)), "x[]");
-    }
-
-    #[test]
-    fn typing_quote_inserts_matching_quote() {
-        assert_eq!(apply_auto_pair("", "\"", Some(1)), "\"\"");
-        assert_eq!(apply_auto_pair("", "'", Some(1)), "''");
-    }
-
-    #[test]
-    fn typing_closer_over_existing_closer_skips_duplicate() {
-        // Cursor sits right before the existing closer; user types the same
-        // closer. This is the primary real-world case (type `(`, it
-        // auto-closes to `()` with the cursor between them, then the user
-        // types `)` to move past it) — and the reason this function uses
-        // egui's real post-edit cursor position rather than diffing
-        // `old_text`/`text`: with old="(a)" / new="(a))", a pure text diff
-        // can't tell "typed `)` right before the existing one" apart from
-        // "appended a new `)` at the end", since both produce the same two
-        // strings. Only the cursor's actual position (3, not 4) disambiguates.
-        assert_eq!(apply_auto_pair("(a)", "(a))", Some(3)), "(a)");
-        assert_eq!(apply_auto_pair("{}", "{}}", Some(2)), "{}");
-        assert_eq!(apply_auto_pair("[]", "[]]", Some(2)), "[]");
-    }
-
-    #[test]
-    fn typing_quote_over_existing_quote_skips_duplicate() {
-        assert_eq!(apply_auto_pair("\"\"", "\"\"\"", Some(2)), "\"\"");
-    }
-
-    #[test]
-    fn typing_closer_at_end_of_buffer_with_no_existing_pair_just_inserts_it() {
-        assert_eq!(apply_auto_pair("foo ", "foo )", Some(5)), "foo )");
-        assert_eq!(apply_auto_pair("foo ", "foo }", Some(5)), "foo }");
-    }
-
-    #[test]
-    fn typing_closer_appended_after_an_unrelated_existing_closer_is_not_confused_for_skip_over() {
-        // "(a)" with cursor at the very end (position 3, after the existing
-        // `)`), typing another `)` — this should NOT be treated as
-        // skip-over, since the cursor isn't sitting right before the
-        // existing closer.
-        assert_eq!(apply_auto_pair("(a)", "(a))", Some(4)), "(a))");
-    }
-
-    #[test]
-    fn replacing_a_selection_is_left_untouched() {
-        // new_chars != old_chars + 1 -> not a pure single-char insertion.
-        assert_eq!(apply_auto_pair("foo bar", "foo {", None), "foo {");
-    }
-
-    #[test]
-    fn multi_char_paste_is_left_untouched() {
-        assert_eq!(apply_auto_pair("foo", "foo({", None), "foo({");
+    /// Builds a freshly parsed `Some(IncrementalParser)`, matching what
+    /// `panels::tabs::open_parser_for` produces for any file with a
+    /// recognized language — `show`'s tests always exercise the "has a
+    /// language" path unless a test says otherwise.
+    fn parsed(language: Language, source: &str) -> Option<IncrementalParser> {
+        let mut parser = IncrementalParser::new(language);
+        parser.parse(source);
+        Some(parser)
     }
 
     #[test]
@@ -586,8 +298,7 @@ mod tests {
             "public class Hello {\n    // greeting\n    String greet() { return \"hi\"; }\n}\n",
             "Hello.java",
         );
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
         egui::__run_test_ui(|ui| {
             // egui::__run_test_ui uses an empty FontDefinitions with no
@@ -607,9 +318,8 @@ mod tests {
             "public class Hello {\n    public String greet() {\n        return \"Hello!\";\n    }\n",
             "Broken.java",
         );
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
-        doc.diagnostics = syntax::syntax_errors(parser.tree().unwrap());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+        doc.diagnostics = syntax::syntax_errors(parser.as_ref().unwrap().tree().unwrap());
         assert!(
             !doc.diagnostics.is_empty(),
             "fixture should contain a deliberate syntax error"
@@ -623,10 +333,32 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
+        let (_dir, mut doc) = open_fixture("just some notes, no code here", "notes.txt");
+        assert_eq!(doc.language, None);
+        let mut parser: Option<IncrementalParser> = None;
+
+        egui::__run_test_ui(|ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default);
+        });
+
+        assert!(doc.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn auto_pair_still_works_for_a_plain_text_file_with_no_parser() {
+        let (_dir, mut doc) = open_fixture("", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame(&mut doc, &mut parser, vec![egui::Event::Text("{".to_string())]);
+
+        assert_eq!(doc.buffer.to_string(), "{}");
+    }
+
+    #[test]
     fn simulated_edit_updates_diagnostics_and_dirty_state() {
         let (_dir, mut doc) = open_fixture("public class Hello {}\n", "Hello.java");
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
         assert!(!doc.is_dirty());
 
         // Directly exercise the same edit -> reparse -> diagnostics path
@@ -635,9 +367,10 @@ mod tests {
         let old_text = doc.buffer.to_string();
         let new_text = "public class Hello {\n".to_string(); // drop the closing brace
         let edit = syntax::diff_edit(&old_text, &new_text);
-        parser.reparse(&new_text, edit);
+        let inner_parser = parser.as_mut().unwrap();
+        inner_parser.reparse(&new_text, edit);
         doc.buffer = Rope::from_str(&new_text);
-        doc.diagnostics = syntax::syntax_errors(parser.tree().unwrap());
+        doc.diagnostics = syntax::syntax_errors(inner_parser.tree().unwrap());
 
         assert!(doc.is_dirty());
         assert!(!doc.diagnostics.is_empty());
@@ -657,7 +390,7 @@ mod tests {
     // focus. `show`'s `.id_salt(doc.path...)` makes the widget's id
     // reproducible outside of `show` itself, so a test can request focus on
     // exactly that id before calling `show`.
-    fn focused_frame(doc: &mut Document, parser: &mut IncrementalParser, events: Vec<egui::Event>) {
+    fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalParser>, events: Vec<egui::Event>) {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
         let raw_input = egui::RawInput { events, ..Default::default() };
@@ -687,8 +420,7 @@ mod tests {
     #[test]
     fn multi_cursor_typed_edit_applies_at_every_active_cursor() {
         let (_dir, mut doc) = open_fixture("abcde", "Hello.java");
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
         // Primary cursor starts at 0 (a fresh widget's default cursor);
         // these two extras sit at char indices 2 and 4.
         doc.extra_selections = vec![2..2, 4..4];
@@ -702,8 +434,7 @@ mod tests {
     #[test]
     fn arrow_key_collapses_extra_selections() {
         let (_dir, mut doc) = open_fixture("abcde", "Hello.java");
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
         doc.extra_selections = vec![2..2, 4..4];
 
         focused_frame(&mut doc, &mut parser, vec![key_event(egui::Key::ArrowLeft)]);
@@ -716,8 +447,7 @@ mod tests {
     #[test]
     fn non_intercepted_mutating_key_collapses_extra_selections_via_safety_net() {
         let (_dir, mut doc) = open_fixture("abc", "Hello.java");
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(&doc.buffer.to_string());
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
         // a genuine one-caret Vec<Range<usize>>, not a range of a Vec
         #[allow(clippy::single_range_in_vec_init)]
         let one_caret = vec![1..1];

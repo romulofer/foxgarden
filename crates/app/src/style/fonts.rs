@@ -7,7 +7,7 @@ pub fn install(ctx: &egui::Context) {
     fonts.font_data.insert(
         JETBRAINS_MONO_KEY.to_owned(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/JetBrainsMono-Regular.ttf"
+            "../../assets/fonts/JetBrainsMono-Regular.ttf"
         ))),
     );
     fonts.families.insert(

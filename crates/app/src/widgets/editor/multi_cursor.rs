@@ -4,7 +4,7 @@ use std::ops::Range;
 /// cursor while multi-cursor mode is active. Enter is just `Insert("\n")` —
 /// auto-indent is deliberately skipped while multiple cursors are active, so
 /// there's nothing enter-specific left to do.
-pub enum MultiEditOp {
+pub(super) enum MultiEditOp {
     Insert(String),
     Backspace,
     Delete,
@@ -23,7 +23,7 @@ fn chars_eq(a: char, b: char, case_sensitive: bool) -> bool {
 /// between two word characters, or immediately before/after a word, all
 /// count as touching it. Returns an empty range at `char_idx` if no word
 /// touches that position.
-pub fn word_range_at(text: &str, char_idx: usize) -> Range<usize> {
+pub(super) fn word_range_at(text: &str, char_idx: usize) -> Range<usize> {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     let idx = char_idx.min(n);
@@ -53,7 +53,7 @@ pub fn word_range_at(text: &str, char_idx: usize) -> Range<usize> {
 /// Finds the next occurrence of `needle` at or after `after_char`, wrapping
 /// around the buffer if nothing is found before the end. Returns `None` for
 /// an empty needle or if `needle` doesn't occur anywhere in `text`.
-pub fn find_next_occurrence(
+pub(super) fn find_next_occurrence(
     text: &str,
     needle: &str,
     after_char: usize,
@@ -82,7 +82,7 @@ pub fn find_next_occurrence(
 /// `claimed` (exact range match — occurrences of the same text are
 /// exact-match-dedupable). Bounded by the buffer's total occurrence count,
 /// so it always terminates even when every occurrence is already claimed.
-pub fn find_next_unclaimed_occurrence(
+pub(super) fn find_next_unclaimed_occurrence(
     text: &str,
     needle: &str,
     after_char: usize,
@@ -117,7 +117,7 @@ pub fn find_next_unclaimed_occurrence(
 /// cursor positions correct for every selection, not just the last one
 /// processed. Returns the resulting text plus one cursor char-position per
 /// entry of `selections`, in the SAME order as the input slice.
-pub fn apply_multi_edit(text: &str, selections: &[Range<usize>], op: &MultiEditOp) -> (String, Vec<usize>) {
+pub(super) fn apply_multi_edit(text: &str, selections: &[Range<usize>], op: &MultiEditOp) -> (String, Vec<usize>) {
     let mut order: Vec<usize> = (0..selections.len()).collect();
     order.sort_by_key(|&i| selections[i].start);
 

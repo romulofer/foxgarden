@@ -28,6 +28,21 @@ feature that's actually needed for the editor to be useful. When those two
 pull in different directions on a specific feature, that's worth surfacing
 to the user rather than silently picking one side.
 
+**Respond to user input as fast as possible.** Typing, clicking, and
+scrolling must never wait on avoidable work. Concretely: nothing on the
+keystroke-to-pixels path should do work that scales with project size (a
+full directory re-walk, a full-buffer operation repeated needlessly) or
+redo work whose result doesn't change between calls (recompiling a parser
+query that's a pure function of `Language`). When you touch a hot path —
+anything called from the editor's layouter, from a per-frame `show()`, or
+from an input handler — ask whether it's doing more work than the input
+that triggered it actually requires. Two examples fixed for exactly this
+reason: `syntax::highlight_spans` used to recompile its `tree_sitter::Query`
+from source on every frame (now cached per language, see
+`crates/syntax/src/highlight.rs`); opening a file used to re-walk the whole
+project tree from disk (now only genuinely tree-changing actions —
+create/rename/delete — trigger that, see `crates/app/src/panels/side_panel.rs`).
+
 ## Constraints
 
 - **Do not author commits. Do not push upstream.** (Carried over from
@@ -50,6 +65,15 @@ project was scaffolded against Rust 1.97 / edition 2024.
 
 ## Architecture
 
+**Organize code into files and folders by concern, not into one growing
+file per crate.** A file earns a split into its own module once it's doing
+one identifiable thing (a widget's pure edit logic, its painting, its
+event-classification helpers); a cluster of related modules earns a folder
+once there's more than one of them (see `crates/app/src/widgets/`,
+`panels/`, `style/` below). Don't over-fragment a small, cohesive file just
+to have more files, though — folder-per-single-file adds path depth with no
+organizational benefit, which cuts against the lightweight principle above.
+
 Three-crate workspace, dependency direction is strict:
 
 ```
@@ -67,19 +91,35 @@ core  <-  syntax  <-  app
   `InputEdit` from two full-text snapshots by common-prefix/suffix diffing —
   needed because egui's `TextEdit` hands back a plain `String`, not a
   structured edit op.
-- **`crates/app`**: eframe/egui shell. `app.rs` owns `EditorState` plus a
-  `parsers: Vec<IncrementalParser>` kept **index-aligned** with
-  `state.open_tabs` — every tab open/close must update both in lockstep, or
-  the wrong parser ends up attached to the wrong document. `tabs::open_parser_for`
-  is the one shared helper for creating a tab's parser (new file opens,
-  `Ctrl+Shift+T` reopen of a closed tab, and a rename that changes a file's
-  language all funnel through it); `EditorState::closed_tabs` is the LIFO
-  stack `close_tab`/`reopen_last_closed_tab` push/pop to make reopen
-  possible. `editor_widget.rs`
-  is the custom highlighted/squiggled text widget (SPEC.md §5.4–5.5), with
-  `Ctrl+D` multi-cursor editing layered on top (`multi_cursor.rs` has the
-  pure search/edit logic — see the gotchas below for why this can't just use
-  egui's `TextEdit` directly).
+- **`crates/app`**: eframe/egui shell, organized by concern into
+  `src/widgets/`, `src/panels/`, `src/style/`, plus `app.rs`/`main.rs` at
+  the root:
+  - `app.rs` owns `EditorState` plus a `parsers: Vec<Option<IncrementalParser>>`
+    kept **index-aligned** with `state.open_tabs` — every tab open/close
+    must update both in lockstep, or the wrong parser (or lack of one) ends
+    up attached to the wrong document. A slot is `None` for a document with
+    no recognized language (any file that isn't `.java`/`.kt` still opens
+    and edits fine, it just gets no parser/highlighting/diagnostics).
+    `panels::tabs::open_parser_for` is the one shared helper for creating
+    (or correctly omitting) a tab's parser — new file opens, `Ctrl+Shift+T`
+    reopen of a closed tab, and a rename that changes a file's language (or
+    clears it) all funnel through it. `EditorState::closed_tabs` is the
+    LIFO stack `close_tab`/`reopen_last_closed_tab` push/pop to make reopen
+    possible.
+  - `widgets/editor/` is the custom highlighted/squiggled text widget
+    (SPEC.md §5.4–5.5): `widget.rs` (the `show()` entry point and its
+    `TextEdit` wiring), `auto_edit.rs` (pure auto-pair/auto-indent text
+    transforms), `painting.rs` (diagnostic squiggles + hover tooltips,
+    multi-cursor overlay), `multi_cursor.rs` (Ctrl+D's pure search/edit
+    logic — see the gotchas below for why this can't just use egui's
+    `TextEdit` directly). Only `widgets::editor::show` is public outside
+    the module.
+  - `panels/` is the surrounding UI chrome built from that widget:
+    `menu_bar.rs`, `side_panel.rs` (project tree + file create/rename/
+    delete), `tabs.rs` (tab bar + the parser-lifecycle helper above).
+  - `style/` is cross-cutting presentation: `fonts.rs` (`EditorFont`
+    selection, JetBrains Mono registration), `theme.rs` (light/dark color
+    palette).
 
 ## Non-obvious gotchas (learned the hard way this session)
 
@@ -120,7 +160,7 @@ core  <-  syntax  <-  app
   strings is ambiguous in exactly the case it needs to detect: typing a
   closer immediately before an identical existing one (e.g. `(a|)` -> type
   `)`) produces the same two strings as appending a new `)` at the end,
-  so the diff can't tell them apart. `editor_widget::apply_auto_pair` instead
+  so the diff can't tell them apart. `widgets::editor::auto_edit::apply_auto_pair` instead
   uses egui's real post-edit cursor position (`TextEditOutput.cursor_range`)
   to locate the just-typed character unambiguously. `syntax::diff_edit` is
   still used afterward, but only to feed the *already-corrected* text to
@@ -132,7 +172,7 @@ core  <-  syntax  <-  app
   Auto-indent (`apply_auto_indent`) inserts whitespace *before* where egui
   already placed the cursor (right after the newline), so skipping the
   cursor fix-up there would leave the cursor sitting before the
-  auto-inserted indentation instead of after it. `editor_widget::show` fixes
+  auto-inserted indentation instead of after it. `widgets::editor::show` fixes
   this via `output.state.cursor.set_char_range(...)` +
   `output.state.store(ui.ctx(), id)` — the exact pattern from egui's own
   `TextEditState` doc example. If you add another edit-time correction,
@@ -183,31 +223,32 @@ core  <-  syntax  <-  app
   `crates/syntax/tests/syntax_tests.rs` has a `highlight_spans` test for
   *each* language, not just one.
 - **JetBrains Mono is registered under a custom `FontFamily::Name(...)`, not
-  merged into `FontFamily::Monospace`** (see `fonts.rs`), so both it and
-  egui's built-in monospace font (Hack) stay independently selectable via
-  `EditorFont`. This means `egui::__run_test_ui` — which runs against a
+  merged into `FontFamily::Monospace`** (see `style/fonts.rs`), so both it
+  and egui's built-in monospace font (Hack) stay independently selectable
+  via `EditorFont`. This means `egui::__run_test_ui` — which runs against a
   fresh `Context` with an *empty* `FontDefinitions` (no families registered
   at all beyond the hardcoded `Monospace`/`Proportional` slots) — panics
   with `"FontFamily::Name(\"JetBrainsMono\") is not bound to any fonts"` if
-  a test passes `EditorFont::JetBrainsMono` to `editor_widget::show`. Tests
-  must pass `EditorFont::Default` instead; only real `main()` (via
-  `fonts::install`) registers the custom family.
+  a test passes `EditorFont::JetBrainsMono` to `widgets::editor::show`.
+  Tests must pass `EditorFont::Default` instead; only real `main()` (via
+  `style::fonts::install`) registers the custom family.
 - **egui 0.35's `TextEdit` has zero multi-cursor support and no hook to
   intercept key events before its own single-cursor logic runs** (the
   `events()` fn that does this in `builder.rs` is private). `Ctrl+D`
   multi-cursor is layered on top instead: `Document::extra_selections`
-  tracks secondary cursors ourselves, and `editor_widget::show` pulls
+  tracks secondary cursors ourselves, and `widgets::editor::show` pulls
   mutating events (`Text`, `Paste`, `Backspace`/`Delete`/`Enter`) out of
   `ui.input_mut(|i| i.events...)` *before* calling `TextEdit::show` whenever
   extras are active, so egui's own handler never sees them and can't
   double-edit the primary cursor — `multi_cursor::apply_multi_edit` then
   replays the same op at every active cursor in one pass. See
-  `crates/app/src/multi_cursor.rs` and the wiring in `editor_widget::show`.
+  `crates/app/src/widgets/editor/multi_cursor.rs` and the wiring in
+  `widgets::editor::show` (in `widget.rs`).
 - **`TextEditState::store(self, ...)` takes `self` by value, not `&self`**
   — it can only be called once per frame per widget. Calling it from more
   than one branch (e.g. once for a Ctrl+D word-selection jump, again at the
   end for auto-indent's cursor fix-up) fails to compile with "borrow of
-  moved value". `editor_widget::show` instead threads a single
+  moved value". `widgets::editor::show` instead threads a single
   `manual_cursor_range: Option<CCursorRange>` through every branch that
   wants to override the cursor, and calls `set_char_range` + `store` exactly
   once at the very end.
@@ -219,11 +260,11 @@ core  <-  syntax  <-  app
   `.id_salt(some_string)` must replicate the same wrapping —
   `ui.make_persistent_id(egui::IdSalt::new(some_string))` — or it computes a
   different id than the widget actually uses and `request_focus` silently
-  targets nothing. This is also how `editor_widget::show`'s tests simulate a
-  *focused* keyboard event at all: `TextEditOutput.cursor_range` is only
+  targets nothing. This is also how `widgets::editor::show`'s tests simulate
+  a *focused* keyboard event at all: `TextEditOutput.cursor_range` is only
   `Some` when `ui.memory(|m| m.has_focus(id))` is true, and `show` gives the
   widget a stable `.id_salt(doc.path...)` specifically so tests can target
-  it deterministically (see `focused_frame` in `editor_widget.rs`'s tests).
+  it deterministically (see `focused_frame` in `widget.rs`'s tests).
 
 ## Testing conventions
 
@@ -236,7 +277,7 @@ core  <-  syntax  <-  app
   headlessly via `egui::__run_test_ui(|ui| { ... })` — it runs a real egui
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
-  `crates/app/src/editor_widget.rs`'s test module for the pattern.
+  `crates/app/src/widgets/editor/widget.rs`'s test module for the pattern.
 - There is no click-automation tool available in this environment (no
   `xdotool`). Verifying actual mouse-driven flows (native "Open Folder"
   dialog, clicking a tree node) requires a human running `cargo run -p app`

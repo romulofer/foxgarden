@@ -10,16 +10,12 @@ use crate::language::Language;
 #[derive(Debug)]
 pub enum OpenDocumentError {
     Io(std::io::Error),
-    UnsupportedExtension(PathBuf),
 }
 
 impl fmt::Display for OpenDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpenDocumentError::Io(e) => write!(f, "{e}"),
-            OpenDocumentError::UnsupportedExtension(path) => {
-                write!(f, "unsupported extension: {}", path.display())
-            }
         }
     }
 }
@@ -36,7 +32,11 @@ pub struct Document {
     pub path: PathBuf,
     pub buffer: Rope,
     pub saved_buffer: Rope,
-    pub language: Language,
+    /// `None` for files whose extension isn't a recognized language (or has
+    /// none at all) — the file still opens and edits like any other, it
+    /// just gets no syntax highlighting, diagnostics, or (in the future)
+    /// completion.
+    pub language: Option<Language>,
     pub diagnostics: Vec<Diagnostic>,
     /// Secondary Ctrl+D cursors/selections, as **char** (not byte) index
     /// ranges into `buffer`. An empty range is a bare caret. The primary
@@ -50,8 +50,7 @@ impl Document {
         let language = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension)
-            .ok_or_else(|| OpenDocumentError::UnsupportedExtension(path.clone()))?;
+            .and_then(Language::from_extension);
 
         let contents = std::fs::read_to_string(&path)?;
         let buffer = Rope::from_str(&contents);
@@ -129,12 +128,23 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_extension_is_rejected() {
+    fn unrecognized_extension_opens_as_plain_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("readme.txt");
         std::fs::write(&path, "hello").unwrap();
 
-        let result = Document::open(path);
-        assert!(matches!(result, Err(OpenDocumentError::UnsupportedExtension(_))));
+        let doc = Document::open(path).unwrap();
+        assert_eq!(doc.language, None);
+        assert_eq!(doc.buffer.to_string(), "hello");
+    }
+
+    #[test]
+    fn extensionless_file_opens_as_plain_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("README");
+        std::fs::write(&path, "hello").unwrap();
+
+        let doc = Document::open(path).unwrap();
+        assert_eq!(doc.language, None);
     }
 }

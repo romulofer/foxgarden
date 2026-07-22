@@ -60,7 +60,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
         }
     });
 
-    show_new_file_row(ui, state, panel, &mut outcome);
+    let created = show_new_file_row(ui, state, panel, &mut outcome);
 
     ui.separator();
 
@@ -76,7 +76,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     apply_tree_actions(panel, actions, &mut outcome);
     show_delete_confirm(ui, panel, &mut outcome);
 
-    if outcome.open.is_some() || outcome.renamed.is_some() || outcome.deleted.is_some() {
+    // Only genuinely tree-changing actions need a refresh — opening an
+    // *existing* file (also carried on `outcome.open`, via a tree click)
+    // doesn't touch the filesystem, so re-walking the whole project for it
+    // would be a pointless full directory read on every single file click.
+    if created || outcome.renamed.is_some() || outcome.deleted.is_some() {
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if let Err(err) = state.open_project(root) {
                 eprintln!("failed to refresh project tree: {err}");
@@ -87,19 +91,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     outcome
 }
 
+/// Returns `true` if a file was actually created this frame — distinct from
+/// `outcome.open` (which this also sets), because the caller needs to know
+/// specifically whether the on-disk tree changed and needs refreshing.
+/// Opening an *existing* file (the tree-click path) also goes through
+/// `outcome.open` but doesn't change the tree, so it must not trigger that
+/// refresh.
 fn show_new_file_row(
     ui: &mut egui::Ui,
     state: &EditorState,
     panel: &mut SidePanelState,
     outcome: &mut SidePanelOutcome,
-) {
+) -> bool {
     let Some((dir, name)) = panel.new_file_draft.as_mut() else {
-        return;
+        return false;
     };
     let dir = dir.clone();
     let project_root = state.project.as_ref().map(|p| p.root.clone());
 
     let mut close_draft = false;
+    let mut created = false;
     ui.horizontal(|ui| {
         let dir_label = dir
             .file_name()
@@ -130,6 +141,7 @@ fn show_new_file_row(
                     } else {
                         outcome.open = Some(new_path);
                         close_draft = true;
+                        created = true;
                     }
                 }
             }
@@ -142,6 +154,7 @@ fn show_new_file_row(
     if close_draft {
         panel.new_file_draft = None;
     }
+    created
 }
 
 fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome: &mut SidePanelOutcome) {
@@ -256,21 +269,19 @@ fn render_node(
             }
 
             let extension = node.path.extension().and_then(|ext| ext.to_str());
-            let is_openable = matches!(extension, Some("java") | Some("kt"));
             let icon = match extension {
                 Some("java") => "☕ ",
                 Some("kt") => "🔷 ",
-                _ => "",
+                _ => "📄 ",
             };
             let label_text = format!("{icon}{}", node.name);
 
-            let response = if is_openable {
-                ui.selectable_label(false, label_text)
-            } else {
-                ui.label(label_text)
-            };
-
-            if is_openable && response.clicked() {
+            // Any file can be opened — `Document::open` only fails on files
+            // that aren't valid UTF-8 text (binaries, etc), and that failure
+            // is reported when the open is actually attempted, not guessed
+            // at here from the extension alone.
+            let response = ui.selectable_label(false, label_text);
+            if response.clicked() {
                 actions.open = Some(node.path.clone());
             }
 

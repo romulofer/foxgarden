@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use fg_core::{EditorState, Language};
 use syntax::IncrementalParser;
 
-use crate::fonts::EditorFont;
-use crate::menu_bar::{self, MenuBarState};
-use crate::side_panel::{self, SidePanelState};
-use crate::tabs;
+use crate::panels::menu_bar::{self, MenuBarState};
+use crate::panels::side_panel::{self, SidePanelState};
+use crate::panels::tabs;
+use crate::style::fonts::EditorFont;
 
 const LAST_PROJECT_KEY: &str = "last_project";
 
@@ -14,7 +14,7 @@ pub struct FoxGardenApp {
     state: EditorState,
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
     /// open document.
-    parsers: Vec<IncrementalParser>,
+    parsers: Vec<Option<IncrementalParser>>,
     pending_close: Option<usize>,
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
@@ -23,7 +23,7 @@ pub struct FoxGardenApp {
 
 /// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
 /// used when the underlying file was deleted out from under an open tab.
-fn close_tab_for_path(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>, path: &Path) {
+fn close_tab_for_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, path: &Path) {
     if let Some(index) = state.find_tab(path) {
         state.close_tab(index);
         parsers.remove(index);
@@ -31,8 +31,9 @@ fn close_tab_for_path(state: &mut EditorState, parsers: &mut Vec<IncrementalPars
 }
 
 /// Repoints any tab open on `old` to `new`, recreating its parser if the
-/// rename changed the file's language (e.g. `.java` -> `.kt`).
-fn handle_rename(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>, old: &Path, new: &Path) {
+/// rename changed the file's language — including to or from no language at
+/// all (e.g. `.java` -> `.kt`, or `.java` -> `.txt`).
+fn handle_rename(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, old: &Path, new: &Path) {
     let Some(index) = state.find_tab(old) else {
         return;
     };
@@ -42,11 +43,9 @@ fn handle_rename(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>, 
         .extension()
         .and_then(|ext| ext.to_str())
         .and_then(Language::from_extension);
-    if let Some(new_language) = new_language {
-        if new_language != state.open_tabs[index].language {
-            state.open_tabs[index].language = new_language;
-            parsers[index] = tabs::open_parser_for(&mut state.open_tabs[index]);
-        }
+    if new_language != state.open_tabs[index].language {
+        state.open_tabs[index].language = new_language;
+        parsers[index] = tabs::open_parser_for(&mut state.open_tabs[index]);
     }
 }
 

@@ -1,10 +1,10 @@
 use fg_core::EditorState;
 use syntax::IncrementalParser;
 
-use crate::fonts::EditorFont;
-use crate::side_panel::SidePanelState;
-use crate::tabs;
-use crate::theme;
+use super::side_panel::SidePanelState;
+use super::tabs;
+use crate::style::fonts::EditorFont;
+use crate::style::theme;
 
 /// Persistent state for menu-triggered dialogs.
 #[derive(Default)]
@@ -16,7 +16,7 @@ pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
     side_panel: &mut SidePanelState,
-    parsers: &mut Vec<IncrementalParser>,
+    parsers: &mut Vec<Option<IncrementalParser>>,
     pending_close: &mut Option<usize>,
     menu: &mut MenuBarState,
     editor_font: &mut EditorFont,

@@ -1,19 +1,26 @@
 use fg_core::{Document, EditorState};
 use syntax::IncrementalParser;
 
-use crate::editor_widget;
-use crate::fonts::EditorFont;
+use crate::style::fonts::EditorFont;
+use crate::widgets::editor;
 
 /// Parses `doc`'s current contents and populates its initial diagnostics, so
 /// a file with a pre-existing syntax error shows its squiggle immediately on
-/// open rather than only after the first edit. Shared by every path that
-/// adds a tab: opening a file, and reopening a closed one.
-pub(crate) fn open_parser_for(doc: &mut Document) -> IncrementalParser {
-    let mut parser = IncrementalParser::new(doc.language);
+/// open rather than only after the first edit. `None` if `doc` has no
+/// recognized language — such files still open and edit fine, they just get
+/// no parser (no highlighting, no diagnostics). Shared by every path that
+/// adds or retags a tab: opening a file, reopening a closed one, and a
+/// rename that changes (or clears) a file's language.
+pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
+    let Some(language) = doc.language else {
+        doc.diagnostics.clear();
+        return None;
+    };
+    let mut parser = IncrementalParser::new(language);
     let source = doc.buffer.to_string();
     parser.parse(&source);
     doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just parsed"));
-    parser
+    Some(parser)
 }
 
 /// Renders the tab bar and the active document's editor. `parsers` is kept
@@ -23,7 +30,7 @@ pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
     pending_close: &mut Option<usize>,
-    parsers: &mut Vec<IncrementalParser>,
+    parsers: &mut Vec<Option<IncrementalParser>>,
     editor_font: EditorFont,
 ) {
     let mut focus_request = None;
@@ -93,7 +100,7 @@ pub fn show(
     };
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        editor_widget::show(ui, doc, parser, editor_font);
+        editor::show(ui, doc, parser, editor_font);
     });
 }
 
@@ -113,7 +120,7 @@ pub fn save_active_tab(state: &mut EditorState) {
 /// button and the menu bar's File > Close Tab.
 pub fn request_close_tab(
     state: &mut EditorState,
-    parsers: &mut Vec<IncrementalParser>,
+    parsers: &mut Vec<Option<IncrementalParser>>,
     pending_close: &mut Option<usize>,
     index: usize,
 ) {
@@ -130,7 +137,7 @@ pub fn request_close_tab(
 /// opened file gets its parser in `app.rs`. A no-op if there's nothing left
 /// to reopen, or if that tab is already open (in which case `EditorState`
 /// just focuses it, so `parsers` needs no change).
-pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>) {
+pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>) {
     let Some(index) = state.reopen_last_closed_tab() else {
         return;
     };
@@ -144,7 +151,7 @@ fn show_close_confirm(
     ui: &mut egui::Ui,
     state: &mut EditorState,
     pending_close: &mut Option<usize>,
-    parsers: &mut Vec<IncrementalParser>,
+    parsers: &mut Vec<Option<IncrementalParser>>,
 ) {
     let Some(index) = *pending_close else {
         return;
