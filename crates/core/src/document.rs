@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use ropey::Rope;
@@ -37,6 +38,11 @@ pub struct Document {
     pub saved_buffer: Rope,
     pub language: Language,
     pub diagnostics: Vec<Diagnostic>,
+    /// Secondary Ctrl+D cursors/selections, as **char** (not byte) index
+    /// ranges into `buffer`. An empty range is a bare caret. The primary
+    /// cursor/selection remains owned by the editor widget's own state;
+    /// this only tracks the extras layered on top of it.
+    pub extra_selections: Vec<Range<usize>>,
 }
 
 impl Document {
@@ -57,6 +63,7 @@ impl Document {
             saved_buffer,
             language,
             diagnostics: Vec::new(),
+            extra_selections: Vec::new(),
         })
     }
 

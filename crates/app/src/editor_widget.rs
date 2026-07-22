@@ -1,10 +1,13 @@
+use std::ops::Range;
+
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Color32, FontId, Shape, Stroke};
+use egui::{Color32, Event, FontId, Key, Shape, Stroke};
 use fg_core::{Diagnostic, Document};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::fonts::EditorFont;
+use crate::multi_cursor::{self, MultiEditOp};
 use crate::theme;
 
 fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
@@ -30,6 +33,25 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
     let language = doc.language;
     let old_text = doc.buffer.to_string();
     let mut text = old_text.clone();
+    // A stable id (rather than the default position-based auto id) keeps
+    // this widget's identity — and thus its cursor/selection state — tied
+    // to the document, not to where `show` happens to be called from in the
+    // ui tree; it also lets tests request focus deterministically.
+    let id_salt = doc.path.to_string_lossy().into_owned();
+
+    // While extra (Ctrl+D) cursors are active, the events that would mutate
+    // the buffer must be pulled out of the queue before `TextEdit::show`
+    // runs, so its own single-cursor editing logic never sees them and
+    // can't double-edit the primary cursor — they're applied manually,
+    // at every active cursor at once, after `show` returns.
+    let multi_cursor_active_at_start = !doc.extra_selections.is_empty();
+    let mut intercepted_events: Vec<Event> = Vec::new();
+    if multi_cursor_active_at_start {
+        ui.input_mut(|i| {
+            intercepted_events = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
+            i.events.retain(|e| !is_multi_edit_event(e));
+        });
+    }
 
     let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let source = buf.as_str();
@@ -72,17 +94,58 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
     };
 
     let mut output = egui::TextEdit::multiline(&mut text)
+        .id_salt(id_salt)
         .code_editor()
         .desired_width(f32::INFINITY)
         .layouter(&mut layouter)
         .show(ui);
 
-    let mut manual_cursor: Option<usize> = None;
-    if output.response.changed() {
+    // `TextEditState::store` takes `self` by value, so it can only be
+    // called once per frame — every path below that wants to override
+    // egui's own post-edit cursor/selection just records the target range
+    // here, and a single `set_char_range` + `store` happens at the very
+    // end.
+    let mut manual_cursor_range: Option<CCursorRange> = None;
+
+    if !intercepted_events.is_empty() {
+        if let Some(primary_range) = output.cursor_range {
+            let op = multi_edit_op_from_events(&intercepted_events);
+            let sorted = primary_range.as_sorted_char_range();
+            let mut selections = Vec::with_capacity(1 + doc.extra_selections.len());
+            selections.push(sorted.start.0..sorted.end.0);
+            selections.extend(doc.extra_selections.iter().cloned());
+
+            let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
+
+            let edit = syntax::diff_edit(&old_text, &new_text);
+            parser.reparse(&new_text, edit);
+            doc.buffer = Rope::from_str(&new_text);
+            doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+
+            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
+            doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
+            // This frame's `output.galley` was laid out before the edit
+            // above landed, so the paint below is stale by one frame — the
+            // same class of staleness the auto-indent path already accepts
+            // (see its comment below). Ask for a repaint to make it correct
+            // as soon as possible.
+            ui.ctx().request_repaint();
+        }
+    } else if output.response.changed() {
+        if multi_cursor_active_at_start {
+            // A mutating event that wasn't in the intercepted set (Tab,
+            // undo/redo, an IME commit, ...) reached egui's own
+            // single-cursor logic and edited the primary cursor alone.
+            // `doc.extra_selections` is now stale relative to `text`, so
+            // rather than paint/edit at wrong offsets next frame, treat
+            // this as an implicit collapse back to single-cursor mode.
+            doc.extra_selections.clear();
+        }
+
         let cursor_char = output.cursor_range.map(|r| r.primary.index.0);
         let (text_after_indent, indent_cursor) = apply_auto_indent(&old_text, &text, cursor_char);
         let corrected = if indent_cursor.is_some() {
-            manual_cursor = indent_cursor;
+            manual_cursor_range = indent_cursor.map(|c| CCursorRange::one(CCursor::new(c)));
             text_after_indent
         } else {
             apply_auto_pair(&old_text, &text, cursor_char)
@@ -94,19 +157,109 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut IncrementalParse
         doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
     }
 
+    let modifiers = ui.input(|i| i.modifiers);
+    let ctrl_d_pressed = ui.input(|i| i.key_pressed(Key::D)) && modifiers.command;
+    if ctrl_d_pressed && let Some(primary_range) = output.cursor_range {
+        if primary_range.is_empty() {
+            let word = multi_cursor::word_range_at(&doc.buffer.to_string(), primary_range.primary.index.0);
+            if !word.is_empty() {
+                manual_cursor_range = Some(CCursorRange::two(CCursor::new(word.start), CCursor::new(word.end)));
+            }
+        } else {
+            let text_now = doc.buffer.to_string();
+            let sorted = primary_range.as_sorted_char_range();
+            let needle_range = sorted.start.0..sorted.end.0;
+            let needle = text_now[char_to_byte(&text_now, needle_range.start)..char_to_byte(&text_now, needle_range.end)]
+                .to_string();
+
+            let mut claimed = doc.extra_selections.clone();
+            claimed.push(needle_range.clone());
+
+            let case_sensitive = modifiers.shift;
+            if let Some(found) = multi_cursor::find_next_unclaimed_occurrence(
+                &text_now,
+                &needle,
+                needle_range.end,
+                &claimed,
+                case_sensitive,
+            ) {
+                doc.extra_selections.push(needle_range);
+                manual_cursor_range = Some(CCursorRange::two(CCursor::new(found.start), CCursor::new(found.end)));
+            }
+        }
+    }
+
+    if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
+        let should_collapse = ui.input(|i| i.events.iter().any(is_multi_cursor_collapse_event));
+        if should_collapse {
+            doc.extra_selections.clear();
+        }
+    }
+
     paint_diagnostics(ui, &output, &text, &doc.diagnostics);
+    paint_extra_selections(ui, &output, &doc.extra_selections);
 
     // Auto-indent inserts content *before* where egui placed the cursor
     // (unlike auto-pair, which only ever inserts after it), so the cursor
     // needs to be pushed forward past the inserted indentation manually.
-    if let Some(new_cursor_char) = manual_cursor {
-        output
-            .state
-            .cursor
-            .set_char_range(Some(CCursorRange::one(CCursor::new(new_cursor_char))));
+    // The multi-cursor paths above reuse the same mechanism to land the
+    // primary cursor after a multi-edit or a Ctrl+D word/occurrence jump.
+    if let Some(range) = manual_cursor_range {
+        output.state.cursor.set_char_range(Some(range));
         let id = output.response.id;
         output.state.store(ui.ctx(), id);
     }
+}
+
+fn is_multi_edit_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Text(_)
+            | Event::Paste(_)
+            | Event::Key {
+                key: Key::Backspace | Key::Delete | Key::Enter,
+                pressed: true,
+                ..
+            }
+    )
+}
+
+fn multi_edit_op_from_events(events: &[Event]) -> MultiEditOp {
+    let mut inserted = String::new();
+    for event in events {
+        match event {
+            Event::Text(s) => inserted.push_str(s),
+            Event::Paste(s) => inserted.push_str(s),
+            Event::Key { key: Key::Enter, .. } => inserted.push('\n'),
+            Event::Key { key: Key::Backspace, .. } => return MultiEditOp::Backspace,
+            Event::Key { key: Key::Delete, .. } => return MultiEditOp::Delete,
+            _ => {}
+        }
+    }
+    MultiEditOp::Insert(inserted)
+}
+
+fn is_multi_cursor_collapse_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key {
+            key: Key::ArrowLeft
+                | Key::ArrowRight
+                | Key::ArrowUp
+                | Key::ArrowDown
+                | Key::Home
+                | Key::End
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Escape,
+            pressed: true,
+            ..
+        } | Event::PointerButton {
+            pressed: true,
+            button: egui::PointerButton::Primary,
+            ..
+        }
+    )
 }
 
 /// Auto-indents after Enter: matches the new line's indentation to the line
@@ -160,7 +313,7 @@ fn apply_auto_indent(old_text: &str, text: &str, cursor_char: Option<usize>) -> 
     (corrected, Some(new_cursor_char))
 }
 
-fn char_to_byte(text: &str, char_idx: usize) -> usize {
+pub(crate) fn char_to_byte(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
         .map(|(b, _)| b)
@@ -263,6 +416,39 @@ fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, col
         up = !up;
     }
     painter.add(Shape::line(points, Stroke::new(1.5, color)));
+}
+
+/// Paints the Ctrl+D secondary cursors/selections: a thin caret for a bare
+/// position, or a translucent rect for a claimed occurrence — same
+/// `galley.pos_from_cursor` technique `paint_diagnostics` uses, just
+/// char-index based instead of byte based since `extra_selections` is
+/// already in char space.
+fn paint_extra_selections(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, extra_selections: &[Range<usize>]) {
+    let painter = ui.painter();
+    let caret_color = ui.visuals().text_cursor.stroke.color;
+    let selection_color = ui.visuals().selection.bg_fill;
+
+    for range in extra_selections {
+        let start_rect = output.galley.pos_from_cursor(CCursor::new(range.start));
+        let y_top = output.galley_pos.y + start_rect.top();
+        let y_bottom = output.galley_pos.y + start_rect.bottom();
+        let x_start = output.galley_pos.x + start_rect.left();
+
+        if range.is_empty() {
+            painter.line_segment(
+                [egui::pos2(x_start, y_top), egui::pos2(x_start, y_bottom)],
+                Stroke::new(1.5, caret_color),
+            );
+        } else {
+            let end_rect = output.galley.pos_from_cursor(CCursor::new(range.end));
+            let x_end = output.galley_pos.x + end_rect.left();
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x_start, y_top), egui::pos2(x_end, y_bottom)),
+                0.0,
+                selection_color,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +638,90 @@ mod tests {
             // first test in this file for why.
             show(ui, &mut doc, &mut parser, EditorFont::Default);
         });
+    }
+
+    // The tests below drive `show` through a real, reused `egui::Context`
+    // (rather than the fire-and-forget `egui::__run_test_ui` used above),
+    // since they need to simulate focused keyboard events: `show`'s
+    // multi-cursor branches only run once `output.cursor_range` is `Some`,
+    // which egui only produces for a widget that currently has keyboard
+    // focus. `show`'s `.id_salt(doc.path...)` makes the widget's id
+    // reproducible outside of `show` itself, so a test can request focus on
+    // exactly that id before calling `show`.
+    fn focused_frame(doc: &mut Document, parser: &mut IncrementalParser, events: Vec<egui::Event>) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let raw_input = egui::RawInput { events, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            // `TextEdit::id_salt(salt)` doesn't hash `salt` directly into the
+            // widget id — it first wraps it in an `egui::IdSalt` (see
+            // `builder.rs`'s `ui.make_persistent_id(id_salt)` where
+            // `id_salt: IdSalt`), so replicate that same wrapping here or
+            // the id won't match and `request_focus` will target nothing.
+            let salt = egui::IdSalt::new(doc.path.to_string_lossy().into_owned());
+            let id = ui.make_persistent_id(salt);
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default);
+        });
+    }
+
+    fn key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn multi_cursor_typed_edit_applies_at_every_active_cursor() {
+        let (_dir, mut doc) = open_fixture("abcde", "Hello.java");
+        let mut parser = IncrementalParser::new(Language::Java);
+        parser.parse(&doc.buffer.to_string());
+        // Primary cursor starts at 0 (a fresh widget's default cursor);
+        // these two extras sit at char indices 2 and 4.
+        doc.extra_selections = vec![2..2, 4..4];
+
+        focused_frame(&mut doc, &mut parser, vec![egui::Event::Text("Y".to_string())]);
+
+        assert_eq!(doc.buffer.to_string(), "YabYcdYe");
+        assert_eq!(doc.extra_selections, vec![4..4, 7..7]);
+    }
+
+    #[test]
+    fn arrow_key_collapses_extra_selections() {
+        let (_dir, mut doc) = open_fixture("abcde", "Hello.java");
+        let mut parser = IncrementalParser::new(Language::Java);
+        parser.parse(&doc.buffer.to_string());
+        doc.extra_selections = vec![2..2, 4..4];
+
+        focused_frame(&mut doc, &mut parser, vec![key_event(egui::Key::ArrowLeft)]);
+
+        assert!(doc.extra_selections.is_empty());
+        // Arrow keys just navigate — the buffer itself is untouched.
+        assert_eq!(doc.buffer.to_string(), "abcde");
+    }
+
+    #[test]
+    fn non_intercepted_mutating_key_collapses_extra_selections_via_safety_net() {
+        let (_dir, mut doc) = open_fixture("abc", "Hello.java");
+        let mut parser = IncrementalParser::new(Language::Java);
+        parser.parse(&doc.buffer.to_string());
+        // a genuine one-caret Vec<Range<usize>>, not a range of a Vec
+        #[allow(clippy::single_range_in_vec_init)]
+        let one_caret = vec![1..1];
+        doc.extra_selections = one_caret;
+
+        // Tab isn't in the intercepted-event set, so it reaches egui's own
+        // single-cursor logic (code editors call `.lock_focus(true)`, which
+        // makes Tab insert a literal tab character instead of moving focus)
+        // and edits the primary cursor alone — the safety net must then
+        // notice `extra_selections` is now stale and clear it.
+        focused_frame(&mut doc, &mut parser, vec![key_event(egui::Key::Tab)]);
+
+        assert!(doc.extra_selections.is_empty());
+        assert_eq!(doc.buffer.to_string(), "\tabc");
     }
 }
