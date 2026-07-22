@@ -36,12 +36,22 @@ redo work whose result doesn't change between calls (recompiling a parser
 query that's a pure function of `Language`). When you touch a hot path —
 anything called from the editor's layouter, from a per-frame `show()`, or
 from an input handler — ask whether it's doing more work than the input
-that triggered it actually requires. Two examples fixed for exactly this
+that triggered it actually requires. Examples fixed for exactly this
 reason: `syntax::highlight_spans` used to recompile its `tree_sitter::Query`
 from source on every frame (now cached per language, see
 `crates/syntax/src/highlight.rs`); opening a file used to re-walk the whole
 project tree from disk (now only genuinely tree-changing actions —
-create/rename/delete — trigger that, see `crates/app/src/panels/side_panel.rs`).
+create/rename/delete — trigger that, see `crates/app/src/panels/side_panel.rs`);
+`FileNode::build` used to walk *every* directory with no ignore list,
+turning a project with a large `.git`/`node_modules`/`target` into a
+multi-second scan on open (now skips a fixed list of VCS/build/dependency
+directory names outright — see `SKIPPED_DIR_NAMES` in
+`crates/core/src/project.rs`); and the editor's layouter used to reshape a
+document's entire text from scratch on every frame it was drawn, including
+merely switching back to a tab that was already open, because egui's own
+shaped-text cache is flushed of anything not painted *that exact frame*
+(see the galley-cache gotcha below for the full story — now cached
+ourselves in `crates/app/src/widgets/editor/widget.rs`).
 
 ## Constraints
 
@@ -59,6 +69,13 @@ cargo test --workspace         # run all tests (core + syntax + app)
 cargo run -p app               # launch the editor
 cargo test -p <core|syntax|app>  # test a single crate
 ```
+
+The first build after a clean checkout, `cargo clean`, or a `Cargo.lock`
+change is slower than you'd expect from this project's own small size —
+`[profile.dev.package."*"]` in the workspace `Cargo.toml` compiles
+dependencies optimized even in debug builds (see the gotcha below on why).
+That cost is one-time; it doesn't recur on ordinary edit-compile-run
+iteration against `core`/`syntax`/`app`.
 
 A stable Rust toolchain is required (`rustup` if none is installed). This
 project was scaffolded against Rust 1.97 / edition 2024.
@@ -85,6 +102,14 @@ core  <-  syntax  <-  app
   `FileNode`, `EditorState`, `Diagnostic`. No `egui` or `tree-sitter`
   dependency — everything here is unit-testable headless. Dirty state is
   *derived* (`buffer != saved_buffer`), never a manually toggled flag.
+  `Project::open`/`FileNode::build` sort directories before files
+  (alphabetically within each group) and skip a fixed denylist of
+  VCS/build/dependency directory names (`SKIPPED_DIR_NAMES`) without ever
+  `read_dir`-ing into them. `Document::open` accepts any file — no
+  extension allowlist — but sniffs the first 8KB for a NUL byte and rejects
+  binaries (`OpenDocumentError::Binary`) before attempting a full
+  `read_to_string`, since the tree has no ignore list for non-source files
+  and a click on a large binary shouldn't block the UI thread reading it.
 - **`crates/syntax`**: wraps tree-sitter. `IncrementalParser` owns a
   `tree_sitter::Parser` + cached `Tree` per document. `highlight_spans()` and
   `syntax_errors()` walk/query that tree. `diff_edit(old, new)` computes an
@@ -105,7 +130,16 @@ core  <-  syntax  <-  app
     reopen of a closed tab, and a rename that changes a file's language (or
     clears it) all funnel through it. `EditorState::closed_tabs` is the
     LIFO stack `close_tab`/`reopen_last_closed_tab` push/pop to make reopen
-    possible.
+    possible. Session persistence (`restore_session`/`persist_session` in
+    `app.rs`) round-trips the project folder, every open tab's path (in tab
+    order), and which one was focused through `eframe::Storage` as plain
+    newline-joined strings — no `serde` dependency for just a list of paths.
+    Both are free functions taking `&dyn eframe::Storage` rather than
+    methods on `FoxGardenApp`, specifically so they're unit-testable against
+    a hand-rolled fake `Storage` (see `app.rs`'s test module) — a real
+    `eframe::CreationContext` isn't practically constructible outside a live
+    windowing/render backend, so `FoxGardenApp::new` itself stays untested,
+    same as the rest of its GUI-wiring functions.
   - `widgets/editor/` is the custom highlighted/squiggled text widget
     (SPEC.md §5.4–5.5): `widget.rs` (the `show()` entry point and its
     `TextEdit` wiring), `auto_edit.rs` (pure auto-pair/auto-indent text
@@ -265,6 +299,40 @@ core  <-  syntax  <-  app
   `Some` when `ui.memory(|m| m.has_focus(id))` is true, and `show` gives the
   widget a stable `.id_salt(doc.path...)` specifically so tests can target
   it deterministically (see `focused_frame` in `widget.rs`'s tests).
+- **egui/epaint's own shaped-text (`Galley`) cache is flushed of anything not
+  painted *this exact frame*, every frame** (`GalleyCache::flush_cache` in
+  `epaint::text::fonts` — `self.cache.retain(|_, c| c.last_used ==
+  current_generation)`). Since only the active tab's editor renders each
+  frame, this means an inactive tab's shaped galley is gone by the very next
+  frame no matter how recently it was visible — switching back to a tab
+  that's merely been sitting open (not edited, not even scrolled) forces a
+  full reshape of its entire buffer from scratch, because `egui::TextEdit`
+  lays out the whole document in one `LayoutJob`, not just the visible
+  lines. The fix (`widget.rs`'s layouter) keeps its own `CachedLayout` in
+  `egui::Context`'s persistent temp storage (`ctx.data()`/`ctx.data_mut()`,
+  keyed by a `LayoutCacheKey` derived from content hash + language + theme +
+  wrap width), which is *not* subject to that per-frame flush — it survives
+  tab switches and only gets replaced when the key actually changes. This
+  only fixes the tab-switch case; a huge file's *first* open or *every*
+  keystroke still pays the full-document layout cost, since that requires
+  actual viewport virtualization (see `FEATURES.md`'s "Large file handling"
+  entry) — a much bigger change than this cache.
+- **Debug builds leave every dependency fully unoptimized, including
+  math/shaping-heavy libraries you never actually debug.** Opening a file
+  with a lot of distinct glyphs shown at once (e.g. a real-world `pom.xml`'s
+  dependency names and version numbers) measured ~750ms in a plain `cargo
+  build`/`cargo test` debug build vs. ~25ms with `--release` — almost
+  entirely inside egui/epaint's text-shaping engine (`harfrust`), not
+  FoxGarden's own code, which is microseconds either way regardless of
+  profile. Fixed via a `[profile.dev.package."*"]` `opt-level = 2` override
+  in the workspace `Cargo.toml` — this only affects dependencies (workspace
+  crates stay unoptimized under plain `[profile.dev]`, so normal
+  edit-compile-run iteration doesn't slow down), at the cost of a slower
+  *first* build after a `cargo clean` or a `Cargo.lock` change, since every
+  dependency has to be recompiled at the new opt level once. If a
+  performance complaint doesn't reproduce in `--release` but does in a plain
+  debug build, suspect this class of issue before assuming an algorithmic
+  problem in our own code — measure both before concluding which it is.
 
 ## Testing conventions
 
@@ -283,3 +351,25 @@ core  <-  syntax  <-  app
   dialog, clicking a tree node) requires a human running `cargo run -p app`
   by hand — don't claim those flows are verified without either doing that
   or clearly disclosing that they weren't.
+- Anything that needs `eframe::Storage` (session persistence) or
+  `egui::Context`'s persistent temp data (the layout cache) is testable
+  without a real window: implement `eframe::Storage` yourself over a plain
+  `HashMap` (`FakeStorage` in `app.rs`'s test module) for the former; for
+  the latter, drive a real, reused `egui::Context` through two or more
+  `ctx.run_ui(...)` passes and read `ctx.data(|d| d.get_temp::<T>(id))`
+  directly (see `widget.rs`'s `layout_cache_reuses_galley_across_
+  unchanged_frames` / `_reshapes_after_an_edit`, which assert `Arc::ptr_eq`
+  to prove a galley either was or wasn't reused across frames). Neither
+  needs a real `eframe::CreationContext`, which isn't practically
+  constructible in a unit test.
+- When chasing a specific "this is slow" report, measure the actual
+  operation with real data before proposing a fix — a plausible-sounding
+  theory (file size, project size) can be wrong even when a real
+  performance bug exists nearby. `std::time::Instant` timing directly in a
+  throwaway `#[ignore]`d test (or a temporary `examples/` binary, deleted
+  once it's done its job) against the user's real file/project, comparing
+  debug vs. `--release` and a "warm-up" frame vs. the frame under
+  suspicion, is what actually distinguished "the project tree walk is slow"
+  from "this one file's first render is slow" from "debug builds are slow"
+  in this session — each looked similar from the outside but had a
+  different root cause and fix.

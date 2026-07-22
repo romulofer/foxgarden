@@ -1,6 +1,9 @@
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Event, FontId, Key};
-use fg_core::Document;
+use egui::{Event, FontId, Galley, Key};
+use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
@@ -9,6 +12,31 @@ use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections};
 use crate::style::fonts::EditorFont;
 use crate::style::theme;
+
+/// Identifies what a laid-out galley depends on: the buffer's exact
+/// contents, which language (if any) is highlighting it, the color theme,
+/// and the wrap width. Two frames with an equal key produce an identical
+/// `Galley`, so a match means the cached one from `CachedLayout` can be
+/// reused outright.
+#[derive(Clone, Copy, PartialEq)]
+struct LayoutCacheKey {
+    content_hash: u64,
+    language: Option<Language>,
+    dark_mode: bool,
+    wrap_width_bits: u32,
+}
+
+#[derive(Clone)]
+struct CachedLayout {
+    key: LayoutCacheKey,
+    galley: Arc<Galley>,
+}
+
+fn hash_source(source: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
 
 fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
     TextFormat {
@@ -40,6 +68,18 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // to the document, not to where `show` happens to be called from in the
     // ui tree; it also lets tests request focus deterministically.
     let id_salt = doc.path.to_string_lossy().into_owned();
+    // A galley is expensive to shape (font lookups, kerning, glyph layout)
+    // but egui's own galley cache (`Fonts`) is flushed of anything not
+    // touched *this* frame, every frame — and only the active tab's editor
+    // renders each frame. So switching back to a tab that was merely
+    // sitting open (not the active one for a few frames) would otherwise
+    // force a full reshape of its entire buffer, no matter how big it is.
+    // This cache lives in `egui::Context`'s persistent temp storage instead
+    // (keyed off this document's `id_salt`), which isn't subject to that
+    // per-frame flush — it survives tab switches and is only replaced when
+    // `LayoutCacheKey` actually changes, i.e. the buffer, language, theme,
+    // or wrap width changed since it was last shaped.
+    let layout_cache_id = egui::Id::new(("editor_layout_cache", id_salt.as_str()));
 
     // While extra (Ctrl+D) cursors are active, the events that would mutate
     // the buffer must be pulled out of the queue before `TextEdit::show`
@@ -57,13 +97,32 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
 
     let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let source = buf.as_str();
+        let dark_mode = ui.visuals().dark_mode;
+        // Matches the rounding epaint's own galley cache applies to
+        // `wrap.max_width` before hashing it — without this, float jitter
+        // from upstream layout rounding would make the key flap between
+        // frames and defeat the cache.
+        let wrap_width = wrap_width.round();
+
+        let tree_and_language = parser.as_ref().and_then(|p| p.tree().map(|tree| (tree, p.language())));
+        let key = LayoutCacheKey {
+            content_hash: hash_source(source),
+            language: tree_and_language.as_ref().map(|(_, language)| *language),
+            dark_mode,
+            wrap_width_bits: wrap_width.to_bits(),
+        };
+
+        if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedLayout>(layout_cache_id)) {
+            if cached.key == key {
+                return cached.galley;
+            }
+        }
+
         let mut job = LayoutJob::default();
         job.wrap.max_width = wrap_width;
 
         let font_id = FontId::new(14.0, editor_font.family());
-        let dark_mode = ui.visuals().dark_mode;
 
-        let tree_and_language = parser.as_ref().and_then(|p| p.tree().map(|tree| (tree, p.language())));
         if let Some((tree, language)) = tree_and_language {
             let spans = syntax::highlight_spans(tree, &old_text, language);
             let mut cursor = 0usize;
@@ -93,7 +152,11 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             job.append(source, 0.0, plain_format(font_id, dark_mode));
         }
 
-        ui.fonts_mut(|f| f.layout_job(job))
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(layout_cache_id, CachedLayout { key, galley: galley.clone() })
+        });
+        galley
     };
 
     let mut output = egui::TextEdit::multiline(&mut text)
@@ -380,6 +443,75 @@ mod tests {
             // first test in this file for why.
             show(ui, &mut doc, &mut parser, EditorFont::Default);
         });
+    }
+
+    /// Computes the same `egui::Id` `show`'s layouter uses internally to key
+    /// its persistent galley cache, so a test can look the cached entry up
+    /// directly from `ctx.data()` without `show` needing to expose it.
+    fn layout_cache_id(doc: &Document) -> egui::Id {
+        let id_salt = doc.path.to_string_lossy().into_owned();
+        egui::Id::new(("editor_layout_cache", id_salt.as_str()))
+    }
+
+    #[test]
+    fn layout_cache_reuses_galley_across_unchanged_frames() {
+        let (_dir, mut doc) = open_fixture("just some notes, no code here", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let cache_id = layout_cache_id(&doc);
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default);
+        });
+        let first = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after first frame");
+
+        // A second frame over the very same, unedited document — as if the
+        // tab were simply redrawn, or switched away from and back to.
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default);
+        });
+        let second = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after second frame");
+
+        assert!(
+            Arc::ptr_eq(&first.galley, &second.galley),
+            "unchanged content across frames should reuse the same shaped galley instead of reshaping it"
+        );
+    }
+
+    #[test]
+    fn layout_cache_reshapes_after_an_edit() {
+        let (_dir, mut doc) = open_fixture("hello", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let cache_id = layout_cache_id(&doc);
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default);
+        });
+        let first = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after first frame");
+
+        doc.buffer = Rope::from_str("hello world");
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default);
+        });
+        let second = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after second frame");
+
+        assert!(
+            !Arc::ptr_eq(&first.galley, &second.galley),
+            "an edited buffer must not reuse the previous frame's stale galley"
+        );
     }
 
     // The tests below drive `show` through a real, reused `egui::Context`

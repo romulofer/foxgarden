@@ -12,8 +12,16 @@ layer on top of.
 - Menu bar: File (New File, Open Folder, Save, Close Tab, Reopen Closed Tab,
   Exit), Settings (Light/Dark theme, editor font), Help (About)
 - Side panel with the open project's file tree, with icons per entry
-  (folders, `.java`, `.kt`); remembers and reopens the last project folder
-  on restart
+  (folders, `.java`, `.kt`); folders are always listed before files, each
+  group sorted alphabetically, and VCS/build/dependency noise (`.git`,
+  `target`, `node_modules`, `build`, `.idea`, `dist`, `out`, `.svn`, `.hg`)
+  is skipped so it never clutters the tree or slows down opening a large
+  real-world project
+- Files with no recognized extension still open and edit as plain text (no
+  highlighting or diagnostics); actual binaries (images, class files, jars,
+  fonts) are detected and refused rather than read in full
+- Remembers and restores your session on restart: the last project folder,
+  every tab that was open, and which one was focused
 - Create, rename, and delete files from the side panel — via the "New File…"
   button or right-click on a file/folder (delete asks for confirmation first)
 - Files open in tabs; clicking an already-open file focuses its tab instead
@@ -84,15 +92,16 @@ cargo run -p app
 cargo test --workspace
 ```
 
-Automated tests cover `core` (data model, dirty-state, tab lifecycle) and
-`syntax` (parsing, incremental reparse, highlighting, error detection)
-headlessly. The `app` crate has a handful of headless widget tests (via
-egui's own test harness) that exercise highlighting and error-squiggle
-rendering without needing a window, including some that drive a real,
-reused `egui::Context` with simulated keyboard events and an explicitly
-focused widget to exercise multi-cursor editing end to end. Full end-to-end
-GUI interaction (opening folders, clicking files, editing) is verified
-manually.
+Automated tests cover `core` (data model, dirty-state, tab lifecycle,
+project-tree ordering/skip-list, binary-file detection) and `syntax`
+(parsing, incremental reparse, highlighting, error detection) headlessly.
+The `app` crate has a handful of headless widget tests (via egui's own test
+harness) that exercise highlighting and error-squiggle rendering without
+needing a window, including some that drive a real, reused `egui::Context`
+with simulated keyboard events and an explicitly focused widget to exercise
+multi-cursor editing end to end, plus session-persistence tests against a
+hand-rolled fake `eframe::Storage`. Full end-to-end GUI interaction (opening
+folders, clicking files, editing) is verified manually.
 
 ## Non-goals (checkpoint 1)
 

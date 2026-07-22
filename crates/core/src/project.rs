@@ -6,6 +6,15 @@ pub enum FileKind {
     Dir,
 }
 
+/// Directory names that are never useful to browse in a Java/Kotlin/Maven
+/// project and can be enormous — VCS internals, build output, installed
+/// dependencies. Skipped without ever being `read_dir`'d, so a `.git` with
+/// tens of thousands of loose objects or a populated `node_modules` doesn't
+/// turn opening the project into a multi-second walk of files nobody wants
+/// to see in the tree anyway.
+const SKIPPED_DIR_NAMES: &[&str] =
+    &[".git", "target", "node_modules", "build", ".idea", "dist", "out", ".svn", ".hg"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileNode {
     pub path: PathBuf,
@@ -26,13 +35,21 @@ impl FileNode {
             // files (true), each group alphabetically by path. `file_type`
             // comes straight off the `DirEntry` rather than a fresh
             // `path.is_dir()` stat call.
-            let mut entries: Vec<(bool, PathBuf)> = std::fs::read_dir(path)?
-                .map(|entry| {
-                    let entry = entry?;
-                    let is_file = !entry.file_type()?.is_dir();
-                    Ok((is_file, entry.path()))
-                })
-                .collect::<std::io::Result<_>>()?;
+            let mut entries: Vec<(bool, PathBuf)> = Vec::new();
+            for entry in std::fs::read_dir(path)? {
+                let entry = entry?;
+                let is_dir = entry.file_type()?.is_dir();
+                let child_path = entry.path();
+                if is_dir
+                    && child_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|name| SKIPPED_DIR_NAMES.contains(&name))
+                {
+                    continue;
+                }
+                entries.push((!is_dir, child_path));
+            }
             entries.sort();
 
             let children = entries
@@ -109,5 +126,24 @@ mod tests {
         let pom = &project.tree.children[2];
         assert_eq!(pom.kind, FileKind::File);
         assert!(pom.children.is_empty());
+    }
+
+    #[test]
+    fn skips_git_target_and_node_modules_without_descending_into_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::write(root.join(".git/objects/deadbeef"), "").unwrap();
+        std::fs::create_dir_all(root.join("target/classes")).unwrap();
+        std::fs::write(root.join("target/classes/Main.class"), "").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/some-pkg")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/Main.java"), "class Main {}").unwrap();
+
+        let project = Project::open(root.to_path_buf()).unwrap();
+
+        let names: Vec<&str> = project.tree.children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["src"], "only src should remain in the tree");
     }
 }

@@ -5,3 +5,16 @@ members = ["crates/core", "crates/syntax", "crates/app"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+
+# Debug builds normally compile every dependency fully unoptimized, which is
+# fine for our own crates (fast recompiles matter more than speed there) but
+# is a real problem for math/shaping-heavy deps we never actually debug —
+# egui/epaint's text shaping (harfrust) in particular: opening a file with a
+# lot of distinct glyphs at once (a large pom.xml's dependency names and
+# version numbers, say) takes ~750ms to shape unoptimized vs. ~25ms
+# optimized, all in dependency code. This only optimizes dependencies —
+# workspace crates (app/core/syntax) are governed by `[profile.dev]` below
+# and stay unoptimized, so normal edit-compile-run iteration doesn't slow
+# down; only a clean build's first compile of dependencies gets slower.
+[profile.dev.package."*"]
+opt-level = 2
