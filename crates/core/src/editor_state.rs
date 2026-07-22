@@ -8,6 +8,9 @@ pub struct EditorState {
     pub project: Option<Project>,
     pub open_tabs: Vec<Document>,
     pub active_tab: Option<usize>,
+    /// Recently closed tabs, most-recently-closed last. `close_tab` pushes
+    /// onto this; `reopen_last_closed_tab` pops off it.
+    pub closed_tabs: Vec<Document>,
 }
 
 impl EditorState {
@@ -44,9 +47,10 @@ impl EditorState {
         }
     }
 
-    /// Removes the tab at `index`, returning the closed document, and moves
+    /// Removes the tab at `index`, pushing it onto `closed_tabs` (so
+    /// `reopen_last_closed_tab` can restore it later), and moves
     /// `active_tab` to a sensible neighbor if the closed tab was active.
-    pub fn close_tab(&mut self, index: usize) -> Document {
+    pub fn close_tab(&mut self, index: usize) {
         let document = self.open_tabs.remove(index);
 
         self.active_tab = match self.active_tab {
@@ -62,7 +66,26 @@ impl EditorState {
             Some(active) => Some(active),
         };
 
-        document
+        self.closed_tabs.push(document);
+    }
+
+    /// Pops the most recently closed tab back onto `open_tabs` and focuses
+    /// it. If a tab for that path is already open (e.g. the user reopened it
+    /// manually since closing it), just focuses that tab instead of creating
+    /// a duplicate. Returns the newly active tab's index, or `None` if
+    /// there's nothing left to reopen.
+    pub fn reopen_last_closed_tab(&mut self) -> Option<usize> {
+        let document = self.closed_tabs.pop()?;
+
+        if let Some(index) = self.find_tab(document.path()) {
+            self.active_tab = Some(index);
+            return Some(index);
+        }
+
+        self.open_tabs.push(document);
+        let index = self.open_tabs.len() - 1;
+        self.active_tab = Some(index);
+        Some(index)
     }
 }
 
@@ -114,5 +137,66 @@ mod tests {
         state.close_tab(0); // close last tab
         assert_eq!(state.active_tab, None);
         assert!(state.open_tabs.is_empty());
+    }
+
+    #[test]
+    fn reopen_last_closed_tab_restores_it_and_focuses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "A.java");
+        let b = java_file(&dir, "B.java");
+        let mut state = EditorState::new();
+
+        state.open_tab(a).unwrap();
+        state.open_tab(b).unwrap();
+        state.close_tab(1); // close B.java
+        assert_eq!(state.open_tabs.len(), 1);
+
+        let index = state.reopen_last_closed_tab().unwrap();
+        assert_eq!(state.open_tabs.len(), 2);
+        assert_eq!(state.active_tab, Some(index));
+        assert_eq!(state.open_tabs[index].path().file_name().unwrap(), "B.java");
+    }
+
+    #[test]
+    fn reopen_last_closed_tab_pops_in_lifo_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "A.java");
+        let b = java_file(&dir, "B.java");
+        let mut state = EditorState::new();
+
+        state.open_tab(a).unwrap();
+        state.open_tab(b).unwrap();
+        state.close_tab(0); // close A.java
+        state.close_tab(0); // close B.java (now the only remaining tab)
+
+        let first = state.reopen_last_closed_tab().unwrap();
+        assert_eq!(state.open_tabs[first].path().file_name().unwrap(), "B.java");
+
+        let second = state.reopen_last_closed_tab().unwrap();
+        assert_eq!(state.open_tabs[second].path().file_name().unwrap(), "A.java");
+
+        assert!(state.reopen_last_closed_tab().is_none());
+    }
+
+    #[test]
+    fn reopen_last_closed_tab_with_nothing_closed_is_a_no_op() {
+        let mut state = EditorState::new();
+        assert!(state.reopen_last_closed_tab().is_none());
+    }
+
+    #[test]
+    fn reopening_a_tab_already_open_focuses_it_instead_of_duplicating() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "A.java");
+        let mut state = EditorState::new();
+
+        state.open_tab(a.clone()).unwrap();
+        state.close_tab(0);
+        // Reopened manually (e.g. via the side panel) before Ctrl+Shift+T.
+        let manual_index = state.open_tab(a).unwrap();
+
+        let index = state.reopen_last_closed_tab().unwrap();
+        assert_eq!(index, manual_index);
+        assert_eq!(state.open_tabs.len(), 1);
     }
 }

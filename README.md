@@ -21,7 +21,13 @@ layer on top of.
 - Dirty files show an asterisk (`*name.kt`) until saved (`Ctrl+S`)
 - Closing a dirty tab prompts to save, discard, or cancel
 - Syntax highlighting for Java and Kotlin (tree-sitter based)
-- Red squiggly underlines on syntax errors, updated live as you type
+- Red squiggly underlines on syntax errors, updated live as you type; hover
+  one to see the error message as a tooltip
+- Multi-cursor editing: `Ctrl+D` selects the word under the cursor, then each
+  further press adds the next occurrence as another cursor so you can type
+  and edit all of them at once (`Ctrl+D` matches case-insensitively,
+  `Ctrl+Shift+D` case-sensitively). Arrow keys, click, or `Escape` collapse
+  back to a single cursor.
 - Auto-closing brackets and quotes (`{`, `(`, `[`, `"`, `'`)
 - Auto-indent on Enter (matches the previous line, plus one level after `{`)
 - New Java/Kotlin files get boilerplate: a class declaration named after the
@@ -77,8 +83,11 @@ Automated tests cover `core` (data model, dirty-state, tab lifecycle) and
 `syntax` (parsing, incremental reparse, highlighting, error detection)
 headlessly. The `app` crate has a handful of headless widget tests (via
 egui's own test harness) that exercise highlighting and error-squiggle
-rendering without needing a window. Full end-to-end GUI interaction (opening
-folders, clicking files, editing) is verified manually.
+rendering without needing a window, including some that drive a real,
+reused `egui::Context` with simulated keyboard events and an explicitly
+focused widget to exercise multi-cursor editing end to end. Full end-to-end
+GUI interaction (opening folders, clicking files, editing) is verified
+manually.
 
 ## Non-goals (checkpoint 1)
 

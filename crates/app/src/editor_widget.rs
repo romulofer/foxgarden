@@ -395,11 +395,20 @@ fn paint_diagnostics(
         let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
         let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
 
+        let top = output.galley_pos.y + start_rect.top();
         let y = output.galley_pos.y + start_rect.bottom();
         let x_start = output.galley_pos.x + start_rect.left();
         let x_end = (output.galley_pos.x + end_rect.left()).max(x_start + 4.0);
 
         paint_squiggle(painter, y, x_start, x_end, squiggle_color);
+
+        // Sense::hover() only — this must not steal clicks/drags from the
+        // TextEdit underneath, just report when the pointer is sitting over
+        // this squiggle so its message can show as a tooltip.
+        let hover_rect = egui::Rect::from_min_max(egui::pos2(x_start, top), egui::pos2(x_end, y));
+        let id = egui::Id::new(("diagnostic_tooltip", start, end));
+        ui.interact(hover_rect, id, egui::Sense::hover())
+            .on_hover_text(&diag.message);
     }
 }
 

@@ -71,7 +71,10 @@ core  <-  syntax  <-  app
   `parsers: Vec<IncrementalParser>` kept **index-aligned** with
   `state.open_tabs` — every tab open/close must update both in lockstep, or
   the wrong parser ends up attached to the wrong document. `editor_widget.rs`
-  is the custom highlighted/squiggled text widget (SPEC.md §5.4–5.5).
+  is the custom highlighted/squiggled text widget (SPEC.md §5.4–5.5), with
+  `Ctrl+D` multi-cursor editing layered on top (`multi_cursor.rs` has the
+  pure search/edit logic — see the gotchas below for why this can't just use
+  egui's `TextEdit` directly).
 
 ## Non-obvious gotchas (learned the hard way this session)
 
@@ -184,6 +187,38 @@ core  <-  syntax  <-  app
   a test passes `EditorFont::JetBrainsMono` to `editor_widget::show`. Tests
   must pass `EditorFont::Default` instead; only real `main()` (via
   `fonts::install`) registers the custom family.
+- **egui 0.35's `TextEdit` has zero multi-cursor support and no hook to
+  intercept key events before its own single-cursor logic runs** (the
+  `events()` fn that does this in `builder.rs` is private). `Ctrl+D`
+  multi-cursor is layered on top instead: `Document::extra_selections`
+  tracks secondary cursors ourselves, and `editor_widget::show` pulls
+  mutating events (`Text`, `Paste`, `Backspace`/`Delete`/`Enter`) out of
+  `ui.input_mut(|i| i.events...)` *before* calling `TextEdit::show` whenever
+  extras are active, so egui's own handler never sees them and can't
+  double-edit the primary cursor — `multi_cursor::apply_multi_edit` then
+  replays the same op at every active cursor in one pass. See
+  `crates/app/src/multi_cursor.rs` and the wiring in `editor_widget::show`.
+- **`TextEditState::store(self, ...)` takes `self` by value, not `&self`**
+  — it can only be called once per frame per widget. Calling it from more
+  than one branch (e.g. once for a Ctrl+D word-selection jump, again at the
+  end for auto-indent's cursor fix-up) fails to compile with "borrow of
+  moved value". `editor_widget::show` instead threads a single
+  `manual_cursor_range: Option<CCursorRange>` through every branch that
+  wants to override the cursor, and calls `set_char_range` + `store` exactly
+  once at the very end.
+- **`TextEdit::id_salt(salt)` does not hash `salt` directly into the widget
+  id.** It first wraps it in an `egui::IdSalt` (`IdSalt::new(salt)`, a
+  keyed-hash of the value) and only then combines that with the `Ui`'s id
+  via `ui.make_persistent_id(id_salt)`. A test that wants to
+  `ui.memory_mut(|m| m.request_focus(id))` on a `TextEdit` given
+  `.id_salt(some_string)` must replicate the same wrapping —
+  `ui.make_persistent_id(egui::IdSalt::new(some_string))` — or it computes a
+  different id than the widget actually uses and `request_focus` silently
+  targets nothing. This is also how `editor_widget::show`'s tests simulate a
+  *focused* keyboard event at all: `TextEditOutput.cursor_range` is only
+  `Some` when `ui.memory(|m| m.has_focus(id))` is true, and `show` gives the
+  widget a stable `.id_salt(doc.path...)` specifically so tests can target
+  it deterministically (see `focused_frame` in `editor_widget.rs`'s tests).
 
 ## Testing conventions
 

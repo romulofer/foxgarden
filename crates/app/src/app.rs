@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use fg_core::{Document, EditorState, Language};
+use fg_core::{EditorState, Language};
 use syntax::IncrementalParser;
 
 use crate::fonts::EditorFont;
@@ -19,17 +19,6 @@ pub struct FoxGardenApp {
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
     editor_font: EditorFont,
-}
-
-/// Parses `doc`'s current contents and populates its initial diagnostics, so
-/// a file with a pre-existing syntax error shows its squiggle immediately on
-/// open rather than only after the first edit.
-fn open_parser_for(doc: &mut Document) -> IncrementalParser {
-    let mut parser = IncrementalParser::new(doc.language);
-    let source = doc.buffer.to_string();
-    parser.parse(&source);
-    doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just parsed"));
-    parser
 }
 
 /// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
@@ -56,7 +45,7 @@ fn handle_rename(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>, 
     if let Some(new_language) = new_language {
         if new_language != state.open_tabs[index].language {
             state.open_tabs[index].language = new_language;
-            parsers[index] = open_parser_for(&mut state.open_tabs[index]);
+            parsers[index] = tabs::open_parser_for(&mut state.open_tabs[index]);
         }
     }
 }
@@ -109,7 +98,7 @@ impl eframe::App for FoxGardenApp {
             match self.state.open_tab(path) {
                 Ok(index) => {
                     if index == self.parsers.len() {
-                        let parser = open_parser_for(&mut self.state.open_tabs[index]);
+                        let parser = tabs::open_parser_for(&mut self.state.open_tabs[index]);
                         self.parsers.push(parser);
                     }
                 }

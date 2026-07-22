@@ -54,6 +54,16 @@ pub fn show(
                 }
                 ui.close();
             }
+            if ui
+                .add_enabled(
+                    !state.closed_tabs.is_empty(),
+                    egui::Button::new("Reopen Closed Tab").shortcut_text("Ctrl+Shift+T"),
+                )
+                .clicked()
+            {
+                tabs::reopen_last_closed_tab(state, parsers);
+                ui.close();
+            }
             ui.separator();
             if ui.button("Exit").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -109,6 +119,8 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.separator();
         ui.label("Shortcuts:");
         ui.label("Ctrl+S — save the active tab");
+        ui.label("Ctrl+Shift+T — reopen the last closed tab");
+        ui.label("Middle-click a tab — close it");
         ui.separator();
         if ui.button("Close").clicked() {
             menu.about_open = false;

@@ -1,8 +1,20 @@
-use fg_core::EditorState;
+use fg_core::{Document, EditorState};
 use syntax::IncrementalParser;
 
 use crate::editor_widget;
 use crate::fonts::EditorFont;
+
+/// Parses `doc`'s current contents and populates its initial diagnostics, so
+/// a file with a pre-existing syntax error shows its squiggle immediately on
+/// open rather than only after the first edit. Shared by every path that
+/// adds a tab: opening a file, and reopening a closed one.
+pub(crate) fn open_parser_for(doc: &mut Document) -> IncrementalParser {
+    let mut parser = IncrementalParser::new(doc.language);
+    let source = doc.buffer.to_string();
+    parser.parse(&source);
+    doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just parsed"));
+    parser
+}
 
 /// Renders the tab bar and the active document's editor. `parsers` is kept
 /// index-aligned with `state.open_tabs`; every close here removes the
@@ -32,8 +44,12 @@ pub fn show(
             let selected = state.active_tab == Some(index);
 
             ui.horizontal(|ui| {
-                if ui.selectable_label(selected, label).clicked() {
+                let label_response = ui.selectable_label(selected, label);
+                if label_response.clicked() {
                     focus_request = Some(index);
+                }
+                if label_response.middle_clicked() {
+                    close_request = Some(index);
                 }
                 if ui.small_button("x").clicked() {
                     close_request = Some(index);
@@ -53,6 +69,12 @@ pub fn show(
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
     if save_requested {
         save_active_tab(state);
+    }
+
+    let reopen_closed_tab_requested =
+        ui.input(|i| i.key_pressed(egui::Key::T) && i.modifiers.command && i.modifiers.shift);
+    if reopen_closed_tab_requested {
+        reopen_last_closed_tab(state, parsers);
     }
 
     show_close_confirm(ui, state, pending_close, parsers);
@@ -100,6 +122,21 @@ pub fn request_close_tab(
     } else {
         state.close_tab(index);
         parsers.remove(index);
+    }
+}
+
+/// Restores the most recently closed tab (`Ctrl+Shift+T`), giving it a
+/// fresh parser if it wasn't already open elsewhere — mirrors how a newly
+/// opened file gets its parser in `app.rs`. A no-op if there's nothing left
+/// to reopen, or if that tab is already open (in which case `EditorState`
+/// just focuses it, so `parsers` needs no change).
+pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<IncrementalParser>) {
+    let Some(index) = state.reopen_last_closed_tab() else {
+        return;
+    };
+    if index == parsers.len() {
+        let parser = open_parser_for(&mut state.open_tabs[index]);
+        parsers.push(parser);
     }
 }
 
