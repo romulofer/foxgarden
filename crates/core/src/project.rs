@@ -22,14 +22,22 @@ impl FileNode {
             .unwrap_or_default();
 
         if path.is_dir() {
-            let mut entries: Vec<PathBuf> = std::fs::read_dir(path)?
-                .map(|entry| entry.map(|e| e.path()))
+            // Sort key is (is_file, path): directories (false) sort before
+            // files (true), each group alphabetically by path. `file_type`
+            // comes straight off the `DirEntry` rather than a fresh
+            // `path.is_dir()` stat call.
+            let mut entries: Vec<(bool, PathBuf)> = std::fs::read_dir(path)?
+                .map(|entry| {
+                    let entry = entry?;
+                    let is_file = !entry.file_type()?.is_dir();
+                    Ok((is_file, entry.path()))
+                })
                 .collect::<std::io::Result<_>>()?;
             entries.sort();
 
             let children = entries
                 .iter()
-                .map(|child_path| FileNode::build(child_path))
+                .map(|(_, child_path)| FileNode::build(child_path))
                 .collect::<std::io::Result<Vec<_>>>()?;
 
             Ok(FileNode {
@@ -80,19 +88,15 @@ mod tests {
         assert_eq!(project.root, root);
         assert_eq!(project.tree.kind, FileKind::Dir);
 
-        // top level, sorted: empty_dir, pom.xml, src
+        // dirs before files, each group sorted: empty_dir, src, pom.xml
         let names: Vec<&str> = project.tree.children.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, vec!["empty_dir", "pom.xml", "src"]);
+        assert_eq!(names, vec!["empty_dir", "src", "pom.xml"]);
 
         let empty_dir = &project.tree.children[0];
         assert_eq!(empty_dir.kind, FileKind::Dir);
         assert!(empty_dir.children.is_empty());
 
-        let pom = &project.tree.children[1];
-        assert_eq!(pom.kind, FileKind::File);
-        assert!(pom.children.is_empty());
-
-        let src = &project.tree.children[2];
+        let src = &project.tree.children[1];
         assert_eq!(src.kind, FileKind::Dir);
         let main = &src.children[0];
         assert_eq!(main.name, "main");
@@ -101,5 +105,9 @@ mod tests {
         let main_java = &java.children[0];
         assert_eq!(main_java.name, "Main.java");
         assert_eq!(main_java.kind, FileKind::File);
+
+        let pom = &project.tree.children[2];
+        assert_eq!(pom.kind, FileKind::File);
+        assert!(pom.children.is_empty());
     }
 }

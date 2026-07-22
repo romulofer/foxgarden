@@ -10,12 +10,14 @@ use crate::language::Language;
 #[derive(Debug)]
 pub enum OpenDocumentError {
     Io(std::io::Error),
+    Binary(PathBuf),
 }
 
 impl fmt::Display for OpenDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpenDocumentError::Io(e) => write!(f, "{e}"),
+            OpenDocumentError::Binary(path) => write!(f, "not a text file: {}", path.display()),
         }
     }
 }
@@ -52,6 +54,19 @@ impl Document {
             .and_then(|ext| ext.to_str())
             .and_then(Language::from_extension);
 
+        // The side panel lets any file in the tree be clicked — including
+        // build artifacts (`target/*.class`, jars) and binary assets, since
+        // there's no ignore list — and doesn't guess from the extension
+        // alone whether a file is text. Without this, a click on a large
+        // binary would fall straight into `read_to_string` below: a full
+        // read plus a whole-buffer UTF-8 validation pass, on the UI thread,
+        // just to discover it isn't text. Sniffing a small prefix for a NUL
+        // byte (the standard binary heuristic) rejects those files fast
+        // instead of blocking on a multi-megabyte read.
+        if looks_binary(&path)? {
+            return Err(OpenDocumentError::Binary(path));
+        }
+
         let contents = std::fs::read_to_string(&path)?;
         let buffer = Rope::from_str(&contents);
         let saved_buffer = buffer.clone();
@@ -79,6 +94,20 @@ impl Document {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Reads only the first `SNIFF_LEN` bytes of `path` and checks for a NUL
+/// byte. Deliberately a prefix, not the whole file: the point is to bound
+/// the cost of rejecting a binary to a few KB instead of its full size.
+fn looks_binary(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+
+    const SNIFF_LEN: usize = 8192;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; SNIFF_LEN];
+    let read = file.read(&mut buf)?;
+    Ok(buf[..read].contains(&0))
 }
 
 #[cfg(test)]
@@ -146,5 +175,21 @@ mod tests {
 
         let doc = Document::open(path).unwrap();
         assert_eq!(doc.language, None);
+    }
+
+    #[test]
+    fn binary_file_is_rejected_without_reading_it_fully() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icon.png");
+        // A NUL a few bytes into an otherwise huge file: if `open` fell
+        // through to `read_to_string`, this would still succeed in reading
+        // (then fail UTF-8 validation) — the point of `looks_binary` is to
+        // catch it from the first 8KB alone, before that full read happens.
+        let mut contents = vec![0x89, b'P', b'N', b'G', 0x00];
+        contents.extend(std::iter::repeat(b'a').take(50 * 1024 * 1024));
+        std::fs::write(&path, &contents).unwrap();
+
+        let result = Document::open(path.clone());
+        assert!(matches!(result, Err(OpenDocumentError::Binary(p)) if p == path));
     }
 }
