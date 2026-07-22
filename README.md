@@ -9,8 +9,8 @@ layer on top of.
 
 ## Features
 
-- Menu bar: File (New File, Open Folder, Save, Close Tab, Exit), Settings
-  (Light/Dark theme, editor font), Help (About)
+- Menu bar: File (New File, Open Folder, Save, Close Tab, Reopen Closed Tab,
+  Exit), Settings (Light/Dark theme, editor font), Help (About)
 - Side panel with the open project's file tree, with icons per entry
   (folders, `.java`, `.kt`); remembers and reopens the last project folder
   on restart
@@ -19,7 +19,12 @@ layer on top of.
 - Files open in tabs; clicking an already-open file focuses its tab instead
   of duplicating it
 - Dirty files show an asterisk (`*name.kt`) until saved (`Ctrl+S`)
-- Closing a dirty tab prompts to save, discard, or cancel
+- Closing a dirty tab prompts to save, discard, or cancel; close a tab via
+  its `x` button or by middle-clicking it
+- `Ctrl+Shift+T` reopens the most recently closed tab (repeatable — each
+  press walks further back through recently closed tabs), restoring it
+  instead of duplicating it if you already reopened the same file manually
+  in the meantime
 - Syntax highlighting for Java and Kotlin (tree-sitter based)
 - Red squiggly underlines on syntax errors, updated live as you type; hover
   one to see the error message as a tooltip

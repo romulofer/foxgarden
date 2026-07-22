@@ -70,7 +70,12 @@ core  <-  syntax  <-  app
 - **`crates/app`**: eframe/egui shell. `app.rs` owns `EditorState` plus a
   `parsers: Vec<IncrementalParser>` kept **index-aligned** with
   `state.open_tabs` — every tab open/close must update both in lockstep, or
-  the wrong parser ends up attached to the wrong document. `editor_widget.rs`
+  the wrong parser ends up attached to the wrong document. `tabs::open_parser_for`
+  is the one shared helper for creating a tab's parser (new file opens,
+  `Ctrl+Shift+T` reopen of a closed tab, and a rename that changes a file's
+  language all funnel through it); `EditorState::closed_tabs` is the LIFO
+  stack `close_tab`/`reopen_last_closed_tab` push/pop to make reopen
+  possible. `editor_widget.rs`
   is the custom highlighted/squiggled text widget (SPEC.md §5.4–5.5), with
   `Ctrl+D` multi-cursor editing layered on top (`multi_cursor.rs` has the
   pure search/edit logic — see the gotchas below for why this can't just use
