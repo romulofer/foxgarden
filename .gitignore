@@ -6,6 +6,7 @@
 # Checkpoint planning docs (local only, not tracked)
 PLAN.md
 SPEC.md
+FEATURES.md
 
 # Claude Code local (personal) settings
 .claude/settings.local.json

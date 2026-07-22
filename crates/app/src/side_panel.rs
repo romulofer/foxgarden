@@ -221,7 +221,7 @@ fn render_node(
 ) {
     match node.kind {
         FileKind::Dir => {
-            let header = egui::CollapsingHeader::new(&node.name)
+            let header = egui::CollapsingHeader::new(format!("📁 {}", node.name))
                 .id_salt(&node.path)
                 .default_open(false)
                 .show(ui, |ui| {
@@ -255,16 +255,19 @@ fn render_node(
                 return;
             }
 
-            let is_openable = node
-                .path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "java" || ext == "kt");
+            let extension = node.path.extension().and_then(|ext| ext.to_str());
+            let is_openable = matches!(extension, Some("java") | Some("kt"));
+            let icon = match extension {
+                Some("java") => "☕ ",
+                Some("kt") => "🔷 ",
+                _ => "",
+            };
+            let label_text = format!("{icon}{}", node.name);
 
             let response = if is_openable {
-                ui.selectable_label(false, &node.name)
+                ui.selectable_label(false, label_text)
             } else {
-                ui.label(&node.name)
+                ui.label(label_text)
             };
 
             if is_openable && response.clicked() {

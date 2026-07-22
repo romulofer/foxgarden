@@ -3,12 +3,38 @@
 Guidance for AI coding agents working in this repository. See `README.md` for
 a human-facing overview.
 
+## Design principle: lightweight AND functional
+
+FoxGarden's whole reason to exist is a fast, small, native editor — not
+"Electron but slower to write." Every feature decision has to hold both
+halves at once:
+
+- **Lightweight**: fast startup, low idle CPU/memory, no needless
+  dependencies, no re-parsing or re-querying more than an edit actually
+  requires. The one-frame highlighting lag, the incremental tree-sitter
+  reparse instead of full reparse, the thin `app` layer over tested
+  `core`/`syntax` state — these aren't corners cut, they're the point.
+  Before adding a dependency or a background computation, ask whether it's
+  earning its weight.
+- **Functional**: it still has to be a genuinely usable daily editor, not
+  a toy that proves a concept and stops. `FEATURES.md` (gitignored, local
+  roadmap doc — regenerate/consult it rather than assuming it's stale)
+  tracks the gap between what exists and what a real editor needs. Don't
+  read "lightweight" as license to leave that gap unaddressed indefinitely.
+
+Concretely: prefer the smaller/simpler implementation when both options are
+equally functional, but don't reach for "lightweight" to justify skipping a
+feature that's actually needed for the editor to be useful. When those two
+pull in different directions on a specific feature, that's worth surfacing
+to the user rather than silently picking one side.
+
 ## Constraints
 
 - **Do not author commits. Do not push upstream.** (Carried over from
   `CLAUDE.md` — these apply regardless of which agent is working here.)
-- `PLAN.md` and `SPEC.md` are intentionally gitignored (local planning docs,
-  not part of the published repo). Don't assume they exist in a fresh clone.
+- `PLAN.md`, `SPEC.md`, and `FEATURES.md` are intentionally gitignored
+  (local planning docs, not part of the published repo). Don't assume they
+  exist in a fresh clone.
 
 ## Commands
 
@@ -112,23 +138,28 @@ core  <-  syntax  <-  app
   and treated as "no stored value" rather than a visible error, so a bad seed
   file just looks like persistence isn't working at all, with no panic or
   log to point at the real cause.
-- **The window icon (`main.rs`'s `ICON_PNG`) is bundled from a small resized
-  copy, not the pristine source `icon.png` — but this is a likely fix, not a
-  confirmed one.** winit's X11 backend writes the icon via `_NET_WM_ICON`
-  (an X property holding raw ARGB pixels), and the call to set it is wrapped
-  in `.ignore_error()` on the egui-winit side — so if the property write
-  fails (plausible for the source `icon.png`, 1024x1024 / ~4MB once expanded
-  to ARGB), the window silently falls back to the WM's default icon with
-  **no error, panic, or log anywhere**. `xprop -id <window> _NET_WM_ICON`
-  came back empty both before *and after* switching to the resized
-  `icon_256.png` in this sandbox's nested X11 setup — so the size theory is
-  unverified here; it needs checking on a real desktop (it was seen showing
-  a generic fallback icon on the user's real Linux Mint/Cinnamon session
-  before the resize). If it's still wrong after that, look past property
-  size at whether this sandbox's X server/WM simply doesn't apply
-  `_NET_WM_ICON` at all, rather than assuming the size fix is sufficient.
-  Regenerate `icon_256.png` via `convert icon.png -resize 256x256
-  icon_256.png` if the source art changes.
+- **All icon files live under `crates/app/assets/icon/`** — the pristine
+  1024x1024 source (`icon.png`) and the small bundled copy actually embedded
+  by `main.rs`'s `ICON_PNG` (`icon_128.png`, downscaled further from 256px
+  after the 256px version still didn't confirm-fix the issue below).
+  Regenerate the small copy via `convert crates/app/assets/icon/icon.png
+  -resize 128x128 crates/app/assets/icon/icon_128.png` if the source art
+  changes — never point `include_bytes!` at the 1024px source directly.
+- **The window icon fix (bundling a small copy instead of the 1024px
+  source) is a likely fix, not a confirmed one.** winit's X11 backend
+  writes the icon via `_NET_WM_ICON` (an X property holding raw ARGB
+  pixels), and the call to set it is wrapped in `.ignore_error()` on the
+  egui-winit side — so if the property write fails (plausible for a
+  1024x1024 source, ~4MB once expanded to ARGB), the window silently falls
+  back to the WM's default icon with **no error, panic, or log anywhere**.
+  `xprop -id <window> _NET_WM_ICON` came back empty both before *and after*
+  switching to a resized copy in this sandbox's nested X11 setup — so the
+  size theory is unverified here; it needs checking on a real desktop (it
+  was seen showing a generic fallback icon on the user's real Linux
+  Mint/Cinnamon session before the resize). If it's still wrong after that,
+  look past property size at whether this sandbox's X server/WM simply
+  doesn't apply `_NET_WM_ICON` at all, rather than assuming the size fix is
+  sufficient.
 - **A `grammar.js` literal string is not proof that `tree_sitter::Query` can
   match it.** `queries/highlights_kotlin.scm` originally listed `"break"`,
   `"continue"`, and `"reified"` as keyword tokens — all three appear as

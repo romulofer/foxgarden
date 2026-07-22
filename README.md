@@ -10,9 +10,10 @@ layer on top of.
 ## Features
 
 - Menu bar: File (New File, Open Folder, Save, Close Tab, Exit), Settings
-  (Light/Dark theme), Help (About)
-- Side panel with the open project's file tree; remembers and reopens the
-  last project folder on restart
+  (Light/Dark theme, editor font), Help (About)
+- Side panel with the open project's file tree, with icons per entry
+  (folders, `.java`, `.kt`); remembers and reopens the last project folder
+  on restart
 - Create, rename, and delete files from the side panel — via the "New File…"
   button or right-click on a file/folder (delete asks for confirmation first)
 - Files open in tabs; clicking an already-open file focuses its tab instead
@@ -29,6 +30,8 @@ layer on top of.
 - Editor font is selectable (Settings > Font); defaults to bundled JetBrains
   Mono (SIL OFL 1.1 — license included alongside the font under
   `crates/app/assets/fonts/`)
+- Light theme background uses raylib's `RAYWHITE` (245, 245, 245); syntax
+  colors are adapted per-theme so both light and dark stay readable
 
 ## Tech stack
 

@@ -246,7 +246,7 @@ fn paint_diagnostics(
         let x_start = output.galley_pos.x + start_rect.left();
         let x_end = (output.galley_pos.x + end_rect.left()).max(x_start + 4.0);
 
-        paint_squiggle(painter, y, x_start, x_end, theme::ERROR_SQUIGGLE);
+        paint_squiggle(painter, y, x_start, x_end, squiggle_color);
     }
 }
 

@@ -4,6 +4,7 @@ use syntax::IncrementalParser;
 use crate::fonts::EditorFont;
 use crate::side_panel::SidePanelState;
 use crate::tabs;
+use crate::theme;
 
 /// Persistent state for menu-triggered dialogs.
 #[derive(Default)]
@@ -63,7 +64,11 @@ pub fn show(
         ui.menu_button("Settings", |ui| {
             ui.menu_button("Theme", |ui| {
                 if ui.button("Light").clicked() {
-                    ui.ctx().set_visuals(egui::Visuals::light());
+                    let mut visuals = egui::Visuals::light();
+                    visuals.panel_fill = theme::RAYWHITE;
+                    visuals.window_fill = theme::RAYWHITE;
+                    visuals.extreme_bg_color = theme::RAYWHITE;
+                    ui.ctx().set_visuals(visuals);
                     ui.close();
                 }
                 if ui.button("Dark").clicked() {
