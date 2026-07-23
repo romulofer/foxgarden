@@ -3,6 +3,7 @@ use syntax::IncrementalParser;
 
 use crate::style::fonts::EditorFont;
 use crate::widgets::editor;
+use crate::widgets::modal::show_modal;
 
 /// Fully reparses `doc`'s *current* buffer contents against `parser` and
 /// refreshes its diagnostics from the result. Only for a brand-new parser
@@ -219,8 +220,7 @@ fn show_close_confirm(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let ctx = ui.ctx().clone();
-    egui::Modal::new(egui::Id::new("close_confirm")).show(&ctx, |ui| {
+    show_modal(ui, "close_confirm", Some(index), |ui, &index| {
         ui.label(format!("Save changes to {name} before closing?"));
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {

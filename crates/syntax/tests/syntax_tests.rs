@@ -267,8 +267,11 @@ fn xml_highlight_query_covers_tag_names_and_comment() {
     };
 
     // Element names are the most prominent token in an XML file — tag
-    // captures map onto the same `Scope::Property` as YAML/properties keys.
-    assert!(has_scope_over("greeting", Scope::Property));
-    assert!(has_scope_over("message", Scope::Property));
+    // captures map onto their own `Scope::Tag`, visually distinct from
+    // YAML/properties keys' `Scope::Property` (see TECHNICAL_DEBT.md's
+    // now-resolved entry on this conflation).
+    assert!(has_scope_over("greeting", Scope::Tag));
+    assert!(has_scope_over("message", Scope::Tag));
+    assert!(!has_scope_over("greeting", Scope::Property), "an XML tag name must not carry Scope::Property");
     assert!(has_scope_over("A friendly note", Scope::Comment));
 }

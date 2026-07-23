@@ -3,13 +3,21 @@ use std::path::{Path, PathBuf};
 use crate::document::{Document, OpenDocumentError};
 use crate::project::Project;
 
+/// Cap on `closed_tabs`: it exists only so `Ctrl+Shift+T` can walk
+/// backwards through recently closed tabs, not as a full undo history, so
+/// unbounded growth buys nothing — each entry holds a full `Document`
+/// (its entire `Rope` buffer) that would otherwise sit in memory for the
+/// life of the process every time a tab is closed.
+const MAX_CLOSED_TABS: usize = 20;
+
 #[derive(Default)]
 pub struct EditorState {
     pub project: Option<Project>,
     pub open_tabs: Vec<Document>,
     pub active_tab: Option<usize>,
     /// Recently closed tabs, most-recently-closed last. `close_tab` pushes
-    /// onto this; `reopen_last_closed_tab` pops off it.
+    /// onto this (capped at `MAX_CLOSED_TABS`, dropping the oldest);
+    /// `reopen_last_closed_tab` pops off it.
     pub closed_tabs: Vec<Document>,
 }
 
@@ -20,6 +28,9 @@ impl EditorState {
 
     pub fn open_project(&mut self, root: PathBuf) -> std::io::Result<()> {
         self.project = Some(Project::open(root)?);
+        // Reopening a tab closed in a project you've since navigated away
+        // from would be a confusing "resurrection", not a useful undo.
+        self.closed_tabs.clear();
         Ok(())
     }
 
@@ -67,6 +78,9 @@ impl EditorState {
         };
 
         self.closed_tabs.push(document);
+        if self.closed_tabs.len() > MAX_CLOSED_TABS {
+            self.closed_tabs.remove(0); // drop the oldest
+        }
     }
 
     /// Pops the most recently closed tab back onto `open_tabs` and focuses
@@ -198,5 +212,50 @@ mod tests {
         let index = state.reopen_last_closed_tab().unwrap();
         assert_eq!(index, manual_index);
         assert_eq!(state.open_tabs.len(), 1);
+    }
+
+    #[test]
+    fn closed_tabs_is_capped_and_drops_the_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = EditorState::new();
+
+        let paths: Vec<PathBuf> = (0..=MAX_CLOSED_TABS)
+            .map(|i| java_file(&dir, &format!("F{i}.java")))
+            .collect();
+        for path in &paths {
+            state.open_tab(path.clone()).unwrap();
+        }
+        // Close them oldest-first (F0.java, F1.java, ...) — one more close
+        // than the cap allows.
+        for _ in 0..paths.len() {
+            state.close_tab(0);
+        }
+
+        assert_eq!(state.closed_tabs.len(), MAX_CLOSED_TABS);
+        assert!(
+            state
+                .closed_tabs
+                .iter()
+                .all(|doc| doc.path().file_name().unwrap() != "F0.java"),
+            "the oldest closed tab should have been evicted to stay under the cap"
+        );
+        let most_recent = state.closed_tabs.last().unwrap().path().file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(most_recent, format!("F{MAX_CLOSED_TABS}.java"));
+    }
+
+    #[test]
+    fn open_project_clears_closed_tabs_from_the_previous_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "A.java");
+        let mut state = EditorState::new();
+
+        state.open_tab(a).unwrap();
+        state.close_tab(0);
+        assert_eq!(state.closed_tabs.len(), 1);
+
+        let other_project_dir = tempfile::tempdir().unwrap();
+        state.open_project(other_project_dir.path().to_path_buf()).unwrap();
+
+        assert!(state.closed_tabs.is_empty());
     }
 }

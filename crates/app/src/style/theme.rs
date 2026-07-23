@@ -50,6 +50,7 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Type => Color32::from_rgb(229, 192, 123),
             Scope::Function => Color32::from_rgb(97, 175, 239),
             Scope::Property => Color32::from_rgb(224, 108, 117),
+            Scope::Tag => Color32::from_rgb(86, 182, 194),
         }
     } else {
         match scope {
@@ -59,6 +60,7 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Type => Color32::from_rgb(152, 104, 1),
             Scope::Function => Color32::from_rgb(37, 106, 194),
             Scope::Property => Color32::from_rgb(228, 86, 73),
+            Scope::Tag => Color32::from_rgb(24, 141, 148),
         }
     }
 }

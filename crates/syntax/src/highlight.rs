@@ -6,12 +6,18 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language::{highlights_query_source, ts_language};
 
-/// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with `Property`
-/// for the markup/config languages added afterward: Java/Kotlin's five
-/// scopes have nothing that fits a YAML/properties mapping key or an XML
-/// tag name, and those are the single most prominent token in either format
-/// — leaving them uncolored would make "syntax highlighting" for these
-/// languages mean little beyond comments and string values.
+/// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with
+/// `Property` and `Tag` for the markup/config languages added afterward:
+/// Java/Kotlin's original five scopes have nothing that fits a YAML/
+/// properties mapping key or an XML tag name, and those are the single
+/// most prominent token in either format — leaving them uncolored would
+/// make "syntax highlighting" for these languages mean little beyond
+/// comments and string values. `Property` and `Tag` are separate variants
+/// (rather than one shared scope) because they're different lexical
+/// concepts that happen to both need *a* color — a future language wanting
+/// tag-like styling visually distinct from property-key styling (HTML
+/// alongside XML, say) is free to give `Tag` its own color without also
+/// disturbing every YAML/properties key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Keyword,
@@ -20,6 +26,7 @@ pub enum Scope {
     Type,
     Function,
     Property,
+    Tag,
 }
 
 fn scope_for_capture(name: &str) -> Option<Scope> {
@@ -33,8 +40,10 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
         Some(Scope::Type)
     } else if name.starts_with("function") {
         Some(Scope::Function)
-    } else if name.starts_with("property") || name.starts_with("tag") {
+    } else if name.starts_with("property") {
         Some(Scope::Property)
+    } else if name.starts_with("tag") {
+        Some(Scope::Tag)
     } else {
         None
     }

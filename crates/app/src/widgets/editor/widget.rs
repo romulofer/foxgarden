@@ -121,19 +121,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // or wrap width changed since it was last shaped.
     let layout_cache_id = egui::Id::new(("editor_layout_cache", id_salt.as_str()));
 
-    // While extra (Ctrl+D) cursors are active, the events that would mutate
-    // the buffer must be pulled out of the queue before `TextEdit::show`
-    // runs, so its own single-cursor editing logic never sees them and
-    // can't double-edit the primary cursor — they're applied manually,
-    // at every active cursor at once, after `show` returns.
     let multi_cursor_active_at_start = !doc.extra_selections.is_empty();
-    let mut intercepted_events: Vec<Event> = Vec::new();
-    if multi_cursor_active_at_start {
-        ui.input_mut(|i| {
-            intercepted_events = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
-            i.events.retain(|e| !is_multi_edit_event(e));
-        });
-    }
 
     // `TextEditState::store` takes `self` by value, so it can only be
     // called once per frame — every path below that wants to override
@@ -141,6 +129,50 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // here, and a single `set_char_range` + `store` happens at the very
     // end.
     let mut manual_cursor_range: Option<CCursorRange> = None;
+
+    // While extra (Ctrl+D) cursors are active, an editing keystroke must
+    // land at every active cursor at once, not just the one egui's own
+    // single-cursor `TextEdit` logic would edit alone. This reads the
+    // *persisted* selection and applies the edit manually *before*
+    // `TextEdit::show()` runs — the same pre-apply timing wrap-selection and
+    // the indent interception below use — so this frame already renders the
+    // fully multi-edited result instead of a stale one needing a follow-up
+    // `request_repaint()`. (A previous version of this function applied the
+    // edit *after* `show()`, off `output.cursor_range`, and ate a stale
+    // frame; see the resolved entry in `TECHNICAL_DEBT.md` for why that was
+    // debt worth fixing rather than a style difference from wrap-selection.)
+    // `doc.extra_selections` only ever becomes non-empty via a prior
+    // `Ctrl+D` frame, so by the time `multi_cursor_active_at_start` is true
+    // here, a persisted `TextEditState` from that prior frame is always
+    // expected to exist.
+    if multi_cursor_active_at_start {
+        let primary_range = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+            .and_then(|state| state.cursor.char_range())
+            .map(|range| range.as_sorted_char_range());
+
+        if let Some(primary_range) = primary_range {
+            let intercepted_events = ui.input_mut(|i| {
+                let matched: Vec<Event> = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
+                i.events.retain(|e| !is_multi_edit_event(e));
+                matched
+            });
+
+            if !intercepted_events.is_empty() {
+                let op = multi_edit_op_from_events(&intercepted_events);
+                let mut selections = Vec::with_capacity(1 + doc.extra_selections.len());
+                selections.push(primary_range.start.0..primary_range.end.0);
+                selections.extend(doc.extra_selections.iter().cloned());
+
+                let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
+
+                apply_edit(doc, parser, &old_text, &new_text);
+                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
+                doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
+                old_text = new_text.clone();
+                text = new_text;
+            }
+        }
+    }
 
     // Typing a bracket/quote while a selection is active should wrap the
     // selected text in it, not replace it the way egui's `TextEdit` does by
@@ -172,10 +204,8 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
                 .filter(|range| !range.is_empty());
 
             if let Some(range) = prior_selection {
-                let opener = ui.input_mut(|i| {
-                    let index = i.events.iter().position(|e| single_pairable_char(e).is_some());
-                    index.map(|index| single_pairable_char(&i.events.remove(index)).expect("matched above"))
-                });
+                let opener = take_event(ui, |e| single_pairable_char(e).is_some())
+                    .map(|e| single_pairable_char(&e).expect("matched above"));
 
                 if let Some(opener) = opener {
                     if let Some((wrapped, sel_start, sel_end)) =
@@ -211,13 +241,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
                 .filter(|range| !range.is_empty());
 
             if let Some(range) = prior_selection {
-                let removed = ui.input_mut(|i| {
-                    let index = i
-                        .events
-                        .iter()
-                        .position(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
-                    index.map(|index| i.events.remove(index))
-                });
+                let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
 
                 if removed.is_some() {
                     let dedent = ui.input(|i| i.modifiers.shift);
@@ -325,31 +349,12 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         })
         .inner;
 
-    if !intercepted_events.is_empty() {
-        if let Some(primary_range) = output.cursor_range {
-            let op = multi_edit_op_from_events(&intercepted_events);
-            let sorted = primary_range.as_sorted_char_range();
-            let mut selections = Vec::with_capacity(1 + doc.extra_selections.len());
-            selections.push(sorted.start.0..sorted.end.0);
-            selections.extend(doc.extra_selections.iter().cloned());
-
-            let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
-
-            apply_edit(doc, parser, &old_text, &new_text);
-
-            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
-            doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
-            // This frame's `output.galley` was laid out before the edit
-            // above landed, so the paint below is stale by one frame — the
-            // same class of staleness the auto-indent path already accepts
-            // (see its comment below). Ask for a repaint to make it correct
-            // as soon as possible.
-            ui.ctx().request_repaint();
-        }
-    } else if output.response.changed() {
+    if output.response.changed() {
         if multi_cursor_active_at_start {
-            // A mutating event that wasn't in the intercepted set (Tab,
-            // undo/redo, an IME commit, ...) reached egui's own
+            // A mutating event that wasn't applied by the multi-cursor block
+            // above — Tab, undo/redo, an IME commit, or (in principle, never
+            // observed in practice — see that block's comment) no persisted
+            // selection yet to apply against — reached egui's own
             // single-cursor logic and edited the primary cursor alone.
             // `doc.extra_selections` is now stale relative to `text`, so
             // rather than paint/edit at wrong offsets next frame, treat
@@ -431,6 +436,20 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         let id = output.response.id;
         output.state.store(ui.ctx(), id);
     }
+}
+
+/// Removes and returns the first event in this frame's input queue matching
+/// `predicate`, if any. The shared "pull one event out of the queue before
+/// `TextEdit::show()` sees it" primitive behind wrap-selection's and the
+/// Tab/Shift+Tab indent interception's single-event removal (see
+/// `TECHNICAL_DEBT.md`'s formerly-open "two interception mechanisms" entry)
+/// — factored out once a third call site needed the identical shape, rather
+/// than let each new feature reinvent its own `position` + `remove`.
+fn take_event(ui: &egui::Ui, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
+    ui.input_mut(|i| {
+        let index = i.events.iter().position(predicate)?;
+        Some(i.events.remove(index))
+    })
 }
 
 /// The single character `event` types, if it's exactly one character *and*
@@ -786,6 +805,49 @@ mod tests {
         });
     }
 
+    /// Like `focused_frame`, but for exercising multi-cursor edits: `show`
+    /// reads the primary cursor's *persisted* `TextEditState` to apply a
+    /// multi-cursor edit before its own `TextEdit::show()` call runs (see
+    /// `show`'s multi-cursor block), so — same reasoning as
+    /// `focused_frame_with_selection` above — this runs one warm-up frame
+    /// first to establish that persisted state before driving the frame
+    /// under test. This isn't just a test-harness nicety: in real usage
+    /// `doc.extra_selections` can only ever become non-empty via an earlier
+    /// `Ctrl+D` frame, so a widget with multi-cursor active has necessarily
+    /// already lived through at least one prior frame — a single dry frame
+    /// with `extra_selections` pre-seeded, as `focused_frame` alone would
+    /// give it, is a scenario that can't happen outside a test.
+    fn focused_frame_with_extra_selections(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        extra_selections: Vec<std::ops::Range<usize>>,
+        events: Vec<egui::Event>,
+    ) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default);
+        });
+
+        doc.extra_selections = extra_selections;
+
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default);
+        });
+    }
+
     #[test]
     fn typing_a_bracket_over_a_selection_wraps_it_instead_of_replacing_it() {
         let (_dir, mut doc) = open_fixture("foo bar baz", "notes.txt");
@@ -952,11 +1014,16 @@ mod tests {
     fn multi_cursor_typed_edit_applies_at_every_active_cursor() {
         let (_dir, mut doc) = open_fixture("abcde", "Hello.java");
         let mut parser = parsed(Language::Java, &doc.buffer.to_string());
-        // Primary cursor starts at 0 (a fresh widget's default cursor);
-        // these two extras sit at char indices 2 and 4.
-        doc.extra_selections = vec![2..2, 4..4];
 
-        focused_frame(&mut doc, &mut parser, vec![egui::Event::Text("Y".to_string())]);
+        // Primary cursor starts at 0 (a fresh widget's default cursor, from
+        // the warm-up frame `focused_frame_with_extra_selections` runs
+        // before setting these); the two extras sit at char indices 2 and 4.
+        focused_frame_with_extra_selections(
+            &mut doc,
+            &mut parser,
+            vec![2..2, 4..4],
+            vec![egui::Event::Text("Y".to_string())],
+        );
 
         assert_eq!(doc.buffer.to_string(), "YabYcdYe");
         assert_eq!(doc.extra_selections, vec![4..4, 7..7]);

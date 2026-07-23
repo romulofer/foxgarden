@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
 
+use crate::widgets::modal::show_modal;
+
 /// Transient UI state for the side panel, owned by the caller across frames.
 #[derive(Default)]
 pub struct SidePanelState {
@@ -280,12 +282,11 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let ctx = ui.ctx().clone();
-    egui::Modal::new(egui::Id::new("delete_confirm")).show(&ctx, |ui| {
+    show_modal(ui, "delete_confirm", Some(path), |ui, path| {
         ui.label(format!("Delete {name}? This cannot be undone."));
         ui.horizontal(|ui| {
             if ui.button("Delete").clicked() {
-                match std::fs::remove_file(&path) {
+                match std::fs::remove_file(path) {
                     Ok(()) => outcome.deleted = Some(path.clone()),
                     Err(err) => outcome.error = Some(format!("failed to delete: {err}")),
                 }

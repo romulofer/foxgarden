@@ -269,20 +269,17 @@ core  <-  syntax  <-  app
   -resize 128x128 crates/app/assets/icon/icon_128.png` if the source art
   changes — never point `include_bytes!` at the 1024px source directly.
 - **The window icon fix (bundling a small copy instead of the 1024px
-  source) is a likely fix, not a confirmed one.** winit's X11 backend
-  writes the icon via `_NET_WM_ICON` (an X property holding raw ARGB
-  pixels), and the call to set it is wrapped in `.ignore_error()` on the
-  egui-winit side — so if the property write fails (plausible for a
-  1024x1024 source, ~4MB once expanded to ARGB), the window silently falls
-  back to the WM's default icon with **no error, panic, or log anywhere**.
-  `xprop -id <window> _NET_WM_ICON` came back empty both before *and after*
-  switching to a resized copy in this sandbox's nested X11 setup — so the
-  size theory is unverified here; it needs checking on a real desktop (it
-  was seen showing a generic fallback icon on the user's real Linux
-  Mint/Cinnamon session before the resize). If it's still wrong after that,
-  look past property size at whether this sandbox's X server/WM simply
-  doesn't apply `_NET_WM_ICON` at all, rather than assuming the size fix is
-  sufficient.
+  source) is confirmed working.** winit's X11 backend writes the icon via
+  `_NET_WM_ICON` (an X property holding raw ARGB pixels), and the call to
+  set it is wrapped in `.ignore_error()` on the egui-winit side — so if the
+  property write fails (plausible for a 1024x1024 source, ~4MB once
+  expanded to ARGB), the window silently falls back to the WM's default
+  icon with **no error, panic, or log anywhere**. `xprop -id <window>
+  _NET_WM_ICON` came back empty both before *and after* switching to a
+  resized copy in this sandbox's nested X11 setup, so the size theory
+  couldn't be verified there — but it's since been confirmed fixed on a
+  real (non-sandboxed) desktop, so the 128px bundling is the right call,
+  not a no-op that happened to coincide with an unrelated fix.
 - **A `grammar.js` literal string is not proof that `tree_sitter::Query` can
   match it.** `queries/highlights_kotlin.scm` originally listed `"break"`,
   `"continue"`, and `"reified"` as keyword tokens — all three appear as

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::Range;
 
 use egui::text::CCursor;
@@ -6,23 +7,60 @@ use fg_core::Diagnostic;
 
 use crate::style::theme;
 
+/// Maps every byte offset in `queries` (assumed sorted, deduped, and each a
+/// valid char boundary of `text` — `paint_diagnostics` guarantees this
+/// before calling in) to its char offset, in one forward pass over `text`
+/// rather than restarting a `text[..b].chars().count()` scan from byte 0
+/// per offset. `text.len()` is a valid query (the "end of the last
+/// diagnostic touches end of file" case) even though it's one past the
+/// last real char, so it's queried via a synthetic trailing entry rather
+/// than `char_indices()`, which never yields it.
+fn char_offsets_for(text: &str, queries: &[usize]) -> HashMap<usize, usize> {
+    let mut result = HashMap::with_capacity(queries.len());
+    let mut qi = 0;
+    for (char_count, (byte_idx, _)) in text.char_indices().chain(std::iter::once((text.len(), '\0'))).enumerate() {
+        while qi < queries.len() && queries[qi] == byte_idx {
+            result.insert(byte_idx, char_count);
+            qi += 1;
+        }
+    }
+    result
+}
+
 pub(super) fn paint_diagnostics(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     text: &str,
     diagnostics: &[Diagnostic],
 ) {
+    if diagnostics.is_empty() {
+        return;
+    }
+
+    // Clamp/validate each diagnostic's byte range up front, keeping its
+    // original index so painting order below matches `diagnostics`' order
+    // unchanged from before this function stopped scanning per-diagnostic.
+    let spans: Vec<(usize, usize, usize)> = diagnostics
+        .iter()
+        .enumerate()
+        .filter_map(|(i, diag)| {
+            let start = diag.range.start.min(text.len());
+            let end = diag.range.end.min(text.len()).max(start);
+            (text.is_char_boundary(start) && text.is_char_boundary(end)).then_some((i, start, end))
+        })
+        .collect();
+
+    let mut queries: Vec<usize> = spans.iter().flat_map(|&(_, start, end)| [start, end]).collect();
+    queries.sort_unstable();
+    queries.dedup();
+    let char_offset_for = char_offsets_for(text, &queries);
+
     let painter = ui.painter();
     let squiggle_color = theme::error_squiggle(ui.visuals().dark_mode);
-    for diag in diagnostics {
-        let start = diag.range.start.min(text.len());
-        let end = diag.range.end.min(text.len()).max(start);
-        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-            continue;
-        }
-
-        let char_start = text[..start].chars().count();
-        let char_end = text[..end].chars().count().max(char_start + 1);
+    for (i, start, end) in spans {
+        let diag = &diagnostics[i];
+        let char_start = char_offset_for[&start];
+        let char_end = char_offset_for[&end].max(char_start + 1);
 
         let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
         let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
@@ -122,5 +160,57 @@ pub(super) fn paint_extra_selections(
                 selection_color,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ground truth for every case below: the same per-offset conversion
+    /// `paint_diagnostics` used before this file's byte→char batching (see
+    /// `TECHNICAL_DEBT.md`'s now-resolved entry on this function) — kept
+    /// here purely as an oracle to check `char_offsets_for` against, not as
+    /// production code.
+    fn naive_char_offset(text: &str, byte_offset: usize) -> usize {
+        text[..byte_offset].chars().count()
+    }
+
+    #[test]
+    fn char_offsets_for_matches_naive_conversion_on_ascii() {
+        let text = "abcde";
+        let queries = vec![0, 2, 5];
+        let offsets = char_offsets_for(text, &queries);
+
+        for &q in &queries {
+            assert_eq!(offsets[&q], naive_char_offset(text, q));
+        }
+    }
+
+    #[test]
+    fn char_offsets_for_matches_naive_conversion_across_multi_byte_chars() {
+        // "h" (1 byte) + "é" (2 bytes, U+00E9) + "llo" (3 bytes) = 6 bytes,
+        // 5 chars — byte offsets land mid-string on both sides of the
+        // 2-byte character.
+        let text = "héllo";
+        let queries = vec![0, 1, 3, 4, 5, 6];
+        let offsets = char_offsets_for(text, &queries);
+
+        for &q in &queries {
+            assert_eq!(
+                offsets[&q],
+                naive_char_offset(text, q),
+                "byte offset {q} in {text:?} converted incorrectly"
+            );
+        }
+        // Spot-check the interesting one directly: byte 3 sits right after
+        // the 2-byte "é", so exactly 2 chars ("h", "é") precede it.
+        assert_eq!(offsets[&3], 2);
+    }
+
+    #[test]
+    fn char_offsets_for_handles_empty_text() {
+        let offsets = char_offsets_for("", &[0]);
+        assert_eq!(offsets[&0], 0);
     }
 }

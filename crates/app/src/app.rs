@@ -7,6 +7,7 @@ use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::tabs;
 use crate::style::fonts::EditorFont;
+use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
 /// Newline-joined absolute paths of the tabs that were open at last exit, in
@@ -176,25 +177,18 @@ impl FoxGardenApp {
 /// acknowledged. Free function rather than a method so its borrow of
 /// `last_error` doesn't overlap `&mut self` for the rest of `ui()`.
 ///
-/// Borrows the message for the label instead of cloning it, deferring the
-/// actual `*last_error = None` write until after the modal closure — same
-/// "record the outcome, apply it once outside the closure" shape
-/// `widgets::editor::show` already uses for `manual_cursor_range` — so
-/// dismissing doesn't mean an extra heap allocation on every frame the
-/// error stays open, just the one frame the user actually clicks "OK".
+/// Borrows the message for the label instead of cloning it — `show_modal`
+/// returning the closure's result (whether "OK" was clicked) is what lets
+/// the actual `*last_error = None` write happen after `show_modal` returns,
+/// once the borrow of `last_error` used for `message` has ended, without
+/// needing a separate `dismissed` flag mutated from inside the closure.
 fn show_error_modal(ui: &egui::Ui, last_error: &mut Option<String>) {
-    let Some(message) = last_error.as_deref() else {
-        return;
-    };
-    let ctx = ui.ctx().clone();
-    let mut dismissed = false;
-    egui::Modal::new(egui::Id::new("error_modal")).show(&ctx, |ui| {
-        ui.label(message);
-        if ui.button("OK").clicked() {
-            dismissed = true;
-        }
+    let message = last_error.as_deref();
+    let dismissed = show_modal(ui, "error_modal", message, |ui, message| {
+        ui.label(*message);
+        ui.button("OK").clicked()
     });
-    if dismissed {
+    if dismissed == Some(true) {
         *last_error = None;
     }
 }

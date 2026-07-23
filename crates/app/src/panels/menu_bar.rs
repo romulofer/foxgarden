@@ -5,6 +5,7 @@ use super::side_panel::SidePanelState;
 use super::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::theme;
+use crate::widgets::modal::show_modal;
 
 /// Persistent state for menu-triggered dialogs.
 #[derive(Default)]
@@ -116,11 +117,7 @@ pub fn show(
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
-    if !menu.about_open {
-        return;
-    }
-    let ctx = ui.ctx().clone();
-    egui::Modal::new(egui::Id::new("about_dialog")).show(&ctx, |ui| {
+    let closed = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
         ui.heading("FoxGarden");
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.label("A light code editor for Java and Kotlin.");
@@ -132,8 +129,9 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
         ui.label("Ctrl+J — join the current line with the next one");
         ui.separator();
-        if ui.button("Close").clicked() {
-            menu.about_open = false;
-        }
+        ui.button("Close").clicked()
     });
+    if closed == Some(true) {
+        menu.about_open = false;
+    }
 }
