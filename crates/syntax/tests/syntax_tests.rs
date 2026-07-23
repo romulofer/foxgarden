@@ -117,6 +117,16 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     assert!(has_scope_over("this", Scope::Keyword));
     assert!(has_scope_over("true", Scope::Keyword));
     assert!(has_scope_over("println", Scope::Function));
+
+    // Regression coverage for gaps found by diffing against Zed's own Java
+    // extension (`../references/java`, same tree-sitter-java grammar): record
+    // and custom-annotation declaration names weren't captured as `@type` at
+    // all, `"@interface"` wasn't a keyword, and binary integer literals
+    // weren't in the `@number` literal list.
+    assert!(has_scope_over("Point", Scope::Type));
+    assert!(has_scope_over("Marker", Scope::Type));
+    assert!(has_scope_over("@interface", Scope::Keyword));
+    assert!(has_scope_over("record", Scope::Keyword));
 }
 
 #[test]

@@ -8,6 +8,25 @@
 ; via the shared "starts_with(\"function\")" prefix match — but that's an
 ; accident of prefix collision, not an intentional choice to color `super`
 ; as a function.
+;
+; Also extended past the bundled query with coverage it lacked outright
+; (checked against `../references/java`, Zed's own extension, which pins the
+; identical `tree-sitter/tree-sitter-java` grammar so its highlights.scm is a
+; valid diff target — unlike Kotlin's reference, which targets a different
+; grammar crate than the one vendored here): `record_declaration` and
+; `annotation_type_declaration` names weren't captured at all, so a record's
+; or a custom annotation's own name rendered as plain text even though
+; class/interface/enum names were; and `"@interface"` (the keyword
+; introducing an annotation type declaration) was missing from the keyword
+; list. Both are user-visible fixes (`@type`/`@keyword` both have a `Scope`).
+;
+; `binary_integer_literal` (e.g. `0b1010`) was also added to the `@number`
+; literal list, alongside `hex`/`decimal`/`octal_integer_literal` — this is
+; NOT currently user-visible: `scope_for_capture` in highlight.rs has no
+; "number"-prefixed branch, so every numeric-literal capture in this file,
+; not just this one, is inert today. Added anyway for consistency with the
+; other three integer literal kinds already listed, so the four are complete
+; as a set whenever `Scope::Number` (or equivalent) is added.
 
 ; Variables
 
@@ -40,6 +59,10 @@
 (class_declaration
   name: (identifier) @type)
 (enum_declaration
+  name: (identifier) @type)
+(record_declaration
+  name: (identifier) @type)
+(annotation_type_declaration
   name: (identifier) @type)
 
 ((field_access
@@ -81,6 +104,7 @@
   (hex_integer_literal)
   (decimal_integer_literal)
   (octal_integer_literal)
+  (binary_integer_literal)
   (decimal_floating_point_literal)
   (hex_floating_point_literal)
 ] @number
@@ -108,6 +132,7 @@
 ; Keywords
 
 [
+  "@interface"
   "abstract"
   "assert"
   "break"
