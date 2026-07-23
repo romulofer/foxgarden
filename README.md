@@ -7,6 +7,12 @@ project tree, tabs, dirty-state tracking, syntax highlighting, and syntax-error
 squiggles — that later checkpoints (Maven awareness, LSP, build/run) will
 layer on top of.
 
+Speed is a hard requirement, not a nice-to-have — [Zed](https://zed.dev) is
+the bar FoxGarden holds itself to for startup time, input latency, and idle
+resource use. The later Maven/LSP/build-tooling checkpoints look to Zed's own
+[Java](https://github.com/zed-extensions/java) and
+[Kotlin](https://github.com/zed-extensions/kotlin) extensions as prior art.
+
 ## Features
 
 - Menu bar: File (New File, Open Folder, Save, Close Tab, Reopen Closed Tab,

@@ -6,8 +6,31 @@ a human-facing overview.
 ## Design principle: lightweight AND functional
 
 FoxGarden's whole reason to exist is a fast, small, native editor — not
-"Electron but slower to write." Every feature decision has to hold both
-halves at once:
+"Electron but slower to write." [Zed](https://zed.dev) is the concrete bar for
+"lightning fast": its source is checked out at `../references/zed` (relative
+to this repo) specifically so architecture/performance questions have a
+real, production-grade answer to check against instead of a guess — e.g. how
+it structures incremental parsing/rendering, what it defers vs. does eagerly,
+how it keeps a hot path (input, scroll, redraw) free of anything that scales
+with project or file size. It's a reference to *learn from*, not a
+dependency or a codebase to copy wholesale — FoxGarden's own scope (a
+Java/Kotlin-focused editor, not Zed's general-purpose multi-language/
+collaborative feature set) means plenty of what Zed does is out of scope
+here; pull the *principles* (its approach to a specific hot path, a specific
+caching strategy) rather than porting its architecture verbatim.
+
+Two more references sit alongside it for the same reason, scoped narrower:
+`../references/java` and `../references/kotlin` are Zed's own Java and
+Kotlin extensions (language server wiring, tree-sitter grammar choices,
+Gradle/Maven task and debug-adapter integration). These are checkpoint-1
+non-goals today (see `README.md`'s "Non-goals" section — no LSP, no Maven
+awareness yet), but they're the concrete answer for *when* that work starts:
+how a real editor structures JDTLS/Kotlin Language Server startup, what a
+Gradle/Maven-aware task runner actually needs to detect, how debug adapter
+wiring is scoped. Don't reach for them on unrelated work; do read them before
+designing the LSP/build-tooling checkpoint from scratch.
+
+Every feature decision has to hold both halves at once:
 
 - **Lightweight**: fast startup, low idle CPU/memory, no needless
   dependencies, no re-parsing or re-querying more than an edit actually
@@ -60,6 +83,14 @@ ourselves in `crates/app/src/widgets/editor/widget.rs`).
 - `PLAN.md`, `SPEC.md`, and `FEATURES.md` are intentionally gitignored
   (local planning docs, not part of the published repo). Don't assume they
   exist in a fresh clone.
+- `../references/zed`, `../references/java`, and `../references/kotlin`
+  (checked out one level *above* this repo, not inside it) are local
+  reference checkouts, not part of this repo at all — nothing about them is
+  gitignored *from* this repo because they were never in it to begin with.
+  Don't assume they exist in a fresh clone, and don't reference their paths
+  from anything that ships with the repo (`README.md`, `LICENSE`, etc.) —
+  `AGENTS.md`/`CLAUDE.md` are the right place for pointers to them, since
+  those are read by whoever/whatever is actually working in this checkout.
 
 ## Commands
 
