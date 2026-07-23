@@ -448,6 +448,11 @@ this was tested in — so the fix track record so far is "was seen working
 on the reporting user's real Linux Mint/Cinnamon desktop before the
 resize was even applied," not a controlled before/after confirmation.
 
+A same-session attempt to shrink this further (128 -> 32, then 128 -> 64)
+was tried and reverted at the user's request — back to 128×128 as the
+bundled size. Whatever the eventual fix turns out to be, it isn't "keep
+halving the PNG."
+
 ### Why this matters
 
 If the size theory is wrong, the real cause (per `AGENTS.md`'s own
@@ -468,7 +473,9 @@ bundled icon. If it's confirmed working, this entry can simply be deleted
 (and the `AGENTS.md` gotcha updated from "likely, not confirmed" to
 "confirmed"). If it's *not* working, the investigation needs to go past
 the size theory to whether `_NET_WM_ICON` is being set at all on whatever
-desktop is being tested.
+desktop is being tested — a `.desktop` file's `Icon=` entry, or whatever
+icon-resolution convention the specific WM/DE in use actually follows, is
+worth checking before trying yet another PNG size.
 
 ### Why it wasn't fixed on the spot
 
@@ -479,4 +486,7 @@ original investigation left it unconfirmed in the first place.
 ### Trigger condition
 
 Next time anyone is running FoxGarden on a real desktop anyway (not a
-sandbox), it costs one `xprop` command to close this out either way.
+sandbox), it costs one `xprop` command to close this out either way. If
+it's still broken at 128×128, that's the trigger to stop treating this as
+a size problem and check what icon-resolution mechanism the actual WM/DE
+uses instead.
