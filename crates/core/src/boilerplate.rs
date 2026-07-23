@@ -32,6 +32,10 @@ pub fn generate(language: Language, project_root: &Path, file_path: &Path) -> St
             out.push_str(&format!("class {class_name} {{\n\n}}\n"));
             out
         }
+        // Class/package scaffolding doesn't mean anything for a config or
+        // markup file — a new one just starts empty, same as any file with
+        // no recognized language at all.
+        Language::Properties | Language::Yaml | Language::Xml => String::new(),
     }
 }
 

@@ -5,6 +5,9 @@ const VALID_JAVA: &str = include_str!("fixtures/valid.java");
 const VALID_KOTLIN: &str = include_str!("fixtures/valid.kt");
 const UNCLOSED_BRACE_JAVA: &str = include_str!("fixtures/unclosed_brace.java");
 const MALFORMED_CLASS_KOTLIN: &str = include_str!("fixtures/malformed_class.kt");
+const VALID_PROPERTIES: &str = include_str!("fixtures/valid.properties");
+const VALID_YAML: &str = include_str!("fixtures/valid.yml");
+const VALID_XML: &str = include_str!("fixtures/valid.xml");
 
 #[test]
 fn valid_java_has_no_syntax_errors() {
@@ -132,4 +135,112 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     assert!(has_scope_over("fun", Scope::Keyword));
     assert!(has_scope_over("// A friendly greeting", Scope::Comment));
     assert!(has_scope_over("\"world\"", Scope::String));
+}
+
+#[test]
+fn valid_properties_has_no_syntax_errors() {
+    let mut parser = IncrementalParser::new(Language::Properties);
+    let tree = parser.parse(VALID_PROPERTIES);
+    assert_eq!(syntax_errors(tree), vec![]);
+}
+
+#[test]
+fn properties_highlight_query_covers_key_value_and_comment() {
+    let mut parser = IncrementalParser::new(Language::Properties);
+    let tree = parser.parse(VALID_PROPERTIES);
+    let spans = highlight_spans(tree, VALID_PROPERTIES, Language::Properties);
+
+    let has_scope_over = |needle: &str, scope: Scope| {
+        let start = VALID_PROPERTIES.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .any(|(range, s)| *s == scope && range.start <= start && range.end >= end)
+    };
+
+    // The key is the most prominent token in a `.properties` file — this is
+    // exactly the case `Scope::Property` was added for (see highlight.rs).
+    assert!(has_scope_over("greeting.message", Scope::Property));
+    assert!(has_scope_over("Hello, world!", Scope::String));
+    assert!(has_scope_over("# A friendly greeting", Scope::Comment));
+}
+
+#[test]
+fn valid_yaml_has_no_syntax_errors() {
+    let mut parser = IncrementalParser::new(Language::Yaml);
+    let tree = parser.parse(VALID_YAML);
+    assert_eq!(syntax_errors(tree), vec![]);
+}
+
+#[test]
+fn yaml_highlight_query_covers_mapping_key_string_and_comment() {
+    let mut parser = IncrementalParser::new(Language::Yaml);
+    let tree = parser.parse(VALID_YAML);
+    let spans = highlight_spans(tree, VALID_YAML, Language::Yaml);
+
+    let has_scope_over = |needle: &str, scope: Scope| {
+        let start = VALID_YAML.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .any(|(range, s)| *s == scope && range.start <= start && range.end >= end)
+    };
+
+    // Mapping keys ("greeting", "message") are the most prominent token in
+    // a YAML file — same `Scope::Property` case as `.properties` keys.
+    assert!(has_scope_over("greeting", Scope::Property));
+    assert!(has_scope_over("message", Scope::Property));
+    assert!(has_scope_over("\"Hello, world!\"", Scope::String));
+    assert!(has_scope_over("# A friendly note", Scope::Comment));
+
+    // Regression guard: the bundled query also matches every plain-scalar
+    // key generically as `@string` (the same rule that colors *values*),
+    // in addition to the more specific `@property` capture that applies
+    // only to keys. Both captures cover the identical byte range, so
+    // `highlight_spans` must resolve that down to exactly one scope —
+    // `Property`, since the more specific pattern is declared later in the
+    // query file — not silently return (and let a caller mis-paint) both.
+    assert!(
+        !has_scope_over("greeting", Scope::String),
+        "a mapping key must not carry both Property and String for the same range"
+    );
+    let key_start = VALID_YAML.find("greeting").unwrap();
+    let key_end = key_start + "greeting".len();
+    let spans_over_key: Vec<_> = spans
+        .iter()
+        .filter(|(range, _)| range.start == key_start && range.end == key_end)
+        .collect();
+    assert_eq!(
+        spans_over_key.len(),
+        1,
+        "expected exactly one span for the key's exact range, got {spans_over_key:?}"
+    );
+}
+
+#[test]
+fn valid_xml_has_no_syntax_errors() {
+    let mut parser = IncrementalParser::new(Language::Xml);
+    let tree = parser.parse(VALID_XML);
+    assert_eq!(syntax_errors(tree), vec![]);
+}
+
+#[test]
+fn xml_highlight_query_covers_tag_names_and_comment() {
+    let mut parser = IncrementalParser::new(Language::Xml);
+    let tree = parser.parse(VALID_XML);
+    let spans = highlight_spans(tree, VALID_XML, Language::Xml);
+
+    let has_scope_over = |needle: &str, scope: Scope| {
+        let start = VALID_XML.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .any(|(range, s)| *s == scope && range.start <= start && range.end >= end)
+    };
+
+    // Element names are the most prominent token in an XML file — tag
+    // captures map onto the same `Scope::Property` as YAML/properties keys.
+    assert!(has_scope_over("greeting", Scope::Property));
+    assert!(has_scope_over("message", Scope::Property));
+    assert!(has_scope_over("A friendly note", Scope::Comment));
 }

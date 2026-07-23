@@ -8,3 +8,6 @@ fg-core = { path = "../core" }
 tree-sitter = "0.26.11"
 tree-sitter-java = "0.23.5"
 tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-yaml = "0.7.2"
+tree-sitter-xml = "0.7.0"
+tree-sitter-properties = "0.3.0"

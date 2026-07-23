@@ -6,8 +6,12 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::language::{highlights_query_source, ts_language};
 
-/// The checkpoint-1 fixed color theme (SPEC.md §5.4): every tree-sitter
-/// capture name is coarsened down to one of these five scopes.
+/// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with `Property`
+/// for the markup/config languages added afterward: Java/Kotlin's five
+/// scopes have nothing that fits a YAML/properties mapping key or an XML
+/// tag name, and those are the single most prominent token in either format
+/// — leaving them uncolored would make "syntax highlighting" for these
+/// languages mean little beyond comments and string values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Keyword,
@@ -15,6 +19,7 @@ pub enum Scope {
     Comment,
     Type,
     Function,
+    Property,
 }
 
 fn scope_for_capture(name: &str) -> Option<Scope> {
@@ -28,6 +33,8 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
         Some(Scope::Type)
     } else if name.starts_with("function") {
         Some(Scope::Function)
+    } else if name.starts_with("property") || name.starts_with("tag") {
+        Some(Scope::Property)
     } else {
         None
     }
@@ -43,9 +50,15 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
 fn cached_query(language: Language) -> &'static Query {
     static JAVA: OnceLock<Query> = OnceLock::new();
     static KOTLIN: OnceLock<Query> = OnceLock::new();
+    static PROPERTIES: OnceLock<Query> = OnceLock::new();
+    static YAML: OnceLock<Query> = OnceLock::new();
+    static XML: OnceLock<Query> = OnceLock::new();
     let cell = match language {
         Language::Java => &JAVA,
         Language::Kotlin => &KOTLIN,
+        Language::Properties => &PROPERTIES,
+        Language::Yaml => &YAML,
+        Language::Xml => &XML,
     };
     cell.get_or_init(|| {
         Query::new(&ts_language(language), highlights_query_source(language))
@@ -54,7 +67,22 @@ fn cached_query(language: Language) -> &'static Query {
 }
 
 /// Runs the language's highlight query over `tree`, returning byte ranges
-/// tagged with a coarse `Scope`, ordered by start position.
+/// tagged with a coarse `Scope`, ordered by start position — one scope per
+/// exact range, never two.
+///
+/// A single node can match more than one pattern in a bundled query: YAML's
+/// highlights.scm captures every `(string_scalar)` node generically as
+/// `@string`, and *separately, later in the file*, captures the same node
+/// as `@property` specifically when it's a mapping key — so an unquoted key
+/// produces two captures spanning the identical byte range. Per the
+/// standard tree-sitter-highlight convention, a pattern declared later in
+/// the query file takes priority over an earlier one for the same range
+/// (more specific patterns are written after more general ones on purpose).
+/// `QueryCursor::captures` yields same-range matches in that declaration
+/// order, so keeping the *last* one seen per exact range — rather than
+/// returning both and leaving resolution to whoever paints them — is what
+/// makes `@property` correctly win over `@string` for a YAML/properties key
+/// instead of losing to whichever one happens to sort first.
 pub fn highlight_spans(tree: &Tree, source: &str, language: Language) -> Vec<(Range<usize>, Scope)> {
     let query = cached_query(language);
     let capture_names = query.capture_names();
@@ -62,15 +90,16 @@ pub fn highlight_spans(tree: &Tree, source: &str, language: Language) -> Vec<(Ra
     let mut cursor = QueryCursor::new();
     let mut captures = cursor.captures(query, tree.root_node(), source.as_bytes());
 
-    let mut spans = Vec::new();
+    let mut by_range: std::collections::HashMap<Range<usize>, Scope> = std::collections::HashMap::new();
     while let Some((query_match, capture_index)) = captures.next() {
         let capture = query_match.captures[*capture_index];
         let name = capture_names[capture.index as usize];
         if let Some(scope) = scope_for_capture(name) {
-            spans.push((capture.node.byte_range(), scope));
+            by_range.insert(capture.node.byte_range(), scope);
         }
     }
 
+    let mut spans: Vec<(Range<usize>, Scope)> = by_range.into_iter().collect();
     spans.sort_by_key(|(range, _)| range.start);
     spans
 }

@@ -272,6 +272,9 @@ fn render_node(
             let icon = match extension {
                 Some("java") => "☕ ",
                 Some("kt") => "🔷 ",
+                Some("properties") => "⚙️ ",
+                Some("yml" | "yaml") => "📜 ",
+                Some("xml") => "🏷️ ",
                 _ => "📄 ",
             };
             let label_text = format!("{icon}{}", node.name);
