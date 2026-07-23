@@ -41,4 +41,23 @@ impl EditorFont {
             EditorFont::Default => "Default",
         }
     }
+
+    /// A stable identifier for persisted storage — deliberately distinct
+    /// from `label()`, which is the user-facing display text and free to
+    /// change (e.g. a typo fix) without silently breaking every saved
+    /// session that picked that font.
+    pub fn storage_key(self) -> &'static str {
+        match self {
+            EditorFont::JetBrainsMono => "JetBrainsMono",
+            EditorFont::Default => "Default",
+        }
+    }
+
+    pub fn from_storage_key(key: &str) -> Option<EditorFont> {
+        match key {
+            "JetBrainsMono" => Some(EditorFont::JetBrainsMono),
+            "Default" => Some(EditorFont::Default),
+            _ => None,
+        }
+    }
 }

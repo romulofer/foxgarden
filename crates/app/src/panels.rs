@@ -2,5 +2,6 @@
 //! tab bar (which also owns tab/parser lifecycle — see `tabs::open_parser_for`).
 
 pub mod menu_bar;
+pub mod quick_switcher;
 pub mod side_panel;
 pub mod tabs;

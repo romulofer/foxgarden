@@ -5,6 +5,24 @@ use syntax::Scope;
 /// background, per user request.
 pub const RAYWHITE: Color32 = Color32::from_rgb(245, 245, 245);
 
+/// Applies this app's light or dark visuals to `ctx`. Shared by startup
+/// restoration (`app::FoxGardenApp::new`, once persisted settings are
+/// loaded) and the Settings > Theme menu buttons, so both stay in sync
+/// with exactly one place that knows what "light" means for this app — not
+/// just `egui::Visuals::light()`, but that plus repainting the background
+/// to `RAYWHITE`.
+pub fn apply(ctx: &egui::Context, dark_mode: bool) {
+    if dark_mode {
+        ctx.set_visuals(egui::Visuals::dark());
+    } else {
+        let mut visuals = egui::Visuals::light();
+        visuals.panel_fill = RAYWHITE;
+        visuals.window_fill = RAYWHITE;
+        visuals.extreme_bg_color = RAYWHITE;
+        ctx.set_visuals(visuals);
+    }
+}
+
 const DARK_TEXT: Color32 = Color32::from_rgb(171, 178, 191);
 const LIGHT_TEXT: Color32 = Color32::from_rgb(56, 58, 66);
 

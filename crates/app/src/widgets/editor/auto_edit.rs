@@ -1,9 +1,17 @@
+use crate::style::indent::IndentSettings;
+
 /// Auto-indents after Enter: matches the new line's indentation to the line
-/// just ended, plus one extra level if that line ends in `{`. Only fires on
-/// a pure single-character insertion of `\n` (same guard as
-/// `apply_auto_pair`, for the same reasons — pastes/IME/selection-replace
-/// are left alone). Returns `(text, None)` unchanged if it doesn't apply.
-pub(super) fn apply_auto_indent(old_text: &str, text: &str, cursor_char: Option<usize>) -> (String, Option<usize>) {
+/// just ended, plus one extra level (per `indent_settings`) if that line
+/// ends in `{`. Only fires on a pure single-character insertion of `\n`
+/// (same guard as `apply_auto_pair`, for the same reasons — pastes/IME/
+/// selection-replace are left alone). Returns `(text, None)` unchanged if
+/// it doesn't apply.
+pub(super) fn apply_auto_indent(
+    old_text: &str,
+    text: &str,
+    cursor_char: Option<usize>,
+    indent_settings: IndentSettings,
+) -> (String, Option<usize>) {
     let old_chars = old_text.chars().count();
     let new_chars = text.chars().count();
     if new_chars != old_chars + 1 {
@@ -35,9 +43,9 @@ pub(super) fn apply_auto_indent(old_text: &str, text: &str, cursor_char: Option<
         .unwrap_or(current_line_before_cursor.len());
     let leading_ws = &current_line_before_cursor[..leading_ws_len];
     let extra_indent = if current_line_before_cursor.trim_end().ends_with('{') {
-        "    "
+        indent_settings.unit()
     } else {
-        ""
+        String::new()
     };
     let new_indent = format!("{leading_ws}{extra_indent}");
     if new_indent.is_empty() {
@@ -79,7 +87,8 @@ pub(super) fn join_lines(text: &str, cursor_char: usize) -> Option<(String, usiz
 }
 
 /// Indents (`dedent == false`) or dedents (`dedent == true`) every line the
-/// selection `start_char..end_char` touches, by one level (4 spaces) —
+/// selection `start_char..end_char` touches, by one level (per
+/// `indent_settings`) —
 /// Tab/Shift+Tab while a selection is active. `start_char` must be `<=
 /// end_char` (the caller sorts, same contract as `wrap_selection`). Returns
 /// the new text and where the selection should land afterward: still
@@ -104,8 +113,15 @@ pub(super) fn join_lines(text: &str, cursor_char: usize) -> Option<(String, usiz
 /// start of line 3 covers only lines 1 and 2, matching most editors' block-
 /// indent semantics (the selection merely touches line 3's boundary, it
 /// doesn't cover any of its content).
-pub(super) fn indent_selected_lines(text: &str, start_char: usize, end_char: usize, dedent: bool) -> (String, usize, usize) {
-    const INDENT: &str = "    ";
+pub(super) fn indent_selected_lines(
+    text: &str,
+    start_char: usize,
+    end_char: usize,
+    dedent: bool,
+    indent_settings: IndentSettings,
+) -> (String, usize, usize) {
+    let unit = indent_settings.unit();
+    let unit_len = unit.chars().count();
 
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
@@ -122,7 +138,7 @@ pub(super) fn indent_selected_lines(text: &str, start_char: usize, end_char: usi
         touched.push(first_line_start);
     }
 
-    let mut result: Vec<char> = Vec::with_capacity(n + touched.len() * INDENT.len());
+    let mut result: Vec<char> = Vec::with_capacity(n + touched.len() * unit_len);
     // (line_start, delta) for every touched line, in the order encountered —
     // used below to remap `start_char`/`end_char` into the rebuilt text.
     let mut line_deltas: Vec<(usize, i64)> = Vec::with_capacity(touched.len());
@@ -137,14 +153,14 @@ pub(super) fn indent_selected_lines(text: &str, start_char: usize, end_char: usi
                 let removable = if chars.get(pos) == Some(&'\t') {
                     1
                 } else {
-                    chars[pos..line_end].iter().take_while(|&&c| c == ' ').count().min(INDENT.len())
+                    chars[pos..line_end].iter().take_while(|&&c| c == ' ').count().min(unit_len)
                 };
                 result.extend_from_slice(&chars[pos + removable..line_end]);
                 line_deltas.push((pos, -(removable as i64)));
             } else {
-                result.extend(INDENT.chars());
+                result.extend(unit.chars());
                 result.extend_from_slice(&chars[pos..line_end]);
-                line_deltas.push((pos, INDENT.len() as i64));
+                line_deltas.push((pos, unit_len as i64));
             }
         } else {
             result.extend_from_slice(&chars[pos..line_end]);
@@ -184,7 +200,7 @@ pub(super) fn indent_selected_lines(text: &str, start_char: usize, end_char: usi
             // start behind.
             0
         } else {
-            column + INDENT.len()
+            column + unit_len
         };
         (p_line_start as i64 + delta_before + new_column as i64) as usize
     };
@@ -321,7 +337,7 @@ mod tests {
         let old = "    int x = 1;";
         let new = "    int x = 1;\n";
         let cursor_char = new.chars().count(); // cursor right after the newline
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
+        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char), IndentSettings::default());
         assert_eq!(corrected, "    int x = 1;\n    ");
         assert_eq!(new_cursor, Some(cursor_char + 4));
     }
@@ -331,7 +347,7 @@ mod tests {
         let old = "public class Foo {";
         let new = "public class Foo {\n";
         let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
+        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char), IndentSettings::default());
         assert_eq!(corrected, "public class Foo {\n    ");
         assert_eq!(new_cursor, Some(cursor_char + 4));
     }
@@ -341,7 +357,7 @@ mod tests {
         let old = "    public void foo() {";
         let new = "    public void foo() {\n";
         let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
+        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char), IndentSettings::default());
         assert_eq!(corrected, "    public void foo() {\n        ");
         assert_eq!(new_cursor, Some(cursor_char + 8));
     }
@@ -351,14 +367,14 @@ mod tests {
         let old = "foo();";
         let new = "foo();\n";
         let cursor_char = new.chars().count();
-        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char));
+        let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char), IndentSettings::default());
         assert_eq!(corrected, new);
         assert_eq!(new_cursor, None);
     }
 
     #[test]
     fn non_newline_insertion_is_left_to_auto_pair() {
-        let (corrected, cursor) = apply_auto_indent("foo ", "foo {", Some(5));
+        let (corrected, cursor) = apply_auto_indent("foo ", "foo {", Some(5), IndentSettings::default());
         assert_eq!(corrected, "foo {");
         assert_eq!(cursor, None);
     }
@@ -514,7 +530,7 @@ mod tests {
     fn indent_selected_lines_indents_every_touched_line() {
         // Selection spans all of "foo" and all of "bar" (chars 0..7),
         // starting right at column 0 of the first line.
-        let (text, start, end) = indent_selected_lines("foo\nbar", 0, 7, false);
+        let (text, start, end) = indent_selected_lines("foo\nbar", 0, 7, false, IndentSettings::default());
         assert_eq!(text, "    foo\n    bar");
         // A selection that starts at column 0 stays at column 0 through an
         // indent (see the `column == 0` branch in `remap`), so it still
@@ -528,31 +544,31 @@ mod tests {
         // Selection from mid "foo" to the very start of "baz" (char 9) —
         // only "foo" and "bar" are touched, matching a Shift+Down drag that
         // never actually selects any of "baz".
-        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 1, 8, false);
+        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 1, 8, false, IndentSettings::default());
         assert_eq!(text, "    foo\n    bar\nbaz");
     }
 
     #[test]
     fn indent_selected_lines_dedent_removes_up_to_one_indent_level_of_spaces() {
-        let (text, ..) = indent_selected_lines("    foo\n        bar", 0, 19, true);
+        let (text, ..) = indent_selected_lines("    foo\n        bar", 0, 19, true, IndentSettings::default());
         assert_eq!(text, "foo\n    bar");
     }
 
     #[test]
     fn indent_selected_lines_dedent_removes_a_single_leading_tab() {
-        let (text, ..) = indent_selected_lines("\tfoo\n\tbar", 0, 9, true);
+        let (text, ..) = indent_selected_lines("\tfoo\n\tbar", 0, 9, true, IndentSettings::default());
         assert_eq!(text, "foo\nbar");
     }
 
     #[test]
     fn indent_selected_lines_dedent_on_a_line_with_less_than_one_level_removes_what_exists() {
-        let (text, ..) = indent_selected_lines("  foo\nbar", 0, 9, true);
+        let (text, ..) = indent_selected_lines("  foo\nbar", 0, 9, true, IndentSettings::default());
         assert_eq!(text, "foo\nbar");
     }
 
     #[test]
     fn indent_selected_lines_dedent_on_an_unindented_line_is_a_no_op_for_that_line() {
-        let (text, ..) = indent_selected_lines("foo\n    bar", 0, 11, true);
+        let (text, ..) = indent_selected_lines("foo\n    bar", 0, 11, true, IndentSettings::default());
         assert_eq!(text, "foo\nbar");
     }
 
@@ -563,7 +579,7 @@ mod tests {
         // "oo\nba" (chars 1..6, a genuine cross-line selection that doesn't
         // start/end on a line boundary) and indenting must not lose any of
         // the original characters.
-        let (text, ..) = indent_selected_lines("foo\nbar", 1, 6, false);
+        let (text, ..) = indent_selected_lines("foo\nbar", 1, 6, false, IndentSettings::default());
         assert_eq!(text, "    foo\n    bar");
         for ch in ['f', 'o', 'o', 'b', 'a', 'r'] {
             assert!(text.contains(ch), "lost character {ch:?} from the selection");
@@ -576,13 +592,13 @@ mod tests {
         // lines: the selection should still point at the very same
         // characters ("oo\nba"), just shifted by the two lines' worth of
         // inserted indentation.
-        let (text, start, end) = indent_selected_lines("foo\nbar", 1, 6, false);
+        let (text, start, end) = indent_selected_lines("foo\nbar", 1, 6, false, IndentSettings::default());
         assert_eq!(&text[start..end], "oo\n    ba");
     }
 
     #[test]
     fn indent_selected_lines_single_line_selection_only_touches_that_line() {
-        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 4, 7, false);
+        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 4, 7, false, IndentSettings::default());
         assert_eq!(text, "foo\n    bar\nbaz");
     }
 }

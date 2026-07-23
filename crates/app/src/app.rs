@@ -4,9 +4,12 @@ use fg_core::{EditorState, Language};
 use syntax::IncrementalParser;
 
 use crate::panels::menu_bar::{self, MenuBarState};
+use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::tabs;
 use crate::style::fonts::EditorFont;
+use crate::style::indent::IndentSettings;
+use crate::style::theme;
 use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
@@ -20,6 +23,20 @@ const OPEN_TABS_KEY: &str = "open_tabs";
 /// doesn't just reopen the same tabs but land on the first one arbitrarily.
 const ACTIVE_TAB_KEY: &str = "active_tab";
 
+const EDITOR_FONT_KEY: &str = "editor_font";
+const FONT_SIZE_KEY: &str = "font_size";
+const DARK_MODE_KEY: &str = "dark_mode";
+const INDENT_USE_TABS_KEY: &str = "indent_use_tabs";
+const INDENT_WIDTH_KEY: &str = "indent_width";
+
+/// The editor's default code-font point size, before any Settings > Font
+/// Size adjustment.
+const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// Matches `egui::Visuals::default()`'s own `dark_mode: true` — the
+/// out-of-the-box theme before any Settings > Theme choice or persisted
+/// setting overrides it.
+const DEFAULT_DARK_MODE: bool = true;
+
 pub struct FoxGardenApp {
     state: EditorState,
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
@@ -28,7 +45,22 @@ pub struct FoxGardenApp {
     pending_close: Option<usize>,
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
+    /// `Ctrl+E`'s recent-files popup.
+    quick_switcher: QuickSwitcherState,
     editor_font: EditorFont,
+    /// The editor's code-font point size, adjustable via Settings > Font
+    /// Size. Independent of `editor_font` (the family) — both feed into
+    /// `widgets::editor::show`'s `FontId`.
+    font_size: f32,
+    /// Mirrors whichever theme Settings > Theme last applied to
+    /// `egui::Context`'s visuals — `eframe::App::save` has no `Context`
+    /// access to read that back at persist time, so this field is the
+    /// source of truth `persist_settings` reads instead.
+    dark_mode: bool,
+    /// Tabs-vs-spaces and indent width, adjustable via Settings >
+    /// Indentation. Feeds `widgets::editor::show`'s auto-indent, Tab/
+    /// Shift+Tab block indent/dedent, and plain-Tab-with-no-selection paths.
+    indent_settings: IndentSettings,
     /// Hides the menu bar and side panel, leaving just the tab bar and
     /// editor. Toggled by `F11` (checked every frame, independent of
     /// whether the menu bar is currently shown — otherwise there'd be no
@@ -49,31 +81,75 @@ pub struct FoxGardenApp {
     last_error: Option<String>,
 }
 
-/// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
-/// used when the underlying file was deleted out from under an open tab.
-fn close_tab_for_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, path: &Path) {
-    if let Some(index) = state.find_tab(path) {
-        state.close_tab(index);
-        parsers.remove(index);
+/// Opens `path` in a new tab (or focuses its existing tab, via
+/// `EditorState::open_tab`'s own dedup), surfacing any failure through
+/// `last_error`. Shared by the side panel's "open a file from the tree"
+/// outcome and the recent-files quick switcher (`Ctrl+E`) — both just want
+/// "open this path, tell the user if it didn't work," identically.
+fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, last_error: &mut Option<String>, path: PathBuf) {
+    let display_path = path.display().to_string();
+    match state.open_tab(path) {
+        Ok(index) => {
+            if index == parsers.len() {
+                let parser = tabs::open_parser_for(&mut state.open_tabs[index]);
+                parsers.push(parser);
+            }
+        }
+        Err(err) => {
+            // `OpenDocumentError::Binary`'s own `Display` already names the
+            // path — restating it here would just duplicate it in the
+            // modal, so only `Io` (whose message doesn't mention a path at
+            // all) gets it prepended.
+            let message = match &err {
+                fg_core::OpenDocumentError::Binary(_) => format!("Couldn't open {display_path}: not a text file."),
+                fg_core::OpenDocumentError::Io(_) => format!("Couldn't open {display_path}:\n{err}"),
+            };
+            *last_error = Some(message);
+        }
     }
 }
 
-/// Repoints any tab open on `old` to `new`, recreating its parser if the
-/// rename changed the file's language — including to or from no language at
-/// all (e.g. `.java` -> `.kt`, or `.java` -> `.txt`).
-fn handle_rename(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, old: &Path, new: &Path) {
-    let Some(index) = state.find_tab(old) else {
-        return;
-    };
-    state.open_tabs[index].path = new.to_path_buf();
+/// Closes every open tab whose path is `path` itself or starts inside it,
+/// keeping `parsers` in lockstep — used when `path` was deleted out from
+/// under the tree. A directory delete removes every file beneath it (via
+/// `remove_dir_all`), so every tab pointing anywhere under it needs to
+/// close, not just one pointing at `path` exactly; a plain file delete is
+/// just the case where the only tab that can match is `path` itself.
+/// Iterates back-to-front so removing an index never shifts the position
+/// of one still to be checked.
+fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, path: &Path) {
+    for index in (0..state.open_tabs.len()).rev() {
+        if state.open_tabs[index].path().starts_with(path) {
+            state.close_tab(index);
+            parsers.remove(index);
+        }
+    }
+}
 
-    let new_language = new
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .and_then(Language::from_extension);
-    if new_language != state.open_tabs[index].language {
-        state.open_tabs[index].language = new_language;
-        parsers[index] = tabs::open_parser_for(&mut state.open_tabs[index]);
+/// Repoints every open tab under `old` to the equivalent path under `new`,
+/// recreating each one's parser if the rename changed its language —
+/// including to or from no language at all (e.g. `.java` -> `.kt`, or
+/// `.java` -> `.txt`). A directory rename moves every file beneath it, so
+/// every tab pointing anywhere under `old` needs repointing; `strip_prefix`
+/// against a tab whose path *is* `old` (the plain file-rename case) yields
+/// an empty suffix, so `new.join(suffix)` is just `new` — one code path
+/// covers both cases.
+fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
+    for (index, doc) in state.open_tabs.iter_mut().enumerate() {
+        let Ok(suffix) = doc.path().strip_prefix(old) else {
+            continue;
+        };
+        let new_path = new.join(suffix);
+        doc.path = new_path.clone();
+
+        let new_language = new_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Language::from_extension);
+        if new_language != doc.language {
+            doc.language = new_language;
+            parsers[index] = tabs::open_parser_for(doc);
+        }
     }
 }
 
@@ -150,15 +226,69 @@ fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
     storage.set_string(ACTIVE_TAB_KEY, active_tab);
 }
 
+/// Restores the font family/size, theme choice, and indentation style saved
+/// by `persist_settings`, leaving each parameter at its current (default)
+/// value if its key is missing or unparseable — same "best-effort, one
+/// missing key doesn't block the rest" shape as `restore_session`. Separate
+/// from that function because this is "how the editor looks/behaves," not
+/// "what was open"; the two happen to both live in `eframe::Storage` but
+/// are independent concerns.
+fn restore_settings(
+    storage: &dyn eframe::Storage,
+    editor_font: &mut EditorFont,
+    font_size: &mut f32,
+    dark_mode: &mut bool,
+    indent_settings: &mut IndentSettings,
+) {
+    if let Some(key) = storage.get_string(EDITOR_FONT_KEY) {
+        if let Some(font) = EditorFont::from_storage_key(&key) {
+            *editor_font = font;
+        }
+    }
+    if let Some(size) = storage.get_string(FONT_SIZE_KEY).and_then(|s| s.parse::<f32>().ok()) {
+        *font_size = size;
+    }
+    if let Some(dark) = storage.get_string(DARK_MODE_KEY) {
+        *dark_mode = dark == "true";
+    }
+    if let Some(use_tabs) = storage.get_string(INDENT_USE_TABS_KEY) {
+        indent_settings.use_tabs = use_tabs == "true";
+    }
+    if let Some(width) = storage.get_string(INDENT_WIDTH_KEY).and_then(|s| s.parse::<usize>().ok()) {
+        indent_settings.width = width;
+    }
+}
+
+/// Inverse of `restore_settings`.
+fn persist_settings(
+    storage: &mut dyn eframe::Storage,
+    editor_font: EditorFont,
+    font_size: f32,
+    dark_mode: bool,
+    indent_settings: IndentSettings,
+) {
+    storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
+    storage.set_string(FONT_SIZE_KEY, font_size.to_string());
+    storage.set_string(DARK_MODE_KEY, dark_mode.to_string());
+    storage.set_string(INDENT_USE_TABS_KEY, indent_settings.use_tabs.to_string());
+    storage.set_string(INDENT_WIDTH_KEY, indent_settings.width.to_string());
+}
+
 impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
+        let mut editor_font = EditorFont::default();
+        let mut font_size = DEFAULT_FONT_SIZE;
+        let mut dark_mode = DEFAULT_DARK_MODE;
+        let mut indent_settings = IndentSettings::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
+            restore_settings(storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings);
         }
+        theme::apply(&cc.egui_ctx, dark_mode);
 
         Self {
             state,
@@ -166,7 +296,11 @@ impl FoxGardenApp {
             pending_close: None,
             side_panel: SidePanelState::default(),
             menu_bar: MenuBarState::default(),
-            editor_font: EditorFont::default(),
+            quick_switcher: QuickSwitcherState::default(),
+            editor_font,
+            font_size,
+            dark_mode,
+            indent_settings,
             zen_mode: false,
             last_error,
         }
@@ -198,6 +332,9 @@ impl eframe::App for FoxGardenApp {
         if ui.input(|i| i.key_pressed(egui::Key::F11)) {
             self.zen_mode = !self.zen_mode;
         }
+        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command) {
+            self.quick_switcher.toggle();
+        }
 
         let mut outcome = side_panel::SidePanelOutcome::default();
 
@@ -211,6 +348,9 @@ impl eframe::App for FoxGardenApp {
                     &mut self.pending_close,
                     &mut self.menu_bar,
                     &mut self.editor_font,
+                    &mut self.font_size,
+                    &mut self.dark_mode,
+                    &mut self.indent_settings,
                     &mut self.zen_mode,
                     &mut self.last_error,
                 );
@@ -222,35 +362,13 @@ impl eframe::App for FoxGardenApp {
         }
 
         if let Some(path) = outcome.open {
-            let display_path = path.display().to_string();
-            match self.state.open_tab(path) {
-                Ok(index) => {
-                    if index == self.parsers.len() {
-                        let parser = tabs::open_parser_for(&mut self.state.open_tabs[index]);
-                        self.parsers.push(parser);
-                    }
-                }
-                Err(err) => {
-                    // `OpenDocumentError::Binary`'s own `Display` already
-                    // names the path — restating it here would just
-                    // duplicate it in the modal, so only `Io` (whose
-                    // message doesn't mention a path at all) gets it
-                    // prepended.
-                    let message = match &err {
-                        fg_core::OpenDocumentError::Binary(_) => {
-                            format!("Couldn't open {display_path}: not a text file.")
-                        }
-                        fg_core::OpenDocumentError::Io(_) => format!("Couldn't open {display_path}:\n{err}"),
-                    };
-                    self.last_error = Some(message);
-                }
-            }
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some((old, new)) = outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, &old, &new);
         }
         if let Some(path) = outcome.deleted {
-            close_tab_for_path(&mut self.state, &mut self.parsers, &path);
+            close_tabs_under(&mut self.state, &mut self.parsers, &path);
         }
         if let Some(err) = outcome.error {
             self.last_error = Some(err);
@@ -263,15 +381,22 @@ impl eframe::App for FoxGardenApp {
                 &mut self.pending_close,
                 &mut self.parsers,
                 self.editor_font,
+                self.font_size,
+                self.indent_settings,
                 &mut self.last_error,
             );
         });
+
+        if let Some(path) = quick_switcher::show(ui, &self.state, &mut self.quick_switcher) {
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+        }
 
         show_error_modal(ui, &mut self.last_error);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         persist_session(storage, &self.state);
+        persist_settings(storage, self.editor_font, self.font_size, self.dark_mode, self.indent_settings);
     }
 }
 
@@ -361,5 +486,143 @@ mod tests {
         assert!(state.open_tabs.is_empty());
         assert!(parsers.is_empty());
         assert_eq!(state.active_tab, None);
+    }
+
+    #[test]
+    fn persisted_settings_round_trip() {
+        let mut storage = FakeStorage::default();
+        let saved_indent = IndentSettings { use_tabs: true, width: 2 };
+        persist_settings(&mut storage, EditorFont::Default, 22.5, false, saved_indent);
+
+        let mut editor_font = EditorFont::JetBrainsMono;
+        let mut font_size = DEFAULT_FONT_SIZE;
+        let mut dark_mode = DEFAULT_DARK_MODE;
+        let mut indent_settings = IndentSettings::default();
+        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings);
+
+        assert_eq!(editor_font, EditorFont::Default);
+        assert_eq!(font_size, 22.5);
+        assert!(!dark_mode);
+        assert_eq!(indent_settings, saved_indent);
+    }
+
+    #[test]
+    fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
+        let storage = FakeStorage::default();
+        let mut editor_font = EditorFont::default();
+        let mut font_size = DEFAULT_FONT_SIZE;
+        let mut dark_mode = DEFAULT_DARK_MODE;
+        let mut indent_settings = IndentSettings::default();
+
+        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings);
+
+        assert_eq!(editor_font, EditorFont::default());
+        assert_eq!(font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(dark_mode, DEFAULT_DARK_MODE);
+        assert_eq!(indent_settings, IndentSettings::default());
+    }
+
+    #[test]
+    fn restore_settings_ignores_an_unparseable_font_size() {
+        let mut storage = FakeStorage::default();
+        storage.set_string(FONT_SIZE_KEY, "not-a-number".to_string());
+        let mut editor_font = EditorFont::default();
+        let mut font_size = DEFAULT_FONT_SIZE;
+        let mut dark_mode = DEFAULT_DARK_MODE;
+        let mut indent_settings = IndentSettings::default();
+
+        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings);
+
+        assert_eq!(font_size, DEFAULT_FONT_SIZE);
+    }
+
+    #[test]
+    fn restore_settings_ignores_an_unparseable_indent_width() {
+        let mut storage = FakeStorage::default();
+        storage.set_string(INDENT_WIDTH_KEY, "not-a-number".to_string());
+        let mut editor_font = EditorFont::default();
+        let mut font_size = DEFAULT_FONT_SIZE;
+        let mut dark_mode = DEFAULT_DARK_MODE;
+        let mut indent_settings = IndentSettings::default();
+
+        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings);
+
+        assert_eq!(indent_settings.width, IndentSettings::default().width);
+    }
+
+    #[test]
+    fn close_tabs_under_closes_every_tab_inside_a_deleted_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("pkg/sub")).unwrap();
+        let a = java_file(&dir, "pkg/A.java");
+        let b = java_file(&dir, "pkg/sub/B.java");
+        let root = java_file(&dir, "Root.java");
+
+        let mut state = EditorState::new();
+        let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        for path in [&a, &b, &root] {
+            state.open_tab(path.clone()).unwrap();
+            parsers.push(None);
+        }
+
+        close_tabs_under(&mut state, &mut parsers, &dir.path().join("pkg"));
+
+        let remaining: Vec<&Path> = state.open_tabs.iter().map(|doc| doc.path()).collect();
+        assert_eq!(remaining, vec![root.as_path()]);
+        assert_eq!(parsers.len(), 1);
+    }
+
+    #[test]
+    fn close_tabs_under_closes_a_single_file_by_exact_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "A.java");
+
+        let mut state = EditorState::new();
+        let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        state.open_tab(a.clone()).unwrap();
+        parsers.push(None);
+
+        close_tabs_under(&mut state, &mut parsers, &a);
+
+        assert!(state.open_tabs.is_empty());
+        assert!(parsers.is_empty());
+    }
+
+    #[test]
+    fn handle_rename_repoints_every_tab_inside_a_renamed_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("old_pkg/sub")).unwrap();
+        let a = java_file(&dir, "old_pkg/A.java");
+        let b = java_file(&dir, "old_pkg/sub/B.java");
+
+        let mut state = EditorState::new();
+        let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        for path in [&a, &b] {
+            let index = state.open_tab(path.clone()).unwrap();
+            parsers.push(tabs::open_parser_for(&mut state.open_tabs[index]));
+        }
+
+        let old_pkg = dir.path().join("old_pkg");
+        let new_pkg = dir.path().join("new_pkg");
+        handle_rename(&mut state, &mut parsers, &old_pkg, &new_pkg);
+
+        let repointed: Vec<PathBuf> = state.open_tabs.iter().map(|doc| doc.path().to_path_buf()).collect();
+        assert_eq!(repointed, vec![new_pkg.join("A.java"), new_pkg.join("sub/B.java")]);
+    }
+
+    #[test]
+    fn handle_rename_repoints_a_single_tab_by_exact_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "Old.java");
+
+        let mut state = EditorState::new();
+        let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        state.open_tab(a.clone()).unwrap();
+        parsers.push(tabs::open_parser_for(&mut state.open_tabs[0]));
+
+        let new_path = dir.path().join("New.java");
+        handle_rename(&mut state, &mut parsers, &a, &new_path);
+
+        assert_eq!(state.open_tabs[0].path(), new_path.as_path());
     }
 }

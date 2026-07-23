@@ -2,6 +2,7 @@ use fg_core::{Document, EditorState};
 use syntax::IncrementalParser;
 
 use crate::style::fonts::EditorFont;
+use crate::style::indent::IndentSettings;
 use crate::widgets::editor;
 use crate::widgets::modal::show_modal;
 
@@ -83,6 +84,8 @@ pub fn show(
     pending_close: &mut Option<usize>,
     parsers: &mut Vec<Option<IncrementalParser>>,
     editor_font: EditorFont,
+    font_size: f32,
+    indent_settings: IndentSettings,
     last_error: &mut Option<String>,
 ) {
     let mut focus_request = None;
@@ -152,7 +155,7 @@ pub fn show(
     };
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        editor::show(ui, doc, parser, editor_font);
+        editor::show(ui, doc, parser, editor_font, font_size, indent_settings);
     });
 }
 

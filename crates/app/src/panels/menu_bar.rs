@@ -4,6 +4,7 @@ use syntax::IncrementalParser;
 use super::side_panel::SidePanelState;
 use super::tabs;
 use crate::style::fonts::EditorFont;
+use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::widgets::modal::show_modal;
 
@@ -13,6 +14,12 @@ pub struct MenuBarState {
     about_open: bool,
 }
 
+/// Clamp range for the Settings > Font Size control — small enough to stay
+/// legible, large enough to stay useful on a hi-DPI display.
+const FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
+/// Clamp range for the Settings > Indentation width control.
+const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
+
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
@@ -21,6 +28,9 @@ pub fn show(
     pending_close: &mut Option<usize>,
     menu: &mut MenuBarState,
     editor_font: &mut EditorFont,
+    font_size: &mut f32,
+    dark_mode: &mut bool,
+    indent_settings: &mut IndentSettings,
     zen_mode: &mut bool,
     last_error: &mut Option<String>,
 ) {
@@ -77,15 +87,13 @@ pub fn show(
         ui.menu_button("Settings", |ui| {
             ui.menu_button("Theme", |ui| {
                 if ui.button("Light").clicked() {
-                    let mut visuals = egui::Visuals::light();
-                    visuals.panel_fill = theme::RAYWHITE;
-                    visuals.window_fill = theme::RAYWHITE;
-                    visuals.extreme_bg_color = theme::RAYWHITE;
-                    ui.ctx().set_visuals(visuals);
+                    *dark_mode = false;
+                    theme::apply(ui.ctx(), false);
                     ui.close();
                 }
                 if ui.button("Dark").clicked() {
-                    ui.ctx().set_visuals(egui::Visuals::dark());
+                    *dark_mode = true;
+                    theme::apply(ui.ctx(), true);
                     ui.close();
                 }
             });
@@ -96,6 +104,26 @@ pub fn show(
                         ui.close();
                     }
                 }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Font Size");
+                ui.add(egui::DragValue::new(font_size).range(FONT_SIZE_RANGE).speed(0.25));
+            });
+            ui.menu_button("Indentation", |ui| {
+                if ui.radio(!indent_settings.use_tabs, "Spaces").clicked() {
+                    indent_settings.use_tabs = false;
+                    ui.close();
+                }
+                if ui.radio(indent_settings.use_tabs, "Tabs").clicked() {
+                    indent_settings.use_tabs = true;
+                    ui.close();
+                }
+                ui.add_enabled_ui(!indent_settings.use_tabs, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Width");
+                        ui.add(egui::DragValue::new(&mut indent_settings.width).range(INDENT_WIDTH_RANGE));
+                    });
+                });
             });
         });
 
@@ -128,6 +156,8 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Middle-click a tab — close it");
         ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
         ui.label("Ctrl+J — join the current line with the next one");
+        ui.label("Ctrl+E — go to a recent file");
+        ui.label("Ctrl+Shift+G — generate getters/setters (Java)");
         ui.separator();
         ui.button("Close").clicked()
     });

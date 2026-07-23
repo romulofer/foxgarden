@@ -10,22 +10,25 @@ use syntax::IncrementalParser;
 use super::auto_edit::{
     apply_auto_indent, apply_auto_pair, char_to_byte, indent_selected_lines, is_pairable, join_lines, wrap_selection,
 };
+use super::codegen::{generate_accessors, insert_generated};
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
 use crate::style::fonts::EditorFont;
+use crate::style::indent::IndentSettings;
 use crate::style::theme;
 
 /// Identifies what a laid-out galley depends on: the buffer's exact
 /// contents, which language (if any) is highlighting it, the color theme,
-/// and the wrap width. Two frames with an equal key produce an identical
-/// `Galley`, so a match means the cached one from `CachedLayout` can be
-/// reused outright.
+/// the wrap width, and the font size. Two frames with an equal key produce
+/// an identical `Galley`, so a match means the cached one from
+/// `CachedLayout` can be reused outright.
 #[derive(Clone, Copy, PartialEq)]
 struct LayoutCacheKey {
     content_hash: u64,
     language: Option<Language>,
     dark_mode: bool,
     wrap_width_bits: u32,
+    font_size_bits: u32,
 }
 
 #[derive(Clone)]
@@ -85,7 +88,14 @@ fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_te
 /// than `.java`/`.kt`) — such files still open and edit normally, they just
 /// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
 /// are language-agnostic and keep working regardless.
-pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<IncrementalParser>, editor_font: EditorFont) {
+pub fn show(
+    ui: &mut egui::Ui,
+    doc: &mut Document,
+    parser: &mut Option<IncrementalParser>,
+    editor_font: EditorFont,
+    font_size: f32,
+    indent_settings: IndentSettings,
+) {
     // Mutable: the wrap-selection interception below may replace both with
     // an already-edited version *before* `TextEdit::show()` ever runs, so
     // everything downstream (the layouter's highlighting, the
@@ -230,6 +240,15 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // pull-it-out-of-the-queue-before-`TextEdit`-sees-it approach as the
     // wrap-selection interception above, and skipped for the same reason
     // whenever multi-cursor is active.
+    //
+    // Plain Tab with *no* selection is handled here too, in "spaces" mode:
+    // egui's own `TextEdit` (a `.code_editor()`, which sets `lock_focus`)
+    // inserts a literal `\t` for a bare Tab keypress, which would silently
+    // ignore an `indent_settings.use_tabs == false` choice. Skipped when
+    // `use_tabs` is set — a literal tab already *is* that setting's unit,
+    // so egui's default is exactly right and needs no interception — and
+    // for Shift+Tab, which egui's own no-selection handling is left to
+    // decide, same as before this feature existed.
     if !multi_cursor_active_at_start {
         let tab_pressed =
             ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. })));
@@ -237,20 +256,35 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         if tab_pressed {
             let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
                 .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range())
-                .filter(|range| !range.is_empty());
+                .map(|range| range.as_sorted_char_range());
 
             if let Some(range) = prior_selection {
-                let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+                if !range.is_empty() {
+                    let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
 
-                if removed.is_some() {
-                    let dedent = ui.input(|i| i.modifiers.shift);
-                    let (indented, sel_start, sel_end) =
-                        indent_selected_lines(&old_text, range.start.0, range.end.0, dedent);
-                    apply_edit(doc, parser, &old_text, &indented);
-                    manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
-                    old_text = indented.clone();
-                    text = indented;
+                    if removed.is_some() {
+                        let dedent = ui.input(|i| i.modifiers.shift);
+                        let (indented, sel_start, sel_end) =
+                            indent_selected_lines(&old_text, range.start.0, range.end.0, dedent, indent_settings);
+                        apply_edit(doc, parser, &old_text, &indented);
+                        manual_cursor_range =
+                            Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                        old_text = indented.clone();
+                        text = indented;
+                    }
+                } else if !indent_settings.use_tabs && !ui.input(|i| i.modifiers.shift) {
+                    let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+
+                    if removed.is_some() {
+                        let unit = indent_settings.unit();
+                        let byte = char_to_byte(&old_text, range.start.0);
+                        let inserted = format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
+                        apply_edit(doc, parser, &old_text, &inserted);
+                        let new_cursor = range.start.0 + unit.chars().count();
+                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                        old_text = inserted.clone();
+                        text = inserted;
+                    }
                 }
             }
         }
@@ -259,7 +293,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // Sized to the widest line number the buffer currently has, so a
     // 9-line file gets a narrow gutter and a 10,000-line one gets a wider
     // one rather than every file paying for a fixed worst-case width.
-    let gutter_font_id = FontId::new(14.0, editor_font.family());
+    let gutter_font_id = FontId::new(font_size, editor_font.family());
     let digit_width = ui.fonts_mut(|f| f.glyph_width(&gutter_font_id, '0'));
     let line_count = doc.buffer.len_lines().max(1);
     let gutter_width = digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0;
@@ -279,6 +313,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             language: tree_and_language.as_ref().map(|(_, language)| *language),
             dark_mode,
             wrap_width_bits: wrap_width.to_bits(),
+            font_size_bits: font_size.to_bits(),
         };
 
         if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedLayout>(layout_cache_id)) {
@@ -290,7 +325,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         let mut job = LayoutJob::default();
         job.wrap.max_width = wrap_width;
 
-        let font_id = FontId::new(14.0, editor_font.family());
+        let font_id = FontId::new(font_size, editor_font.family());
 
         if let Some((tree, language)) = tree_and_language {
             let spans = syntax::highlight_spans(tree, &old_text, language);
@@ -363,7 +398,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         }
 
         let cursor_char = output.cursor_range.map(|r| r.primary.index.0);
-        let (text_after_indent, indent_cursor) = apply_auto_indent(&old_text, &text, cursor_char);
+        let (text_after_indent, indent_cursor) = apply_auto_indent(&old_text, &text, cursor_char, indent_settings);
         let corrected = if indent_cursor.is_some() {
             manual_cursor_range = indent_cursor.map(|c| CCursorRange::one(CCursor::new(c)));
             text_after_indent
@@ -411,6 +446,28 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         let text_now = doc.buffer.to_string();
         if let Some((joined, new_cursor)) = join_lines(&text_now, primary_range.primary.index.0) {
             apply_edit(doc, parser, &text_now, &joined);
+            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+        }
+    }
+
+    // Ctrl+Shift+G: generate getters/setters for the enclosing Java class's
+    // fields at the cursor. Java-only — Kotlin's `val`/`var` properties
+    // already *are* getters/setters, so generating explicit ones for them
+    // isn't the idiomatic move a Java accessor-boilerplate command is.
+    let generate_accessors_pressed = ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift;
+    if generate_accessors_pressed
+        && doc.language == Some(Language::Java)
+        && let Some(primary_range) = output.cursor_range
+        && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+    {
+        let text_now = doc.buffer.to_string();
+        let cursor_char = primary_range.primary.index.0;
+        let cursor_byte = char_to_byte(&text_now, cursor_char);
+        let fields = syntax::java_fields_in_enclosing_class(tree, &text_now, cursor_byte);
+        if !fields.is_empty() {
+            let generated = generate_accessors(&fields, &indent_settings.unit());
+            let (inserted, new_cursor) = insert_generated(&text_now, cursor_char, &generated);
+            apply_edit(doc, parser, &text_now, &inserted);
             manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
         }
     }
@@ -556,7 +613,7 @@ mod tests {
             // here with "is not bound to any fonts". Use the built-in family
             // instead — this test exercises the widget's rendering logic,
             // not font registration.
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
     }
 
@@ -576,7 +633,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
     }
 
@@ -587,7 +644,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
 
         assert!(doc.diagnostics.is_empty());
@@ -626,7 +683,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
     }
 
@@ -648,7 +705,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -657,7 +714,7 @@ mod tests {
         // A second frame over the very same, unedited document — as if the
         // tab were simply redrawn, or switched away from and back to.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -679,7 +736,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -687,7 +744,7 @@ mod tests {
 
         doc.buffer = Rope::from_str("hello world");
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -696,6 +753,37 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&first.galley, &second.galley),
             "an edited buffer must not reuse the previous frame's stale galley"
+        );
+    }
+
+    #[test]
+    fn layout_cache_reshapes_after_a_font_size_change() {
+        let (_dir, mut doc) = open_fixture("just some notes, no code here", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let cache_id = layout_cache_id(&doc);
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+        });
+        let first = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after first frame");
+
+        // Same unedited content, but a different font size — the cached
+        // galley was shaped at the old size, so it must not be reused.
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default());
+        });
+        let second = ctx
+            .data(|d| d.get_temp::<CachedLayout>(cache_id))
+            .expect("layout cache populated after second frame");
+
+        assert!(
+            !Arc::ptr_eq(&first.galley, &second.galley),
+            "a font size change must not reuse the previous frame's stale-sized galley"
         );
     }
 
@@ -734,7 +822,7 @@ mod tests {
             // will target nothing.
             let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
     }
 
@@ -776,7 +864,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -801,7 +889,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
     }
 
@@ -829,7 +917,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
         });
 
         doc.extra_selections = extra_selections;
@@ -844,7 +932,44 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+        });
+    }
+
+    /// Like `focused_frame`, but runs a warm-up frame first and lets the
+    /// caller choose `IndentSettings` — needed to exercise the plain-
+    /// Tab-with-no-selection interception, which (like wrap-selection and
+    /// multi-cursor) reads the *persisted* selection from before
+    /// `TextEdit::show()` runs this frame, so a single dry frame with no
+    /// prior state can't reach it. See `focused_frame_with_selection`'s doc
+    /// comment for why a real warm-up frame, not just a stored
+    /// `TextEditState`, is what's needed.
+    fn focused_frame_with_indent_settings(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        indent_settings: IndentSettings,
+        events: Vec<egui::Event>,
+    ) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings);
+        });
+
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings);
         });
     }
 
@@ -925,16 +1050,60 @@ mod tests {
     }
 
     #[test]
-    fn tab_with_no_selection_still_inserts_a_literal_tab() {
-        // Guards the un-intercepted path: Tab with a collapsed cursor (no
-        // selection) must keep falling through to egui's own behavior
-        // rather than being swallowed by the new interception.
+    fn tab_with_no_selection_inserts_a_literal_tab_in_tabs_mode() {
+        // Guards the un-intercepted path: with `use_tabs: true`, a literal
+        // tab already *is* the configured indent unit, so plain Tab with a
+        // collapsed cursor (no selection) must keep falling through to
+        // egui's own behavior rather than being intercepted.
         let (_dir, mut doc) = open_fixture("abc", "Hello.java");
         let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
-        focused_frame(&mut doc, &mut parser, vec![key_event(egui::Key::Tab)]);
+        let tabs_mode = IndentSettings { use_tabs: true, width: 4 };
+        focused_frame_with_indent_settings(&mut doc, &mut parser, tabs_mode, vec![key_event(egui::Key::Tab)]);
 
         assert_eq!(doc.buffer.to_string(), "\tabc");
+    }
+
+    #[test]
+    fn tab_with_no_selection_inserts_spaces_in_spaces_mode() {
+        // In "spaces" mode (the default), plain Tab with a collapsed cursor
+        // must insert `width` spaces instead of the literal tab egui's own
+        // `.code_editor()` handling would otherwise insert.
+        let (_dir, mut doc) = open_fixture("abc", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let spaces_mode = IndentSettings { use_tabs: false, width: 4 };
+        focused_frame_with_indent_settings(&mut doc, &mut parser, spaces_mode, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "    abc");
+    }
+
+    #[test]
+    fn tab_with_no_selection_respects_a_configured_width() {
+        let (_dir, mut doc) = open_fixture("abc", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let two_space_mode = IndentSettings { use_tabs: false, width: 2 };
+        focused_frame_with_indent_settings(&mut doc, &mut parser, two_space_mode, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "  abc");
+    }
+
+    #[test]
+    fn shift_tab_with_no_selection_is_left_to_egui_regardless_of_indent_mode() {
+        // The new spaces-mode interception only ever fires for plain Tab —
+        // Shift+Tab with no selection is (and remains) egui's own no-
+        // selection dedent handling, untouched by `indent_settings`.
+        let (_dir, mut doc) = open_fixture("    abc", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let spaces_mode = IndentSettings { use_tabs: false, width: 4 };
+        focused_frame_with_indent_settings(&mut doc, &mut parser, spaces_mode, vec![shift_key_event(egui::Key::Tab)]);
+
+        // Whatever egui's own no-selection Shift+Tab does, the buffer must
+        // not have grown by a spaces-mode insertion — the interception must
+        // not have fired.
+        assert!(doc.buffer.to_string().len() <= "    abc".len());
     }
 
     fn command_key_event(key: egui::Key) -> egui::Event {
@@ -969,6 +1138,58 @@ mod tests {
         focused_frame(&mut doc, &mut parser, vec![command_key_event(egui::Key::J)]);
 
         assert_eq!(doc.buffer.to_string(), "foo");
+    }
+
+    fn command_shift_key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers { command: true, shift: true, ..egui::Modifiers::NONE },
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_g_generates_getter_and_setter_at_the_cursor() {
+        let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        // A fresh widget's default cursor sits at char 0, which is still
+        // "inside" the class_declaration spanning the whole file — see
+        // `syntax::java_fields_in_enclosing_class`'s inclusive containment
+        // check.
+        focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
+
+        let text = doc.buffer.to_string();
+        assert!(text.contains("public int getX() {\n        return this.x;\n    }"));
+        assert!(text.contains("public void setX(int x) {\n        this.x = x;\n    }"));
+    }
+
+    #[test]
+    fn ctrl_shift_g_is_a_no_op_for_kotlin_files() {
+        // Kotlin's `val`/`var` properties already are getters/setters;
+        // generating explicit Java-shaped ones for them isn't idiomatic
+        // (see `widget::show`'s comment on this shortcut), so the command
+        // does nothing for a non-Java file.
+        let (_dir, mut doc) = open_fixture("class Foo(val x: Int)\n", "Foo.kt");
+        let mut parser = parsed(Language::Kotlin, &doc.buffer.to_string());
+        let before = doc.buffer.to_string();
+
+        focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
+
+        assert_eq!(doc.buffer.to_string(), before);
+    }
+
+    #[test]
+    fn ctrl_shift_g_is_a_no_op_when_the_class_has_no_instance_fields() {
+        let (_dir, mut doc) = open_fixture("public class Empty {\n}\n", "Empty.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+        let before = doc.buffer.to_string();
+
+        focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
+
+        assert_eq!(doc.buffer.to_string(), before);
     }
 
     #[test]

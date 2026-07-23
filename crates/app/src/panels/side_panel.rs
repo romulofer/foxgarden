@@ -273,6 +273,17 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
     }
 }
 
+/// Deletes `path` — a whole subtree via `remove_dir_all` if it's a
+/// directory, otherwise a single `remove_file` — so the delete
+/// confirmation dialog can treat file and directory nodes the same way.
+fn delete_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
 fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &mut SidePanelOutcome) {
     let Some(path) = panel.pending_delete.clone() else {
         return;
@@ -281,12 +292,17 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let message = if path.is_dir() {
+        format!("Delete directory {name} and everything inside it? This cannot be undone.")
+    } else {
+        format!("Delete {name}? This cannot be undone.")
+    };
 
     show_modal(ui, "delete_confirm", Some(path), |ui, path| {
-        ui.label(format!("Delete {name}? This cannot be undone."));
+        ui.label(message);
         ui.horizontal(|ui| {
             if ui.button("Delete").clicked() {
-                match std::fs::remove_file(path) {
+                match delete_path(path) {
                     Ok(()) => outcome.deleted = Some(path.clone()),
                     Err(err) => outcome.error = Some(format!("failed to delete: {err}")),
                 }
@@ -299,6 +315,23 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
     });
 }
 
+/// Draws the inline rename text field + confirm/cancel buttons shown in
+/// place of a node's normal label while it's the one `rename_draft` points
+/// at — shared by both file and directory nodes, which otherwise differ
+/// (directories render a `CollapsingHeader` with children, files a plain
+/// selectable label) but hand off to identical rename UI once renaming.
+fn show_rename_field(ui: &mut egui::Ui, name: &mut String, should_focus: bool, actions: &mut TreeActions) {
+    ui.horizontal(|ui| {
+        let (confirmed, escaped) = text_field_outcome(ui, name, should_focus);
+        if confirmed || ui.small_button("✓").clicked() {
+            actions.confirm_rename = Some(name.clone());
+        }
+        if escaped || ui.small_button("✗").clicked() {
+            actions.cancel_rename = true;
+        }
+    });
+}
+
 fn render_node(
     ui: &mut egui::Ui,
     node: &FileNode,
@@ -306,6 +339,13 @@ fn render_node(
     should_focus_rename: bool,
     actions: &mut TreeActions,
 ) {
+    let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == &node.path);
+    if is_being_renamed {
+        let (_, name) = rename_draft.as_mut().expect("checked above");
+        show_rename_field(ui, name, should_focus_rename, actions);
+        return;
+    }
+
     match node.kind {
         FileKind::Dir => {
             let header = egui::CollapsingHeader::new(format!("📁 {}", node.name))
@@ -321,25 +361,17 @@ fn render_node(
                     actions.start_new_file = Some(node.path.clone());
                     ui.close();
                 }
+                if ui.button("Rename").clicked() {
+                    actions.start_rename = Some(node.path.clone());
+                    ui.close();
+                }
+                if ui.button("Delete").clicked() {
+                    actions.delete_request = Some(node.path.clone());
+                    ui.close();
+                }
             });
         }
         FileKind::File => {
-            let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == &node.path);
-
-            if is_being_renamed {
-                let (_, name) = rename_draft.as_mut().expect("checked above");
-                ui.horizontal(|ui| {
-                    let (confirmed, escaped) = text_field_outcome(ui, name, should_focus_rename);
-                    if confirmed || ui.small_button("✓").clicked() {
-                        actions.confirm_rename = Some(name.clone());
-                    }
-                    if escaped || ui.small_button("✗").clicked() {
-                        actions.cancel_rename = true;
-                    }
-                });
-                return;
-            }
-
             let extension = node.path.extension().and_then(|ext| ext.to_str());
             let icon = match extension {
                 Some("java") => "☕ ",
@@ -412,5 +444,29 @@ mod tests {
         create_file_with_parents(&path, "class File {}").unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "class File {}");
+    }
+
+    #[test]
+    fn delete_path_removes_a_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("File.java");
+        std::fs::write(&path, "class File {}").unwrap();
+
+        delete_path(&path).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_path_removes_a_directory_and_everything_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("pkg");
+        std::fs::create_dir_all(subdir.join("nested")).unwrap();
+        std::fs::write(subdir.join("A.java"), "class A {}").unwrap();
+        std::fs::write(subdir.join("nested/B.java"), "class B {}").unwrap();
+
+        delete_path(&subdir).unwrap();
+
+        assert!(!subdir.exists());
     }
 }
