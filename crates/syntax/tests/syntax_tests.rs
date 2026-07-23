@@ -108,6 +108,15 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     assert!(has_scope_over("public", Scope::Keyword));
     assert!(has_scope_over("// A friendly greeting", Scope::Comment));
     assert!(has_scope_over("\"Hello, \"", Scope::String));
+
+    // Regression coverage for the bundled query's `@attribute` /
+    // `@variable.builtin` / `@constant.builtin` captures, which the fixed
+    // theme has no `Scope` for and which therefore rendered uncolored
+    // before highlights_java.scm remapped them (see that file's header).
+    assert!(has_scope_over("SuppressWarnings", Scope::Type));
+    assert!(has_scope_over("this", Scope::Keyword));
+    assert!(has_scope_over("true", Scope::Keyword));
+    assert!(has_scope_over("println", Scope::Function));
 }
 
 #[test]
@@ -135,6 +144,15 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     assert!(has_scope_over("fun", Scope::Keyword));
     assert!(has_scope_over("// A friendly greeting", Scope::Comment));
     assert!(has_scope_over("\"world\"", Scope::String));
+
+    // Regression coverage for the additions beyond the checkpoint-1 minimum:
+    // call expressions, `true`/`false`/`null` (not distinct node types in
+    // this grammar — matched by text), character literals, and a companion
+    // object's name.
+    assert!(has_scope_over("println", Scope::Function));
+    assert!(has_scope_over("'w'", Scope::String));
+    assert!(has_scope_over("true", Scope::Keyword));
+    assert!(has_scope_over("Defaults", Scope::Type));
 }
 
 #[test]

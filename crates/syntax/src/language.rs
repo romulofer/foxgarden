@@ -12,7 +12,7 @@ pub fn ts_language(language: Language) -> tree_sitter::Language {
 
 pub fn highlights_query_source(language: Language) -> &'static str {
     match language {
-        Language::Java => tree_sitter_java::HIGHLIGHTS_QUERY,
+        Language::Java => include_str!("../queries/highlights_java.scm"),
         Language::Kotlin => include_str!("../queries/highlights_kotlin.scm"),
         Language::Properties => tree_sitter_properties::HIGHLIGHTS_QUERY,
         Language::Yaml => tree_sitter_yaml::HIGHLIGHTS_QUERY,
