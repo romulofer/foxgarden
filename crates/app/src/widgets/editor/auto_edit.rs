@@ -211,6 +211,264 @@ pub(super) fn indent_selected_lines(
     (result.into_iter().collect(), new_start, new_end)
 }
 
+/// The `start..end` char range of the line containing `cursor_char`
+/// (`end` excludes the line's own trailing `\n`, if any) — shared by
+/// `duplicate_line`/`move_line_up`/`move_line_down` to find "the current
+/// line" the same way each time.
+fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
+    let n = chars.len();
+    let cursor_char = cursor_char.min(n);
+    let start = chars[..cursor_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let end = chars[cursor_char..].iter().position(|&c| c == '\n').map_or(n, |off| cursor_char + off);
+    (start, end)
+}
+
+/// Duplicates the line containing `cursor_char`, inserting the copy
+/// immediately below the original — `Alt+Shift+ArrowDown`/`Up`'s shared
+/// transform (the two shortcuts differ only in where the cursor ends up
+/// afterward, decided by the caller). Returns the new text and the cursor
+/// position at the same column on the duplicate line.
+///
+/// Operates on the cursor's line only, not the full extent of any active
+/// selection — a deliberate scope choice, matching `Ctrl+D`'s existing
+/// word/occurrence semantics rather than adding a second, differently-
+/// shaped "duplicate the selection" behavior.
+pub(super) fn duplicate_line(text: &str, cursor_char: usize) -> (String, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let (line_start, line_end) = current_line_range(&chars, cursor_char);
+    let column = cursor_char.min(chars.len()) - line_start;
+
+    let mut result: Vec<char> = Vec::with_capacity(chars.len() + (line_end - line_start) + 1);
+    result.extend_from_slice(&chars[..line_end]);
+    result.push('\n');
+    result.extend_from_slice(&chars[line_start..line_end]);
+    result.extend_from_slice(&chars[line_end..]);
+
+    let cursor_on_duplicate = line_end + 1 + column;
+    (result.into_iter().collect(), cursor_on_duplicate)
+}
+
+/// Swaps the line containing `cursor_char` with the line above it —
+/// `Alt+ArrowUp`. Returns `None` if the cursor is already on the first
+/// line (nothing above to swap with). The cursor follows its line, at the
+/// same column.
+pub(super) fn move_line_up(text: &str, cursor_char: usize) -> Option<(String, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let (line_start, line_end) = current_line_range(&chars, cursor_char);
+    if line_start == 0 {
+        return None;
+    }
+    let column = cursor_char.min(chars.len()) - line_start;
+    let prev_line_start = chars[..line_start - 1].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+
+    let mut result: Vec<char> = Vec::with_capacity(chars.len());
+    result.extend_from_slice(&chars[..prev_line_start]);
+    result.extend_from_slice(&chars[line_start..line_end]);
+    result.push('\n');
+    result.extend_from_slice(&chars[prev_line_start..line_start - 1]);
+    result.extend_from_slice(&chars[line_end..]);
+
+    Some((result.into_iter().collect(), prev_line_start + column))
+}
+
+/// Swaps the line containing `cursor_char` with the line below it —
+/// `Alt+ArrowDown`. Returns `None` if the cursor is already on the last
+/// line (nothing below to swap with). The cursor follows its line, at the
+/// same column.
+pub(super) fn move_line_down(text: &str, cursor_char: usize) -> Option<(String, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let (line_start, line_end) = current_line_range(&chars, cursor_char);
+    if line_end == chars.len() {
+        return None;
+    }
+    let column = cursor_char.min(chars.len()) - line_start;
+    let next_line_start = line_end + 1;
+    let next_line_end = chars[next_line_start..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map_or(chars.len(), |off| next_line_start + off);
+
+    let mut result: Vec<char> = Vec::with_capacity(chars.len());
+    result.extend_from_slice(&chars[..line_start]);
+    result.extend_from_slice(&chars[next_line_start..next_line_end]);
+    result.push('\n');
+    result.extend_from_slice(&chars[line_start..line_end]);
+    result.extend_from_slice(&chars[next_line_end..]);
+
+    let new_line_start = line_start + (next_line_end - next_line_start) + 1;
+    Some((result.into_iter().collect(), new_line_start + column))
+}
+
+/// Toggles `//` line comments on every line the selection
+/// `start_char..end_char` touches (or just the cursor's line, for a
+/// collapsed selection) — `Ctrl+/`. Uncomments only if every non-blank
+/// touched line is already commented; otherwise comments every touched
+/// line, blank ones included. Returns the new text and the remapped
+/// `start..end` selection.
+///
+/// The marker is always inserted/removed at column 0, regardless of a
+/// line's own indentation — a deliberate simplification, not an oversight:
+/// it lets the cursor/selection remap below reuse exactly
+/// `indent_selected_lines`' already-proven-correct "touched line +
+/// per-line delta" shape, rather than a second bespoke one that has to
+/// separately account for a cursor sitting inside a line's leading
+/// whitespace. The tradeoff is that the comment marker doesn't line up
+/// with an indented line's code — acceptable for a `Ctrl+/` toggle, which
+/// only two supported languages (both `//`-commented) need at all.
+pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usize) -> (String, usize, usize) {
+    const MARKER: &str = "// ";
+
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let start_char = start_char.min(n);
+    let end_char = end_char.min(n);
+
+    let first_line_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let mut touched: Vec<usize> = std::iter::once(0)
+        .chain(chars.iter().enumerate().filter(|&(_, &c)| c == '\n').map(|(i, _)| i + 1))
+        .filter(|&s| s >= first_line_start && s < end_char)
+        .collect();
+    if touched.is_empty() {
+        touched.push(first_line_start);
+    }
+
+    let line_end_of = |s: usize| chars[s..].iter().position(|&c| c == '\n').map_or(n, |off| s + off);
+    let is_commented = |s: usize| chars[s..line_end_of(s)].starts_with(&['/', '/']);
+    let is_blank = |s: usize| chars[s..line_end_of(s)].iter().all(|&c| c == ' ' || c == '\t');
+
+    let mut any_non_blank = false;
+    let mut all_commented = true;
+    for &s in &touched {
+        if !is_blank(s) {
+            any_non_blank = true;
+            all_commented &= is_commented(s);
+        }
+    }
+    let uncomment = any_non_blank && all_commented;
+
+    let marker_len = MARKER.chars().count() as i64;
+    let mut result: Vec<char> = Vec::with_capacity(n + touched.len() * marker_len as usize);
+    let mut line_deltas: Vec<(usize, i64)> = Vec::with_capacity(touched.len());
+
+    let mut pos = 0usize;
+    loop {
+        let line_end = line_end_of(pos);
+        let has_newline = line_end < n;
+
+        if touched.contains(&pos) {
+            if uncomment && is_commented(pos) {
+                let removable = if chars.get(pos + 2) == Some(&' ') { 3 } else { 2 };
+                result.extend_from_slice(&chars[pos + removable..line_end]);
+                line_deltas.push((pos, -(removable as i64)));
+            } else if !uncomment {
+                result.extend(MARKER.chars());
+                result.extend_from_slice(&chars[pos..line_end]);
+                line_deltas.push((pos, marker_len));
+            } else {
+                // Uncomment mode, but this touched line (necessarily
+                // blank — `uncomment` requires every *non-blank* touched
+                // line to already be commented) has nothing to remove.
+                result.extend_from_slice(&chars[pos..line_end]);
+            }
+        } else {
+            result.extend_from_slice(&chars[pos..line_end]);
+        }
+
+        if has_newline {
+            result.push('\n');
+            pos = line_end + 1;
+        } else {
+            break;
+        }
+    }
+
+    let remap = |p: usize| -> usize {
+        let p_line_start = chars[..p].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+        let mut delta_before = 0i64;
+        let mut this_line_delta = 0i64;
+        for &(line_start, delta) in &line_deltas {
+            if line_start < p_line_start {
+                delta_before += delta;
+            } else if line_start == p_line_start {
+                this_line_delta = delta;
+            }
+        }
+        let column = p - p_line_start;
+        let new_column = if !touched.contains(&p_line_start) {
+            column
+        } else if uncomment {
+            column.saturating_sub((-this_line_delta) as usize)
+        } else if column == 0 {
+            0
+        } else {
+            column + this_line_delta as usize
+        };
+        (p_line_start as i64 + delta_before + new_column as i64) as usize
+    };
+
+    let new_start = remap(start_char);
+    let new_end = remap(end_char);
+
+    (result.into_iter().collect(), new_start, new_end)
+}
+
+/// Which case transform `convert_selection_case` applies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum CaseConversion {
+    Upper,
+    Lower,
+    Title,
+}
+
+/// Uppercases the first letter of every word (a maximal run of alphanumeric
+/// characters) and lowercases the rest — "hello WORLD_2day" becomes
+/// "Hello World_2day" (`_` isn't alphanumeric, so it still ends a word the
+/// same way a space would).
+fn title_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut at_word_start = true;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            if at_word_start {
+                result.extend(c.to_uppercase());
+            } else {
+                result.extend(c.to_lowercase());
+            }
+            at_word_start = false;
+        } else {
+            result.push(c);
+            at_word_start = true;
+        }
+    }
+    result
+}
+
+/// Applies `case` to `text[start_char..end_char]`, returning the new text
+/// and the selection's new `start..end` (unchanged from the input unless
+/// the conversion itself changes the run's char count, which full Unicode
+/// case mapping occasionally does — e.g. German `ß` uppercases to `SS`).
+/// `None` for an empty range: case conversion has nothing to do without an
+/// actual selection, unlike the line-based transforms above, which fall
+/// back to "the cursor's line".
+pub(super) fn convert_selection_case(text: &str, start_char: usize, end_char: usize, case: CaseConversion) -> Option<(String, usize, usize)> {
+    if start_char == end_char {
+        return None;
+    }
+    let start_byte = char_to_byte(text, start_char);
+    let end_byte = char_to_byte(text, end_char);
+    let selected = &text[start_byte..end_byte];
+
+    let converted = match case {
+        CaseConversion::Upper => selected.to_uppercase(),
+        CaseConversion::Lower => selected.to_lowercase(),
+        CaseConversion::Title => title_case(selected),
+    };
+
+    let new_text = format!("{}{converted}{}", &text[..start_byte], &text[end_byte..]);
+    let new_end = start_char + converted.chars().count();
+    Some((new_text, start_char, new_end))
+}
+
 pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
@@ -600,5 +858,129 @@ mod tests {
     fn indent_selected_lines_single_line_selection_only_touches_that_line() {
         let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 4, 7, false, IndentSettings::default());
         assert_eq!(text, "foo\n    bar\nbaz");
+    }
+
+    #[test]
+    fn duplicate_line_inserts_the_copy_directly_below() {
+        let (text, cursor) = duplicate_line("foo\nbar\nbaz", 5); // cursor on "bar"
+        assert_eq!(text, "foo\nbar\nbar\nbaz");
+        // Cursor lands on the duplicate, same column as it started at.
+        assert_eq!(&text[cursor - 1..cursor + 2], "bar");
+    }
+
+    #[test]
+    fn duplicate_line_on_the_last_line_with_no_trailing_newline_works() {
+        let (text, cursor) = duplicate_line("foo\nbar", 5); // column 1 of "bar"
+        assert_eq!(text, "foo\nbar\nbar");
+        // Cursor lands at column 1 of the duplicate "bar" (the second one).
+        assert_eq!(&text[cursor..cursor + 2], "ar");
+    }
+
+    #[test]
+    fn duplicate_line_preserves_the_cursors_column() {
+        let (_, cursor) = duplicate_line("abcdef", 3);
+        // "abcdef" duplicated is "abcdef\nabcdef" (13 chars); column 3 on
+        // the duplicate is char 7 + 3 = 10.
+        assert_eq!(cursor, 10);
+    }
+
+    #[test]
+    fn move_line_up_swaps_with_the_previous_line() {
+        let (text, cursor) = move_line_up("aaa\nbbb\nccc", 4).unwrap(); // cursor at column 0 of "bbb"
+        assert_eq!(text, "bbb\naaa\nccc");
+        assert_eq!(&text[cursor..cursor + 3], "bbb");
+    }
+
+    #[test]
+    fn move_line_up_on_the_first_line_is_none() {
+        assert_eq!(move_line_up("aaa\nbbb", 1), None);
+    }
+
+    #[test]
+    fn move_line_up_keeps_the_cursors_column() {
+        let (_, cursor) = move_line_up("aaa\nbbb", 5).unwrap(); // column 1 of "bbb"
+        assert_eq!(cursor, 1); // column 1 of "bbb", which now starts at 0
+    }
+
+    #[test]
+    fn move_line_down_swaps_with_the_next_line() {
+        let (text, cursor) = move_line_down("aaa\nbbb\nccc", 0).unwrap(); // cursor at column 0 of "aaa"
+        assert_eq!(text, "bbb\naaa\nccc");
+        assert_eq!(&text[cursor..cursor + 3], "aaa");
+    }
+
+    #[test]
+    fn move_line_down_on_the_last_line_is_none() {
+        assert_eq!(move_line_down("aaa\nbbb", 5), None);
+    }
+
+    #[test]
+    fn move_line_up_then_down_is_the_identity() {
+        let original = "one\ntwo\nthree\nfour";
+        let cursor = original.find("three").unwrap();
+        let (moved, new_cursor) = move_line_up(original, cursor).unwrap();
+        let (restored, _) = move_line_down(&moved, new_cursor).unwrap();
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn toggle_line_comments_comments_a_single_uncommented_line() {
+        let (text, ..) = toggle_line_comments("foo();", 0, 0);
+        assert_eq!(text, "// foo();");
+    }
+
+    #[test]
+    fn toggle_line_comments_uncomments_an_already_commented_line() {
+        let (text, ..) = toggle_line_comments("// foo();", 0, 0);
+        assert_eq!(text, "foo();");
+    }
+
+    #[test]
+    fn toggle_line_comments_uncomment_tolerates_no_space_after_the_marker() {
+        let (text, ..) = toggle_line_comments("//foo();", 0, 0);
+        assert_eq!(text, "foo();");
+    }
+
+    #[test]
+    fn toggle_line_comments_comments_every_touched_line() {
+        let (text, ..) = toggle_line_comments("foo\nbar\nbaz", 0, 7); // touches "foo" and "bar"
+        assert_eq!(text, "// foo\n// bar\nbaz");
+    }
+
+    #[test]
+    fn toggle_line_comments_uncomments_only_when_every_touched_line_is_commented() {
+        // "foo" is commented, "bar" isn't — mixed, so the whole selection
+        // is treated as "not fully commented" and gets commented further
+        // rather than uncommenting just the one that qualifies.
+        let (text, ..) = toggle_line_comments("// foo\nbar", 0, 10);
+        assert_eq!(text, "// // foo\n// bar");
+    }
+
+    #[test]
+    fn toggle_line_comments_uncomments_every_touched_line_when_all_are_commented() {
+        let (text, ..) = toggle_line_comments("// foo\n// bar", 0, 13);
+        assert_eq!(text, "foo\nbar");
+    }
+
+    #[test]
+    fn toggle_line_comments_comments_a_blank_touched_line_too() {
+        let (text, ..) = toggle_line_comments("foo\n\nbar", 0, 8);
+        assert_eq!(text, "// foo\n// \n// bar");
+    }
+
+    #[test]
+    fn toggle_line_comments_ignores_blank_lines_when_deciding_to_uncomment() {
+        // A blank line among otherwise-fully-commented lines shouldn't
+        // block recognizing the selection as "commented".
+        let (text, ..) = toggle_line_comments("// foo\n\n// bar", 0, 14);
+        assert_eq!(text, "foo\n\nbar");
+    }
+
+    #[test]
+    fn toggle_line_comments_round_trips() {
+        let original = "if (x) {\nfoo();\n}";
+        let (commented, ..) = toggle_line_comments(original, 0, original.chars().count());
+        let (restored, ..) = toggle_line_comments(&commented, 0, commented.chars().count());
+        assert_eq!(restored, original);
     }
 }

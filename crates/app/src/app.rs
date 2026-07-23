@@ -337,24 +337,27 @@ impl eframe::App for FoxGardenApp {
         }
 
         let mut outcome = side_panel::SidePanelOutcome::default();
+        let mut generate_request = None;
 
         if !self.zen_mode {
-            egui::Panel::top("menu_bar").show(ui, |ui| {
-                menu_bar::show(
-                    ui,
-                    &mut self.state,
-                    &mut self.side_panel,
-                    &mut self.parsers,
-                    &mut self.pending_close,
-                    &mut self.menu_bar,
-                    &mut self.editor_font,
-                    &mut self.font_size,
-                    &mut self.dark_mode,
-                    &mut self.indent_settings,
-                    &mut self.zen_mode,
-                    &mut self.last_error,
-                );
-            });
+            generate_request = egui::Panel::top("menu_bar")
+                .show(ui, |ui| {
+                    menu_bar::show(
+                        ui,
+                        &mut self.state,
+                        &mut self.side_panel,
+                        &mut self.parsers,
+                        &mut self.pending_close,
+                        &mut self.menu_bar,
+                        &mut self.editor_font,
+                        &mut self.font_size,
+                        &mut self.dark_mode,
+                        &mut self.indent_settings,
+                        &mut self.zen_mode,
+                        &mut self.last_error,
+                    )
+                })
+                .inner;
 
             outcome = egui::Panel::left("project_panel")
                 .show(ui, |ui| side_panel::show(ui, &mut self.state, &mut self.side_panel))
@@ -383,6 +386,7 @@ impl eframe::App for FoxGardenApp {
                 self.editor_font,
                 self.font_size,
                 self.indent_settings,
+                generate_request,
                 &mut self.last_error,
             );
         });

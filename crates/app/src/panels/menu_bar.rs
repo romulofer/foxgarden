@@ -6,6 +6,7 @@ use super::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
+use crate::widgets::editor::AccessorKind;
 use crate::widgets::modal::show_modal;
 
 /// Persistent state for menu-triggered dialogs.
@@ -33,7 +34,9 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     zen_mode: &mut bool,
     last_error: &mut Option<String>,
-) {
+) -> Option<AccessorKind> {
+    let mut generate_request = None;
+
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
             if ui.button("New File…").clicked() {
@@ -127,6 +130,23 @@ pub fn show(
             });
         });
 
+        ui.menu_button("Tools", |ui| {
+            // Java-only, and only meaningful with the cursor inside a
+            // class body — `widgets::editor::show` reports that as an
+            // error (via `last_error`) rather than silently doing nothing
+            // if it doesn't apply, same as `Ctrl+Shift+G` (which requests
+            // both at once; these two are separate, narrower requests).
+            let has_active_tab = state.active_tab.is_some();
+            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Getters")).clicked() {
+                generate_request = Some(AccessorKind::Getters);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Setters")).clicked() {
+                generate_request = Some(AccessorKind::Setters);
+                ui.close();
+            }
+        });
+
         ui.menu_button("View", |ui| {
             if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
                 ui.close();
@@ -142,6 +162,8 @@ pub fn show(
     });
 
     show_about(ui, menu);
+
+    generate_request
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
@@ -157,7 +179,12 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
         ui.label("Ctrl+J — join the current line with the next one");
         ui.label("Ctrl+E — go to a recent file");
-        ui.label("Ctrl+Shift+G — generate getters/setters (Java)");
+        ui.label("Ctrl+/ — toggle line comments");
+        ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
+        ui.label("Tools menu — generate just getters, or just setters");
+        ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
+        ui.label("Alt+↑/↓ — move the current line up/down");
+        ui.label("Alt+Shift+↑/↓ — duplicate the current line");
         ui.separator();
         ui.button("Close").clicked()
     });

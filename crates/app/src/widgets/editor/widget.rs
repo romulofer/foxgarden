@@ -8,11 +8,13 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    apply_auto_indent, apply_auto_pair, char_to_byte, indent_selected_lines, is_pairable, join_lines, wrap_selection,
+    apply_auto_indent, apply_auto_pair, char_to_byte, duplicate_line, indent_selected_lines, is_pairable, join_lines,
+    move_line_down, move_line_up, toggle_line_comments, wrap_selection,
 };
-use super::codegen::{generate_accessors, insert_generated};
+use super::codegen::{generate_accessors, insert_generated, AccessorKind};
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
+use super::templates::{self, expand, find_template, word_before_cursor};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -95,6 +97,8 @@ pub fn show(
     editor_font: EditorFont,
     font_size: f32,
     indent_settings: IndentSettings,
+    generate_request: Option<AccessorKind>,
+    last_error: &mut Option<String>,
 ) {
     // Mutable: the wrap-selection interception below may replace both with
     // an already-edited version *before* `TextEdit::show()` ever runs, so
@@ -241,14 +245,19 @@ pub fn show(
     // wrap-selection interception above, and skipped for the same reason
     // whenever multi-cursor is active.
     //
-    // Plain Tab with *no* selection is handled here too, in "spaces" mode:
-    // egui's own `TextEdit` (a `.code_editor()`, which sets `lock_focus`)
-    // inserts a literal `\t` for a bare Tab keypress, which would silently
-    // ignore an `indent_settings.use_tabs == false` choice. Skipped when
-    // `use_tabs` is set — a literal tab already *is* that setting's unit,
-    // so egui's default is exactly right and needs no interception — and
-    // for Shift+Tab, which egui's own no-selection handling is left to
-    // decide, same as before this feature existed.
+    // Plain Tab with *no* selection is handled here too, for two things:
+    // live-template expansion (a trigger word like "sout" completing into
+    // its snippet), and — in "spaces" mode — indentation. egui's own
+    // `TextEdit` (a `.code_editor()`, which sets `lock_focus`) inserts a
+    // literal `\t` for a bare Tab keypress, which would silently ignore
+    // both a matched template and an `indent_settings.use_tabs == false`
+    // choice. A template match is checked (and, if found, wins) regardless
+    // of `use_tabs` — expansion is orthogonal to indentation style — so
+    // only the *indentation* half of this is skipped once `use_tabs` is
+    // set (a literal tab already *is* that setting's unit, so egui's
+    // default is exactly right there and needs no interception). Shift+Tab
+    // is left to egui's own no-selection handling either way, same as
+    // before either feature existed.
     if !multi_cursor_active_at_start {
         let tab_pressed =
             ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. })));
@@ -272,19 +281,128 @@ pub fn show(
                         old_text = indented.clone();
                         text = indented;
                     }
-                } else if !indent_settings.use_tabs && !ui.input(|i| i.modifiers.shift) {
-                    let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+                } else if !ui.input(|i| i.modifiers.shift) {
+                    let word_range = word_before_cursor(&old_text, range.start.0);
+                    let word_start_byte = char_to_byte(&old_text, word_range.start);
+                    let word_end_byte = char_to_byte(&old_text, word_range.end);
+                    let templates = match doc.language {
+                        Some(Language::Java) => templates::JAVA_TEMPLATES,
+                        Some(Language::Kotlin) => templates::KOTLIN_TEMPLATES,
+                        _ => &[],
+                    };
+                    let template_body = find_template(templates, &old_text[word_start_byte..word_end_byte]);
 
-                    if removed.is_some() {
-                        let unit = indent_settings.unit();
-                        let byte = char_to_byte(&old_text, range.start.0);
-                        let inserted = format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
-                        apply_edit(doc, parser, &old_text, &inserted);
-                        let new_cursor = range.start.0 + unit.chars().count();
-                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
-                        old_text = inserted.clone();
-                        text = inserted;
+                    if template_body.is_some() || !indent_settings.use_tabs {
+                        let removed =
+                            take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+
+                        if removed.is_some() {
+                            let (new_full_text, new_cursor) = if let Some(body) = template_body {
+                                expand(&old_text, word_range, body)
+                            } else {
+                                let unit = indent_settings.unit();
+                                let byte = char_to_byte(&old_text, range.start.0);
+                                let inserted = format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
+                                (inserted, range.start.0 + unit.chars().count())
+                            };
+                            apply_edit(doc, parser, &old_text, &new_full_text);
+                            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                            old_text = new_full_text.clone();
+                            text = new_full_text;
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    // Alt+ArrowUp/Down move the current line up/down; Alt+Shift+ArrowUp/
+    // Down duplicate it (inserted below, cursor landing on the original
+    // for Up or the duplicate for Down — matching a widely-used editor
+    // convention). Pre-apply, same interception shape as Tab above: egui's
+    // own `TextEdit` would otherwise also move/extend-select the cursor
+    // via its native arrow-key handling this same frame, competing with
+    // this transform.
+    if !multi_cursor_active_at_start {
+        let alt_arrow = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                Event::Key { key: key @ (Key::ArrowUp | Key::ArrowDown), pressed: true, modifiers, .. }
+                    if modifiers.alt =>
+                {
+                    Some((*key, modifiers.shift))
+                }
+                _ => None,
+            })
+        });
+
+        if let Some((key, shift)) = alt_arrow {
+            let prior_cursor = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.primary.index.0);
+
+            if let Some(cursor_char) = prior_cursor {
+                let removed = take_event(ui, |e| {
+                    matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.alt && modifiers.shift == shift)
+                });
+
+                if removed.is_some() {
+                    let outcome = match (key, shift) {
+                        (Key::ArrowUp, false) => move_line_up(&old_text, cursor_char),
+                        (Key::ArrowDown, false) => move_line_down(&old_text, cursor_char),
+                        (Key::ArrowUp, true) => {
+                            let (duplicated, _) = duplicate_line(&old_text, cursor_char);
+                            Some((duplicated, cursor_char))
+                        }
+                        (Key::ArrowDown, true) => {
+                            let (duplicated, cursor_on_duplicate) = duplicate_line(&old_text, cursor_char);
+                            Some((duplicated, cursor_on_duplicate))
+                        }
+                        _ => None,
+                    };
+                    if let Some((new_full_text, new_cursor)) = outcome {
+                        apply_edit(doc, parser, &old_text, &new_full_text);
+                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                        old_text = new_full_text.clone();
+                        text = new_full_text;
+                    }
+                }
+            }
+        }
+    }
+
+    // Ctrl+/: toggle `//` line comments on every line the selection
+    // touches (or just the cursor's line, for a collapsed selection).
+    // Pre-apply, same interception shape as Tab/Alt+Arrow above — and for
+    // an extra reason beyond "egui's own handling would otherwise compete
+    // with it": reading the *persisted* selection from before this frame's
+    // `TextEdit::show()` call is what makes an externally set/dragged
+    // selection actually usable here. `output.cursor_range` (the post-show
+    // value simpler shortcuts like Ctrl+D/Ctrl+J read) doesn't reliably
+    // agree with it — the same class of caveat `focused_frame_with_
+    // selection`'s doc comment already documents for a different case.
+    if !multi_cursor_active_at_start {
+        let ctrl_slash_pressed = ui.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, Event::Key { key: Key::Slash, pressed: true, modifiers, .. } if modifiers.command))
+        });
+
+        if ctrl_slash_pressed {
+            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.as_sorted_char_range());
+
+            if let Some(range) = prior_selection {
+                let removed = take_event(ui, |e| {
+                    matches!(e, Event::Key { key: Key::Slash, pressed: true, modifiers, .. } if modifiers.command)
+                });
+
+                if removed.is_some() {
+                    let (toggled, sel_start, sel_end) = toggle_line_comments(&old_text, range.start.0, range.end.0);
+                    apply_edit(doc, parser, &old_text, &toggled);
+                    manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                    old_text = toggled.clone();
+                    text = toggled;
                 }
             }
         }
@@ -450,25 +568,46 @@ pub fn show(
         }
     }
 
-    // Ctrl+Shift+G: generate getters/setters for the enclosing Java class's
-    // fields at the cursor. Java-only — Kotlin's `val`/`var` properties
-    // already *are* getters/setters, so generating explicit ones for them
-    // isn't the idiomatic move a Java accessor-boilerplate command is.
-    let generate_accessors_pressed = ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift;
-    if generate_accessors_pressed
-        && doc.language == Some(Language::Java)
-        && let Some(primary_range) = output.cursor_range
-        && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
-    {
-        let text_now = doc.buffer.to_string();
-        let cursor_char = primary_range.primary.index.0;
-        let cursor_byte = char_to_byte(&text_now, cursor_char);
-        let fields = syntax::java_fields_in_enclosing_class(tree, &text_now, cursor_byte);
-        if !fields.is_empty() {
-            let generated = generate_accessors(&fields, &indent_settings.unit());
-            let (inserted, new_cursor) = insert_generated(&text_now, cursor_char, &generated);
-            apply_edit(doc, parser, &text_now, &inserted);
-            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+
+    // Ctrl+Shift+G (always `Both`) or a Tools menu click (`generate_request`,
+    // already narrowed to `Getters`/`Setters`/`Both`) generate accessors for
+    // the enclosing Java class's fields at the cursor. Java-only — Kotlin's
+    // `val`/`var` properties already *are* getters/setters, so generating
+    // explicit ones for them isn't the idiomatic move a Java accessor-
+    // boilerplate command is. Every non-applicable case sets `last_error`
+    // instead of silently doing nothing — a request that visibly changes
+    // nothing (wrong file type, cursor not inside a class, no matching
+    // fields) is easy to mistake for "the shortcut doesn't work" otherwise.
+    let keyboard_requested_accessors =
+        (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
+    if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
+        if doc.language != Some(Language::Java) {
+            *last_error = Some("Generate getters/setters only works for Java files.".to_string());
+        } else if let Some(primary_range) = output.cursor_range {
+            if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
+                let text_now = doc.buffer.to_string();
+                let cursor_char = primary_range.primary.index.0;
+                let cursor_byte = char_to_byte(&text_now, cursor_char);
+                let fields = syntax::java_fields_in_enclosing_class(tree, &text_now, cursor_byte);
+                if fields.is_empty() {
+                    *last_error = Some("No class fields found at the cursor.".to_string());
+                } else {
+                    let generated = generate_accessors(&fields, &indent_settings.unit(), kind);
+                    if generated.is_empty() {
+                        // Only reachable for `AccessorKind::Setters` when
+                        // every field found is `final`.
+                        *last_error = Some("Nothing to generate: every field here is final.".to_string());
+                    } else {
+                        let (inserted, new_cursor) = insert_generated(&text_now, cursor_char, &generated);
+                        apply_edit(doc, parser, &text_now, &inserted);
+                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                    }
+                }
+            } else {
+                *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
+            }
+        } else {
+            *last_error = Some("Click inside the editor, then try again.".to_string());
         }
     }
 
@@ -613,7 +752,7 @@ mod tests {
             // here with "is not bound to any fonts". Use the built-in family
             // instead — this test exercises the widget's rendering logic,
             // not font registration.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -633,7 +772,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -644,7 +783,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
 
         assert!(doc.diagnostics.is_empty());
@@ -683,7 +822,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -705,7 +844,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -714,7 +853,7 @@ mod tests {
         // A second frame over the very same, unedited document — as if the
         // tab were simply redrawn, or switched away from and back to.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -736,7 +875,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -744,7 +883,7 @@ mod tests {
 
         doc.buffer = Rope::from_str("hello world");
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -766,7 +905,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -775,7 +914,7 @@ mod tests {
         // Same unedited content, but a different font size — the cached
         // galley was shaped at the old size, so it must not be reused.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -822,7 +961,7 @@ mod tests {
             // will target nothing.
             let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -864,7 +1003,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -889,7 +1028,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -917,7 +1056,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
 
         doc.extra_selections = extra_selections;
@@ -932,7 +1071,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
         });
     }
 
@@ -956,7 +1095,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
         });
 
         let modifiers = events
@@ -969,7 +1108,50 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+        });
+    }
+
+    /// Combines `focused_frame_with_indent_settings` (custom
+    /// `IndentSettings`) and `focused_frame_with_selection` (an injected
+    /// cursor/selection) — needed to exercise the Tab-with-no-selection
+    /// live-template path under a non-default indent mode, which needs
+    /// both: the cursor positioned right after a trigger word, and control
+    /// over `use_tabs`.
+    fn focused_frame_with_indent_settings_and_selection(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        indent_settings: IndentSettings,
+        selection: std::ops::Range<usize>,
+        events: Vec<egui::Event>,
+    ) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+        });
+
+        let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(selection.start),
+            CCursor::new(selection.end),
+        )));
+        state.store(&ctx, id);
+
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
         });
     }
 
@@ -1002,6 +1184,26 @@ mod tests {
             pressed: true,
             repeat: false,
             modifiers: egui::Modifiers::SHIFT,
+        }
+    }
+
+    fn alt_key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers { alt: true, ..egui::Modifiers::NONE },
+        }
+    }
+
+    fn alt_shift_key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers { alt: true, shift: true, ..egui::Modifiers::NONE },
         }
     }
 
@@ -1106,6 +1308,114 @@ mod tests {
         assert!(doc.buffer.to_string().len() <= "    abc".len());
     }
 
+    #[test]
+    fn tab_after_a_known_java_trigger_word_expands_the_live_template() {
+        let (_dir, mut doc) = open_fixture("sout", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        // Collapsed cursor (4..4) right after "sout" — not a real
+        // selection, just how `focused_frame_with_selection` positions a
+        // bare cursor via the persisted `TextEditState` the Tab
+        // interception reads.
+        focused_frame_with_selection(&mut doc, &mut parser, 4..4, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "System.out.println();");
+    }
+
+    #[test]
+    fn tab_after_a_known_kotlin_trigger_word_expands_the_kotlin_template() {
+        let (_dir, mut doc) = open_fixture("sout", "Hello.kt");
+        let mut parser = parsed(Language::Kotlin, &doc.buffer.to_string());
+
+        focused_frame_with_selection(&mut doc, &mut parser, 4..4, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "println()");
+    }
+
+    #[test]
+    fn tab_after_an_unknown_word_falls_through_to_normal_spaces_indentation() {
+        let (_dir, mut doc) = open_fixture("xyz", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        focused_frame_with_selection(&mut doc, &mut parser, 3..3, vec![key_event(egui::Key::Tab)]);
+
+        // No template matches "xyz" — default (spaces) indentation applies
+        // instead, same as plain Tab anywhere else with no selection.
+        assert_eq!(doc.buffer.to_string(), "xyz    ");
+    }
+
+    #[test]
+    fn tab_after_a_trigger_word_expands_even_in_tabs_mode() {
+        // Live-template expansion is orthogonal to the tabs-vs-spaces
+        // setting — it must win even when `use_tabs` would otherwise leave
+        // plain Tab un-intercepted.
+        let (_dir, mut doc) = open_fixture("sout", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let tabs_mode = IndentSettings { use_tabs: true, width: 4 };
+        focused_frame_with_indent_settings_and_selection(
+            &mut doc,
+            &mut parser,
+            tabs_mode,
+            4..4,
+            vec![key_event(egui::Key::Tab)],
+        );
+
+        assert_eq!(doc.buffer.to_string(), "System.out.println();");
+    }
+
+    #[test]
+    fn alt_arrow_up_moves_the_current_line_up() {
+        let (_dir, mut doc) = open_fixture("aaa\nbbb\nccc", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // Cursor at column 0 of "bbb" (char 4).
+        focused_frame_with_selection(&mut doc, &mut parser, 4..4, vec![alt_key_event(egui::Key::ArrowUp)]);
+
+        assert_eq!(doc.buffer.to_string(), "bbb\naaa\nccc");
+    }
+
+    #[test]
+    fn alt_arrow_down_moves_the_current_line_down() {
+        let (_dir, mut doc) = open_fixture("aaa\nbbb\nccc", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // Cursor at column 0 of "aaa" (char 0).
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_key_event(egui::Key::ArrowDown)]);
+
+        assert_eq!(doc.buffer.to_string(), "bbb\naaa\nccc");
+    }
+
+    #[test]
+    fn alt_arrow_up_on_the_first_line_is_a_no_op() {
+        let (_dir, mut doc) = open_fixture("aaa\nbbb", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_key_event(egui::Key::ArrowUp)]);
+
+        assert_eq!(doc.buffer.to_string(), "aaa\nbbb");
+    }
+
+    #[test]
+    fn alt_shift_arrow_down_duplicates_the_line_and_lands_on_the_copy() {
+        let (_dir, mut doc) = open_fixture("foo\nbar", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_shift_key_event(egui::Key::ArrowDown)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo\nfoo\nbar");
+    }
+
+    #[test]
+    fn alt_shift_arrow_up_duplicates_the_line_and_stays_on_the_original() {
+        let (_dir, mut doc) = open_fixture("foo\nbar", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_shift_key_event(egui::Key::ArrowUp)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo\nfoo\nbar");
+    }
+
     fn command_key_event(key: egui::Key) -> egui::Event {
         egui::Event::Key {
             key,
@@ -1140,6 +1450,42 @@ mod tests {
         assert_eq!(doc.buffer.to_string(), "foo");
     }
 
+    #[test]
+    fn ctrl_slash_comments_the_current_line() {
+        let (_dir, mut doc) = open_fixture("foo();", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // Ctrl+/ reads the *persisted* selection (see `show`'s comment on
+        // this interception), so — like wrap-selection/Tab/Alt+Arrow — it
+        // needs `focused_frame_with_selection`'s warm-up frame, not the
+        // single dry frame `focused_frame` gives; a collapsed 0..0
+        // selection is just "cursor at the start, nothing selected".
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![command_key_event(egui::Key::Slash)]);
+
+        assert_eq!(doc.buffer.to_string(), "// foo();");
+    }
+
+    #[test]
+    fn ctrl_slash_uncomments_an_already_commented_line() {
+        let (_dir, mut doc) = open_fixture("// foo();", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![command_key_event(egui::Key::Slash)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo();");
+    }
+
+    #[test]
+    fn ctrl_slash_toggles_every_line_a_selection_touches() {
+        let (_dir, mut doc) = open_fixture("foo\nbar", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // All of "foo" and all of "bar" (chars 0..7).
+        focused_frame_with_selection(&mut doc, &mut parser, 0..7, vec![command_key_event(egui::Key::Slash)]);
+
+        assert_eq!(doc.buffer.to_string(), "// foo\n// bar");
+    }
+
     fn command_shift_key_event(key: egui::Key) -> egui::Event {
         egui::Event::Key {
             key,
@@ -1166,30 +1512,124 @@ mod tests {
         assert!(text.contains("public void setX(int x) {\n        this.x = x;\n    }"));
     }
 
+    /// Like `focused_frame`, but exposes the `generate_request`/`last_error`
+    /// parameters `Tools > Generate Getters/Setters` and `Ctrl+Shift+G`
+    /// feed `show`, returning whatever ends up in `last_error` — used to
+    /// verify every non-applicable case (wrong file type, no fields)
+    /// surfaces visible feedback instead of a silent no-op, which is easy
+    /// to mistake for "the shortcut doesn't work."
+    fn focused_frame_with_generate_request(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        generate_request: Option<AccessorKind>,
+        events: Vec<egui::Event>,
+    ) -> Option<String> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let mut last_error = None;
+        let _ = ctx.run_ui(raw_input, |ui| {
+            let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(
+                ui,
+                doc,
+                parser,
+                EditorFont::Default,
+                14.0,
+                IndentSettings::default(),
+                generate_request,
+                &mut last_error,
+            );
+        });
+        last_error
+    }
+
     #[test]
-    fn ctrl_shift_g_is_a_no_op_for_kotlin_files() {
+    fn ctrl_shift_g_is_a_no_op_for_kotlin_files_but_reports_why() {
         // Kotlin's `val`/`var` properties already are getters/setters;
         // generating explicit Java-shaped ones for them isn't idiomatic
         // (see `widget::show`'s comment on this shortcut), so the command
-        // does nothing for a non-Java file.
+        // does nothing for a non-Java file — but must say so via
+        // `last_error` rather than silently doing nothing.
         let (_dir, mut doc) = open_fixture("class Foo(val x: Int)\n", "Foo.kt");
         let mut parser = parsed(Language::Kotlin, &doc.buffer.to_string());
         let before = doc.buffer.to_string();
 
-        focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
+        let last_error = focused_frame_with_generate_request(
+            &mut doc,
+            &mut parser,
+            None,
+            vec![command_shift_key_event(egui::Key::G)],
+        );
 
         assert_eq!(doc.buffer.to_string(), before);
+        assert!(last_error.is_some_and(|msg| msg.contains("Java")));
     }
 
     #[test]
-    fn ctrl_shift_g_is_a_no_op_when_the_class_has_no_instance_fields() {
+    fn ctrl_shift_g_on_a_fieldless_class_is_a_no_op_but_reports_why() {
         let (_dir, mut doc) = open_fixture("public class Empty {\n}\n", "Empty.java");
         let mut parser = parsed(Language::Java, &doc.buffer.to_string());
         let before = doc.buffer.to_string();
 
-        focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
+        let last_error = focused_frame_with_generate_request(
+            &mut doc,
+            &mut parser,
+            None,
+            vec![command_shift_key_event(egui::Key::G)],
+        );
 
         assert_eq!(doc.buffer.to_string(), before);
+        assert!(last_error.is_some_and(|msg| msg.contains("fields")));
+    }
+
+    #[test]
+    fn tools_menu_generate_getters_inserts_only_a_getter() {
+        let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let last_error =
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Getters), vec![]);
+
+        assert_eq!(last_error, None);
+        let text = doc.buffer.to_string();
+        assert!(text.contains("getX"));
+        assert!(!text.contains("setX"));
+    }
+
+    #[test]
+    fn tools_menu_generate_setters_inserts_only_a_setter() {
+        let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        let last_error =
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), vec![]);
+
+        assert_eq!(last_error, None);
+        let text = doc.buffer.to_string();
+        assert!(!text.contains("getX"));
+        assert!(text.contains("setX"));
+    }
+
+    #[test]
+    fn tools_menu_generate_setters_on_an_all_final_class_reports_why() {
+        let (_dir, mut doc) = open_fixture("public class Foo {\n    private final int x;\n}\n", "Foo.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+        let before = doc.buffer.to_string();
+
+        let last_error =
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), vec![]);
+
+        assert_eq!(doc.buffer.to_string(), before);
+        assert!(last_error.is_some_and(|msg| msg.contains("final")));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use syntax::IncrementalParser;
 
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
-use crate::widgets::editor;
+use crate::widgets::editor::{self, AccessorKind};
 use crate::widgets::modal::show_modal;
 
 /// Fully reparses `doc`'s *current* buffer contents against `parser` and
@@ -86,6 +86,7 @@ pub fn show(
     editor_font: EditorFont,
     font_size: f32,
     indent_settings: IndentSettings,
+    generate_request: Option<AccessorKind>,
     last_error: &mut Option<String>,
 ) {
     let mut focus_request = None;
@@ -155,7 +156,7 @@ pub fn show(
     };
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        editor::show(ui, doc, parser, editor_font, font_size, indent_settings);
+        editor::show(ui, doc, parser, editor_font, font_size, indent_settings, generate_request, last_error);
     });
 }
 
