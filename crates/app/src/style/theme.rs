@@ -11,6 +11,9 @@ const LIGHT_TEXT: Color32 = Color32::from_rgb(56, 58, 66);
 const DARK_ERROR_SQUIGGLE: Color32 = Color32::from_rgb(224, 82, 82);
 const LIGHT_ERROR_SQUIGGLE: Color32 = Color32::from_rgb(202, 42, 42);
 
+const DARK_LINE_NUMBER: Color32 = Color32::from_rgb(92, 99, 112);
+const LIGHT_LINE_NUMBER: Color32 = Color32::from_rgb(160, 160, 160);
+
 /// The editor's default (non-highlighted) text color, adapted for legibility
 /// against the current theme's background — `color_for_scope`'s dark-theme
 /// palette reads poorly against `RAYWHITE`, so both need the `dark_mode`
@@ -24,6 +27,17 @@ pub fn error_squiggle(dark_mode: bool) -> Color32 {
         DARK_ERROR_SQUIGGLE
     } else {
         LIGHT_ERROR_SQUIGGLE
+    }
+}
+
+/// Deliberately muted relative to `default_text` — line numbers are a
+/// glance-able reference, not something that should compete with the code
+/// itself for attention.
+pub fn line_number(dark_mode: bool) -> Color32 {
+    if dark_mode {
+        DARK_LINE_NUMBER
+    } else {
+        LIGHT_LINE_NUMBER
     }
 }
 

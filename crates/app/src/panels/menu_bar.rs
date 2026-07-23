@@ -129,6 +129,7 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Ctrl+Shift+T — reopen the last closed tab");
         ui.label("Middle-click a tab — close it");
         ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
+        ui.label("Ctrl+J — join the current line with the next one");
         ui.separator();
         if ui.button("Close").clicked() {
             menu.about_open = false;

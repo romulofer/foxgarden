@@ -49,6 +49,35 @@ pub(super) fn apply_auto_indent(old_text: &str, text: &str, cursor_char: Option<
     (corrected, Some(new_cursor_char))
 }
 
+/// Merges the line below `cursor_char` onto the current line — `Ctrl+J`'s
+/// "join lines" command. Returns `None` if the cursor is on the last line
+/// (nothing to join). The newline and the next line's leading whitespace
+/// are replaced by a single space, except when that would be redundant (the
+/// current line is empty or already ends in whitespace) or pointless (the
+/// next line is itself blank) — in those cases the join leaves no separator
+/// at all, matching how most editors' "join lines" avoids inserting spaces
+/// no one would want. Returns the joined text and where the cursor should
+/// land: right at the join point, same as most editors default to.
+pub(super) fn join_lines(text: &str, cursor_char: usize) -> Option<(String, usize)> {
+    let cursor_byte = char_to_byte(text, cursor_char);
+    let line_start = text[..cursor_byte].rfind('\n').map_or(0, |i| i + 1);
+    let nl_byte = line_start + text[line_start..].find('\n')?;
+    let current_line = &text[line_start..nl_byte];
+
+    let after_nl = &text[nl_byte + 1..];
+    let ws_len = after_nl.find(|c: char| c != ' ' && c != '\t').unwrap_or(after_nl.len());
+    let next_line_start = nl_byte + 1 + ws_len;
+    let next_line_first_char = text[next_line_start..].chars().next();
+
+    let needs_space =
+        !current_line.is_empty() && !current_line.ends_with([' ', '\t']) && !matches!(next_line_first_char, None | Some('\n'));
+    let separator = if needs_space { " " } else { "" };
+
+    let joined = format!("{}{separator}{}", &text[..nl_byte], &text[next_line_start..]);
+    let new_cursor_char = text[..nl_byte].chars().count() + separator.chars().count();
+    Some((joined, new_cursor_char))
+}
+
 pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
@@ -219,5 +248,56 @@ mod tests {
     #[test]
     fn multi_char_paste_is_left_untouched() {
         assert_eq!(apply_auto_pair("foo", "foo({", None), "foo({");
+    }
+
+    #[test]
+    fn join_lines_inserts_a_single_space_between_two_words() {
+        let (joined, cursor) = join_lines("foo\nbar", 1).unwrap();
+        assert_eq!(joined, "foo bar");
+        // Cursor lands right at the join point: after "foo " (the original
+        // line plus the inserted separator), at the start of what was the
+        // next line's content.
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn join_lines_strips_the_next_lines_leading_indentation() {
+        let (joined, cursor) = join_lines("if (x) {\n    doStuff();\n}", 4).unwrap();
+        assert_eq!(joined, "if (x) { doStuff();\n}");
+        assert_eq!(cursor, 9);
+    }
+
+    #[test]
+    fn join_lines_on_the_last_line_is_a_no_op() {
+        assert_eq!(join_lines("foo\nbar", 5), None);
+    }
+
+    #[test]
+    fn join_lines_uses_cursor_position_regardless_of_column_within_the_line() {
+        // Cursor anywhere on "foo" (chars 0..=3) should join the *line*,
+        // not require the cursor to sit at any particular column.
+        let (joined, _) = join_lines("foo\nbar", 0).unwrap();
+        assert_eq!(joined, "foo bar");
+    }
+
+    #[test]
+    fn join_lines_onto_a_blank_line_adds_no_space() {
+        let (joined, cursor) = join_lines("foo\n\nbar", 1).unwrap();
+        assert_eq!(joined, "foo\nbar");
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn join_lines_from_an_empty_current_line_adds_no_leading_space() {
+        let (joined, cursor) = join_lines("\nbar", 0).unwrap();
+        assert_eq!(joined, "bar");
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn join_lines_avoids_a_double_space_when_current_line_already_ends_in_whitespace() {
+        let (joined, cursor) = join_lines("foo  \nbar", 1).unwrap();
+        assert_eq!(joined, "foo  bar");
+        assert_eq!(cursor, 5);
     }
 }

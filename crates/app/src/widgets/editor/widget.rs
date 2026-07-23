@@ -7,9 +7,9 @@ use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
-use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte};
+use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte, join_lines};
 use super::multi_cursor::{self, MultiEditOp};
-use super::painting::{paint_diagnostics, paint_extra_selections};
+use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
 use crate::style::fonts::EditorFont;
 use crate::style::theme;
 
@@ -31,6 +31,10 @@ struct CachedLayout {
     key: LayoutCacheKey,
     galley: Arc<Galley>,
 }
+
+/// Horizontal breathing room on each side of the line-number gutter's
+/// digits, so they don't crowd the window edge or the text they precede.
+const GUTTER_PADDING: f32 = 8.0;
 
 fn hash_source(source: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -66,7 +70,15 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // A stable id (rather than the default position-based auto id) keeps
     // this widget's identity — and thus its cursor/selection state — tied
     // to the document, not to where `show` happens to be called from in the
-    // ui tree; it also lets tests request focus deterministically.
+    // ui tree; it also lets tests request focus deterministically. Set via
+    // `.id(Id::new(id_salt))` below, not `.id_salt(id_salt)`: the latter
+    // still combines the salt with whichever `Ui` calls `.show()`
+    // (`ui.make_persistent_id`), so it silently changes if `show`'s
+    // internals end up calling the builder through a different nested
+    // `Ui` than before (as happened when the line-number gutter moved the
+    // `TextEdit` inside a `ui.horizontal` one level deeper) — the opposite
+    // of the position-independence this comment claims. `Id::new` is a
+    // pure hash of the salt with no `Ui` involved, so it actually holds.
     let id_salt = doc.path.to_string_lossy().into_owned();
     // A galley is expensive to shape (font lookups, kerning, glyph layout)
     // but egui's own galley cache (`Fonts`) is flushed of anything not
@@ -94,6 +106,14 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             i.events.retain(|e| !is_multi_edit_event(e));
         });
     }
+
+    // Sized to the widest line number the buffer currently has, so a
+    // 9-line file gets a narrow gutter and a 10,000-line one gets a wider
+    // one rather than every file paying for a fixed worst-case width.
+    let gutter_font_id = FontId::new(14.0, editor_font.family());
+    let digit_width = ui.fonts_mut(|f| f.glyph_width(&gutter_font_id, '0'));
+    let line_count = doc.buffer.len_lines().max(1);
+    let gutter_width = digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0;
 
     let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let source = buf.as_str();
@@ -159,12 +179,26 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         galley
     };
 
-    let mut output = egui::TextEdit::multiline(&mut text)
-        .id_salt(id_salt)
-        .code_editor()
-        .desired_width(f32::INFINITY)
-        .layouter(&mut layouter)
-        .show(ui);
+    // The gutter and the text field are laid out side by side, in that
+    // order, inside one `horizontal` — that's what shifts the `TextEdit`
+    // right to make room, and what gives `paint_line_numbers` (called once
+    // `output` is available, alongside the other overlay painting below)
+    // the gutter's left edge to right-align digits against. Both live
+    // inside the *same* `ScrollArea` call site (`panels::tabs::show`), so
+    // they scroll together as one unit rather than independently.
+    let (mut output, gutter_left) = ui
+        .horizontal(|ui| {
+            let gutter_left = ui.cursor().left();
+            ui.add_space(gutter_width);
+            let output = egui::TextEdit::multiline(&mut text)
+                .id(egui::Id::new(&id_salt))
+                .code_editor()
+                .desired_width(f32::INFINITY)
+                .layouter(&mut layouter)
+                .show(ui);
+            (output, gutter_left)
+        })
+        .inner;
 
     // `TextEditState::store` takes `self` by value, so it can only be
     // called once per frame — every path below that wants to override
@@ -259,6 +293,20 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         }
     }
 
+    let ctrl_j_pressed = ui.input(|i| i.key_pressed(Key::J)) && modifiers.command;
+    if ctrl_j_pressed && let Some(primary_range) = output.cursor_range {
+        let text_now = doc.buffer.to_string();
+        if let Some((joined, new_cursor)) = join_lines(&text_now, primary_range.primary.index.0) {
+            doc.buffer = Rope::from_str(&joined);
+            if let Some(parser) = parser.as_mut() {
+                let edit = syntax::diff_edit(&text_now, &joined);
+                parser.reparse(&joined, edit);
+                doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+            }
+            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+        }
+    }
+
     if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
         let should_collapse = ui.input(|i| i.events.iter().any(is_multi_cursor_collapse_event));
         if should_collapse {
@@ -268,6 +316,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
 
     paint_diagnostics(ui, &output, &text, &doc.diagnostics);
     paint_extra_selections(ui, &output, &doc.extra_selections);
+    paint_line_numbers(ui, &output, gutter_left + gutter_width - GUTTER_PADDING, gutter_font_id, ui.visuals().dark_mode);
 
     // Auto-indent inserts content *before* where egui placed the cursor
     // (unlike auto-pair, which only ever inserts after it), so the cursor
@@ -525,15 +574,29 @@ mod tests {
     fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalParser>, events: Vec<egui::Event>) {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
-        let raw_input = egui::RawInput { events, ..Default::default() };
+        // `RawInput::modifiers` ("which modifier keys are down at the start
+        // of the frame") is a separate top-level field from each
+        // `Event::Key`'s own `modifiers` — it's what `ui.input(|i|
+        // i.modifiers)` actually reads (e.g. `Ctrl+J`'s `modifiers.command`
+        // check), not the per-event field. Left at its `..Default::default()`
+        // value (`NONE`), a simulated `Ctrl+<key>` event would carry the
+        // right modifiers on the event itself but still read as unmodified —
+        // so derive it from whichever `Key` event carries it.
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
-            // `TextEdit::id_salt(salt)` doesn't hash `salt` directly into the
-            // widget id — it first wraps it in an `egui::IdSalt` (see
-            // `builder.rs`'s `ui.make_persistent_id(id_salt)` where
-            // `id_salt: IdSalt`), so replicate that same wrapping here or
-            // the id won't match and `request_focus` will target nothing.
-            let salt = egui::IdSalt::new(doc.path.to_string_lossy().into_owned());
-            let id = ui.make_persistent_id(salt);
+            // `show` sets the widget's id via `.id(egui::Id::new(id_salt))`
+            // — a pure hash of the path string, independent of which `Ui`
+            // ends up calling `.show()` — so replicate that exact
+            // computation here or the id won't match and `request_focus`
+            // will target nothing.
+            let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
             show(ui, doc, parser, EditorFont::Default);
         });
@@ -547,6 +610,40 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    fn command_key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }
+    }
+
+    #[test]
+    fn ctrl_j_joins_the_current_line_with_the_next_one() {
+        let (_dir, mut doc) = open_fixture("foo\nbar", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // A fresh widget's default cursor sits somewhere on the first line
+        // ("foo") — `join_lines` only cares which line the cursor is on,
+        // not its exact column (see `join_lines_uses_cursor_position_
+        // regardless_of_column_within_the_line` in `auto_edit.rs`).
+        focused_frame(&mut doc, &mut parser, vec![command_key_event(egui::Key::J)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo bar");
+    }
+
+    #[test]
+    fn ctrl_j_on_the_last_line_is_a_no_op() {
+        let (_dir, mut doc) = open_fixture("foo", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        focused_frame(&mut doc, &mut parser, vec![command_key_event(egui::Key::J)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use egui::text::CCursor;
-use egui::{Color32, Shape, Stroke};
+use egui::{Align2, Color32, FontId, Shape, Stroke};
 use fg_core::Diagnostic;
 
 use crate::style::theme;
@@ -57,6 +57,35 @@ fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, col
         up = !up;
     }
     painter.add(Shape::line(points, Stroke::new(1.5, color)));
+}
+
+/// Paints one right-aligned line number per visual row of `output.galley`,
+/// flush against `gutter_right_edge`. Driven directly by the galley's own
+/// rows (each row's `pos`/`size`, via `PlacedRow::rect`) rather than
+/// independently recomputing row positions from font metrics — that keeps
+/// the numbers pixel-aligned with the text no matter what the row height
+/// actually is, and automatically scrolls in sync since `output.galley_pos`
+/// already accounts for the `ScrollArea`'s current offset (same technique
+/// `paint_diagnostics`/`paint_extra_selections` use).
+pub(super) fn paint_line_numbers(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    gutter_right_edge: f32,
+    font_id: FontId,
+    dark_mode: bool,
+) {
+    let painter = ui.painter();
+    let color = theme::line_number(dark_mode);
+    for (index, row) in output.galley.rows.iter().enumerate() {
+        let y = output.galley_pos.y + row.rect().center().y;
+        painter.text(
+            egui::pos2(gutter_right_edge, y),
+            Align2::RIGHT_CENTER,
+            index + 1,
+            font_id.clone(),
+            color,
+        );
+    }
 }
 
 /// Paints the Ctrl+D secondary cursors/selections: a thin caret for a bare

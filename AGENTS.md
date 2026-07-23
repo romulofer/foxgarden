@@ -142,9 +142,14 @@ core  <-  syntax  <-  app
     same as the rest of its GUI-wiring functions.
   - `widgets/editor/` is the custom highlighted/squiggled text widget
     (SPEC.md §5.4–5.5): `widget.rs` (the `show()` entry point and its
-    `TextEdit` wiring), `auto_edit.rs` (pure auto-pair/auto-indent text
+    `TextEdit` wiring — including the line-number gutter, laid out via a
+    `ui.horizontal` with the gutter's width reserved before `TextEdit` is
+    shown), `auto_edit.rs` (pure auto-pair/auto-indent/join-lines text
     transforms), `painting.rs` (diagnostic squiggles + hover tooltips,
-    multi-cursor overlay), `multi_cursor.rs` (Ctrl+D's pure search/edit
+    multi-cursor overlay, and the line-number gutter's own paint call,
+    which reads row positions straight off the same `Galley`
+    `TextEdit` renders rather than recomputing them from font metrics —
+    see `paint_line_numbers`), `multi_cursor.rs` (Ctrl+D's pure search/edit
     logic — see the gotchas below for why this can't just use egui's
     `TextEdit` directly). Only `widgets::editor::show` is public outside
     the module.
@@ -287,18 +292,31 @@ core  <-  syntax  <-  app
   wants to override the cursor, and calls `set_char_range` + `store` exactly
   once at the very end.
 - **`TextEdit::id_salt(salt)` does not hash `salt` directly into the widget
-  id.** It first wraps it in an `egui::IdSalt` (`IdSalt::new(salt)`, a
-  keyed-hash of the value) and only then combines that with the `Ui`'s id
-  via `ui.make_persistent_id(id_salt)`. A test that wants to
-  `ui.memory_mut(|m| m.request_focus(id))` on a `TextEdit` given
-  `.id_salt(some_string)` must replicate the same wrapping —
-  `ui.make_persistent_id(egui::IdSalt::new(some_string))` — or it computes a
-  different id than the widget actually uses and `request_focus` silently
-  targets nothing. This is also how `widgets::editor::show`'s tests simulate
-  a *focused* keyboard event at all: `TextEditOutput.cursor_range` is only
-  `Some` when `ui.memory(|m| m.has_focus(id))` is true, and `show` gives the
-  widget a stable `.id_salt(doc.path...)` specifically so tests can target
-  it deterministically (see `focused_frame` in `widget.rs`'s tests).
+  id — it combines it with whichever `Ui` calls `.show()`, so the id is
+  *not* actually independent of where in the ui tree the widget renders,
+  despite that being the whole point of using a stable salt.** Internally,
+  `.id_salt(salt)` wraps it in an `egui::IdSalt` and combines that with the
+  `Ui`'s own id via `ui.make_persistent_id(id_salt)` — meaning the same
+  salt string produces a *different* final id if the widget ends up shown
+  through a different nested `Ui` than before. This bit for real: adding
+  the line-number gutter wrapped `TextEdit::show` one level deeper inside a
+  `ui.horizontal(|ui| ...)` closure, and every test relying on
+  `focused_frame`'s simulated focus broke — `request_focus` was targeting
+  the *old* id, computed against the outer `Ui`, while the real widget now
+  resolved to a different id via the inner one. `widgets::editor::show` now
+  sets the id via `.id(egui::Id::new(id_salt))` instead — `Id::new` is a
+  pure hash of the salt with no `Ui` involved at all, so it's stable
+  regardless of internal layout changes, which is what "tied to the
+  document, not to where `show` is called from" actually requires. Prefer
+  `.id(Id::new(...))` over `.id_salt(...)` for any widget whose identity
+  needs to survive its own internal restructuring, not just movement by its
+  caller. A test that wants to `ui.memory_mut(|m| m.request_focus(id))` on
+  such a widget just computes `egui::Id::new(salt)` directly — no
+  `ui.make_persistent_id` wrapping needed, since there's no `Ui` in the
+  computation to replicate. This is also how `widgets::editor::show`'s
+  tests simulate a *focused* keyboard event at all: `TextEditOutput.
+  cursor_range` is only `Some` when `ui.memory(|m| m.has_focus(id))` is
+  true (see `focused_frame` in `widget.rs`'s tests).
 - **egui/epaint's own shaped-text (`Galley`) cache is flushed of anything not
   painted *this exact frame*, every frame** (`GalleyCache::flush_cache` in
   `epaint::text::fonts` — `self.cache.retain(|_, c| c.last_used ==

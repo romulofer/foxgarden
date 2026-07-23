@@ -36,6 +36,7 @@ layer on top of.
   press walks further back through recently closed tabs), restoring it
   instead of duplicating it if you already reopened the same file manually
   in the meantime
+- Line numbers gutter, right-aligned, scrolling in sync with the text
 - Syntax highlighting for Java and Kotlin (tree-sitter based)
 - Red squiggly underlines on syntax errors, updated live as you type; hover
   one to see the error message as a tooltip
@@ -46,6 +47,9 @@ layer on top of.
   back to a single cursor.
 - Auto-closing brackets and quotes (`{`, `(`, `[`, `"`, `'`)
 - Auto-indent on Enter (matches the previous line, plus one level after `{`)
+- `Ctrl+J` joins the current line with the next one, trimming the next
+  line's leading indentation down to a single separating space (or none, if
+  the current line already ends in whitespace or either line is blank)
 - New Java/Kotlin files get boilerplate: a class declaration named after the
   file, plus a `package` line inferred from a Maven/Gradle-style
   `src/main/java|kotlin` (or `src/test/...`) path
