@@ -38,6 +38,12 @@ pub struct SidePanelOutcome {
     pub renamed: Option<(PathBuf, PathBuf)>,
     /// A file was deleted from disk; any tab pointing at it should close.
     pub deleted: Option<PathBuf>,
+    /// A user-facing message for a failure this frame (open project,
+    /// create/rename/delete file, refresh tree, ...), for the caller to
+    /// surface through the app's shared error modal. `Some` overwrites
+    /// whatever the caller was already holding — last error wins, same as
+    /// every other single-slot outcome field here.
+    pub error: Option<String>,
 }
 
 #[derive(Default)]
@@ -66,7 +72,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             }
             if let Some(folder) = dialog.pick_folder() {
                 if let Err(err) = state.open_project(folder) {
-                    eprintln!("failed to open project: {err}");
+                    outcome.error = Some(format!("failed to open project: {err}"));
                 }
             }
         }
@@ -105,7 +111,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     if created || outcome.renamed.is_some() || outcome.deleted.is_some() {
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if let Err(err) = state.open_project(root) {
-                eprintln!("failed to refresh project tree: {err}");
+                outcome.error = Some(format!("failed to refresh project tree: {err}"));
             }
         }
     }
@@ -178,7 +184,7 @@ fn show_new_file_row(
                 // before `fs::write` can create the file in them.
                 let new_path = dir.join(trimmed);
                 if new_path.exists() {
-                    eprintln!("file already exists: {}", new_path.display());
+                    outcome.error = Some(format!("file already exists: {}", new_path.display()));
                 } else {
                     let content = new_path
                         .extension()
@@ -194,7 +200,7 @@ fn show_new_file_row(
                             close_draft = true;
                             created = true;
                         }
-                        Err(err) => eprintln!("failed to create file: {err}"),
+                        Err(err) => outcome.error = Some(format!("failed to create file: {err}")),
                     }
                 }
             }
@@ -247,15 +253,15 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
             let new_name = new_name.trim();
             let new_path = old_path.parent().map(|p| p.join(new_name));
             match new_path {
-                _ if new_name.is_empty() => eprintln!("rename failed: empty name"),
+                _ if new_name.is_empty() => outcome.error = Some("rename failed: empty name".to_string()),
                 Some(new_path) if new_path.exists() => {
-                    eprintln!("rename failed: {} already exists", new_path.display());
+                    outcome.error = Some(format!("rename failed: {} already exists", new_path.display()));
                 }
                 Some(new_path) => match std::fs::rename(&old_path, &new_path) {
                     Ok(()) => outcome.renamed = Some((old_path, new_path)),
-                    Err(err) => eprintln!("failed to rename: {err}"),
+                    Err(err) => outcome.error = Some(format!("failed to rename: {err}")),
                 },
-                None => eprintln!("rename failed: no parent directory"),
+                None => outcome.error = Some("rename failed: no parent directory".to_string()),
             }
         }
     }
@@ -281,7 +287,7 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
             if ui.button("Delete").clicked() {
                 match std::fs::remove_file(&path) {
                     Ok(()) => outcome.deleted = Some(path.clone()),
-                    Err(err) => eprintln!("failed to delete: {err}"),
+                    Err(err) => outcome.error = Some(format!("failed to delete: {err}")),
                 }
                 panel.pending_delete = None;
             }

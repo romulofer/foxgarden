@@ -34,15 +34,18 @@ pub struct FoxGardenApp {
     /// way back out once the menu holding the toggle is itself hidden) or
     /// via View > Zen Mode while the menu is visible.
     zen_mode: bool,
-    /// Set when the user clicks a file in the tree and `Document::open`
-    /// fails — most commonly a binary file (`OpenDocumentError::Binary`,
-    /// caught early by `Document::open`'s NUL-byte sniff) or a file in a
-    /// non-UTF-8 encoding. Previously only `eprintln!`'d, which is
-    /// invisible outside a terminal the user probably isn't watching, so a
-    /// click on a file that can't be opened as text looked like it just
-    /// silently did nothing. Shown as a dismissable modal instead (see
-    /// `show_open_error`), same pattern as the delete/close confirmations.
-    open_error: Option<String>,
+    /// The most recent user-facing failure from any panel (open/save/rename/
+    /// delete/create a file, open or refresh a project, restore last
+    /// session, ...), shown as a dismissable modal (see `show_error_modal`).
+    /// A single shared slot rather than one flag per failure kind: every
+    /// site that used to just `eprintln!` — invisible outside a terminal
+    /// the GUI user probably isn't watching — sets this instead, so a new
+    /// failure kind never needs a new field, just another `*last_error =
+    /// Some(...)` at the point it's detected. Last write wins if two
+    /// failures somehow land the same frame, which in practice never
+    /// happens since these all come from distinct, mutually exclusive user
+    /// actions.
+    last_error: Option<String>,
 }
 
 /// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
@@ -79,12 +82,17 @@ fn handle_rename(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalPa
 /// testable against a fake `Storage` without needing a real
 /// `eframe::CreationContext`, which isn't practically constructible in a
 /// unit test.
-fn restore_session(storage: &dyn eframe::Storage, state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>) {
+fn restore_session(
+    storage: &dyn eframe::Storage,
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    last_error: &mut Option<String>,
+) {
     if let Some(last_project) = storage.get_string(LAST_PROJECT_KEY) {
         let path = PathBuf::from(last_project);
         if path.is_dir() {
             if let Err(err) = state.open_project(path) {
-                eprintln!("failed to reopen last project: {err}");
+                *last_error = Some(format!("failed to reopen last project: {err}"));
             }
         }
     }
@@ -105,7 +113,7 @@ fn restore_session(storage: &dyn eframe::Storage, state: &mut EditorState, parse
                         parsers.push(parser);
                     }
                 }
-                Err(err) => eprintln!("failed to reopen tab: {err}"),
+                Err(err) => *last_error = Some(format!("failed to reopen tab: {err}")),
             }
         }
     }
@@ -145,9 +153,10 @@ impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        let mut last_error = None;
 
         if let Some(storage) = cc.storage {
-            restore_session(storage, &mut state, &mut parsers);
+            restore_session(storage, &mut state, &mut parsers, &mut last_error);
         }
 
         Self {
@@ -158,35 +167,35 @@ impl FoxGardenApp {
             menu_bar: MenuBarState::default(),
             editor_font: EditorFont::default(),
             zen_mode: false,
-            open_error: None,
+            last_error,
         }
     }
 }
 
-/// Shows `open_error` (if any) as a dismissable modal, and clears it once
+/// Shows `last_error` (if any) as a dismissable modal, and clears it once
 /// acknowledged. Free function rather than a method so its borrow of
-/// `open_error` doesn't overlap `&mut self` for the rest of `ui()`.
+/// `last_error` doesn't overlap `&mut self` for the rest of `ui()`.
 ///
 /// Borrows the message for the label instead of cloning it, deferring the
-/// actual `*open_error = None` write until after the modal closure — same
+/// actual `*last_error = None` write until after the modal closure — same
 /// "record the outcome, apply it once outside the closure" shape
 /// `widgets::editor::show` already uses for `manual_cursor_range` — so
 /// dismissing doesn't mean an extra heap allocation on every frame the
 /// error stays open, just the one frame the user actually clicks "OK".
-fn show_open_error(ui: &egui::Ui, open_error: &mut Option<String>) {
-    let Some(message) = open_error.as_deref() else {
+fn show_error_modal(ui: &egui::Ui, last_error: &mut Option<String>) {
+    let Some(message) = last_error.as_deref() else {
         return;
     };
     let ctx = ui.ctx().clone();
     let mut dismissed = false;
-    egui::Modal::new(egui::Id::new("open_error")).show(&ctx, |ui| {
+    egui::Modal::new(egui::Id::new("error_modal")).show(&ctx, |ui| {
         ui.label(message);
         if ui.button("OK").clicked() {
             dismissed = true;
         }
     });
     if dismissed {
-        *open_error = None;
+        *last_error = None;
     }
 }
 
@@ -209,6 +218,7 @@ impl eframe::App for FoxGardenApp {
                     &mut self.menu_bar,
                     &mut self.editor_font,
                     &mut self.zen_mode,
+                    &mut self.last_error,
                 );
             });
 
@@ -227,20 +237,18 @@ impl eframe::App for FoxGardenApp {
                     }
                 }
                 Err(err) => {
-                    eprintln!("failed to open file: {err}");
                     // `OpenDocumentError::Binary`'s own `Display` already
-                    // names the path (useful for the bare `eprintln!`
-                    // above, and other call sites that log it without this
-                    // wrapper) — restating it here would just duplicate it
-                    // in the modal, so only `Io` (whose message doesn't
-                    // mention a path at all) gets it prepended.
+                    // names the path — restating it here would just
+                    // duplicate it in the modal, so only `Io` (whose
+                    // message doesn't mention a path at all) gets it
+                    // prepended.
                     let message = match &err {
                         fg_core::OpenDocumentError::Binary(_) => {
                             format!("Couldn't open {display_path}: not a text file.")
                         }
                         fg_core::OpenDocumentError::Io(_) => format!("Couldn't open {display_path}:\n{err}"),
                     };
-                    self.open_error = Some(message);
+                    self.last_error = Some(message);
                 }
             }
         }
@@ -250,8 +258,9 @@ impl eframe::App for FoxGardenApp {
         if let Some(path) = outcome.deleted {
             close_tab_for_path(&mut self.state, &mut self.parsers, &path);
         }
-
-        show_open_error(ui, &mut self.open_error);
+        if let Some(err) = outcome.error {
+            self.last_error = Some(err);
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             tabs::show(
@@ -260,8 +269,11 @@ impl eframe::App for FoxGardenApp {
                 &mut self.pending_close,
                 &mut self.parsers,
                 self.editor_font,
+                &mut self.last_error,
             );
         });
+
+        show_error_modal(ui, &mut self.last_error);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -316,7 +328,7 @@ mod tests {
 
         let mut restored_state = EditorState::new();
         let mut restored_parsers: Vec<Option<IncrementalParser>> = Vec::new();
-        restore_session(&storage, &mut restored_state, &mut restored_parsers);
+        restore_session(&storage, &mut restored_state, &mut restored_parsers, &mut None);
 
         let restored_paths: Vec<&Path> = restored_state.open_tabs.iter().map(|doc| doc.path()).collect();
         assert_eq!(restored_paths, vec![a.as_path(), b.as_path()]);
@@ -337,7 +349,7 @@ mod tests {
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
-        restore_session(&storage, &mut state, &mut parsers);
+        restore_session(&storage, &mut state, &mut parsers, &mut None);
 
         assert_eq!(state.open_tabs.len(), 1);
         assert_eq!(state.open_tabs[0].path(), kept.as_path());
@@ -350,7 +362,7 @@ mod tests {
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
 
-        restore_session(&storage, &mut state, &mut parsers);
+        restore_session(&storage, &mut state, &mut parsers, &mut None);
 
         assert!(state.open_tabs.is_empty());
         assert!(parsers.is_empty());

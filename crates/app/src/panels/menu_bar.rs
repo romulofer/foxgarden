@@ -21,6 +21,7 @@ pub fn show(
     menu: &mut MenuBarState,
     editor_font: &mut EditorFont,
     zen_mode: &mut bool,
+    last_error: &mut Option<String>,
 ) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
@@ -33,7 +34,7 @@ pub fn show(
             if ui.button("Open Folder…").clicked() {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     if let Err(err) = state.open_project(folder) {
-                        eprintln!("failed to open project: {err}");
+                        *last_error = Some(format!("failed to open project: {err}"));
                     }
                 }
                 ui.close();
@@ -43,7 +44,7 @@ pub fn show(
                 .add_enabled(state.active_tab.is_some(), egui::Button::new("Save").shortcut_text("Ctrl+S"))
                 .clicked()
             {
-                tabs::save_active_tab(state, parsers);
+                tabs::save_active_tab(state, parsers, last_error);
                 ui.close();
             }
             if ui

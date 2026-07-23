@@ -51,13 +51,18 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
 /// File > Save and the close-confirmation modal's "Save" button, so neither
 /// can reintroduce the "saved without reparsing at all" bug by skipping
 /// this.
-fn save_tab(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], index: usize) {
+fn save_tab(
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+    index: usize,
+    last_error: &mut Option<String>,
+) {
     let Some(doc) = state.open_tabs.get_mut(index) else {
         return;
     };
     let old_text = doc.buffer.to_string();
     if let Err(err) = doc.save() {
-        eprintln!("failed to save: {err}");
+        *last_error = Some(format!("failed to save: {err}"));
         return;
     }
     if let Some(Some(parser)) = parsers.get_mut(index) {
@@ -77,6 +82,7 @@ pub fn show(
     pending_close: &mut Option<usize>,
     parsers: &mut Vec<Option<IncrementalParser>>,
     editor_font: EditorFont,
+    last_error: &mut Option<String>,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -120,7 +126,7 @@ pub fn show(
 
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
     if save_requested {
-        save_active_tab(state, parsers);
+        save_active_tab(state, parsers, last_error);
     }
 
     let reopen_closed_tab_requested =
@@ -129,7 +135,7 @@ pub fn show(
         reopen_last_closed_tab(state, parsers);
     }
 
-    show_close_confirm(ui, state, pending_close, parsers);
+    show_close_confirm(ui, state, pending_close, parsers, last_error);
 
     ui.separator();
 
@@ -151,9 +157,13 @@ pub fn show(
 
 /// Saves the active tab's document, if any. Shared by `Ctrl+S` here and the
 /// menu bar's File > Save.
-pub fn save_active_tab(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>]) {
+pub fn save_active_tab(
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+    last_error: &mut Option<String>,
+) {
     if let Some(active) = state.active_tab {
-        save_tab(state, parsers, active);
+        save_tab(state, parsers, active, last_error);
     }
 }
 
@@ -193,6 +203,7 @@ fn show_close_confirm(
     state: &mut EditorState,
     pending_close: &mut Option<usize>,
     parsers: &mut Vec<Option<IncrementalParser>>,
+    last_error: &mut Option<String>,
 ) {
     let Some(index) = *pending_close else {
         return;
@@ -213,7 +224,7 @@ fn show_close_confirm(
         ui.label(format!("Save changes to {name} before closing?"));
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
-                save_tab(state, parsers, index);
+                save_tab(state, parsers, index, last_error);
                 state.close_tab(index);
                 parsers.remove(index);
                 *pending_close = None;
@@ -256,8 +267,9 @@ mod tests {
         state.open_tab(path).unwrap();
         let parser = open_parser_for(&mut state.open_tabs[0]);
         let mut parsers = vec![parser];
+        let mut last_error = None;
 
-        save_tab(&mut state, &mut parsers, 0);
+        save_tab(&mut state, &mut parsers, 0, &mut last_error);
 
         let doc = &state.open_tabs[0];
         assert_eq!(doc.buffer.to_string(), "public class Hello {\n    private String name;\n}\n");
