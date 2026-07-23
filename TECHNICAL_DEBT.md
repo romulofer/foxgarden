@@ -267,3 +267,290 @@ Until then, leave it — splitting the variant speculatively, before a
 second language actually needs the distinction, is exactly the kind of
 premature generalization this codebase's own conventions (see `AGENTS.md`)
 argue against.
+
+---
+
+## 5. `EditorState::closed_tabs` grows without bound for the life of the process
+
+**Where:** `crates/core/src/editor_state.rs` — the `closed_tabs: Vec<Document>`
+field (line 13), pushed to by `close_tab` (line 69), popped by
+`reopen_last_closed_tab` (line 78).
+
+**Status:** Open. Found during a whole-project re-check, not tied to any
+specific session's diff.
+
+### Current shape
+
+Every tab close pushes the *full* `Document` — including its entire
+`Rope` buffer, i.e. the whole file's contents — onto `closed_tabs`, purely
+so `Ctrl+Shift+T` can restore it later:
+
+```rust
+pub fn close_tab(&mut self, index: usize) {
+    let document = self.open_tabs.remove(index);
+    // ...
+    self.closed_tabs.push(document);
+}
+```
+
+Nothing ever removes entries from `closed_tabs` except `reopen_last_closed_tab`
+popping the single most recent one. There's no cap on its length, no LRU
+eviction, and — checked directly — no other reference to `closed_tabs`
+anywhere in the codebase that would bound or clear it, *including*
+`open_project` (switching to an entirely different project keeps every
+closed tab from the *previous* project sitting in memory indefinitely).
+
+### Why this matters
+
+A session that opens and closes many files over time (browsing through a
+large project, reviewing file after file) accumulates full copies of every
+closed file's content for as long as the process runs. For small
+Java/Kotlin source files this is a slow leak, not an acute problem — but
+it's unbounded, and it compounds across project switches rather than
+resetting. A user who works a full day without restarting the app, moving
+between several projects, is the realistic case this eventually bites.
+
+### Proposed fix
+
+Cap `closed_tabs` at a small fixed size (an actual "recently closed" list,
+which is the only thing it's used for — `Ctrl+Shift+T` walks it, repeat
+presses go further back):
+
+```rust
+const MAX_CLOSED_TABS: usize = 20;
+
+pub fn close_tab(&mut self, index: usize) {
+    // ... existing logic ...
+    self.closed_tabs.push(document);
+    if self.closed_tabs.len() > MAX_CLOSED_TABS {
+        self.closed_tabs.remove(0); // drop the oldest
+    }
+}
+```
+
+(A `VecDeque` would make the eviction O(1) instead of O(n) shift, if this
+ever shows up as a real cost — at `MAX_CLOSED_TABS` = 20 it won't.)
+Separately, `open_project` should probably clear `closed_tabs` outright —
+reopening a tab from a project you've since navigated away from is a
+confusing "resurrection" even before memory is a concern.
+
+### Why it wasn't fixed on the spot
+
+Found during a documentation pass ("re-check the whole project"), not a
+code-change pass — recording it rather than making an unreviewed behavior
+change (even a small, obviously-correct one) outside the context of an
+actual task that touches this file.
+
+### Trigger condition
+
+Worth fixing opportunistically the next time `editor_state.rs` or
+`Ctrl+Shift+T` behavior is touched for any other reason — it's a small,
+low-risk, self-contained change. Worth prioritizing sooner if anyone
+reports memory growth over a long-running session.
+
+---
+
+## 6. `paint_diagnostics` redoes an O(file length) byte→char scan per diagnostic, every frame
+
+**Where:** `crates/app/src/widgets/editor/painting.rs:9-45`, `fn
+paint_diagnostics`, specifically lines 24-25.
+
+**Status:** Open. Found during a whole-project re-check.
+
+### Current shape
+
+```rust
+for diag in diagnostics {
+    let start = diag.range.start.min(text.len());
+    let end = diag.range.end.min(text.len()).max(start);
+    // ...
+    let char_start = text[..start].chars().count();
+    let char_end = text[..end].chars().count().max(char_start + 1);
+    // ...
+}
+```
+
+`diag.range` is a *byte* range (it comes straight from tree-sitter's
+`node.byte_range()`, see `crates/syntax/src/diagnostics.rs`), but egui's
+`CCursor` — used a few lines later for `output.galley.pos_from_cursor(...)`
+— needs a *char* index. The conversion, `text[..start].chars().count()`,
+walks the string from byte 0 up to `start` counting characters: O(start)
+work, redone from scratch for every diagnostic, every single frame the
+editor with that diagnostic is visible — regardless of whether `text` or
+`diagnostics` changed since the last frame. `paint_diagnostics` is called
+unconditionally each frame in `widgets::editor::show` (no early-out, no
+memoization) whenever `doc.diagnostics` is non-empty.
+
+For one diagnostic near the *start* of a file this is negligible. For a
+diagnostic near the *end* of a large file, or multiple diagnostics at once,
+this is O(file length × diagnostic count) of redundant work, sustained for
+as long as the syntax error persists — which, in practice, is exactly the
+window where a user is actively looking at the file trying to fix it.
+
+### Proposed fix
+
+The layout cache this codebase already has for shaped galleys
+(`LayoutCacheKey`/`CachedLayout` in `widgets/editor/widget.rs`) is the
+right model: cache the byte→char conversion, invalidate it the same way
+the galley cache already is (on content-hash change), and pass pre-computed
+char positions into `paint_diagnostics` instead of raw byte ranges. Simplest
+version: since `highlight_spans`'s layouter already walks the *whole*
+source once per shape to build the `LayoutJob`, byte→char conversion for
+every diagnostic could piggyback on that same single pass rather than
+paying for it again, separately, per diagnostic, in `paint_diagnostics`.
+
+A smaller, more local fix if a full cache feels like too much: sort
+`diagnostics` by `range.start` once (cheap, and diagnostics rarely number
+more than a handful) and walk `text` *once* computing all the char offsets
+in a single forward pass, rather than restarting the scan from byte 0 for
+each diagnostic independently. This turns O(file length × diagnostic
+count) into O(file length + diagnostic count) — a real improvement with
+much less structural change than a full cache.
+
+### Why it wasn't fixed on the spot
+
+Found during a documentation pass, not a code-change pass. Also: no
+concrete evidence yet (no profiling, no user report) that this is
+*actually* a perceptible problem at realistic file sizes/diagnostic
+counts for this project's stated scope (single Java/Kotlin source files,
+not multi-thousand-line generated code) — worth confirming it's real
+before spending a review cycle on the fix.
+
+### Trigger condition
+
+Fix the "sort once, walk once" version the next time `painting.rs` is
+touched for any reason. Escalate to the full layout-cache-integrated
+version only if profiling (or a user report of editor lag on a file with
+persistent syntax errors) actually shows this mattering — don't do the
+bigger version speculatively.
+
+---
+
+## 7. Error reporting is now inconsistent: one failure path shows a modal, a dozen others are still silent
+
+**Where:** Introduced by the `open_error` modal added in
+`crates/app/src/app.rs` (`show_open_error`); the inconsistency it exposes
+spans `crates/app/src/panels/side_panel.rs`, `crates/app/src/panels/tabs.rs`,
+and `crates/app/src/panels/menu_bar.rs`.
+
+**Status:** Open. Self-inflicted by this session's own work — recorded so
+it doesn't get missed rather than because it's newly discovered.
+
+### Current shape
+
+Before this session, *every* user-facing operation failure was reported
+identically: `eprintln!` to a terminal the GUI user almost certainly isn't
+watching. Silent-but-consistent. This session added a real modal
+(`show_open_error`) for exactly one of them — failing to open a file — on
+explicit request ("when the user tries to open a file that is not a text
+file, the app should inform them"). That request was scoped correctly and
+the fix is right for what it covers. But it leaves every *other* failure
+path silent-but-now-inconsistently-so, confirmed still present via a
+direct grep:
+
+```
+crates/app/src/panels/tabs.rs:60    eprintln!("failed to save: {err}");
+crates/app/src/app.rs:87            eprintln!("failed to reopen last project: {err}");
+crates/app/src/app.rs:108           Err(err) => eprintln!("failed to reopen tab: {err}"),
+crates/app/src/panels/menu_bar.rs:36    eprintln!("failed to open project: {err}");
+crates/app/src/panels/side_panel.rs:69  eprintln!("failed to open project: {err}");
+crates/app/src/panels/side_panel.rs:108 eprintln!("failed to refresh project tree: {err}");
+crates/app/src/panels/side_panel.rs:181 eprintln!("file already exists: {}", ...);
+crates/app/src/panels/side_panel.rs:197 Err(err) => eprintln!("failed to create file: {err}"),
+crates/app/src/panels/side_panel.rs:250 eprintln!("rename failed: empty name"),
+crates/app/src/panels/side_panel.rs:252 eprintln!("rename failed: {} already exists", ...),
+crates/app/src/panels/side_panel.rs:256 Err(err) => eprintln!("failed to rename: {err}"),
+crates/app/src/panels/side_panel.rs:258 None => eprintln!("rename failed: no parent directory"),
+crates/app/src/panels/side_panel.rs:284 Err(err) => eprintln!("failed to delete: {err}"),
+```
+
+A user who tries to save a read-only file, create a file that already
+exists, rename to a name that collides, or open a project folder they
+don't have permission to read, gets exactly the same "nothing visibly
+happened" experience the file-open case used to have — except now that
+gap is conspicuous, since they've *seen* the app surface an error clearly
+in the one case that got fixed.
+
+### Proposed fix
+
+Generalize `open_error: Option<String>` into something every one of these
+sites can report through — either broaden it to a shared "last error"
+slot on `FoxGardenApp` that any panel's outcome can set (`SidePanelOutcome`,
+`TreeActions`, etc. would each need an `error: Option<String>` field
+threaded up the same way `open`/`renamed`/`deleted` already are), or take
+the finding-#2 modal-helper extraction further and make error-reporting a
+first-class thing every panel function can call directly rather than
+funneling through outcome structs. Either way, the right fix should
+replace *all* thirteen sites at once, not add a fourteenth bespoke one —
+this is precisely the kind of "one at a time" drift that produces
+inconsistent UX no one intended.
+
+### Why it wasn't fixed on the spot
+
+The original request was specifically and narrowly about the file-open
+case; broadening it to all thirteen sites unilaterally would have been
+scope creep well beyond what was asked. It's real follow-up work, not
+something to sneak into an unrelated task.
+
+### Trigger condition
+
+Worth doing as its own explicit task — "make error reporting consistent
+across the app" — rather than waiting for another trigger. This is
+already actionable today; it just needs someone to decide to do it.
+
+---
+
+## 8. Window icon fix is unconfirmed on a real desktop
+
+**Where:** `crates/app/src/main.rs`'s `ICON_PNG`, and the corresponding
+gotcha already recorded in `AGENTS.md` (search "window icon fix").
+
+**Status:** Open, likely-but-unverified fix — cross-referenced here from
+`AGENTS.md` because that file is context/history for a future agent to
+*learn from*, not a queue of things to *act on*; this file is that queue.
+
+### Current shape
+
+The app bundles a downscaled 128×128 copy of the window icon
+(`crates/app/assets/icon/icon_128.png`) instead of the pristine 1024×1024
+source, on the theory that winit's X11 backend was silently failing to
+set a `_NET_WM_ICON` window property that large (`.ignore_error()` on the
+egui-winit side swallows the failure with no panic, log, or visible
+error). Per `AGENTS.md`'s own account, `xprop -id <window> _NET_WM_ICON`
+came back *empty* both before and after the resize inside the sandbox
+this was tested in — so the fix track record so far is "was seen working
+on the reporting user's real Linux Mint/Cinnamon desktop before the
+resize was even applied," not a controlled before/after confirmation.
+
+### Why this matters
+
+If the size theory is wrong, the real cause (per `AGENTS.md`'s own
+alternate hypothesis) might be that this sandbox's X server/WM doesn't
+apply `_NET_WM_ICON` at all — in which case the 128px bundling is a no-op
+fix that happens to coincide with the icon looking right for unrelated
+reasons, and a *future* regression (someone reverting to the 1024px
+source, or a different desktop environment with a stricter size limit)
+would silently reintroduce the original bug with no test to catch it.
+
+### Proposed fix
+
+Not a code fix — a verification step: a human with access to a real
+(non-sandboxed) Linux desktop needs to confirm the window icon actually
+renders correctly with the current `icon_128.png`, ideally by checking
+`xprop -id <window> _NET_WM_ICON` returns non-empty data matching the
+bundled icon. If it's confirmed working, this entry can simply be deleted
+(and the `AGENTS.md` gotcha updated from "likely, not confirmed" to
+"confirmed"). If it's *not* working, the investigation needs to go past
+the size theory to whether `_NET_WM_ICON` is being set at all on whatever
+desktop is being tested.
+
+### Why it wasn't fixed on the spot
+
+Not fixable from within this environment — there's no real (non-sandboxed)
+X11 desktop available to test against here, which is exactly why the
+original investigation left it unconfirmed in the first place.
+
+### Trigger condition
+
+Next time anyone is running FoxGarden on a real desktop anyway (not a
+sandbox), it costs one `xprop` command to close this out either way.
