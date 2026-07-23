@@ -4,7 +4,21 @@ use syntax::IncrementalParser;
 use crate::style::fonts::EditorFont;
 use crate::widgets::editor;
 
-/// Parses `doc`'s current contents and populates its initial diagnostics, so
+/// Fully reparses `doc`'s *current* buffer contents against `parser` and
+/// refreshes its diagnostics from the result. Only for a brand-new parser
+/// with no previous tree to diff against — there's no `InputEdit` to
+/// describe "the buffer changed from nothing," so this has to reparse from
+/// scratch. Once a parser already has a tree, prefer the incremental
+/// `syntax::diff_edit` + `parser.reparse` path instead (see `save_tab`) —
+/// even for a change that didn't originate as a normal editor keystroke, a
+/// before/after text diff is still cheaper than discarding the whole tree.
+fn reparse_from_scratch(doc: &mut Document, parser: &mut IncrementalParser) {
+    let source = doc.buffer.to_string();
+    parser.parse(&source);
+    doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just parsed"));
+}
+
+/// Builds a fresh parser for `doc` and populates its initial diagnostics, so
 /// a file with a pre-existing syntax error shows its squiggle immediately on
 /// open rather than only after the first edit. `None` if `doc` has no
 /// recognized language — such files still open and edit fine, they just get
@@ -17,10 +31,41 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
         return None;
     };
     let mut parser = IncrementalParser::new(language);
-    let source = doc.buffer.to_string();
-    parser.parse(&source);
-    doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just parsed"));
+    reparse_from_scratch(doc, &mut parser);
     Some(parser)
+}
+
+/// Saves `index`'s document, then reparses it if it has a parser.
+/// `Document::save` may itself rewrite the buffer (trimming trailing
+/// whitespace) as a side effect of saving — without a reparse afterward,
+/// the existing parse tree silently drifts out of sync with what's actually
+/// in `doc.buffer`, which is what made highlighting (and squiggle
+/// positions) look subtly wrong immediately after a save that trimmed
+/// anything. Captures the buffer's text *before* saving specifically so it
+/// can reparse incrementally (`syntax::diff_edit` + `parser.reparse`, the
+/// same pattern every edit path in `widgets::editor::show` already uses)
+/// instead of discarding the tree and reparsing from scratch — a save only
+/// ever changes a handful of trailing-whitespace bytes, not the whole file,
+/// so there's no reason to pay for a full reparse just because the edit
+/// came from `Document::save` instead of a keystroke. Shared by `Ctrl+S`/
+/// File > Save and the close-confirmation modal's "Save" button, so neither
+/// can reintroduce the "saved without reparsing at all" bug by skipping
+/// this.
+fn save_tab(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], index: usize) {
+    let Some(doc) = state.open_tabs.get_mut(index) else {
+        return;
+    };
+    let old_text = doc.buffer.to_string();
+    if let Err(err) = doc.save() {
+        eprintln!("failed to save: {err}");
+        return;
+    }
+    if let Some(Some(parser)) = parsers.get_mut(index) {
+        let new_text = doc.buffer.to_string();
+        let edit = syntax::diff_edit(&old_text, &new_text);
+        parser.reparse(&new_text, edit);
+        doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+    }
 }
 
 /// Renders the tab bar and the active document's editor. `parsers` is kept
@@ -75,7 +120,7 @@ pub fn show(
 
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
     if save_requested {
-        save_active_tab(state);
+        save_active_tab(state, parsers);
     }
 
     let reopen_closed_tab_requested =
@@ -106,13 +151,9 @@ pub fn show(
 
 /// Saves the active tab's document, if any. Shared by `Ctrl+S` here and the
 /// menu bar's File > Save.
-pub fn save_active_tab(state: &mut EditorState) {
+pub fn save_active_tab(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>]) {
     if let Some(active) = state.active_tab {
-        if let Some(doc) = state.open_tabs.get_mut(active) {
-            if let Err(err) = doc.save() {
-                eprintln!("failed to save: {err}");
-            }
-        }
+        save_tab(state, parsers, active);
     }
 }
 
@@ -172,11 +213,7 @@ fn show_close_confirm(
         ui.label(format!("Save changes to {name} before closing?"));
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
-                if let Some(doc) = state.open_tabs.get_mut(index) {
-                    if let Err(err) = doc.save() {
-                        eprintln!("failed to save: {err}");
-                    }
-                }
+                save_tab(state, parsers, index);
                 state.close_tab(index);
                 parsers.remove(index);
                 *pending_close = None;
@@ -191,4 +228,53 @@ fn show_close_confirm(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fg_core::Language;
+
+    #[test]
+    fn save_tab_reparses_so_trimmed_content_is_not_highlighted_against_a_stale_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Hello.java");
+        // Trailing whitespace on the first line: `Document::save` trims
+        // this, shortening the buffer by however many spaces there were —
+        // exactly the class of side effect that leaves an un-reparsed tree
+        // silently stale. Trailing whitespace on the *first* line matters
+        // here — trimming it shifts the byte offset of every token after
+        // it (the `private String name;` line), so a stale tree's node
+        // ranges land on the wrong bytes instead of coincidentally still
+        // being correct (which is exactly what happened when this test
+        // first put the trimmed whitespace *after* all the highlighted
+        // tokens: nothing downstream of the trim to shift meant a stale
+        // tree and a fresh one produced identical spans by accident).
+        std::fs::write(&path, "public class Hello {   \n    private String name;\n}\n").unwrap();
+
+        let mut state = EditorState::new();
+        state.open_tab(path).unwrap();
+        let parser = open_parser_for(&mut state.open_tabs[0]);
+        let mut parsers = vec![parser];
+
+        save_tab(&mut state, &mut parsers, 0);
+
+        let doc = &state.open_tabs[0];
+        assert_eq!(doc.buffer.to_string(), "public class Hello {\n    private String name;\n}\n");
+        assert!(!doc.is_dirty(), "buffer and saved_buffer must agree right after save");
+
+        let tree = parsers[0].as_ref().unwrap().tree().unwrap();
+        let text = doc.buffer.to_string();
+        let spans = syntax::highlight_spans(tree, &text, Language::Java);
+
+        // Cross-check against a from-scratch parse of the same (trimmed)
+        // text: if `save_tab`'s reparse kept the tree in sync, the two
+        // must match exactly. Before the fix, the tree still reflected the
+        // pre-trim (longer) text, so node byte ranges no longer lined up
+        // with `text` at all past the trimmed line.
+        let mut fresh_parser = IncrementalParser::new(Language::Java);
+        fresh_parser.parse(&text);
+        let fresh_spans = syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
+        assert_eq!(spans, fresh_spans);
+    }
 }

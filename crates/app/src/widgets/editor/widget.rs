@@ -7,7 +7,7 @@ use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
-use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte, join_lines};
+use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte, is_pairable, join_lines, wrap_selection};
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
 use crate::style::fonts::EditorFont;
@@ -58,6 +58,25 @@ fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextF
     }
 }
 
+/// Commits `new_text` as `doc`'s buffer and brings `parser` (if any) back in
+/// sync with it via the incremental diff-and-reparse path: compute the edit
+/// between `old_text` and `new_text`, reparse, refresh diagnostics from the
+/// result. Every path in `show` that produces a new full-text snapshot from
+/// an old one — multi-cursor edits, plain typing, `Ctrl+J`, wrap-selection —
+/// needs this exact sequence, so it's centralized here rather than repeated
+/// at each call site (repetition that's exactly how a future edit path
+/// could forget the reparse step and silently drift out of sync, the same
+/// bug `save_tab` in `panels::tabs` had before it started reusing this
+/// pattern too).
+fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
+    doc.buffer = Rope::from_str(new_text);
+    if let Some(parser) = parser.as_mut() {
+        let edit = syntax::diff_edit(old_text, new_text);
+        parser.reparse(new_text, edit);
+        doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+    }
+}
+
 /// Renders `doc`'s buffer as an editable text area, keeping `parser`'s
 /// incremental tree in sync with edits (SPEC.md sections 5.4 and 5.5).
 /// `parser` is `None` for files with no recognized language (anything other
@@ -65,14 +84,20 @@ fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextF
 /// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
 /// are language-agnostic and keep working regardless.
 pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<IncrementalParser>, editor_font: EditorFont) {
-    let old_text = doc.buffer.to_string();
+    // Mutable: the wrap-selection interception below may replace both with
+    // an already-edited version *before* `TextEdit::show()` ever runs, so
+    // everything downstream (the layouter's highlighting, the
+    // `response.changed()` diff) sees the post-wrap text as its baseline
+    // rather than redoing (or fighting with) the edit egui would otherwise
+    // apply on its own.
+    let mut old_text = doc.buffer.to_string();
     let mut text = old_text.clone();
     // A stable id (rather than the default position-based auto id) keeps
     // this widget's identity — and thus its cursor/selection state — tied
     // to the document, not to where `show` happens to be called from in the
     // ui tree; it also lets tests request focus deterministically. Set via
-    // `.id(Id::new(id_salt))` below, not `.id_salt(id_salt)`: the latter
-    // still combines the salt with whichever `Ui` calls `.show()`
+    // `.id(widget_id)` below, not `.id_salt(id_salt)`: the latter still
+    // combines the salt with whichever `Ui` calls `.show()`
     // (`ui.make_persistent_id`), so it silently changes if `show`'s
     // internals end up calling the builder through a different nested
     // `Ui` than before (as happened when the line-number gutter moved the
@@ -80,6 +105,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     // of the position-independence this comment claims. `Id::new` is a
     // pure hash of the salt with no `Ui` involved, so it actually holds.
     let id_salt = doc.path.to_string_lossy().into_owned();
+    let widget_id = egui::Id::new(&id_salt);
     // A galley is expensive to shape (font lookups, kerning, glyph layout)
     // but egui's own galley cache (`Fonts`) is flushed of anything not
     // touched *this* frame, every frame — and only the active tab's editor
@@ -105,6 +131,63 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             intercepted_events = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
             i.events.retain(|e| !is_multi_edit_event(e));
         });
+    }
+
+    // `TextEditState::store` takes `self` by value, so it can only be
+    // called once per frame — every path below that wants to override
+    // egui's own post-edit cursor/selection just records the target range
+    // here, and a single `set_char_range` + `store` happens at the very
+    // end.
+    let mut manual_cursor_range: Option<CCursorRange> = None;
+
+    // Typing a bracket/quote while a selection is active should wrap the
+    // selected text in it, not replace it the way egui's `TextEdit` does by
+    // default. That default has already happened by the time a post-edit
+    // diff could see it (the same technique `apply_auto_pair`/
+    // `apply_auto_indent` use below) — the selected text egui deleted is
+    // just gone from `text` at that point. So this reads the *persisted*
+    // selection from before this frame's `TextEdit::show()` call instead,
+    // and — if it's non-empty and the next queued keystroke is a single
+    // pairable character — intercepts that event and applies the wrap
+    // manually, the same "pull it out of the queue before `TextEdit` sees
+    // it" approach the multi-cursor interception above uses. Skipped
+    // whenever multi-cursor is active: wrapping is a single-selection
+    // concept, and the primary selection's meaning while `Ctrl+D` extras
+    // exist is already spoken for by the multi-edit path above.
+    if !multi_cursor_active_at_start {
+        // Cheap check first: only load the persisted `TextEditState` (a
+        // `ctx.data` mutex lock + hashmap probe + struct clone, paid again
+        // moments later by `TextEdit::show()`'s own internal load of the
+        // exact same state) on the frames where there's actually a
+        // candidate keystroke queued — not on every idle/mouse-only/
+        // arrow-key frame the editor is visible.
+        let has_candidate_keystroke = ui.input(|i| i.events.iter().any(|e| single_pairable_char(e).is_some()));
+
+        if has_candidate_keystroke {
+            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.as_sorted_char_range())
+                .filter(|range| !range.is_empty());
+
+            if let Some(range) = prior_selection {
+                let opener = ui.input_mut(|i| {
+                    let index = i.events.iter().position(|e| single_pairable_char(e).is_some());
+                    index.map(|index| single_pairable_char(&i.events.remove(index)).expect("matched above"))
+                });
+
+                if let Some(opener) = opener {
+                    if let Some((wrapped, sel_start, sel_end)) =
+                        wrap_selection(&old_text, range.start.0, range.end.0, opener)
+                    {
+                        apply_edit(doc, parser, &old_text, &wrapped);
+                        manual_cursor_range =
+                            Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                        old_text = wrapped.clone();
+                        text = wrapped;
+                    }
+                }
+            }
+        }
     }
 
     // Sized to the widest line number the buffer currently has, so a
@@ -191,7 +274,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             let gutter_left = ui.cursor().left();
             ui.add_space(gutter_width);
             let output = egui::TextEdit::multiline(&mut text)
-                .id(egui::Id::new(&id_salt))
+                .id(widget_id)
                 .code_editor()
                 .desired_width(f32::INFINITY)
                 .layouter(&mut layouter)
@@ -199,13 +282,6 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             (output, gutter_left)
         })
         .inner;
-
-    // `TextEditState::store` takes `self` by value, so it can only be
-    // called once per frame — every path below that wants to override
-    // egui's own post-edit cursor/selection just records the target range
-    // here, and a single `set_char_range` + `store` happens at the very
-    // end.
-    let mut manual_cursor_range: Option<CCursorRange> = None;
 
     if !intercepted_events.is_empty() {
         if let Some(primary_range) = output.cursor_range {
@@ -217,12 +293,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
 
             let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
 
-            doc.buffer = Rope::from_str(&new_text);
-            if let Some(parser) = parser.as_mut() {
-                let edit = syntax::diff_edit(&old_text, &new_text);
-                parser.reparse(&new_text, edit);
-                doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
-            }
+            apply_edit(doc, parser, &old_text, &new_text);
 
             manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
             doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
@@ -253,12 +324,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
             apply_auto_pair(&old_text, &text, cursor_char)
         };
 
-        doc.buffer = Rope::from_str(&corrected);
-        if let Some(parser) = parser.as_mut() {
-            let edit = syntax::diff_edit(&old_text, &corrected);
-            parser.reparse(&corrected, edit);
-            doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
-        }
+        apply_edit(doc, parser, &old_text, &corrected);
     }
 
     let modifiers = ui.input(|i| i.modifiers);
@@ -297,12 +363,7 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
     if ctrl_j_pressed && let Some(primary_range) = output.cursor_range {
         let text_now = doc.buffer.to_string();
         if let Some((joined, new_cursor)) = join_lines(&text_now, primary_range.primary.index.0) {
-            doc.buffer = Rope::from_str(&joined);
-            if let Some(parser) = parser.as_mut() {
-                let edit = syntax::diff_edit(&text_now, &joined);
-                parser.reparse(&joined, edit);
-                doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
-            }
+            apply_edit(doc, parser, &text_now, &joined);
             manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
         }
     }
@@ -327,6 +388,20 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
         output.state.cursor.set_char_range(Some(range));
         let id = output.response.id;
         output.state.store(ui.ctx(), id);
+    }
+}
+
+/// The single character `event` types, if it's exactly one character *and*
+/// one this editor auto-pairs — the condition that makes it a candidate for
+/// wrap-selection to intercept. Shared between the cheap "is there anything
+/// worth loading `TextEditState` for" check and the actual removal, so the
+/// two can't drift apart on what counts as a match.
+fn single_pairable_char(event: &Event) -> Option<char> {
+    let Event::Text(s) = event else { return None };
+    let mut chars = s.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if is_pairable(c) => Some(c),
+        _ => None,
     }
 }
 
@@ -612,6 +687,73 @@ mod tests {
         }
     }
 
+    /// Like `focused_frame`, but for exercising wrap-selection: `show`'s
+    /// interception reads the *persisted* selection from before its own
+    /// frame runs (see `show`'s wrap-selection block), so this pre-stores
+    /// one — as if some earlier, unmodeled frame were where the user
+    /// actually dragged/clicked to create it — before driving the frame
+    /// under test.
+    ///
+    /// Runs one plain, unfocused-to-focused warm-up frame before injecting
+    /// the selection: egui's `TextEdit` doesn't reliably honor a selection
+    /// that was only ever set via `TextEditState::store` without the
+    /// widget having actually lived through a real frame first — the
+    /// same-frame "just gained focus" transition doesn't trust it, so a
+    /// character typed on that very first frame lands at a default cursor
+    /// position instead of replacing the injected selection. A real
+    /// drag-selection always happens on a frame *after* the widget already
+    /// has focus, so this just makes the test match that.
+    fn focused_frame_with_selection(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        selection: std::ops::Range<usize>,
+        events: Vec<egui::Event>,
+    ) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default);
+        });
+
+        let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(selection.start),
+            CCursor::new(selection.end),
+        )));
+        state.store(&ctx, id);
+
+        let raw_input = egui::RawInput { events, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default);
+        });
+    }
+
+    #[test]
+    fn typing_a_bracket_over_a_selection_wraps_it_instead_of_replacing_it() {
+        let (_dir, mut doc) = open_fixture("foo bar baz", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // "bar" is chars 4..7.
+        focused_frame_with_selection(&mut doc, &mut parser, 4..7, vec![egui::Event::Text("(".to_string())]);
+
+        assert_eq!(doc.buffer.to_string(), "foo (bar) baz");
+    }
+
+    #[test]
+    fn typing_an_angle_bracket_over_a_selection_wraps_it_too() {
+        let (_dir, mut doc) = open_fixture("List Item", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // "Item" is chars 5..9.
+        focused_frame_with_selection(&mut doc, &mut parser, 5..9, vec![egui::Event::Text("<".to_string())]);
+
+        assert_eq!(doc.buffer.to_string(), "List <Item>");
+    }
+
     fn command_key_event(key: egui::Key) -> egui::Event {
         egui::Event::Key {
             key,
@@ -644,6 +786,45 @@ mod tests {
         focused_frame(&mut doc, &mut parser, vec![command_key_event(egui::Key::J)]);
 
         assert_eq!(doc.buffer.to_string(), "foo");
+    }
+
+    #[test]
+    fn realistic_paste_reparses_and_highlights_correctly() {
+        // A realistic paste: inserting a whole new, syntactically valid
+        // method into a class body at a clean line boundary.
+        let old_text = "public class Hello {\n}\n";
+        let pasted = "    public String greet() {\n        return \"hi\";\n    }\n";
+        let insert_at = old_text.find('}').unwrap();
+        let mut new_text = old_text.to_string();
+        new_text.insert_str(insert_at, pasted);
+
+        let mut parser = IncrementalParser::new(Language::Java);
+        parser.parse(old_text);
+        let edit = syntax::diff_edit(old_text, &new_text);
+        parser.reparse(&new_text, edit);
+
+        let tree = parser.tree().unwrap();
+        let spans = syntax::highlight_spans(tree, &new_text, Language::Java);
+
+        let has_scope_over = |needle: &str, scope: syntax::Scope| {
+            let start = new_text.find(needle).unwrap();
+            let end = start + needle.len();
+            spans
+                .iter()
+                .any(|(range, s)| *s == scope && range.start <= start && range.end >= end)
+        };
+        assert!(has_scope_over("class", syntax::Scope::Keyword));
+        assert!(has_scope_over("greet", syntax::Scope::Function));
+        assert!(has_scope_over("return", syntax::Scope::Keyword));
+        assert!(has_scope_over("\"hi\"", syntax::Scope::String));
+
+        // Cross-check against a from-scratch full parse of the same final
+        // text: if incremental reparse after this paste produced the same
+        // tree a fresh parse would, the highlighting can't be stale.
+        let mut full_parser = IncrementalParser::new(Language::Java);
+        full_parser.parse(&new_text);
+        let full_spans = syntax::highlight_spans(full_parser.tree().unwrap(), &new_text, Language::Java);
+        assert_eq!(spans, full_spans);
     }
 
     #[test]

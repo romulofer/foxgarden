@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
 
@@ -9,6 +9,13 @@ pub struct SidePanelState {
     new_file_draft: Option<(PathBuf, String)>,
     rename_draft: Option<(PathBuf, String)>,
     pending_delete: Option<PathBuf>,
+    /// Set whenever `new_file_draft`/`rename_draft` is freshly opened,
+    /// consumed (cleared) by the very next frame that draws the
+    /// corresponding text field — so a freshly opened "New File"/rename
+    /// input grabs keyboard focus immediately instead of requiring an
+    /// extra click before the user can type.
+    focus_new_file: bool,
+    focus_rename: bool,
 }
 
 impl SidePanelState {
@@ -17,6 +24,7 @@ impl SidePanelState {
     /// bar's File > New File item.
     pub fn begin_new_file(&mut self, dir: PathBuf) {
         self.new_file_draft = Some((dir, String::new()));
+        self.focus_new_file = true;
     }
 }
 
@@ -47,7 +55,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
 
     ui.horizontal(|ui| {
         if ui.button("📁").on_hover_text("Open Folder").clicked() {
-            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            // Default to the already-open project's folder, if there is
+            // one, so re-opening (a sibling folder, or the same project
+            // after it was closed) doesn't mean re-navigating away from
+            // wherever the OS's own default (home, Desktop, ...) happens
+            // to be every single time.
+            let mut dialog = rfd::FileDialog::new();
+            if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
+                dialog = dialog.set_directory(root);
+            }
+            if let Some(folder) = dialog.pick_folder() {
                 if let Err(err) = state.open_project(folder) {
                     eprintln!("failed to open project: {err}");
                 }
@@ -66,8 +83,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
 
     let mut actions = TreeActions::default();
     if let Some(project) = &state.project {
+        // Taken before the tree walk (which only ever visits *one* node
+        // matching `rename_draft`, so a plain `bool` threaded through the
+        // recursion is enough — no need for `render_node` to reach back
+        // into `panel` itself for it).
+        let should_focus_rename = std::mem::take(&mut panel.focus_rename);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            render_node(ui, &project.tree, &mut panel.rename_draft, &mut actions);
+            render_node(ui, &project.tree, &mut panel.rename_draft, should_focus_rename, &mut actions);
         });
     } else {
         ui.weak("No folder open");
@@ -91,6 +113,27 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     outcome
 }
 
+/// Draws a single-line text field, focusing it (once, per `should_focus`)
+/// and reading back whether the user just confirmed or cancelled it.
+/// Shared by the "New File" row and the tree's inline rename field, which
+/// otherwise each hand-rolled the identical three steps.
+///
+/// Both Enter and Escape make egui's focused-widget tracking drop the
+/// field's focus on the same frame they're pressed (Escape unconditionally
+/// clears it; Enter does for any single-line `TextEdit` since it's treated
+/// as a submit) — so `lost_focus()` paired with the specific key pressed
+/// distinguishes "confirmed" from "cancelled" from an unrelated, ordinary
+/// focus change (e.g. clicking elsewhere), which should count as neither.
+fn text_field_outcome(ui: &mut egui::Ui, text: &mut String, should_focus: bool) -> (bool, bool) {
+    let response = ui.text_edit_singleline(text);
+    if should_focus {
+        response.request_focus();
+    }
+    let confirmed = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let escaped = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    (confirmed, escaped)
+}
+
 /// Returns `true` if a file was actually created this frame — distinct from
 /// `outcome.open` (which this also sets), because the caller needs to know
 /// specifically whether the on-disk tree changed and needs refreshing.
@@ -103,6 +146,10 @@ fn show_new_file_row(
     panel: &mut SidePanelState,
     outcome: &mut SidePanelOutcome,
 ) -> bool {
+    // Taken (not just read) before borrowing `new_file_draft` below, both to
+    // sidestep any borrow-checker friction between the two fields and so it
+    // naturally only fires once: the very first frame this draft is drawn.
+    let should_focus = std::mem::take(&mut panel.focus_new_file);
     let Some((dir, name)) = panel.new_file_draft.as_mut() else {
         return false;
     };
@@ -118,12 +165,17 @@ fn show_new_file_row(
             .unwrap_or_else(|| dir.display().to_string());
         ui.label(format!("New file in {dir_label}:"));
 
-        let response = ui.text_edit_singleline(name);
-        let confirmed = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let (confirmed, escaped) = text_field_outcome(ui, name, should_focus);
 
         if ui.button("Create").clicked() || confirmed {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
+                // `trimmed` may itself contain `/` (e.g. "controllers/
+                // UserController.java") to create the file inside a new,
+                // not-yet-existing subdirectory in one step — `dir.join`
+                // already resolves that into the right nested path, it
+                // just needs its parent directories to actually exist
+                // before `fs::write` can create the file in them.
                 let new_path = dir.join(trimmed);
                 if new_path.exists() {
                     eprintln!("file already exists: {}", new_path.display());
@@ -136,17 +188,18 @@ fn show_new_file_row(
                         .map(|(language, root)| fg_core::generate_boilerplate(language, root, &new_path))
                         .unwrap_or_default();
 
-                    if let Err(err) = std::fs::write(&new_path, content) {
-                        eprintln!("failed to create file: {err}");
-                    } else {
-                        outcome.open = Some(new_path);
-                        close_draft = true;
-                        created = true;
+                    match create_file_with_parents(&new_path, &content) {
+                        Ok(()) => {
+                            outcome.open = Some(new_path);
+                            close_draft = true;
+                            created = true;
+                        }
+                        Err(err) => eprintln!("failed to create file: {err}"),
                     }
                 }
             }
         }
-        if ui.button("Cancel").clicked() {
+        if ui.button("Cancel").clicked() || escaped {
             close_draft = true;
         }
     });
@@ -155,6 +208,18 @@ fn show_new_file_row(
         panel.new_file_draft = None;
     }
     created
+}
+
+/// Creates `path` with `content`, creating any missing parent directories
+/// first. Lets "New File" accept a nested relative name like
+/// "controllers/UserController.java" and have it just work, rather than
+/// failing because "controllers/" doesn't exist yet — `fs::write` alone
+/// only ever creates the final file, never its parent directories.
+fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)
 }
 
 fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome: &mut SidePanelOutcome) {
@@ -172,6 +237,7 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         panel.rename_draft = Some((path, default_name));
+        panel.focus_rename = true;
     }
     if actions.cancel_rename {
         panel.rename_draft = None;
@@ -230,6 +296,7 @@ fn render_node(
     ui: &mut egui::Ui,
     node: &FileNode,
     rename_draft: &mut Option<(PathBuf, String)>,
+    should_focus_rename: bool,
     actions: &mut TreeActions,
 ) {
     match node.kind {
@@ -239,7 +306,7 @@ fn render_node(
                 .default_open(false)
                 .show(ui, |ui| {
                     for child in &node.children {
-                        render_node(ui, child, rename_draft, actions);
+                        render_node(ui, child, rename_draft, should_focus_rename, actions);
                     }
                 });
             header.header_response.context_menu(|ui| {
@@ -255,13 +322,11 @@ fn render_node(
             if is_being_renamed {
                 let (_, name) = rename_draft.as_mut().expect("checked above");
                 ui.horizontal(|ui| {
-                    let response = ui.text_edit_singleline(name);
-                    let confirmed =
-                        response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let (confirmed, escaped) = text_field_outcome(ui, name, should_focus_rename);
                     if confirmed || ui.small_button("✓").clicked() {
                         actions.confirm_rename = Some(name.clone());
                     }
-                    if ui.small_button("✗").clicked() {
+                    if escaped || ui.small_button("✗").clicked() {
                         actions.cancel_rename = true;
                     }
                 });
@@ -304,5 +369,41 @@ fn render_node(
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_file_with_parents_creates_missing_nested_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("controllers/api/UserController.java");
+
+        create_file_with_parents(&path, "class UserController {}").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class UserController {}");
+    }
+
+    #[test]
+    fn create_file_with_parents_works_for_a_flat_path_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.java");
+
+        create_file_with_parents(&path, "class Main {}").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class Main {}");
+    }
+
+    #[test]
+    fn create_file_with_parents_leaves_already_existing_directories_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("existing")).unwrap();
+        let path = dir.path().join("existing/File.java");
+
+        create_file_with_parents(&path, "class File {}").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class File {}");
     }
 }

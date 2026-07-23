@@ -112,10 +112,15 @@ core  <-  syntax  <-  app
   and a click on a large binary shouldn't block the UI thread reading it.
 - **`crates/syntax`**: wraps tree-sitter. `IncrementalParser` owns a
   `tree_sitter::Parser` + cached `Tree` per document. `highlight_spans()` and
-  `syntax_errors()` walk/query that tree. `diff_edit(old, new)` computes an
-  `InputEdit` from two full-text snapshots by common-prefix/suffix diffing —
-  needed because egui's `TextEdit` hands back a plain `String`, not a
-  structured edit op.
+  `syntax_errors()` walk/query that tree — both fully generic over
+  `Language` (Java, Kotlin, YAML, XML, `.properties`); adding a language is
+  `fg_core::Language` + `Language::from_extension`, a `ts_language`/
+  `highlights_query_source` arm in `crates/syntax/src/language.rs`, and a
+  `cached_query` cell in `highlight.rs` — nothing about parsing, diagnostics,
+  or the editor widget is Java/Kotlin-specific. `diff_edit(old, new)`
+  computes an `InputEdit` from two full-text snapshots by common-prefix/
+  suffix diffing — needed because egui's `TextEdit` hands back a plain
+  `String`, not a structured edit op.
 - **`crates/app`**: eframe/egui shell, organized by concern into
   `src/widgets/`, `src/panels/`, `src/style/`, plus `app.rs`/`main.rs` at
   the root:
@@ -261,6 +266,31 @@ core  <-  syntax  <-  app
   "(\"token\")")` rather than trusting the grammar source, and make sure
   `crates/syntax/tests/syntax_tests.rs` has a `highlight_spans` test for
   *each* language, not just one.
+- **A single node can match more than one capture pattern in a bundled
+  highlight query — `highlight_spans` must resolve that itself, not return
+  duplicates and hope the caller sorts it out.** YAML's `highlights.scm`
+  captures every `(string_scalar)` node generically as `@string`, and
+  *separately, later in the file*, captures the same node as `@property`
+  specifically when it's a mapping key — so an unquoted key produces two
+  captures spanning the identical byte range. `highlight_spans` used to
+  push both into its result unfiltered; `widgets::editor::show`'s layouter
+  then painted whichever one came first when consuming the sorted list,
+  which was `@string` (declared earlier, so yielded first for the tied
+  range) — meaning every YAML/properties key rendered in the *string*
+  color instead of `Property`, invisibly, because a membership-style test
+  (`spans.iter().any(|(r, s)| ...)`) can't tell "the right scope is present
+  somewhere in the list" apart from "the right scope is what actually gets
+  painted." Fixed by deduplicating in `highlight_spans` itself — a
+  `HashMap<Range<usize>, Scope>` insert per capture keeps the *last* one
+  seen for an exact-duplicate range, matching the standard
+  tree-sitter-highlight convention that a later pattern in the query file
+  takes priority over an earlier, more general one. If you add another
+  language, don't just check that the right scope *appears* in
+  `highlight_spans`'s output for a given range — check it's the *only* one
+  for that exact range (see `yaml_highlight_query_covers_mapping_key_
+  string_and_comment`'s regression-guard assertions in
+  `crates/syntax/tests/syntax_tests.rs` for the pattern), or the same class
+  of bug can reappear silently.
 - **JetBrains Mono is registered under a custom `FontFamily::Name(...)`, not
   merged into `FontFamily::Monospace`** (see `style/fonts.rs`), so both it
   and egui's built-in monospace font (Hack) stay independently selectable

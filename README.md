@@ -26,7 +26,12 @@ layer on top of.
 - Remembers and restores your session on restart: the last project folder,
   every tab that was open, and which one was focused
 - Create, rename, and delete files from the side panel — via the "New File…"
-  button or right-click on a file/folder (delete asks for confirmation first)
+  button or right-click on a file/folder (delete asks for confirmation
+  first); `Enter` confirms a new-file/rename input, `Escape` cancels it. A
+  new file's name can include `/` (e.g. `controllers/UserController.java`)
+  to create it inside a not-yet-existing subdirectory in one step
+- "Open Folder…" starts at the currently open project's own folder, if
+  there is one, instead of wherever the OS defaults to
 - Files open in tabs; clicking an already-open file focuses its tab instead
   of duplicating it
 - Dirty files show an asterisk (`*name.kt`) until saved (`Ctrl+S`)
@@ -37,7 +42,9 @@ layer on top of.
   instead of duplicating it if you already reopened the same file manually
   in the meantime
 - Line numbers gutter, right-aligned, scrolling in sync with the text
-- Syntax highlighting for Java and Kotlin (tree-sitter based)
+- Syntax highlighting for Java, Kotlin, YAML, XML, and `.properties`
+  (tree-sitter based), each with its own icon in the file tree; error
+  squiggles work for all five, not just Java/Kotlin
 - Red squiggly underlines on syntax errors, updated live as you type; hover
   one to see the error message as a tooltip
 - Multi-cursor editing: `Ctrl+D` selects the word under the cursor, then each

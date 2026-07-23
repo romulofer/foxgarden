@@ -43,7 +43,7 @@ pub fn show(
                 .add_enabled(state.active_tab.is_some(), egui::Button::new("Save").shortcut_text("Ctrl+S"))
                 .clicked()
             {
-                tabs::save_active_tab(state);
+                tabs::save_active_tab(state, parsers);
                 ui.close();
             }
             if ui

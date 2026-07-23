@@ -34,6 +34,15 @@ pub struct FoxGardenApp {
     /// way back out once the menu holding the toggle is itself hidden) or
     /// via View > Zen Mode while the menu is visible.
     zen_mode: bool,
+    /// Set when the user clicks a file in the tree and `Document::open`
+    /// fails — most commonly a binary file (`OpenDocumentError::Binary`,
+    /// caught early by `Document::open`'s NUL-byte sniff) or a file in a
+    /// non-UTF-8 encoding. Previously only `eprintln!`'d, which is
+    /// invisible outside a terminal the user probably isn't watching, so a
+    /// click on a file that can't be opened as text looked like it just
+    /// silently did nothing. Shown as a dismissable modal instead (see
+    /// `show_open_error`), same pattern as the delete/close confirmations.
+    open_error: Option<String>,
 }
 
 /// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
@@ -149,7 +158,35 @@ impl FoxGardenApp {
             menu_bar: MenuBarState::default(),
             editor_font: EditorFont::default(),
             zen_mode: false,
+            open_error: None,
         }
+    }
+}
+
+/// Shows `open_error` (if any) as a dismissable modal, and clears it once
+/// acknowledged. Free function rather than a method so its borrow of
+/// `open_error` doesn't overlap `&mut self` for the rest of `ui()`.
+///
+/// Borrows the message for the label instead of cloning it, deferring the
+/// actual `*open_error = None` write until after the modal closure — same
+/// "record the outcome, apply it once outside the closure" shape
+/// `widgets::editor::show` already uses for `manual_cursor_range` — so
+/// dismissing doesn't mean an extra heap allocation on every frame the
+/// error stays open, just the one frame the user actually clicks "OK".
+fn show_open_error(ui: &egui::Ui, open_error: &mut Option<String>) {
+    let Some(message) = open_error.as_deref() else {
+        return;
+    };
+    let ctx = ui.ctx().clone();
+    let mut dismissed = false;
+    egui::Modal::new(egui::Id::new("open_error")).show(&ctx, |ui| {
+        ui.label(message);
+        if ui.button("OK").clicked() {
+            dismissed = true;
+        }
+    });
+    if dismissed {
+        *open_error = None;
     }
 }
 
@@ -181,6 +218,7 @@ impl eframe::App for FoxGardenApp {
         }
 
         if let Some(path) = outcome.open {
+            let display_path = path.display().to_string();
             match self.state.open_tab(path) {
                 Ok(index) => {
                     if index == self.parsers.len() {
@@ -188,7 +226,22 @@ impl eframe::App for FoxGardenApp {
                         self.parsers.push(parser);
                     }
                 }
-                Err(err) => eprintln!("failed to open file: {err}"),
+                Err(err) => {
+                    eprintln!("failed to open file: {err}");
+                    // `OpenDocumentError::Binary`'s own `Display` already
+                    // names the path (useful for the bare `eprintln!`
+                    // above, and other call sites that log it without this
+                    // wrapper) — restating it here would just duplicate it
+                    // in the modal, so only `Io` (whose message doesn't
+                    // mention a path at all) gets it prepended.
+                    let message = match &err {
+                        fg_core::OpenDocumentError::Binary(_) => {
+                            format!("Couldn't open {display_path}: not a text file.")
+                        }
+                        fg_core::OpenDocumentError::Io(_) => format!("Couldn't open {display_path}:\n{err}"),
+                    };
+                    self.open_error = Some(message);
+                }
             }
         }
         if let Some((old, new)) = outcome.renamed {
@@ -197,6 +250,8 @@ impl eframe::App for FoxGardenApp {
         if let Some(path) = outcome.deleted {
             close_tab_for_path(&mut self.state, &mut self.parsers, &path);
         }
+
+        show_open_error(ui, &mut self.open_error);
 
         egui::CentralPanel::default().show(ui, |ui| {
             tabs::show(

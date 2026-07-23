@@ -85,11 +85,44 @@ pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-/// Auto-closes brackets/quotes: typing an opener (`{`, `(`, `[`, `"`, `'`)
-/// inserts its matching closer right after the cursor, and typing a closer
-/// that's already sitting right there just types over it instead of
+/// Maps an auto-pairable opening character to its closing counterpart —
+/// shared by `apply_auto_pair` (typing an opener with no selection) and
+/// `wrap_selection` (typing one *over* a selection), so the two features
+/// can't quietly disagree on which characters are paired or what they pair
+/// with.
+///
+/// `<`/`>` is a deliberate tradeoff, not an oversight: in Java/Kotlin `<` is
+/// also the less-than operator, so auto-closing it unconditionally means
+/// typing `x < 5` inserts an unwanted `>` after the `<`. Every other paired
+/// character here is unambiguous in context; `<` isn't, and this doesn't
+/// attempt the type-position analysis that would be needed to tell "generic"
+/// from "comparison" apart.
+fn closing_char(opener: char) -> Option<char> {
+    match opener {
+        '{' => Some('}'),
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '<' => Some('>'),
+        '"' => Some('"'),
+        '\'' => Some('\''),
+        _ => None,
+    }
+}
+
+/// Whether `c` is a character this editor auto-pairs — used by
+/// `widgets::editor::show` to decide whether a single typed character while
+/// a selection is active should be intercepted for `wrap_selection` instead
+/// of falling through to egui's default replace-selection behavior.
+pub(super) fn is_pairable(c: char) -> bool {
+    closing_char(c).is_some()
+}
+
+/// Auto-closes brackets/quotes: typing an opener (`{`, `(`, `[`, `<`, `"`,
+/// `'`) inserts its matching closer right after the cursor, and typing a
+/// closer that's already sitting right there just types over it instead of
 /// duplicating it. Only fires on a pure single-character insertion (so
-/// pastes, multi-char IME commits, and replacing a selection are untouched).
+/// pastes, multi-char IME commits, and replacing a selection are untouched
+/// — a selection is `wrap_selection`'s job instead).
 ///
 /// Deliberately locates the just-typed character via `cursor_char` (egui's
 /// own post-edit cursor position) rather than by diffing `old_text`/`text`:
@@ -118,12 +151,8 @@ pub(super) fn apply_auto_pair(old_text: &str, text: &str, cursor_char: Option<us
     let old_char_at_same_pos = old_text.chars().nth(cursor_char - 1);
 
     match inserted {
-        '{' | '(' | '[' => {
-            let closer = match inserted {
-                '{' => '}',
-                '(' => ')',
-                _ => ']',
-            };
+        '{' | '(' | '[' | '<' => {
+            let closer = closing_char(inserted).expect("matched only auto-pairable openers");
             format!("{}{closer}{}", &text[..inserted_end], &text[inserted_end..])
         }
         '"' | '\'' if old_char_at_same_pos == Some(inserted) => {
@@ -132,11 +161,38 @@ pub(super) fn apply_auto_pair(old_text: &str, text: &str, cursor_char: Option<us
             format!("{}{}", &text[..inserted_start], &text[inserted_end..])
         }
         '"' | '\'' => format!("{}{inserted}{}", &text[..inserted_end], &text[inserted_end..]),
-        '}' | ')' | ']' if old_char_at_same_pos == Some(inserted) => {
+        '}' | ')' | ']' | '>' if old_char_at_same_pos == Some(inserted) => {
             format!("{}{}", &text[..inserted_start], &text[inserted_end..])
         }
         _ => text.to_string(),
     }
+}
+
+/// Wraps `old_text[start_char..end_char]` in `opener`/its matching closer,
+/// replacing egui's default "typing a bracket over a selection deletes it"
+/// behavior. Used when a selection is active and the typed character is one
+/// this editor auto-pairs — `widgets::editor::show` detects that *before*
+/// `TextEdit::show()` runs, since by the time a normal post-edit diff would
+/// see it, the selected text egui replaced is already gone; there's nothing
+/// left for a diff-based approach (like `apply_auto_pair` and
+/// `apply_auto_indent` use) to recover it from.
+///
+/// Returns the new text and the char range the originally selected text now
+/// occupies — kept selected in the result, matching how most editors leave
+/// a just-wrapped selection selected rather than collapsing the cursor, so
+/// wrapping it again (to nest) or moving on with an arrow key both stay one
+/// step away. `None` if `opener` isn't a character this editor auto-pairs.
+pub(super) fn wrap_selection(old_text: &str, start_char: usize, end_char: usize, opener: char) -> Option<(String, usize, usize)> {
+    let closer = closing_char(opener)?;
+    let start_byte = char_to_byte(old_text, start_char);
+    let end_byte = char_to_byte(old_text, end_char);
+    let wrapped = format!(
+        "{}{opener}{}{closer}{}",
+        &old_text[..start_byte],
+        &old_text[start_byte..end_byte],
+        &old_text[end_byte..],
+    );
+    Some((wrapped, start_char + 1, end_char + 1))
 }
 
 #[cfg(test)]
@@ -195,12 +251,48 @@ mod tests {
         assert_eq!(apply_auto_pair("foo ", "foo {", Some(5)), "foo {}");
         assert_eq!(apply_auto_pair("", "(", Some(1)), "()");
         assert_eq!(apply_auto_pair("x", "x[", Some(2)), "x[]");
+        assert_eq!(apply_auto_pair("List", "List<", Some(5)), "List<>");
+    }
+
+    #[test]
+    fn typing_closer_angle_bracket_over_existing_one_skips_duplicate() {
+        assert_eq!(apply_auto_pair("List<>", "List<>>", Some(6)), "List<>");
     }
 
     #[test]
     fn typing_quote_inserts_matching_quote() {
         assert_eq!(apply_auto_pair("", "\"", Some(1)), "\"\"");
         assert_eq!(apply_auto_pair("", "'", Some(1)), "''");
+    }
+
+    #[test]
+    fn wrap_selection_wraps_selected_text_in_the_matching_pair() {
+        let (wrapped, sel_start, sel_end) = wrap_selection("foo bar baz", 4, 7, '(').unwrap();
+        assert_eq!(wrapped, "foo (bar) baz");
+        // The originally selected text ("bar") now sits one char later, to
+        // account for the inserted opener before it.
+        assert_eq!((sel_start, sel_end), (5, 8));
+        assert_eq!(&wrapped[sel_start..sel_end], "bar");
+    }
+
+    #[test]
+    fn wrap_selection_covers_every_auto_paired_character() {
+        for (opener, closer) in [('{', '}'), ('(', ')'), ('[', ']'), ('<', '>'), ('"', '"'), ('\'', '\'')] {
+            let (wrapped, ..) = wrap_selection("x", 0, 1, opener).unwrap();
+            assert_eq!(wrapped, format!("{opener}x{closer}"));
+        }
+    }
+
+    #[test]
+    fn wrap_selection_returns_none_for_a_non_pairable_character() {
+        assert_eq!(wrap_selection("foo bar", 4, 7, 'x'), None);
+    }
+
+    #[test]
+    fn wrap_selection_works_at_the_start_and_end_of_the_buffer() {
+        let (wrapped, sel_start, sel_end) = wrap_selection("bar", 0, 3, '[').unwrap();
+        assert_eq!(wrapped, "[bar]");
+        assert_eq!((sel_start, sel_end), (1, 4));
     }
 
     #[test]
