@@ -20,6 +20,7 @@ pub fn show(
     pending_close: &mut Option<usize>,
     menu: &mut MenuBarState,
     editor_font: &mut EditorFont,
+    zen_mode: &mut bool,
 ) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
@@ -96,6 +97,12 @@ pub fn show(
             });
         });
 
+        ui.menu_button("View", |ui| {
+            if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
+                ui.close();
+            }
+        });
+
         ui.menu_button("Help", |ui| {
             if ui.button("About").clicked() {
                 menu.about_open = true;
@@ -121,6 +128,7 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Ctrl+S — save the active tab");
         ui.label("Ctrl+Shift+T — reopen the last closed tab");
         ui.label("Middle-click a tab — close it");
+        ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
         ui.separator();
         if ui.button("Close").clicked() {
             menu.about_open = false;

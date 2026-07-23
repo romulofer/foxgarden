@@ -28,6 +28,12 @@ pub struct FoxGardenApp {
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
     editor_font: EditorFont,
+    /// Hides the menu bar and side panel, leaving just the tab bar and
+    /// editor. Toggled by `F11` (checked every frame, independent of
+    /// whether the menu bar is currently shown — otherwise there'd be no
+    /// way back out once the menu holding the toggle is itself hidden) or
+    /// via View > Zen Mode while the menu is visible.
+    zen_mode: bool,
 }
 
 /// Closes the tab pointing at `path`, if any, keeping `parsers` in lockstep —
@@ -142,27 +148,37 @@ impl FoxGardenApp {
             side_panel: SidePanelState::default(),
             menu_bar: MenuBarState::default(),
             editor_font: EditorFont::default(),
+            zen_mode: false,
         }
     }
 }
 
 impl eframe::App for FoxGardenApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("menu_bar").show(ui, |ui| {
-            menu_bar::show(
-                ui,
-                &mut self.state,
-                &mut self.side_panel,
-                &mut self.parsers,
-                &mut self.pending_close,
-                &mut self.menu_bar,
-                &mut self.editor_font,
-            );
-        });
+        if ui.input(|i| i.key_pressed(egui::Key::F11)) {
+            self.zen_mode = !self.zen_mode;
+        }
 
-        let outcome = egui::Panel::left("project_panel")
-            .show(ui, |ui| side_panel::show(ui, &mut self.state, &mut self.side_panel))
-            .inner;
+        let mut outcome = side_panel::SidePanelOutcome::default();
+
+        if !self.zen_mode {
+            egui::Panel::top("menu_bar").show(ui, |ui| {
+                menu_bar::show(
+                    ui,
+                    &mut self.state,
+                    &mut self.side_panel,
+                    &mut self.parsers,
+                    &mut self.pending_close,
+                    &mut self.menu_bar,
+                    &mut self.editor_font,
+                    &mut self.zen_mode,
+                );
+            });
+
+            outcome = egui::Panel::left("project_panel")
+                .show(ui, |ui| side_panel::show(ui, &mut self.state, &mut self.side_panel))
+                .inner;
+        }
 
         if let Some(path) = outcome.open {
             match self.state.open_tab(path) {

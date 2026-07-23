@@ -85,8 +85,15 @@ impl Document {
         self.buffer != self.saved_buffer
     }
 
+    /// Trims trailing whitespace from every line before writing, and updates
+    /// `buffer` itself (not just the bytes written to disk) to match — so
+    /// the editor immediately shows what's actually on disk, and `is_dirty`
+    /// (derived from `buffer != saved_buffer`) doesn't flip back to `true`
+    /// right after a save because the two silently diverged.
     pub fn save(&mut self) -> std::io::Result<()> {
-        std::fs::write(&self.path, self.buffer.to_string())?;
+        let trimmed = trim_trailing_whitespace(&self.buffer.to_string());
+        self.buffer = Rope::from_str(&trimmed);
+        std::fs::write(&self.path, &trimmed)?;
         self.saved_buffer = self.buffer.clone();
         Ok(())
     }
@@ -94,6 +101,21 @@ impl Document {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Strips trailing spaces/tabs from every line, preserving line count,
+/// line-ending style, and whether the text ends with a trailing newline. A
+/// `\r\n`-terminated line has its `\r` set aside first and reattached after
+/// trimming — otherwise `\r` (not itself whitespace we want to strip) would
+/// block `trim_end_matches` from reaching the spaces/tabs before it.
+fn trim_trailing_whitespace(text: &str) -> String {
+    text.split('\n')
+        .map(|line| match line.strip_suffix('\r') {
+            Some(content) => format!("{}\r", content.trim_end_matches([' ', '\t'])),
+            None => line.trim_end_matches([' ', '\t']).to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Reads only the first `SNIFF_LEN` bytes of `path` and checks for a NUL
@@ -175,6 +197,43 @@ mod tests {
 
         let doc = Document::open(path).unwrap();
         assert_eq!(doc.language, None);
+    }
+
+    #[test]
+    fn save_trims_trailing_whitespace_from_every_line() {
+        let (_dir, path) = temp_java_file("class Hello {}");
+        let mut doc = Document::open(path.clone()).unwrap();
+
+        doc.buffer = Rope::from_str("class Hello {   \n\tint x;\t\t\n}   \n");
+        doc.save().unwrap();
+
+        let expected = "class Hello {\n\tint x;\n}\n";
+        assert_eq!(doc.buffer.to_string(), expected);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        assert!(!doc.is_dirty(), "buffer and saved_buffer must agree right after save");
+    }
+
+    #[test]
+    fn save_trims_a_final_line_with_no_trailing_newline() {
+        let (_dir, path) = temp_java_file("class Hello {}");
+        let mut doc = Document::open(path).unwrap();
+
+        doc.buffer = Rope::from_str("class Hello {}  ");
+        doc.save().unwrap();
+
+        // No newline should be added where there wasn't one.
+        assert_eq!(doc.buffer.to_string(), "class Hello {}");
+    }
+
+    #[test]
+    fn save_preserves_crlf_line_endings_while_trimming() {
+        let (_dir, path) = temp_java_file("class Hello {}");
+        let mut doc = Document::open(path).unwrap();
+
+        doc.buffer = Rope::from_str("class Hello {}  \r\n  int x;\r\n");
+        doc.save().unwrap();
+
+        assert_eq!(doc.buffer.to_string(), "class Hello {}\r\n  int x;\r\n");
     }
 
     #[test]

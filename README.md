@@ -10,7 +10,10 @@ layer on top of.
 ## Features
 
 - Menu bar: File (New File, Open Folder, Save, Close Tab, Reopen Closed Tab,
-  Exit), Settings (Light/Dark theme, editor font), Help (About)
+  Exit), Settings (Light/Dark theme, editor font), View (Zen Mode), Help
+  (About)
+- `F11` toggles Zen Mode — hides the menu bar and side panel, leaving just
+  the tab bar and editor; `F11` again brings them back
 - Side panel with the open project's file tree, with icons per entry
   (folders, `.java`, `.kt`); folders are always listed before files, each
   group sorted alphabetically, and VCS/build/dependency noise (`.git`,
