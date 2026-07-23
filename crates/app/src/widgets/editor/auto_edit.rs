@@ -78,6 +78,123 @@ pub(super) fn join_lines(text: &str, cursor_char: usize) -> Option<(String, usiz
     Some((joined, new_cursor_char))
 }
 
+/// Indents (`dedent == false`) or dedents (`dedent == true`) every line the
+/// selection `start_char..end_char` touches, by one level (4 spaces) —
+/// Tab/Shift+Tab while a selection is active. `start_char` must be `<=
+/// end_char` (the caller sorts, same contract as `wrap_selection`). Returns
+/// the new text and where the selection should land afterward: still
+/// covering the same set of lines, adjusted for however many characters
+/// each touched line gained or lost, matching how most editors keep a
+/// block-indent's selection in place rather than collapsing it.
+///
+/// Exists because egui's own Tab/Shift+Tab handling doesn't do this
+/// (`egui::text_edit::builder`'s `Event::Key { key: Key::Tab, .. }` arm):
+/// it unconditionally deletes the *entire* selection first, and only then
+/// — for Shift+Tab — dedents the single line the resulting cursor lands
+/// on (a limitation its own source flags with
+/// "TODO(emilk): support removing indentation over a selection?"). Plain
+/// Tab has the same problem one step further: it deletes the selection and
+/// replaces it with a single literal tab character. Both destroy every
+/// selected character instead of adjusting leading whitespace — exactly
+/// backwards from what indenting a selection should do, whether that
+/// selection spans one line or many.
+///
+/// A selection whose end sits exactly at the start of a line doesn't touch
+/// that line — e.g. selecting from the middle of line 1 down to the very
+/// start of line 3 covers only lines 1 and 2, matching most editors' block-
+/// indent semantics (the selection merely touches line 3's boundary, it
+/// doesn't cover any of its content).
+pub(super) fn indent_selected_lines(text: &str, start_char: usize, end_char: usize, dedent: bool) -> (String, usize, usize) {
+    const INDENT: &str = "    ";
+
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let start_char = start_char.min(n);
+    let end_char = end_char.min(n);
+
+    let first_line_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+
+    let mut touched: Vec<usize> = std::iter::once(0)
+        .chain(chars.iter().enumerate().filter(|&(_, &c)| c == '\n').map(|(i, _)| i + 1))
+        .filter(|&s| s >= first_line_start && s < end_char)
+        .collect();
+    if touched.is_empty() {
+        touched.push(first_line_start);
+    }
+
+    let mut result: Vec<char> = Vec::with_capacity(n + touched.len() * INDENT.len());
+    // (line_start, delta) for every touched line, in the order encountered —
+    // used below to remap `start_char`/`end_char` into the rebuilt text.
+    let mut line_deltas: Vec<(usize, i64)> = Vec::with_capacity(touched.len());
+
+    let mut pos = 0usize;
+    loop {
+        let line_end = chars[pos..].iter().position(|&c| c == '\n').map_or(n, |off| pos + off);
+        let has_newline = line_end < n;
+
+        if touched.contains(&pos) {
+            if dedent {
+                let removable = if chars.get(pos) == Some(&'\t') {
+                    1
+                } else {
+                    chars[pos..line_end].iter().take_while(|&&c| c == ' ').count().min(INDENT.len())
+                };
+                result.extend_from_slice(&chars[pos + removable..line_end]);
+                line_deltas.push((pos, -(removable as i64)));
+            } else {
+                result.extend(INDENT.chars());
+                result.extend_from_slice(&chars[pos..line_end]);
+                line_deltas.push((pos, INDENT.len() as i64));
+            }
+        } else {
+            result.extend_from_slice(&chars[pos..line_end]);
+        }
+
+        if has_newline {
+            result.push('\n');
+            pos = line_end + 1;
+        } else {
+            break;
+        }
+    }
+
+    let remap = |p: usize| -> usize {
+        let p_line_start = chars[..p].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+        let mut delta_before = 0i64;
+        let mut this_line_delta = 0i64;
+        for &(line_start, delta) in &line_deltas {
+            if line_start < p_line_start {
+                delta_before += delta;
+            } else if line_start == p_line_start {
+                this_line_delta = delta;
+            }
+        }
+        let column = p - p_line_start;
+        let new_column = if !touched.contains(&p_line_start) {
+            column
+        } else if dedent {
+            column.saturating_sub((-this_line_delta) as usize)
+        } else if column == 0 {
+            // A selection that starts exactly at column 0 of a line being
+            // indented stays at column 0 rather than jumping past the new
+            // indentation — the added spaces land "inside" the selection,
+            // matching how most editors keep a whole-line selection
+            // covering the whole (now-indented) line, so repeated Tab
+            // presses keep growing the selection instead of leaving its
+            // start behind.
+            0
+        } else {
+            column + INDENT.len()
+        };
+        (p_line_start as i64 + delta_before + new_column as i64) as usize
+    };
+
+    let new_start = remap(start_char);
+    let new_end = remap(end_char);
+
+    (result.into_iter().collect(), new_start, new_end)
+}
+
 pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
@@ -391,5 +508,81 @@ mod tests {
         let (joined, cursor) = join_lines("foo  \nbar", 1).unwrap();
         assert_eq!(joined, "foo  bar");
         assert_eq!(cursor, 5);
+    }
+
+    #[test]
+    fn indent_selected_lines_indents_every_touched_line() {
+        // Selection spans all of "foo" and all of "bar" (chars 0..7),
+        // starting right at column 0 of the first line.
+        let (text, start, end) = indent_selected_lines("foo\nbar", 0, 7, false);
+        assert_eq!(text, "    foo\n    bar");
+        // A selection that starts at column 0 stays at column 0 through an
+        // indent (see the `column == 0` branch in `remap`), so it still
+        // covers the entire (now-indented) two lines rather than excluding
+        // the newly inserted leading spaces.
+        assert_eq!(&text[start..end], "    foo\n    bar");
+    }
+
+    #[test]
+    fn indent_selected_lines_selection_ending_at_line_start_excludes_that_line() {
+        // Selection from mid "foo" to the very start of "baz" (char 9) —
+        // only "foo" and "bar" are touched, matching a Shift+Down drag that
+        // never actually selects any of "baz".
+        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 1, 8, false);
+        assert_eq!(text, "    foo\n    bar\nbaz");
+    }
+
+    #[test]
+    fn indent_selected_lines_dedent_removes_up_to_one_indent_level_of_spaces() {
+        let (text, ..) = indent_selected_lines("    foo\n        bar", 0, 19, true);
+        assert_eq!(text, "foo\n    bar");
+    }
+
+    #[test]
+    fn indent_selected_lines_dedent_removes_a_single_leading_tab() {
+        let (text, ..) = indent_selected_lines("\tfoo\n\tbar", 0, 9, true);
+        assert_eq!(text, "foo\nbar");
+    }
+
+    #[test]
+    fn indent_selected_lines_dedent_on_a_line_with_less_than_one_level_removes_what_exists() {
+        let (text, ..) = indent_selected_lines("  foo\nbar", 0, 9, true);
+        assert_eq!(text, "foo\nbar");
+    }
+
+    #[test]
+    fn indent_selected_lines_dedent_on_an_unindented_line_is_a_no_op_for_that_line() {
+        let (text, ..) = indent_selected_lines("foo\n    bar", 0, 11, true);
+        assert_eq!(text, "foo\nbar");
+    }
+
+    #[test]
+    fn indent_selected_lines_preserves_all_selected_text_unlike_eguis_default() {
+        // Regression guard for the bug this function exists to fix: egui's
+        // own Tab/Shift+Tab deletes the whole selection first. Selecting
+        // "oo\nba" (chars 1..6, a genuine cross-line selection that doesn't
+        // start/end on a line boundary) and indenting must not lose any of
+        // the original characters.
+        let (text, ..) = indent_selected_lines("foo\nbar", 1, 6, false);
+        assert_eq!(text, "    foo\n    bar");
+        for ch in ['f', 'o', 'o', 'b', 'a', 'r'] {
+            assert!(text.contains(ch), "lost character {ch:?} from the selection");
+        }
+    }
+
+    #[test]
+    fn indent_selected_lines_keeps_selection_anchors_aligned_with_the_original_text() {
+        // Selecting "oo\nba" (1..6) out of "foo\nbar" and indenting both
+        // lines: the selection should still point at the very same
+        // characters ("oo\nba"), just shifted by the two lines' worth of
+        // inserted indentation.
+        let (text, start, end) = indent_selected_lines("foo\nbar", 1, 6, false);
+        assert_eq!(&text[start..end], "oo\n    ba");
+    }
+
+    #[test]
+    fn indent_selected_lines_single_line_selection_only_touches_that_line() {
+        let (text, ..) = indent_selected_lines("foo\nbar\nbaz", 4, 7, false);
+        assert_eq!(text, "foo\n    bar\nbaz");
     }
 }

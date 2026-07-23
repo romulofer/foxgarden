@@ -7,7 +7,9 @@ use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
-use super::auto_edit::{apply_auto_indent, apply_auto_pair, char_to_byte, is_pairable, join_lines, wrap_selection};
+use super::auto_edit::{
+    apply_auto_indent, apply_auto_pair, char_to_byte, indent_selected_lines, is_pairable, join_lines, wrap_selection,
+};
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
 use crate::style::fonts::EditorFont;
@@ -185,6 +187,46 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<Increment
                         old_text = wrapped.clone();
                         text = wrapped;
                     }
+                }
+            }
+        }
+    }
+
+    // Tab/Shift+Tab while a selection is active should indent/dedent every
+    // line the selection touches, not replace the selection the way egui's
+    // `TextEdit` does by default (see `indent_selected_lines`'s doc comment:
+    // egui deletes the *entire* selection first, then for Shift+Tab dedents
+    // only the single line the resulting cursor lands on). Same
+    // pull-it-out-of-the-queue-before-`TextEdit`-sees-it approach as the
+    // wrap-selection interception above, and skipped for the same reason
+    // whenever multi-cursor is active.
+    if !multi_cursor_active_at_start {
+        let tab_pressed =
+            ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. })));
+
+        if tab_pressed {
+            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.as_sorted_char_range())
+                .filter(|range| !range.is_empty());
+
+            if let Some(range) = prior_selection {
+                let removed = ui.input_mut(|i| {
+                    let index = i
+                        .events
+                        .iter()
+                        .position(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+                    index.map(|index| i.events.remove(index))
+                });
+
+                if removed.is_some() {
+                    let dedent = ui.input(|i| i.modifiers.shift);
+                    let (indented, sel_start, sel_end) =
+                        indent_selected_lines(&old_text, range.start.0, range.end.0, dedent);
+                    apply_edit(doc, parser, &old_text, &indented);
+                    manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                    old_text = indented.clone();
+                    text = indented;
                 }
             }
         }
@@ -725,7 +767,19 @@ mod tests {
         )));
         state.store(&ctx, id);
 
-        let raw_input = egui::RawInput { events, ..Default::default() };
+        // Same derivation as `focused_frame`: `RawInput::modifiers` (what
+        // `ui.input(|i| i.modifiers)` actually reads) is separate from each
+        // `Event::Key`'s own `modifiers` field, so a simulated Shift+Tab
+        // needs it pulled up to the top level or `show`'s
+        // `ui.input(|i| i.modifiers.shift)` check would read unmodified.
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
             show(ui, doc, parser, EditorFont::Default);
@@ -752,6 +806,73 @@ mod tests {
         focused_frame_with_selection(&mut doc, &mut parser, 5..9, vec![egui::Event::Text("<".to_string())]);
 
         assert_eq!(doc.buffer.to_string(), "List <Item>");
+    }
+
+    fn shift_key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }
+    }
+
+    #[test]
+    fn shift_tab_dedents_every_line_a_multi_line_selection_touches() {
+        let (_dir, mut doc) = open_fixture("    foo\n    bar\nbaz", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        // Selects all of "foo" and all of "bar" (chars 4..15), leaving
+        // "baz" untouched.
+        focused_frame_with_selection(&mut doc, &mut parser, 4..15, vec![shift_key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo\nbar\nbaz");
+    }
+
+    #[test]
+    fn shift_tab_over_a_selection_does_not_delete_the_selected_text() {
+        // Regression test for the bug this feature fixes: egui's own
+        // Shift+Tab deletes the entire selection before dedenting, so a
+        // multi-line selection lost all its text, not just its leading
+        // whitespace.
+        let (_dir, mut doc) = open_fixture("    foo\n    bar", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        // "oo\n    ba" (chars 5..14) — a selection that starts and ends
+        // mid-line, not on either line's boundary. Dedent still strips each
+        // touched *line's* leading whitespace in full (not just whatever
+        // fell inside the selection), same as every other editor's
+        // block-dedent — so both lines lose their 4-space indent, and none
+        // of "foo"/"bar" is lost the way egui's own delete-then-dedent
+        // default would lose it.
+        focused_frame_with_selection(&mut doc, &mut parser, 5..14, vec![shift_key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "foo\nbar");
+    }
+
+    #[test]
+    fn tab_over_a_selection_indents_every_line_instead_of_replacing_it() {
+        let (_dir, mut doc) = open_fixture("foo\nbar", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        // All of "foo" and all of "bar" (chars 0..7).
+        focused_frame_with_selection(&mut doc, &mut parser, 0..7, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "    foo\n    bar");
+    }
+
+    #[test]
+    fn tab_with_no_selection_still_inserts_a_literal_tab() {
+        // Guards the un-intercepted path: Tab with a collapsed cursor (no
+        // selection) must keep falling through to egui's own behavior
+        // rather than being swallowed by the new interception.
+        let (_dir, mut doc) = open_fixture("abc", "Hello.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+        focused_frame(&mut doc, &mut parser, vec![key_event(egui::Key::Tab)]);
+
+        assert_eq!(doc.buffer.to_string(), "\tabc");
     }
 
     fn command_key_event(key: egui::Key) -> egui::Event {
