@@ -168,8 +168,8 @@ recurring.
   suffix diffing — needed because egui's `TextEdit` hands back a plain
   `String`, not a structured edit op.
 - **`crates/app`**: eframe/egui shell, organized by concern into
-  `src/widgets/`, `src/panels/`, `src/style/`, plus `app.rs`/`main.rs` at
-  the root:
+  `src/widgets/`, `src/panels/`, `src/style/`, plus `app.rs`/`main.rs`/
+  `terminal.rs` at the root:
   - `app.rs` owns `EditorState` plus a `parsers: Vec<Option<IncrementalParser>>`
     kept **index-aligned** with `state.open_tabs` — every tab open/close
     must update both in lockstep, or the wrong parser (or lack of one) ends
@@ -255,6 +255,11 @@ recurring.
   - `style/` is cross-cutting presentation: `fonts.rs` (`EditorFont`
     selection, JetBrains Mono registration), `theme.rs` (light/dark color
     palette), `indent.rs` (tabs-vs-spaces + width settings).
+  - `terminal.rs` (crate root, not under `panels/` — it's system
+    integration the side panel's "Open Terminal" button calls into, not UI
+    chrome itself): opens a terminal window at a given directory. The one
+    place in the app that branches on `target_os` — see the cross-platform
+    gotcha below before touching it.
 
 ## Non-obvious gotchas (learned the hard way this session)
 
@@ -487,6 +492,27 @@ recurring.
   performance complaint doesn't reproduce in `--release` but does in a plain
   debug build, suspect this class of issue before assuming an algorithmic
   problem in our own code — measure both before concluding which it is.
+- **There is no cross-platform "open a terminal here" API, and no single
+  standard terminal emulator even within Linux desktops.** `terminal.rs`
+  branches on `target_os`: Windows goes through `cmd /C start "" /D <dir>
+  cmd` (`start` is a `cmd.exe` builtin, not its own executable, and needs
+  an explicit empty-string title argument before `/D` or it misparses a
+  spaced path as the title); macOS goes through `open -a Terminal <dir>`
+  (documented, no AppleScript needed); everything else tries a fixed list
+  of common terminal binaries (`LINUX_TERMINAL_CANDIDATES`) in order via
+  plain `Command::new(name).current_dir(dir).spawn()`, taking whichever one
+  is actually installed — no per-terminal `--working-directory`-shaped flag
+  needed, since every one of them starts its default shell inheriting the
+  *terminal binary's own* working directory rather than resetting it.
+  Everything else in this codebase already runs on Windows/macOS/Linux
+  without special-casing — `Path`/`PathBuf` (including `.join("a/b")` with
+  a forward slash literal, which Rust resolves correctly on Windows too),
+  `std::fs`, and every dependency in use (`egui`/`eframe`, `rfd`, `ropey`,
+  `tree-sitter`, `arboard`) are already cross-platform by design — so
+  `terminal.rs` is the *only* place that needs to know which OS it's on.
+  Keep it that way: reach for a portable `std`/existing-dependency API
+  before adding a second `#[cfg(target_os = ...)]` site anywhere else in
+  the app.
 
 ## Testing conventions
 

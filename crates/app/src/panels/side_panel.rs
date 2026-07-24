@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
 
+use crate::terminal;
 use crate::widgets::modal::show_modal;
 
 /// Transient UI state for the side panel, owned by the caller across frames.
@@ -80,7 +81,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if ui.button("📄").on_hover_text("New File").clicked() {
-                panel.begin_new_file(root);
+                panel.begin_new_file(root.clone());
+            }
+            if ui.button("💻").on_hover_text("Open Terminal").clicked()
+                && let Err(err) = terminal::open(&root)
+            {
+                outcome.error = Some(format!("failed to open terminal: {err}"));
             }
         }
     });

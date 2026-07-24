@@ -1,6 +1,7 @@
 mod app;
 mod panels;
 mod style;
+mod terminal;
 mod widgets;
 
 use app::FoxGardenApp;

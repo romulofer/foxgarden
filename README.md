@@ -13,6 +13,12 @@ resource use. The later Maven/LSP/build-tooling checkpoints look to Zed's own
 [Java](https://github.com/zed-extensions/java) and
 [Kotlin](https://github.com/zed-extensions/kotlin) extensions as prior art.
 
+Runs on Windows, macOS, and Linux. Everything is built on portable Rust
+`std`/dependency APIs (`egui`/`eframe`, `rfd`, `ropey`, `tree-sitter`,
+`arboard`); the "Open Terminal" button is the one feature with real
+per-OS behavior (see `crates/app/src/terminal.rs`), since there's no
+cross-platform "open a terminal here" API to call instead.
+
 ## Features
 
 ### Project, files, and sessions
@@ -42,6 +48,9 @@ resource use. The later Maven/LSP/build-tooling checkpoints look to Zed's own
   not-yet-existing subdirectory in one step
 - "Open Folder…" starts at the currently open project's own folder, if
   there is one, instead of wherever the OS defaults to
+- A 💻 button beside "New File" opens a system terminal at the project
+  root (Terminal.app on macOS, `cmd` on Windows, whichever common Linux
+  terminal emulator is actually installed)
 - `Ctrl+E`: a searchable recent-files popup listing open tabs, then
   recently-closed ones, most-recent first — type to filter, arrow keys +
   Enter or click to jump
