@@ -39,6 +39,7 @@ const INDENT_WIDTH_KEY: &str = "indent_width";
 const WORD_WRAP_KEY: &str = "word_wrap";
 const SHOW_WHITESPACE_KEY: &str = "show_whitespace";
 const SHOW_INDENT_GUIDES_KEY: &str = "show_indent_guides";
+const SHOW_STICKY_SCROLL_KEY: &str = "show_sticky_scroll";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -470,6 +471,9 @@ fn restore_settings(
     if let Some(show_indent_guides) = storage.get_string(SHOW_INDENT_GUIDES_KEY) {
         view_settings.show_indent_guides = show_indent_guides == "true";
     }
+    if let Some(show_sticky_scroll) = storage.get_string(SHOW_STICKY_SCROLL_KEY) {
+        view_settings.show_sticky_scroll = show_sticky_scroll == "true";
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -489,6 +493,7 @@ fn persist_settings(
     storage.set_string(WORD_WRAP_KEY, view_settings.word_wrap.to_string());
     storage.set_string(SHOW_WHITESPACE_KEY, view_settings.show_whitespace.to_string());
     storage.set_string(SHOW_INDENT_GUIDES_KEY, view_settings.show_indent_guides.to_string());
+    storage.set_string(SHOW_STICKY_SCROLL_KEY, view_settings.show_sticky_scroll.to_string());
 }
 
 impl FoxGardenApp {
@@ -907,7 +912,8 @@ mod tests {
     fn persisted_settings_round_trip() {
         let mut storage = FakeStorage::default();
         let saved_indent = IndentSettings { use_tabs: true, width: 2 };
-        let saved_view = ViewSettings { word_wrap: false, show_whitespace: true, show_indent_guides: true };
+        let saved_view =
+            ViewSettings { word_wrap: false, show_whitespace: true, show_indent_guides: true, show_sticky_scroll: true };
         persist_settings(&mut storage, EditorFont::Default, 22.5, false, saved_indent, saved_view);
 
         let mut editor_font = EditorFont::JetBrainsMono;

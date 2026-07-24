@@ -13,10 +13,15 @@ pub struct ViewSettings {
     /// Paints a thin vertical line through each indent level a line's
     /// leading whitespace spans.
     pub show_indent_guides: bool,
+    /// Pins the enclosing class/method header line(s) to the top of the
+    /// editor while scrolling through their body — "sticky scroll." Java only
+    /// for now (needs a tree-sitter scope vocabulary; see
+    /// `syntax::enclosing_scope_starts`), a no-op elsewhere.
+    pub show_sticky_scroll: bool,
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
-        Self { word_wrap: true, show_whitespace: false, show_indent_guides: false }
+        Self { word_wrap: true, show_whitespace: false, show_indent_guides: false, show_sticky_scroll: false }
     }
 }

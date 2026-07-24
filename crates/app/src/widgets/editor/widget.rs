@@ -23,7 +23,7 @@ use super::context_menu::synthetic_shortcut;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
     paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides, paint_line_numbers,
-    paint_occurrence_highlights, paint_whitespace,
+    paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
 use super::templates::{self, expand, find_template, word_before_cursor};
 use super::text_offset::{byte_to_char, char_to_byte};
@@ -72,6 +72,12 @@ struct SelectionExpandState {
 /// Horizontal breathing room on each side of the line-number gutter's
 /// digits, so they don't crowd the window edge or the text they precede.
 const GUTTER_PADDING: f32 = 8.0;
+
+/// Most enclosing scopes sticky scroll pins at once — matches VSCode's default
+/// `stickyScroll.maxLineCount`. Deep nesting keeps the *outermost* scopes,
+/// since losing the outer context (which class/method am I in) is more
+/// disorienting than losing an inner block header.
+const STICKY_MAX_DEPTH: usize = 5;
 
 fn hash_source(source: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

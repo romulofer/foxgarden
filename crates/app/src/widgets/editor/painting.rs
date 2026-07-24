@@ -299,6 +299,69 @@ pub(super) fn paint_indent_guides(
     }
 }
 
+/// Paints sticky scroll: the `header_lines` text pinned as opaque bands at the
+/// top of the editor viewport, outermost-first top-to-bottom, so the enclosing
+/// class/method signatures stay visible while their body scrolls underneath.
+///
+/// Painted in **screen space off `ui.clip_rect().top()`** — a fixed viewport
+/// pixel, deliberately *not* `output.galley_pos.y` (which scrolls) — so the
+/// bands stay put as the body moves under them. Each band is opaque
+/// (`theme::sticky_background`) precisely to occlude that scrolling body; a
+/// thin bottom line separates the whole stack from the live content below.
+///
+/// Header text is drawn in the plain editor text color rather than
+/// syntax-highlighted for this first cut: re-deriving per-token colors here
+/// would mean a whole-file `highlight_spans` pass every frame sticky scroll is
+/// active (the main galley's cache would no longer cover it), which isn't
+/// worth it for a handful of pinned signature lines — a colored pinned header
+/// is a clear later refinement, not a correctness gap.
+pub(super) fn paint_sticky_scroll(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    header_lines: &[String],
+    font_id: FontId,
+    dark_mode: bool,
+) {
+    let Some(row_height) = output.galley.rows.first().map(|r| r.rect().height()) else {
+        return; // empty buffer — nothing laid out, nothing to enclose
+    };
+    if header_lines.is_empty() {
+        return;
+    }
+
+    let painter = ui.painter();
+    let clip = ui.clip_rect();
+    let band_bg = theme::sticky_background(dark_mode);
+    let text_color = theme::default_text(dark_mode);
+    // Keep the signature readable even when the body is scrolled right: clamp
+    // the text's left edge into the viewport rather than letting it slide off
+    // with `galley_pos.x`.
+    let text_left = output.galley_pos.x.max(clip.left() + 2.0);
+
+    for (i, line) in header_lines.iter().enumerate() {
+        let band_top = clip.top() + i as f32 * row_height;
+        let band = egui::Rect::from_min_max(
+            egui::pos2(clip.left(), band_top),
+            egui::pos2(clip.right(), band_top + row_height),
+        );
+        painter.rect_filled(band, 0.0, band_bg);
+        painter.text(
+            egui::pos2(text_left, band_top),
+            Align2::LEFT_TOP,
+            line.trim_end_matches(['\n', '\r']),
+            font_id.clone(),
+            text_color,
+        );
+    }
+
+    // One separator line under the whole pinned stack.
+    let divider_y = clip.top() + header_lines.len() as f32 * row_height;
+    painter.line_segment(
+        [egui::pos2(clip.left(), divider_y), egui::pos2(clip.right(), divider_y)],
+        Stroke::new(1.0, theme::structure(dark_mode)),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

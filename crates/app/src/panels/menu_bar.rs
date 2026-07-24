@@ -236,6 +236,13 @@ pub fn show(
             if ui.checkbox(&mut view_settings.show_indent_guides, "Indentation Guides").changed() {
                 ui.close();
             }
+            if ui
+                .checkbox(&mut view_settings.show_sticky_scroll, "Sticky Scroll")
+                .on_hover_text("Pin the enclosing class/method header while scrolling (Java)")
+                .changed()
+            {
+                ui.close();
+            }
         });
 
         ui.menu_button("Help", |ui| {

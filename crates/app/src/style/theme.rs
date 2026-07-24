@@ -52,6 +52,19 @@ const BRACKET_MATCH: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 1
 const DARK_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 60);
 const LIGHT_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 70);
 
+/// Background band behind sticky-scroll's pinned header lines. Deliberately
+/// **opaque** (unlike the alpha-blended structural cues above): its whole job
+/// is to occlude the scrolled body text passing underneath the pinned
+/// signatures, which a translucent fill couldn't do. A hair off the editor
+/// background in each theme so the band still reads as pinned chrome rather
+/// than blending invisibly into the content.
+const DARK_STICKY_BACKGROUND: Color32 = Color32::from_rgb(45, 48, 56);
+const LIGHT_STICKY_BACKGROUND: Color32 = Color32::from_rgb(235, 235, 238);
+
+pub fn sticky_background(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_STICKY_BACKGROUND } else { LIGHT_STICKY_BACKGROUND }
+}
+
 /// The editor's default (non-highlighted) text color, adapted for legibility
 /// against the current theme's background — `color_for_scope`'s dark-theme
 /// palette reads poorly against `RAYWHITE`, so both need the `dark_mode`
