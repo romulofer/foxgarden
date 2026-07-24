@@ -127,6 +127,11 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     assert!(has_scope_over("Marker", Scope::Type));
     assert!(has_scope_over("@interface", Scope::Keyword));
     assert!(has_scope_over("record", Scope::Keyword));
+
+    // Regression coverage for TECHNICAL_DEBT.md #2: the `@constant` capture
+    // in highlights_java.scm (ALL-CAPS identifiers) had no matching `Scope`
+    // in `scope_for_capture` and rendered as plain text.
+    assert!(has_scope_over("MAX_LENGTH", Scope::Constant));
 }
 
 #[test]
@@ -163,6 +168,13 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     assert!(has_scope_over("'w'", Scope::String));
     assert!(has_scope_over("true", Scope::Keyword));
     assert!(has_scope_over("Defaults", Scope::Type));
+
+    // Regression coverage for TECHNICAL_DEBT.md #3: enum entries ported from
+    // Zed's reference Kotlin query, adapted to this grammar's `identifier`
+    // (not `simple_identifier`) node shape for `enum_entry`'s name child.
+    assert!(has_scope_over("LOW", Scope::Constant));
+    assert!(has_scope_over("MEDIUM", Scope::Constant));
+    assert!(has_scope_over("HIGH", Scope::Constant));
 }
 
 #[test]

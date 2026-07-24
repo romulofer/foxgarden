@@ -103,6 +103,7 @@ pub fn show(
     case_conversion_request: Option<CaseConversion>,
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
+    cached_clipboard_text: &mut Option<String>,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -183,6 +184,7 @@ pub fn show(
             case_conversion_request,
             last_error,
             pending_editor_input,
+            cached_clipboard_text,
         );
     });
 }

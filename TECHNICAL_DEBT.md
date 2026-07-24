@@ -18,47 +18,80 @@ blindly executed.
 
 ---
 
-## 1. Considered and rejected: moving `display_path` computation into the `Err` arm
+## 1. ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~ — Resolved
 
-**Where:** `crates/app/src/app.rs`, inside `impl eframe::App for
-FoxGardenApp { fn ui(...) }`, the `if let Some(path) = outcome.open { ... }`
-block (around line 220).
+**Where:** `crates/core/src/document.rs` (`OpenDocumentError`, `Document::open`)
+and `crates/app/src/app.rs` (`open_path`).
 
-**Status:** Not actual debt — recorded here so a future agent doesn't
-re-flag it and waste time re-deriving why it's not applicable.
+**Status:** Fixed. The originally-flagged shape genuinely didn't compile as
+suggested (see below for why), but the underlying goal — not paying for a
+path-display allocation on the success path — was still achievable by
+changing what the error type carries, so it's been done that way instead.
 
 ### What was flagged
 
 An efficiency-review agent noted that `let display_path =
-path.display().to_string();` runs on every file-open attempt (success or
-failure) but is only used in the `Err` arm, and suggested moving it inside
-that arm so the successful-open path skips the allocation.
+path.display().to_string();` ran on every file-open attempt (success or
+failure) in `open_path`, but was only used in the `Err` arm, and suggested
+moving it inside that arm so the successful-open path skips the allocation.
 
-### Why it doesn't apply
+### Why the original suggestion didn't apply
 
-`path: PathBuf` is moved into `self.state.open_tab(path)` — the `match`
-scrutinee itself — before either arm's body runs. By the time the `Err`
-arm executes, `path` has already been consumed by the `open_tab` call;
-it's not available to compute `display_path` from inside that arm at all.
+`path: PathBuf` was moved into `state.open_tab(path)` — the `match`
+scrutinee itself — before either arm's body ran. By the time the `Err` arm
+executed, `path` had already been consumed by the `open_tab` call; it
+wasn't available to compute `display_path` from inside that arm at all.
 Moving the computation there without also cloning `path` first (which just
 relocates the same cost rather than avoiding it, since `PathBuf::clone`
-and `.display().to_string()` are both real allocations) doesn't compile as
-suggested. The current placement — before the `match`, so both `path` and
-its display string are available where needed — is the correct shape given
-`open_tab`'s ownership signature, not an oversight. The cost itself (one
-`format!`-free `.display().to_string()` per user click on a file in the
-tree) is genuinely trivial and not worth restructuring around regardless.
+and `.display().to_string()` are both real allocations) wouldn't have
+compiled as suggested.
+
+### What was actually done
+
+`OpenDocumentError::Io` didn't carry a `PathBuf` (only `Binary` did), which
+is *why* `open_path` had to pre-compute `display_path` before the match in
+the first place — it was the only place both arms had `path` in scope.
+Giving `Io` its own `PathBuf` (`Io(PathBuf, std::io::Error)`) removes that
+constraint: `Document::open` already owns `path` at both fallible call
+sites (`looks_binary(&path)?` and `read_to_string(&path)?` only *borrow*
+it), so it can move `path` into the error on failure with no clone. That
+makes `path.display().to_string()` computable straight from `err` inside
+`open_path`'s `Err` arm, and the pre-match allocation is gone.
+
+The cost being eliminated was genuinely trivial (one `.display().to_string()`
+per file-open click, hardly ever on a hot path) — this was worth doing
+because the fix was free and mechanical (a small, self-contained type
+change with no clone introduced anywhere), not because the perf delta
+matters.
 
 ---
 
-## 2. `highlights_java.scm`'s `@constant` capture is dead — no `Scope` renders it
+## 2. ~~`highlights_java.scm`'s `@constant` capture is dead — no `Scope` renders it~~ — Resolved
 
 **Where:** `crates/syntax/queries/highlights_java.scm:94-95`, and
 `crates/syntax/src/highlight.rs:25-41` (`fn scope_for_capture`).
 
-**Status:** Open. Found while diffing `highlights_java.scm` against
+**Status:** Fixed. Found while diffing `highlights_java.scm` against
 `../references/java` (Zed's Java extension, same `tree-sitter-java` grammar)
 for syntax-highlighting improvements.
+
+### What was done
+
+Added a dedicated `Scope::Constant` (per the "proposed fix" below — none of
+the existing seven scopes fit well enough to share, `Property` in
+particular reads as a YAML/properties-key concept, not a Java
+`static final` one) touching:
+- `crates/syntax/src/highlight.rs`: the `Scope` enum and `scope_for_capture`
+  (`"constant"`-prefixed captures now map to it)
+- `crates/app/src/style/theme.rs`: a color for `Scope::Constant` in both the
+  dark and light tables (`d19a66`/`c18401`, the Atom One Dark/Light
+  constant-and-number color in each palette)
+- `crates/syntax/tests/fixtures/valid.java`: added a `MAX_LENGTH` constant
+  field
+- `crates/syntax/tests/syntax_tests.rs`: a `has_scope_over("MAX_LENGTH",
+  Scope::Constant)` regression assertion in
+  `highlight_spans_cover_expected_keyword_string_comment_ranges`, as this
+  entry's own "proposed fix" section called for
 
 ### Current shape
 
@@ -132,8 +165,12 @@ for adding a `Scope`-mapped constant is already in place.
 **Where:** `crates/syntax/queries/highlights_kotlin.scm` vs.
 `../references/kotlin/languages/kotlin/highlights.scm`.
 
-**Status:** Not actionable as-is — recorded so a future agent doesn't
-attempt a direct line-by-line port and introduce broken captures.
+**Status:** Partially addressed. The whole-file incompatibility below is
+still real — a direct line-by-line port remains off the table — but one
+concrete construct (enum-entry-as-constant) has now been ported by
+following this entry's own proposed methodology, now that `Scope::Constant`
+exists (added alongside TECHNICAL_DEBT.md #2) to route it into. Recorded
+below as a worked example for whichever construct gets picked up next.
 
 ### What was found
 
@@ -175,20 +212,45 @@ Not a mechanical port. Any future Kotlin highlighting improvement needs to:
    grammar version (`cargo test -p syntax`) before trusting it, same as the
    existing header comment's bisection approach for keyword tokens.
 
+### What was done
+
+Ported enum-entry-as-constant, the first item on this entry's own example
+list. Zed's file captures it as `(enum_entry (simple_identifier)
+@constant)`; per `tree-sitter-kotlin-ng`'s `node-types.json`, `enum_entry`
+has no `simple_identifier` at all — its name child is a plain `identifier`
+(the same collapsing this entry already documented for `identifier` vs.
+`simple_identifier` generally). `enum_entry`'s only other possible direct
+children are `modifiers`, `value_arguments`, and `class_body` — all
+distinct node types — so `(enum_entry (identifier) @constant)` unambiguously
+matches just the entry's own name, not an identifier buried inside a
+constructor-argument list. Added to `highlights_kotlin.scm`, with
+`Scope::Constant` (added for TECHNICAL_DEBT.md #2) as where it now renders.
+Verified via `cargo test -p syntax`: an `enum class Level { LOW, MEDIUM,
+HIGH }` fixture in `valid.kt` plus `has_scope_over("LOW"/"MEDIUM"/"HIGH",
+Scope::Constant)` assertions in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
+
+Remaining candidates from Zed's file (richer modifier-keyword coverage,
+regex-literal detection, `@variable.builtin` for `it`/`field`) are each
+still their own future pass, following the same three-step process.
+
 ### Trigger condition
 
 Next time Kotlin highlighting is revisited — this entry just saves that
-future pass from re-discovering the grammar mismatch from scratch.
+future pass from re-discovering the grammar mismatch from scratch, and now
+also has one worked example of the fix process to follow.
 
 ---
 
-## 4. Context menu's Paste item creates a new OS clipboard connection every frame the menu is open
+## 4. ~~Context menu's Paste item creates a new OS clipboard connection every frame the menu is open~~ — Resolved
 
 **Where:** `crates/app/src/widgets/editor/context_menu.rs`, the
 `arboard::Clipboard::new()` call inside `show_context_menu`'s
 `context_menu` closure (used to decide whether "Paste" should be enabled).
 
-**Status:** Open, low priority.
+**Status:** Fixed. Was deliberately deferred as low-priority/speculative
+(see "Why this wasn't fixed on the spot" below), but was picked up anyway
+alongside the rest of this file's entries — the trigger condition below was
+never met on its own, this was just done opportunistically.
 
 ### What was found
 
@@ -218,21 +280,46 @@ state across frames) and cache the result in a small piece of state
 threaded alongside `pending_input`, instead of on every frame the popup
 renders.
 
+### What was done
+
+Exactly the proposed fix. `show_context_menu` gained a
+`cached_clipboard_text: &mut Option<String>` parameter; the `arboard` read
+now runs once, right before `response.context_menu(...)` is called, gated
+on `response.secondary_clicked()` (the same condition egui's own
+`context_menu` checks internally to decide whether to open the popup, so
+it's true on exactly the frame it opens — no new detection mechanism
+needed). The Paste item's closure reads the cached value instead of
+re-reading the clipboard itself.
+
+The new state lives on `FoxGardenApp` as `cached_clipboard_text: Option<String>`
+(not per-tab) — threaded through `tabs::show` and `widgets::editor::show`
+alongside `pending_editor_input`, since only the active tab's editor (and so
+only one context menu) is ever shown at a time, same reasoning already
+applied to `pending_editor_input` itself.
+
 ### Trigger condition
 
-Only if actually observed to matter — speculative caching without a
+~~Only if actually observed to matter — speculative caching without a
 measured need is exactly the kind of premature complexity the "lightweight"
-principle in `AGENTS.md` warns against.
+principle in `AGENTS.md` warns against.~~ Superseded — done opportunistically
+instead of waiting for that evidence.
 
 ---
 
 ## 5. Considered and rejected: splitting `widget.rs` further
 
-**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines).
+**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines, 2214 as
+of this recheck).
 
 **Status:** Not actual debt — recorded so a future review doesn't re-flag
 file size alone and fragment a file that's already been evaluated for
-exactly that.
+exactly that. Re-checked while working through this file's other entries
+(#1-#4, three of which touched this exact file): still holds. Those
+changes only threaded one more plumbing parameter
+(`cached_clipboard_text`) through `show()` and its call sites — no new
+self-contained feature landed inside `show()` the way getters/setters
+generation once did, so the "Why it doesn't apply" reasoning below is
+unchanged and no split was made.
 
 ### What was flagged
 
@@ -283,6 +370,13 @@ open_fixture`.
 
 **Status:** Not real debt — recorded so a future cleanup pass doesn't
 "simplify" this into ~50 error-prone call-site edits for no real benefit.
+Re-checked alongside #5: `temp_document`'s argument order is unchanged, and
+today's ~23 mechanical edits to this same test module (appending one
+plumbing argument to each `show(...)` call, for #4) never touched
+`open_fixture` call sites or required reading each one's filename/content
+argument order, so it doesn't count as the "already touching most of this
+test module" trigger this entry calls for. Still not worth doing on its
+own.
 
 ### What was found
 

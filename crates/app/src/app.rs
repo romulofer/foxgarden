@@ -57,6 +57,12 @@ pub struct FoxGardenApp {
     /// that's the only way to drive those three from outside egui's own
     /// `TextEdit`.
     pending_editor_input: Vec<egui::Event>,
+    /// The editor's right-click menu's Paste item's last OS-clipboard read,
+    /// refreshed only on the frame the menu opens rather than on every
+    /// frame it stays open (see `context_menu::show_context_menu`) — kept
+    /// here, not on a per-tab basis, since only the active tab's editor (and
+    /// so only one context menu) is ever shown at a time.
+    cached_clipboard_text: Option<String>,
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
     /// `Ctrl+E`'s recent-files popup.
@@ -101,7 +107,6 @@ pub struct FoxGardenApp {
 /// outcome and the recent-files quick switcher (`Ctrl+E`) — both just want
 /// "open this path, tell the user if it didn't work," identically.
 fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, last_error: &mut Option<String>, path: PathBuf) {
-    let display_path = path.display().to_string();
     match state.open_tab(path) {
         Ok(index) => {
             if index == parsers.len() {
@@ -110,13 +115,12 @@ fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser
             }
         }
         Err(err) => {
-            // `OpenDocumentError::Binary`'s own `Display` already names the
-            // path — restating it here would just duplicate it in the
-            // modal, so only `Io` (whose message doesn't mention a path at
-            // all) gets it prepended.
+            // Both variants carry their own `PathBuf`, so the display string
+            // is built here in the failure arm only, instead of
+            // unconditionally before the match on every open attempt.
             let message = match &err {
-                fg_core::OpenDocumentError::Binary(_) => format!("Couldn't open {display_path}: not a text file."),
-                fg_core::OpenDocumentError::Io(_) => format!("Couldn't open {display_path}:\n{err}"),
+                fg_core::OpenDocumentError::Binary(path) => format!("Couldn't open {}: not a text file.", path.display()),
+                fg_core::OpenDocumentError::Io(path, e) => format!("Couldn't open {}:\n{e}", path.display()),
             };
             *last_error = Some(message);
         }
@@ -319,6 +323,7 @@ impl FoxGardenApp {
             pending_close: None,
             generate_dialog: None,
             pending_editor_input: Vec::new(),
+            cached_clipboard_text: None,
             side_panel: SidePanelState::default(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -423,6 +428,7 @@ impl eframe::App for FoxGardenApp {
                 menu_outcome.case_conversion_request,
                 &mut self.last_error,
                 &mut self.pending_editor_input,
+                &mut self.cached_clipboard_text,
             );
         });
 

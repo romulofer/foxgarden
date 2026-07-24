@@ -38,6 +38,20 @@
 (companion_object name: (identifier) @type)
 (user_type (identifier) @type)
 
+; Enum entries, e.g. `LOW` in `enum class Level { LOW, MEDIUM, HIGH }` —
+; ported from Zed's reference (`(enum_entry (simple_identifier) @constant)`),
+; but that capture name is the one node type this grammar doesn't split out:
+; per `tree-sitter-kotlin-ng`'s own node-types.json, `enum_entry`'s name
+; child is a plain `identifier`, not a `simple_identifier` (verified by
+; checking node-types.json directly, per this file's and
+; TECHNICAL_DEBT.md#3's own caution against assuming node names carry over
+; from the fwcd grammar Zed's file targets). `(identifier)` as a direct
+; child of `enum_entry` is unambiguously the entry's own name — the other
+; possible direct children (`modifiers`, `value_arguments`, `class_body`)
+; are distinct node types, so this can't accidentally match an identifier
+; nested inside a constructor-argument list instead.
+(enum_entry (identifier) @constant)
+
 (function_declaration name: (identifier) @function)
 
 ; Call expressions: `foo()` (callee is a bare identifier, anchored first so

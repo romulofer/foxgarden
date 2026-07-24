@@ -9,26 +9,20 @@ use crate::language::Language;
 
 #[derive(Debug)]
 pub enum OpenDocumentError {
-    Io(std::io::Error),
+    Io(PathBuf, std::io::Error),
     Binary(PathBuf),
 }
 
 impl fmt::Display for OpenDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenDocumentError::Io(e) => write!(f, "{e}"),
+            OpenDocumentError::Io(path, e) => write!(f, "{}: {e}", path.display()),
             OpenDocumentError::Binary(path) => write!(f, "not a text file: {}", path.display()),
         }
     }
 }
 
 impl std::error::Error for OpenDocumentError {}
-
-impl From<std::io::Error> for OpenDocumentError {
-    fn from(e: std::io::Error) -> Self {
-        OpenDocumentError::Io(e)
-    }
-}
 
 pub struct Document {
     pub path: PathBuf,
@@ -63,11 +57,16 @@ impl Document {
         // just to discover it isn't text. Sniffing a small prefix for a NUL
         // byte (the standard binary heuristic) rejects those files fast
         // instead of blocking on a multi-megabyte read.
-        if looks_binary(&path)? {
-            return Err(OpenDocumentError::Binary(path));
+        match looks_binary(&path) {
+            Ok(true) => return Err(OpenDocumentError::Binary(path)),
+            Ok(false) => {}
+            Err(e) => return Err(OpenDocumentError::Io(path, e)),
         }
 
-        let contents = std::fs::read_to_string(&path)?;
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(e) => return Err(OpenDocumentError::Io(path, e)),
+        };
         let buffer = Rope::from_str(&contents);
         let saved_buffer = buffer.clone();
 

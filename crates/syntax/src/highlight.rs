@@ -18,6 +18,13 @@ use crate::language::{highlights_query_source, ts_language};
 /// tag-like styling visually distinct from property-key styling (HTML
 /// alongside XML, say) is free to give `Tag` its own color without also
 /// disturbing every YAML/properties key.
+///
+/// `Constant` was added later still, for Java's ALL-CAPS `@constant`
+/// capture (`highlights_java.scm`) — a dedicated variant rather than
+/// reusing `Property`, since a `static final` constant and a YAML/
+/// properties mapping key are different enough lexical concepts that
+/// sharing a color would read as a coincidence, not a deliberate visual
+/// grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Keyword,
@@ -27,6 +34,7 @@ pub enum Scope {
     Function,
     Property,
     Tag,
+    Constant,
 }
 
 fn scope_for_capture(name: &str) -> Option<Scope> {
@@ -44,6 +52,8 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
         Some(Scope::Property)
     } else if name.starts_with("tag") {
         Some(Scope::Tag)
+    } else if name.starts_with("constant") {
+        Some(Scope::Constant)
     } else {
         None
     }

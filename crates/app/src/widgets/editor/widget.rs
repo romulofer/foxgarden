@@ -106,6 +106,7 @@ pub fn show(
     case_conversion_request: Option<CaseConversion>,
     last_error: &mut Option<String>,
     pending_input: &mut Vec<Event>,
+    cached_clipboard_text: &mut Option<String>,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -751,6 +752,7 @@ pub fn show(
         &mut manual_cursor_range,
         pending_input,
         last_error,
+        cached_clipboard_text,
     );
 
     if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
@@ -915,7 +917,7 @@ mod tests {
             // here with "is not bound to any fonts". Use the built-in family
             // instead — this test exercises the widget's rendering logic,
             // not font registration.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -935,7 +937,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -948,7 +950,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -959,7 +961,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         assert!(doc.diagnostics.is_empty());
@@ -998,7 +1000,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1020,7 +1022,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1029,7 +1031,7 @@ mod tests {
         // A second frame over the very same, unedited document — as if the
         // tab were simply redrawn, or switched away from and back to.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1051,7 +1053,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1059,7 +1061,7 @@ mod tests {
 
         doc.buffer = Rope::from_str("hello world");
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1081,7 +1083,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1090,7 +1092,7 @@ mod tests {
         // Same unedited content, but a different font size — the cached
         // galley was shaped at the old size, so it must not be reused.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1137,7 +1139,7 @@ mod tests {
             // will target nothing.
             let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1179,7 +1181,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1204,7 +1206,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1224,7 +1226,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1244,7 +1246,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         egui::text_edit::TextEditState::load(&ctx, id)
@@ -1276,7 +1278,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         doc.extra_selections = extra_selections;
@@ -1291,7 +1293,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1315,7 +1317,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         let modifiers = events
@@ -1328,7 +1330,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1351,7 +1353,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1371,7 +1373,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
     }
 
@@ -1813,6 +1815,7 @@ mod tests {
                 None,
                 &mut last_error,
                 &mut Vec::new(),
+                &mut None,
             );
         });
         last_error
@@ -1837,7 +1840,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new(), &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1870,6 +1873,7 @@ mod tests {
                 case_conversion_request,
                 &mut last_error,
                 &mut Vec::new(),
+                &mut None,
             );
         });
         last_error
@@ -2192,6 +2196,7 @@ mod tests {
                     None,
                     &mut None,
                     pending_input,
+                    &mut None,
                 );
             });
         };

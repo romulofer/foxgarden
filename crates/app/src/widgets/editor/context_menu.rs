@@ -48,9 +48,23 @@ pub(super) fn show_context_menu(
     manual_cursor_range: &mut Option<CCursorRange>,
     pending_input: &mut Vec<Event>,
     last_error: &mut Option<String>,
+    cached_clipboard_text: &mut Option<String>,
 ) {
     let has_selection = primary_cursor_range.is_some_and(|r| !r.is_empty());
     let cursor_char = primary_cursor_range.map(|r| r.primary.index.0);
+
+    // Refreshed only on the frame the menu actually opens (a right click on
+    // `response`), not on every frame it stays open — opening a clipboard
+    // connection isn't free (an X11/Wayland round-trip under the hood on
+    // Linux), and a user hovering the menu while deciding what to click
+    // could otherwise reopen it many times in a row for no new information.
+    // `response.secondary_clicked()` is the same condition egui's own
+    // `context_menu` checks internally to decide whether to open the popup
+    // in the first place, so it's true on exactly that one frame.
+    if response.secondary_clicked() {
+        *cached_clipboard_text =
+            arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).ok().filter(|s| !s.is_empty());
+    }
 
     response.context_menu(|ui| {
         if ui.button("Undo").clicked() {
@@ -87,14 +101,13 @@ pub(super) fn show_context_menu(
             }
             ui.close();
         }
-        // Read fresh, only while the menu is actually open — egui has no
-        // public API to read the OS clipboard (only `Context::copy_text`
-        // to write it), so this is the one item here that needs `arboard`
-        // directly rather than something already exposed by egui.
-        let clipboard_text =
-            arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).ok().filter(|s| !s.is_empty());
-        if ui.add_enabled(clipboard_text.is_some(), egui::Button::new("Paste")).clicked() {
-            if let (Some(pasted), Some(range)) = (&clipboard_text, primary_cursor_range.map(|r| r.as_sorted_char_range()))
+        // egui has no public API to read the OS clipboard (only
+        // `Context::copy_text` to write it), so this is the one item here
+        // that needs `arboard` directly rather than something already
+        // exposed by egui — see the cache refresh above this closure.
+        if ui.add_enabled(cached_clipboard_text.is_some(), egui::Button::new("Paste")).clicked() {
+            if let (Some(pasted), Some(range)) =
+                (cached_clipboard_text.as_ref(), primary_cursor_range.map(|r| r.as_sorted_char_range()))
             {
                 let start = char_to_byte(text, range.start.0);
                 let end = char_to_byte(text, range.end.0);

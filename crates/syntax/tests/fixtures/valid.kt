@@ -13,3 +13,7 @@ class Hello {
         return "Hello, $name!"
     }
 }
+
+enum class Level {
+    LOW, MEDIUM, HIGH
+}
