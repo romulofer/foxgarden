@@ -72,12 +72,14 @@ fn cached_query(language: Language) -> &'static Query {
     static PROPERTIES: OnceLock<Query> = OnceLock::new();
     static YAML: OnceLock<Query> = OnceLock::new();
     static XML: OnceLock<Query> = OnceLock::new();
+    static DOCKERFILE: OnceLock<Query> = OnceLock::new();
     let cell = match language {
         Language::Java => &JAVA,
         Language::Kotlin => &KOTLIN,
         Language::Properties => &PROPERTIES,
         Language::Yaml => &YAML,
         Language::Xml => &XML,
+        Language::Dockerfile => &DOCKERFILE,
     };
     cell.get_or_init(|| {
         Query::new(&ts_language(language), highlights_query_source(language))

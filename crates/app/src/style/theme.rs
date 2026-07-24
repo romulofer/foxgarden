@@ -38,6 +38,20 @@ const LIGHT_LINE_NUMBER: Color32 = Color32::from_rgb(160, 160, 160);
 const DARK_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(140, 140, 140, 55);
 const LIGHT_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(90, 90, 90, 35);
 
+/// A matched bracket pair's outline — distinct from `occurrence_highlight`'s
+/// fill (a box outline reads as "these two characters pair up," not "this
+/// span is selected/repeated," so it shouldn't share that fill's visual
+/// vocabulary) and, unlike it, the same color in both themes: it's already
+/// deliberately muted via alpha rather than via a theme-specific hue pick.
+const BRACKET_MATCH: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 110);
+
+/// Whitespace markers and indentation guides are both "structural, not
+/// content" cues — deliberately fainter than `line_number` (already the
+/// dimmest text-like color in the palette) so a line dense with spaces
+/// doesn't out-compete the code itself for attention.
+const DARK_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 60);
+const LIGHT_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 70);
+
 /// The editor's default (non-highlighted) text color, adapted for legibility
 /// against the current theme's background — `color_for_scope`'s dark-theme
 /// palette reads poorly against `RAYWHITE`, so both need the `dark_mode`
@@ -71,6 +85,14 @@ pub fn occurrence_highlight(dark_mode: bool) -> Color32 {
     } else {
         LIGHT_OCCURRENCE_HIGHLIGHT
     }
+}
+
+pub fn bracket_match(_dark_mode: bool) -> Color32 {
+    BRACKET_MATCH
+}
+
+pub fn structure(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_STRUCTURE } else { LIGHT_STRUCTURE }
 }
 
 pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {

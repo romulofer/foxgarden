@@ -39,14 +39,26 @@ pub struct Document {
     /// cursor/selection remains owned by the editor widget's own state;
     /// this only tracks the extras layered on top of it.
     pub extra_selections: Vec<Range<usize>>,
+    /// User-toggled "don't let me edit this by accident" flag — session-local
+    /// only (not persisted; a fresh open always starts editable), same as
+    /// `zen_mode`. Blocks every edit path in `widgets::editor::show`, not
+    /// just direct typing; see that function's `strip_mutating_events`.
+    pub read_only: bool,
 }
 
 impl Document {
     pub fn open(path: PathBuf) -> Result<Self, OpenDocumentError> {
+        // Falls back to a bare-file-name check (`from_filename`) only when
+        // there's no extension-based match — a plain `Dockerfile` has no
+        // extension at all for `from_extension` to key off, but something
+        // like `notes.dockerfile.bak` should still lose to whatever
+        // `from_extension` says about its actual (`bak`) extension, not be
+        // second-guessed by the name check.
         let language = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension);
+            .and_then(Language::from_extension)
+            .or_else(|| path.file_name().and_then(|n| n.to_str()).and_then(Language::from_filename));
 
         // The side panel lets any file in the tree be clicked — including
         // build artifacts (`target/*.class`, jars) and binary assets, since
@@ -77,6 +89,7 @@ impl Document {
             language,
             diagnostics: Vec::new(),
             extra_selections: Vec::new(),
+            read_only: false,
         })
     }
 

@@ -8,6 +8,7 @@ const MALFORMED_CLASS_KOTLIN: &str = include_str!("fixtures/malformed_class.kt")
 const VALID_PROPERTIES: &str = include_str!("fixtures/valid.properties");
 const VALID_YAML: &str = include_str!("fixtures/valid.yml");
 const VALID_XML: &str = include_str!("fixtures/valid.xml");
+const VALID_DOCKERFILE: &str = include_str!("fixtures/Dockerfile");
 
 #[test]
 fn valid_java_has_no_syntax_errors() {
@@ -132,6 +133,26 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     // in highlights_java.scm (ALL-CAPS identifiers) had no matching `Scope`
     // in `scope_for_capture` and rendered as plain text.
     assert!(has_scope_over("MAX_LENGTH", Scope::Constant));
+
+    // First richer-highlighting increment: fields get their own
+    // `Scope::Property` (both at their declaration site and at an
+    // `object.field`-style access), distinct from a local variable or
+    // parameter, which stay plain `@variable`/`Scope`-less.
+    assert!(has_scope_over("mask", Scope::Property), "a field's own declaration site should be Scope::Property");
+    assert!(has_scope_over("loud", Scope::Property), "`this.loud`'s field access should be Scope::Property");
+    // `MAX_LENGTH` is *also* a field declarator, but it must still resolve
+    // to Constant, not Property — Constants is the later (and so, per
+    // `highlight_spans`' own same-range-conflict rule, winning) pattern in
+    // the query file specifically so an ALL-CAPS field keeps reading as a
+    // constant rather than just "a field."
+    assert!(!has_scope_over("MAX_LENGTH", Scope::Property));
+
+    // An enum constant that doesn't follow the ALL_CAPS convention still
+    // resolves to Constant via the explicit `enum_constant` capture, not
+    // just the regex heuristic (same treatment TECHNICAL_DEBT.md #3 already
+    // gave Kotlin's enum entries).
+    assert!(has_scope_over("Hearts", Scope::Constant));
+    assert!(has_scope_over("Spades", Scope::Constant));
 }
 
 #[test]
@@ -262,6 +283,38 @@ fn valid_xml_has_no_syntax_errors() {
     let mut parser = IncrementalParser::new(Language::Xml);
     let tree = parser.parse(VALID_XML);
     assert_eq!(syntax_errors(tree), vec![]);
+}
+
+#[test]
+fn valid_dockerfile_has_no_syntax_errors() {
+    let mut parser = IncrementalParser::new(Language::Dockerfile);
+    let tree = parser.parse(VALID_DOCKERFILE);
+    assert_eq!(syntax_errors(tree), vec![]);
+}
+
+#[test]
+fn dockerfile_highlight_query_covers_instructions_strings_and_comments() {
+    let mut parser = IncrementalParser::new(Language::Dockerfile);
+    let tree = parser.parse(VALID_DOCKERFILE);
+    let spans = highlight_spans(tree, VALID_DOCKERFILE, Language::Dockerfile);
+
+    let has_scope_over = |needle: &str, scope: Scope| {
+        let start = VALID_DOCKERFILE.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .any(|(range, s)| *s == scope && range.start <= start && range.end >= end)
+    };
+
+    assert!(has_scope_over("FROM", Scope::Keyword));
+    assert!(has_scope_over("ENTRYPOINT", Scope::Keyword));
+    assert!(has_scope_over("# A friendly comment", Scope::Comment));
+    assert!(has_scope_over("\"java\"", Scope::String));
+
+    // `ARG`/`ENV` keys are this format's closest equivalent to a YAML/
+    // properties mapping key — same `Scope::Property` treatment.
+    assert!(has_scope_over("APP_VERSION", Scope::Property));
+    assert!(has_scope_over("APP_HOME", Scope::Property));
 }
 
 #[test]

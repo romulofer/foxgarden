@@ -17,3 +17,5 @@ public class Hello {
 record Point(int x, int y) {}
 
 @interface Marker {}
+
+enum Suit { Hearts, Diamonds, Clubs, Spades }

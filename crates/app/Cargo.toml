@@ -8,6 +8,7 @@ arboard = "3.6.1"
 eframe = { version = "0.35.0", features = ["persistence"] }
 egui = "0.35.0"
 fg-core = { path = "../core" }
+notify = "8.2.0"
 rfd = "0.17.2"
 ropey = "1.6.1"
 syntax = { path = "../syntax" }

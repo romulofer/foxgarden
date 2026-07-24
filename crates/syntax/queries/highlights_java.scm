@@ -89,10 +89,34 @@
   (void_type)
 ] @type.builtin
 
+; Fields: a field's own declaration site and any `object.field`-style
+; access (ported from `../references/java`'s highlights.scm) — visually
+; distinct from a local variable/parameter, which stay the generic
+; `@variable` capture above since nothing in the syntax tree alone marks
+; an identifier as "resolves to a local" (that needs semantic analysis,
+; not just a query). Placed *before* the Constants section below, not
+; after: a `static final` ALL-CAPS field (`MAX_LENGTH`) is also a field
+; declarator, and `highlight_spans` resolves a same-range capture
+; conflict in favor of whichever pattern is declared *later* in this file
+; — Constants needs to win there, so it has to stay the later pattern.
+(field_declaration
+  declarator: (variable_declarator
+    name: (identifier) @property))
+(field_access
+  field: (identifier) @property)
+
 ; Constants
 
 ((identifier) @constant
  (#match? @constant "^_*[A-Z][A-Z\\d_]+$"))
+
+; An enum constant explicitly, not just via the ALL-CAPS regex above —
+; same reasoning TECHNICAL_DEBT.md #3 already applied to Kotlin's enum
+; entries: `enum Suit { Hearts, Diamonds, ... }`-style constants that
+; don't follow the ALL_CAPS convention are still constants, and the
+; regex alone would otherwise leave them as plain `@variable`.
+(enum_constant
+  name: (identifier) @constant)
 
 ; Builtins: `this`/`super` treated as keywords, matching how Kotlin's
 ; highlights_kotlin.scm keywords its `this`/`super`/`this@`/`super@`.

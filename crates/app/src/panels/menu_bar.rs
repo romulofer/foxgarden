@@ -6,7 +6,8 @@ use super::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
-use crate::widgets::editor::{AccessorKind, CaseConversion};
+use crate::style::view::ViewSettings;
+use crate::widgets::editor::{AccessorKind, CaseConversion, GenerateMethodKind};
 use crate::widgets::modal::show_modal;
 
 /// Persistent state for menu-triggered dialogs.
@@ -21,7 +22,12 @@ pub struct MenuBarState {
 #[derive(Default)]
 pub struct MenuBarOutcome {
     pub generate_request: Option<AccessorKind>,
+    pub generate_method_request: Option<GenerateMethodKind>,
+    pub override_method_request: bool,
     pub case_conversion_request: Option<CaseConversion>,
+    pub sort_lines_request: bool,
+    pub unique_lines_request: bool,
+    pub open_run_configs_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -42,6 +48,7 @@ pub fn show(
     font_size: &mut f32,
     dark_mode: &mut bool,
     indent_settings: &mut IndentSettings,
+    view_settings: &mut ViewSettings,
     zen_mode: &mut bool,
     last_error: &mut Option<String>,
 ) -> MenuBarOutcome {
@@ -148,12 +155,34 @@ pub fn show(
             // (which request the same actions, just narrower or via the
             // keyboard).
             let has_active_tab = state.active_tab.is_some();
+            if let Some(active) = state.active_tab
+                && ui.checkbox(&mut state.open_tabs[active].read_only, "Read-Only").clicked()
+            {
+                ui.close();
+            }
+            ui.separator();
             if ui.add_enabled(has_active_tab, egui::Button::new("Generate Getters")).clicked() {
                 outcome.generate_request = Some(AccessorKind::Getters);
                 ui.close();
             }
             if ui.add_enabled(has_active_tab, egui::Button::new("Generate Setters")).clicked() {
                 outcome.generate_request = Some(AccessorKind::Setters);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Constructor")).clicked() {
+                outcome.generate_method_request = Some(GenerateMethodKind::Constructor);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Generate toString()")).clicked() {
+                outcome.generate_method_request = Some(GenerateMethodKind::ToString);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Generate equals() and hashCode()")).clicked() {
+                outcome.generate_method_request = Some(GenerateMethodKind::EqualsAndHashCode);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Override Method")).clicked() {
+                outcome.override_method_request = true;
                 ui.close();
             }
             ui.separator();
@@ -175,10 +204,36 @@ pub fn show(
                 outcome.case_conversion_request = Some(CaseConversion::Title);
                 ui.close();
             }
+            ui.separator();
+            if ui.add_enabled(has_active_tab, egui::Button::new("Sort Lines")).clicked() {
+                outcome.sort_lines_request = true;
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Unique Lines")).clicked() {
+                outcome.unique_lines_request = true;
+                ui.close();
+            }
+        });
+
+        ui.menu_button("Run", |ui| {
+            if ui.add_enabled(state.project.is_some(), egui::Button::new("Edit Configurations…")).clicked() {
+                outcome.open_run_configs_request = true;
+                ui.close();
+            }
         });
 
         ui.menu_button("View", |ui| {
             if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
+                ui.close();
+            }
+            ui.separator();
+            if ui.checkbox(&mut view_settings.word_wrap, "Word Wrap").changed() {
+                ui.close();
+            }
+            if ui.checkbox(&mut view_settings.show_whitespace, "Render Whitespace").changed() {
+                ui.close();
+            }
+            if ui.checkbox(&mut view_settings.show_indent_guides, "Indentation Guides").changed() {
                 ui.close();
             }
         });

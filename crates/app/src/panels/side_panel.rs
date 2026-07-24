@@ -5,6 +5,14 @@ use fg_core::{EditorState, FileKind, FileNode};
 use crate::terminal;
 use crate::widgets::modal::show_modal;
 
+/// Which action a previous Copy/Cut left waiting for Paste — `SidePanelState
+/// ::clipboard`'s tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardOp {
+    Copy,
+    Cut,
+}
+
 /// Transient UI state for the side panel, owned by the caller across frames.
 #[derive(Default)]
 pub struct SidePanelState {
@@ -19,6 +27,12 @@ pub struct SidePanelState {
     /// extra click before the user can type.
     focus_new_file: bool,
     focus_rename: bool,
+    /// The file/directory a Copy or Cut is waiting to be pasted somewhere —
+    /// set by a tree node's "Copy"/"Cut" context-menu entry, read (and, for
+    /// `Cut`, cleared) by a directory's "Paste" entry. `Copy` stays here
+    /// across a paste (so it can be pasted again elsewhere, same as an OS
+    /// file manager); `Cut` is one-shot.
+    clipboard: Option<(PathBuf, ClipboardOp)>,
 }
 
 impl SidePanelState {
@@ -57,6 +71,10 @@ struct TreeActions {
     cancel_rename: bool,
     confirm_rename: Option<String>,
     delete_request: Option<PathBuf>,
+    copy_request: Option<PathBuf>,
+    cut_request: Option<PathBuf>,
+    /// The directory a "Paste" click targets.
+    paste_request: Option<PathBuf>,
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelState) -> SidePanelOutcome {
@@ -102,20 +120,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
         // into `panel` itself for it).
         let should_focus_rename = std::mem::take(&mut panel.focus_rename);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            render_node(ui, &project.tree, &mut panel.rename_draft, should_focus_rename, &mut actions);
+            render_node(ui, &project.tree, &mut panel.rename_draft, should_focus_rename, &panel.clipboard, &mut actions);
         });
     } else {
         ui.weak("No folder open");
     }
 
-    apply_tree_actions(panel, actions, &mut outcome);
+    let pasted = apply_tree_actions(panel, actions, &mut outcome);
     show_delete_confirm(ui, panel, &mut outcome);
 
     // Only genuinely tree-changing actions need a refresh — opening an
     // *existing* file (also carried on `outcome.open`, via a tree click)
     // doesn't touch the filesystem, so re-walking the whole project for it
     // would be a pointless full directory read on every single file click.
-    if (created || outcome.renamed.is_some() || outcome.deleted.is_some())
+    if (created || pasted || outcome.renamed.is_some() || outcome.deleted.is_some())
         && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
             && let Err(err) = state.open_project(root) {
                 outcome.error = Some(format!("failed to refresh project tree: {err}"));
@@ -233,7 +251,14 @@ fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }
 
-fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome: &mut SidePanelOutcome) {
+/// Returns `true` if a paste actually changed the filesystem tree — needed
+/// alongside `outcome.renamed`/`outcome.deleted` (which a `Cut` paste also
+/// sets, and which `show`'s refresh condition already watches) because a
+/// `Copy` paste sets neither of those: the pasted-from file is untouched,
+/// only a new one appeared, the same "something new exists that a tab
+/// click didn't put there" case `show_new_file_row`'s `created` return
+/// covers for New File.
+fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome: &mut SidePanelOutcome) -> bool {
     if let Some(path) = actions.open {
         outcome.open = Some(path);
     }
@@ -273,6 +298,44 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
     if let Some(path) = actions.delete_request {
         panel.pending_delete = Some(path);
     }
+
+    if let Some(path) = actions.copy_request {
+        panel.clipboard = Some((path, ClipboardOp::Copy));
+    }
+    if let Some(path) = actions.cut_request {
+        panel.clipboard = Some((path, ClipboardOp::Cut));
+    }
+
+    let mut tree_changed = false;
+    if let Some(target_dir) = actions.paste_request
+        && let Some((source, op)) = panel.clipboard.clone()
+    {
+        if is_invalid_paste_target(&source, &target_dir) {
+            outcome.error = Some(format!(
+                "can't paste {} into itself or one of its own subdirectories",
+                source.display()
+            ));
+        } else {
+            match paste_into(&source, &target_dir, op) {
+                Ok(dest) => {
+                    tree_changed = true;
+                    if op == ClipboardOp::Cut {
+                        outcome.renamed = Some((source, dest));
+                        // One-shot: a cut-and-pasted file is gone from
+                        // where it was, so pasting the same clipboard
+                        // entry again would just fail with "source not
+                        // found" — clearing it here is what makes a
+                        // second Paste with nothing newly copied/cut a
+                        // silent no-op instead of that confusing error.
+                        panel.clipboard = None;
+                    }
+                }
+                Err(err) => outcome.error = Some(format!("failed to paste: {err}")),
+            }
+        }
+    }
+
+    tree_changed
 }
 
 /// Deletes `path` — a whole subtree via `remove_dir_all` if it's a
@@ -284,6 +347,63 @@ fn delete_path(path: &Path) -> std::io::Result<()> {
     } else {
         std::fs::remove_file(path)
     }
+}
+
+/// Whether pasting `source` into `target_dir` would paste it into itself or
+/// one of its own descendants — copying/moving a directory into its own
+/// subtree either can't mean anything sensible (pasting onto itself) or
+/// would have `copy_recursive` walk into the very directory it's still
+/// writing to (a descendant target), so both are rejected up front rather
+/// than attempted.
+fn is_invalid_paste_target(source: &Path, target_dir: &Path) -> bool {
+    target_dir == source || target_dir.starts_with(source)
+}
+
+/// Copies `source` to `dest`, recursing into every entry if `source` is a
+/// directory — `std::fs::copy` alone only ever copies a single file.
+fn copy_recursive(source: &Path, dest: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        std::fs::create_dir_all(dest)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(source, dest).map(|_| ())
+    }
+}
+
+/// Pastes `source` into `target_dir`, returning the resulting path.
+/// `ClipboardOp::Copy` always copies (recursively, for a directory);
+/// `ClipboardOp::Cut` prefers a same-filesystem `std::fs::rename` (fast,
+/// atomic) and falls back to copy-then-delete-original on any failure —
+/// cross-device is the expected reason `rename` alone can't do it, but
+/// `std::io::ErrorKind` doesn't reliably distinguish that across platforms,
+/// so this just attempts `rename` first rather than pre-detecting it.
+fn paste_into(source: &Path, target_dir: &Path, op: ClipboardOp) -> std::io::Result<PathBuf> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "source has no file name"))?;
+    let dest = target_dir.join(name);
+
+    if dest.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} already exists", dest.display()),
+        ));
+    }
+
+    match op {
+        ClipboardOp::Copy => copy_recursive(source, &dest)?,
+        ClipboardOp::Cut => {
+            if std::fs::rename(source, &dest).is_err() {
+                copy_recursive(source, &dest)?;
+                delete_path(source)?;
+            }
+        }
+    }
+    Ok(dest)
 }
 
 fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &mut SidePanelOutcome) {
@@ -343,6 +463,7 @@ fn render_node(
     node: &FileNode,
     rename_draft: &mut Option<(PathBuf, String)>,
     should_focus_rename: bool,
+    clipboard: &Option<(PathBuf, ClipboardOp)>,
     actions: &mut TreeActions,
 ) {
     let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == &node.path);
@@ -359,7 +480,7 @@ fn render_node(
                 .default_open(false)
                 .show(ui, |ui| {
                     for child in &node.children {
-                        render_node(ui, child, rename_draft, should_focus_rename, actions);
+                        render_node(ui, child, rename_draft, should_focus_rename, clipboard, actions);
                     }
                 });
             header.header_response.context_menu(|ui| {
@@ -375,16 +496,46 @@ fn render_node(
                     actions.delete_request = Some(node.path.clone());
                     ui.close();
                 }
+                ui.separator();
+                if ui.button("Copy").clicked() {
+                    actions.copy_request = Some(node.path.clone());
+                    ui.close();
+                }
+                if ui.button("Cut").clicked() {
+                    actions.cut_request = Some(node.path.clone());
+                    ui.close();
+                }
+                // Only a directory is a meaningful paste *target* — pasting
+                // "onto" a file doesn't have an obvious destination the way
+                // pasting into a folder does, so `FileKind::File` below
+                // gets no Paste entry at all.
+                if ui.add_enabled(clipboard.is_some(), egui::Button::new("Paste")).clicked() {
+                    actions.paste_request = Some(node.path.clone());
+                    ui.close();
+                }
             });
         }
         FileKind::File => {
             let extension = node.path.extension().and_then(|ext| ext.to_str());
+            // A bare `Dockerfile` has no extension at all for the `match`
+            // below to key off, and a suffixed variant (`Dockerfile.dev`)
+            // has one that means nothing here (`"dev"` isn't a real file
+            // type) — so this is checked as its own name-based fallback,
+            // the same `from_filename` check `Document::open` already uses
+            // to recognize one, rather than folded into the `extension`
+            // match itself.
+            let is_dockerfile = node
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| fg_core::Language::from_filename(n).is_some());
             let icon = match extension {
                 Some("java") => "☕ ",
                 Some("kt") => "🔷 ",
                 Some("properties") => "⚙️ ",
                 Some("yml" | "yaml") => "📜 ",
                 Some("xml") => "🏷️ ",
+                _ if is_dockerfile => "🐳 ",
                 _ => "📄 ",
             };
             let label_text = format!("{icon}{}", node.name);
@@ -410,6 +561,15 @@ fn render_node(
                 }
                 if ui.button("Delete").clicked() {
                     actions.delete_request = Some(node.path.clone());
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Copy").clicked() {
+                    actions.copy_request = Some(node.path.clone());
+                    ui.close();
+                }
+                if ui.button("Cut").clicked() {
+                    actions.cut_request = Some(node.path.clone());
                     ui.close();
                 }
             });
@@ -474,5 +634,111 @@ mod tests {
         delete_path(&subdir).unwrap();
 
         assert!(!subdir.exists());
+    }
+
+    #[test]
+    fn is_invalid_paste_target_rejects_pasting_a_directory_into_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("pkg");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        assert!(is_invalid_paste_target(&subdir, &subdir));
+    }
+
+    #[test]
+    fn is_invalid_paste_target_rejects_pasting_into_a_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("pkg");
+        let nested = subdir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert!(is_invalid_paste_target(&subdir, &nested));
+    }
+
+    #[test]
+    fn is_invalid_paste_target_allows_an_unrelated_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("pkg");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+
+        assert!(!is_invalid_paste_target(&source, &other));
+    }
+
+    #[test]
+    fn copy_recursive_copies_a_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("A.java");
+        let dest = dir.path().join("B.java");
+        std::fs::write(&source, "class A {}").unwrap();
+
+        copy_recursive(&source, &dest).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "class A {}");
+        assert!(source.exists(), "copy must leave the original in place");
+    }
+
+    #[test]
+    fn copy_recursive_copies_a_directory_and_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("pkg");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::write(source.join("A.java"), "class A {}").unwrap();
+        std::fs::write(source.join("nested/B.java"), "class B {}").unwrap();
+        let dest = dir.path().join("pkg_copy");
+
+        copy_recursive(&source, &dest).unwrap();
+
+        assert_eq!(std::fs::read_to_string(dest.join("A.java")).unwrap(), "class A {}");
+        assert_eq!(std::fs::read_to_string(dest.join("nested/B.java")).unwrap(), "class B {}");
+        assert!(source.exists(), "copy must leave the original directory in place");
+    }
+
+    #[test]
+    fn paste_into_with_copy_leaves_the_source_and_creates_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("A.java");
+        let target_dir = dir.path().join("dest");
+        std::fs::write(&source, "class A {}").unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+
+        let result = paste_into(&source, &target_dir, ClipboardOp::Copy).unwrap();
+
+        assert_eq!(result, target_dir.join("A.java"));
+        assert_eq!(std::fs::read_to_string(&result).unwrap(), "class A {}");
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn paste_into_with_cut_moves_the_source_to_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("A.java");
+        let target_dir = dir.path().join("dest");
+        std::fs::write(&source, "class A {}").unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+
+        let result = paste_into(&source, &target_dir, ClipboardOp::Cut).unwrap();
+
+        assert_eq!(result, target_dir.join("A.java"));
+        assert_eq!(std::fs::read_to_string(&result).unwrap(), "class A {}");
+        assert!(!source.exists(), "cut must remove the original");
+    }
+
+    #[test]
+    fn paste_into_fails_on_a_name_collision_at_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("A.java");
+        let target_dir = dir.path().join("dest");
+        std::fs::write(&source, "class A {}").unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("A.java"), "already here").unwrap();
+
+        let err = paste_into(&source, &target_dir, ClipboardOp::Copy).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        // Neither side should have been touched by the failed attempt.
+        assert_eq!(std::fs::read_to_string(target_dir.join("A.java")).unwrap(), "already here");
+        assert!(source.exists());
     }
 }

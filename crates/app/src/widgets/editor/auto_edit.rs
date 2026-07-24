@@ -432,6 +432,72 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
     (result.into_iter().collect(), new_start, new_end)
 }
 
+/// The whole-line block `start_char..end_char` touches — from the start of
+/// the line `start_char` sits on, to the end of the line the selection's
+/// last touched character sits on. Falls back to just the cursor's own line
+/// when `start_char == end_char` (nothing selected), matching `Ctrl+/`'s
+/// "no selection means the current line" behavior. Deliberately simpler
+/// than `indent_selected_lines`/`toggle_line_comments`'s own "touched line
+/// set" (a `Vec` of every line start in the range): `sort_lines`/
+/// `unique_lines` only ever need the block's outer boundaries, since they
+/// replace the whole block in one piece rather than editing each touched
+/// line independently.
+fn line_block_range(chars: &[char], start_char: usize, end_char: usize) -> (usize, usize) {
+    let n = chars.len();
+    let start_char = start_char.min(n);
+    let end_char = end_char.min(n);
+    let block_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let last_touched = if end_char > start_char { end_char - 1 } else { start_char };
+    let block_end = chars[last_touched..].iter().position(|&c| c == '\n').map_or(n, |off| last_touched + off);
+    (block_start, block_end)
+}
+
+/// Sorts (by plain `str::cmp`, no case-insensitive/locale option needed for
+/// a first cut) the lines touched by `start_char..end_char` — a Tools menu
+/// command, not a keyboard shortcut. Returns the new text and a selection
+/// covering the now-reordered block. A collapsed selection touches only the
+/// cursor's own single line, which sorting trivially leaves unchanged.
+pub(super) fn sort_lines(text: &str, start_char: usize, end_char: usize) -> (String, usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let (block_start, block_end) = line_block_range(&chars, start_char, end_char);
+
+    let block: String = chars[block_start..block_end].iter().collect();
+    let mut lines: Vec<&str> = block.split('\n').collect();
+    lines.sort_unstable();
+    let sorted_block = lines.join("\n");
+
+    let new_text = format!(
+        "{}{sorted_block}{}",
+        chars[..block_start].iter().collect::<String>(),
+        chars[block_end..].iter().collect::<String>()
+    );
+    let new_end = block_start + sorted_block.chars().count();
+    (new_text, block_start, new_end)
+}
+
+/// Collapses the lines touched by `start_char..end_char` down to only their
+/// first occurrence, preserving order — a separate operation from
+/// `sort_lines`, not one that implies it, so the two can be invoked
+/// independently or combined. Returns the new text and a selection covering
+/// the now-deduplicated block.
+pub(super) fn unique_lines(text: &str, start_char: usize, end_char: usize) -> (String, usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let (block_start, block_end) = line_block_range(&chars, start_char, end_char);
+
+    let block: String = chars[block_start..block_end].iter().collect();
+    let mut seen = std::collections::HashSet::new();
+    let deduped: Vec<&str> = block.split('\n').filter(|line| seen.insert(*line)).collect();
+    let deduped_block = deduped.join("\n");
+
+    let new_text = format!(
+        "{}{deduped_block}{}",
+        chars[..block_start].iter().collect::<String>(),
+        chars[block_end..].iter().collect::<String>()
+    );
+    let new_end = block_start + deduped_block.chars().count();
+    (new_text, block_start, new_end)
+}
+
 /// Which case transform `convert_selection_case` applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CaseConversion {
@@ -995,6 +1061,60 @@ mod tests {
         let (commented, ..) = toggle_line_comments(original, 0, original.chars().count());
         let (restored, ..) = toggle_line_comments(&commented, 0, commented.chars().count());
         assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn sort_lines_sorts_the_touched_lines_alphabetically() {
+        let (text, ..) = sort_lines("banana\napple\ncherry", 0, 19);
+        assert_eq!(text, "apple\nbanana\ncherry");
+    }
+
+    #[test]
+    fn sort_lines_with_no_selection_only_touches_the_cursors_line() {
+        // Collapsed selection on "banana" (the first line) — sorting a
+        // single line is a no-op, and the other lines must stay untouched
+        // (and in particular not get pulled into the "sort" at all).
+        let (text, ..) = sort_lines("banana\napple\ncherry", 2, 2);
+        assert_eq!(text, "banana\napple\ncherry");
+    }
+
+    #[test]
+    fn sort_lines_selection_ending_at_a_line_start_excludes_that_line() {
+        // Selection from column 0 of "banana" to column 0 of "cherry" (char
+        // 14) touches only "banana" and "apple", matching
+        // `indent_selected_lines`'s own boundary rule.
+        let (text, ..) = sort_lines("banana\napple\ncherry", 0, 14);
+        assert_eq!(text, "apple\nbanana\ncherry");
+    }
+
+    #[test]
+    fn sort_lines_returns_a_selection_covering_the_reordered_block() {
+        let (text, start, end) = sort_lines("banana\napple", 0, 12);
+        assert_eq!(&text[start..end], "apple\nbanana");
+    }
+
+    #[test]
+    fn unique_lines_drops_duplicates_keeping_the_first_occurrence() {
+        let (text, ..) = unique_lines("foo\nbar\nfoo\nbaz\nbar", 0, 19);
+        assert_eq!(text, "foo\nbar\nbaz");
+    }
+
+    #[test]
+    fn unique_lines_preserves_order_rather_than_also_sorting() {
+        let (text, ..) = unique_lines("zebra\napple\nzebra", 0, 17);
+        assert_eq!(text, "zebra\napple");
+    }
+
+    #[test]
+    fn unique_lines_with_no_duplicates_is_unchanged() {
+        let (text, ..) = unique_lines("foo\nbar\nbaz", 0, 11);
+        assert_eq!(text, "foo\nbar\nbaz");
+    }
+
+    #[test]
+    fn unique_lines_with_no_selection_only_touches_the_cursors_line() {
+        let (text, ..) = unique_lines("foo\nfoo\nfoo", 1, 1);
+        assert_eq!(text, "foo\nfoo\nfoo");
     }
 
     #[test]

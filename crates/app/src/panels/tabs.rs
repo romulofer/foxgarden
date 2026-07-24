@@ -3,7 +3,11 @@ use syntax::IncrementalParser;
 
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
-use crate::widgets::editor::{self, AccessorKind, CaseConversion, GenerateAccessorsDialog};
+use crate::style::view::ViewSettings;
+use crate::widgets::editor::{
+    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
+    OverrideMethodDialog,
+};
 use crate::widgets::modal::show_modal;
 
 /// Fully reparses `doc`'s *current* buffer contents against `parser` and
@@ -99,15 +103,23 @@ pub fn show(
     editor_font: EditorFont,
     font_size: f32,
     indent_settings: IndentSettings,
+    view_settings: ViewSettings,
     generate_request: Option<AccessorKind>,
     generate_dialog: &mut Option<GenerateAccessorsDialog>,
+    generate_method_request: Option<GenerateMethodKind>,
+    generate_method_dialog: &mut Option<GenerateMethodDialog>,
+    override_method_request: bool,
+    override_method_dialog: &mut Option<OverrideMethodDialog>,
     case_conversion_request: Option<CaseConversion>,
+    sort_lines_request: bool,
+    unique_lines_request: bool,
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
     cached_clipboard_text: &mut Option<String>,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
+    let mut toggle_read_only_request = None;
 
     ui.horizontal_wrapped(|ui| {
         for (index, doc) in state.open_tabs.iter().enumerate() {
@@ -116,11 +128,14 @@ pub fn show(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let label = if doc.is_dirty() {
-                format!("*{name}")
-            } else {
-                name
-            };
+            let mut label = String::new();
+            if doc.read_only {
+                label.push('🔒');
+            }
+            if doc.is_dirty() {
+                label.push('*');
+            }
+            label.push_str(&name);
             let selected = state.active_tab == Some(index);
 
             ui.horizontal(|ui| {
@@ -131,6 +146,13 @@ pub fn show(
                 if label_response.middle_clicked() {
                     close_request = Some(index);
                 }
+                label_response.context_menu(|ui| {
+                    let toggle_label = if doc.read_only { "Allow Editing" } else { "Read-Only" };
+                    if ui.button(toggle_label).clicked() {
+                        toggle_read_only_request = Some(index);
+                        ui.close();
+                    }
+                });
                 if ui.small_button("x").clicked() {
                     close_request = Some(index);
                 }
@@ -144,6 +166,12 @@ pub fn show(
 
     if let Some(index) = close_request {
         request_close_tab(state, parsers, pending_close, index);
+    }
+
+    if let Some(index) = toggle_read_only_request
+        && let Some(doc) = state.open_tabs.get_mut(index)
+    {
+        doc.read_only = !doc.read_only;
     }
 
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
@@ -165,6 +193,7 @@ pub fn show(
         ui.weak("No file open");
         return;
     };
+    let project = state.project.as_ref();
     let Some(doc) = state.open_tabs.get_mut(active) else {
         return;
     };
@@ -172,7 +201,13 @@ pub fn show(
         return;
     };
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    // `.both()`, not `.vertical()`: with `ViewSettings::word_wrap` off, a
+    // long line can run past the viewport width (the editor's own
+    // `desired_width(f32::INFINITY)` lets it), and a vertical-only
+    // `ScrollArea` would leave no way to reach it. Wrapped content never
+    // overflows horizontally by construction, so this is a no-op — no
+    // horizontal scrollbar appears — whenever wrapping is on.
+    egui::ScrollArea::both().show(ui, |ui| {
         editor::show(
             ui,
             doc,
@@ -180,9 +215,17 @@ pub fn show(
             editor_font,
             font_size,
             indent_settings,
+            view_settings,
             generate_request,
             generate_dialog,
+            generate_method_request,
+            generate_method_dialog,
+            project,
+            override_method_request,
+            override_method_dialog,
             case_conversion_request,
+            sort_lines_request,
+            unique_lines_request,
             last_error,
             pending_editor_input,
             cached_clipboard_text,

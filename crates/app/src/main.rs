@@ -1,4 +1,5 @@
 mod app;
+mod file_watch;
 mod panels;
 mod style;
 mod terminal;

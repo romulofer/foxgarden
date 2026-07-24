@@ -5,6 +5,7 @@ use egui::text::CCursor;
 use egui::{Align2, Color32, FontId, Shape, Stroke};
 use fg_core::Diagnostic;
 
+use crate::style::indent::IndentSettings;
 use crate::style::theme;
 
 /// Maps every byte offset in `queries` (assumed sorted, deduped, and each a
@@ -190,6 +191,111 @@ pub(super) fn paint_occurrence_highlights(
             2.0,
             fill,
         );
+    }
+}
+
+/// Paints a subtle outline box around each bracket of a matched pair — the
+/// bracket-pair-highlighting overlay. `pair` holds each bracket's **byte**
+/// range (as `syntax::bracket_match` returns them, tree-sitter's own
+/// byte-range currency), converted to char offsets here the same way
+/// `paint_diagnostics` does, just without that function's `HashMap`
+/// batching: there are only ever two ranges to convert for a single matched
+/// pair, not a per-diagnostic-file count, so a direct
+/// `text[..byte].chars().count()` call twice is simpler and just as cheap.
+/// An outline (not `paint_occurrence_highlights`' filled rect) deliberately
+/// reads as "these two characters pair up," not "this span is
+/// selected/repeated" — a different visual vocabulary for a different kind
+/// of highlight.
+pub(super) fn paint_bracket_match(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+    pair: (Range<usize>, Range<usize>),
+) {
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.0, theme::bracket_match(ui.visuals().dark_mode));
+
+    for range in [pair.0, pair.1] {
+        let char_start = text[..range.start].chars().count();
+        let char_end = text[..range.end].chars().count();
+        let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
+        let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(output.galley_pos.x + start_rect.left(), output.galley_pos.y + start_rect.top()),
+            egui::pos2(output.galley_pos.x + end_rect.left(), output.galley_pos.y + end_rect.bottom()),
+        );
+        painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// Paints a small dot for each space and a short arrow for each tab —
+/// `ViewSettings::show_whitespace`. Walks `text` char by char rather than
+/// reusing the range-based technique every other overlay here uses: there's
+/// no contiguous span to paint, just individually-scattered single
+/// characters, so a per-char `pos_from_cursor` call is the natural fit
+/// (same cost class as `paint_indent_guides`'s per-level lookups below, not
+/// the per-diagnostic-file count `paint_diagnostics` optimizes for).
+pub(super) fn paint_whitespace(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str) {
+    let painter = ui.painter();
+    let color = theme::structure(ui.visuals().dark_mode);
+
+    for (char_idx, c) in text.chars().enumerate() {
+        match c {
+            ' ' => {
+                let rect = output.galley.pos_from_cursor(CCursor::new(char_idx));
+                let center = egui::pos2(output.galley_pos.x + rect.center().x, output.galley_pos.y + rect.center().y);
+                painter.circle_filled(center, 1.5, color);
+            }
+            '\t' => {
+                let start = output.galley.pos_from_cursor(CCursor::new(char_idx));
+                let end = output.galley.pos_from_cursor(CCursor::new(char_idx + 1));
+                let y = output.galley_pos.y + start.center().y;
+                let x_start = output.galley_pos.x + start.left() + 2.0;
+                let x_end = (output.galley_pos.x + end.left() - 2.0).max(x_start + 2.0);
+                painter.line_segment([egui::pos2(x_start, y), egui::pos2(x_end, y)], Stroke::new(1.0, color));
+                painter.line_segment([egui::pos2(x_end, y), egui::pos2(x_end - 3.0, y - 3.0)], Stroke::new(1.0, color));
+                painter.line_segment([egui::pos2(x_end, y), egui::pos2(x_end - 3.0, y + 3.0)], Stroke::new(1.0, color));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Paints a thin vertical line through every indent level a line's leading
+/// whitespace spans — `ViewSettings::show_indent_guides`. Assumes each
+/// `output.galley.rows` entry corresponds 1:1 to a logical (`\n`-separated)
+/// line of `text`, the same simplifying assumption `paint_line_numbers`
+/// already makes (both break down identically for a wrapped long line —
+/// see that function's doc comment); `indent_settings` decides how many
+/// leading whitespace characters make up one level, same as every other
+/// indent-aware transform in `auto_edit.rs`.
+pub(super) fn paint_indent_guides(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+    indent_settings: IndentSettings,
+) {
+    let painter = ui.painter();
+    let color = theme::structure(ui.visuals().dark_mode);
+    let unit_width = if indent_settings.use_tabs { 1 } else { indent_settings.width.max(1) };
+
+    let mut char_offset = 0usize;
+    for (row_index, line) in text.split('\n').enumerate() {
+        let Some(row) = output.galley.rows.get(row_index) else { break };
+        let leading_ws = line.chars().take_while(|&c| c == ' ' || c == '\t').count();
+        let levels = leading_ws / unit_width;
+
+        let y_top = output.galley_pos.y + row.rect().top();
+        let y_bottom = output.galley_pos.y + row.rect().bottom();
+
+        for level in 0..levels {
+            let level_char = char_offset + level * unit_width;
+            let pos = output.galley.pos_from_cursor(CCursor::new(level_char));
+            let x = output.galley_pos.x + pos.left();
+            painter.line_segment([egui::pos2(x, y_top), egui::pos2(x, y_bottom)], Stroke::new(1.0, color));
+        }
+
+        char_offset += line.chars().count() + 1; // +1 skips the '\n' separator itself
     }
 }
 
