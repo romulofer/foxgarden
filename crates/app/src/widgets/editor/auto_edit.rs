@@ -223,6 +223,25 @@ fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// "Smart Home": where the Home key should move the cursor on the line
+/// containing `cursor_char` — the line's first non-whitespace character if
+/// the cursor isn't already there, otherwise column 0 (so a second Home
+/// press from the first-non-whitespace position goes all the way to the
+/// true line start, and a third press — now at column 0 — goes right back
+/// to first-non-whitespace, matching most editors' toggle behavior). A
+/// blank (all-whitespace) line has no "first non-whitespace" to toggle
+/// with, so Home always goes to column 0 there.
+pub(super) fn smart_home_target(text: &str, cursor_char: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let (line_start, line_end) = current_line_range(&chars, cursor_char);
+    let first_non_ws = chars[line_start..line_end].iter().position(|&c| c != ' ' && c != '\t').map(|off| line_start + off);
+
+    match first_non_ws {
+        Some(pos) if cursor_char.min(chars.len()) != pos => pos,
+        _ => line_start,
+    }
+}
+
 /// Duplicates the line containing `cursor_char`, inserting the copy
 /// immediately below the original — `Alt+Shift+ArrowDown`/`Up`'s shared
 /// transform (the two shortcuts differ only in where the cursor ends up
@@ -414,7 +433,7 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
 
 /// Which case transform `convert_selection_case` applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum CaseConversion {
+pub enum CaseConversion {
     Upper,
     Lower,
     Title,
@@ -982,5 +1001,77 @@ mod tests {
         let (commented, ..) = toggle_line_comments(original, 0, original.chars().count());
         let (restored, ..) = toggle_line_comments(&commented, 0, commented.chars().count());
         assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn convert_selection_case_uppercases_only_the_selected_range() {
+        let (text, start, end) = convert_selection_case("foo bar baz", 4, 7, CaseConversion::Upper).unwrap();
+        assert_eq!(text, "foo BAR baz");
+        assert_eq!((start, end), (4, 7));
+    }
+
+    #[test]
+    fn convert_selection_case_lowercases_only_the_selected_range() {
+        let (text, ..) = convert_selection_case("FOO BAR BAZ", 4, 7, CaseConversion::Lower).unwrap();
+        assert_eq!(text, "FOO bar BAZ");
+    }
+
+    #[test]
+    fn convert_selection_case_title_cases_every_word_in_the_range() {
+        // "_" isn't alphanumeric, so it ends a word the same way a space
+        // does — "World" and "2day" are separate words, each capitalized
+        // at its own start; "2" is already its own "capital", so the
+        // digit-led word's letter stays lowercase (mid-word).
+        let (text, ..) = convert_selection_case("hello WORLD_2day now", 0, 16, CaseConversion::Title).unwrap();
+        assert_eq!(text, "Hello World_2day now");
+    }
+
+    #[test]
+    fn convert_selection_case_returns_none_for_an_empty_selection() {
+        assert_eq!(convert_selection_case("foo", 1, 1, CaseConversion::Upper), None);
+    }
+
+    #[test]
+    fn convert_selection_case_tracks_a_growing_conversion() {
+        // German ß uppercases to "SS" — two chars from one — so the
+        // returned end must reflect the actual converted length, not just
+        // assume the selection stays the same size.
+        let (text, start, end) = convert_selection_case("straße", 0, 6, CaseConversion::Upper).unwrap();
+        assert_eq!(text, "STRASSE");
+        assert_eq!((start, end), (0, 7));
+    }
+
+    #[test]
+    fn smart_home_from_mid_line_goes_to_first_non_whitespace() {
+        assert_eq!(smart_home_target("    foo", 6), 4);
+    }
+
+    #[test]
+    fn smart_home_from_first_non_whitespace_goes_to_column_zero() {
+        assert_eq!(smart_home_target("    foo", 4), 0);
+    }
+
+    #[test]
+    fn smart_home_from_column_zero_goes_back_to_first_non_whitespace() {
+        assert_eq!(smart_home_target("    foo", 0), 4);
+    }
+
+    #[test]
+    fn smart_home_on_an_unindented_line_always_goes_to_column_zero() {
+        // First-non-whitespace *is* column 0 here, so the toggle condition
+        // ("already at first-non-whitespace") is met immediately.
+        assert_eq!(smart_home_target("foo", 2), 0);
+    }
+
+    #[test]
+    fn smart_home_on_a_blank_line_goes_to_column_zero() {
+        assert_eq!(smart_home_target("    ", 2), 0);
+    }
+
+    #[test]
+    fn smart_home_operates_on_the_cursors_own_line_in_a_multiline_buffer() {
+        let text = "foo\n    bar\nbaz";
+        let cursor = text.find("bar").unwrap() + 1; // mid "bar"
+        assert_eq!(smart_home_target(text, cursor), text.find("bar").unwrap());
     }
 }

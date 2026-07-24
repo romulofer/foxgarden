@@ -337,10 +337,10 @@ impl eframe::App for FoxGardenApp {
         }
 
         let mut outcome = side_panel::SidePanelOutcome::default();
-        let mut generate_request = None;
+        let mut menu_outcome = menu_bar::MenuBarOutcome::default();
 
         if !self.zen_mode {
-            generate_request = egui::Panel::top("menu_bar")
+            menu_outcome = egui::Panel::top("menu_bar")
                 .show(ui, |ui| {
                     menu_bar::show(
                         ui,
@@ -386,7 +386,8 @@ impl eframe::App for FoxGardenApp {
                 self.editor_font,
                 self.font_size,
                 self.indent_settings,
-                generate_request,
+                menu_outcome.generate_request,
+                menu_outcome.case_conversion_request,
                 &mut self.last_error,
             );
         });

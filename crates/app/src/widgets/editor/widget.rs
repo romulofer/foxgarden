@@ -8,12 +8,13 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    apply_auto_indent, apply_auto_pair, char_to_byte, duplicate_line, indent_selected_lines, is_pairable, join_lines,
-    move_line_down, move_line_up, toggle_line_comments, wrap_selection,
+    apply_auto_indent, apply_auto_pair, char_to_byte, convert_selection_case, duplicate_line, indent_selected_lines,
+    is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, toggle_line_comments, wrap_selection,
+    CaseConversion,
 };
 use super::codegen::{generate_accessors, insert_generated, AccessorKind};
 use super::multi_cursor::{self, MultiEditOp};
-use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers};
+use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers, paint_occurrence_highlights};
 use super::templates::{self, expand, find_template, word_before_cursor};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
@@ -98,6 +99,7 @@ pub fn show(
     font_size: f32,
     indent_settings: IndentSettings,
     generate_request: Option<AccessorKind>,
+    case_conversion_request: Option<CaseConversion>,
     last_error: &mut Option<String>,
 ) {
     // Mutable: the wrap-selection interception below may replace both with
@@ -370,6 +372,38 @@ pub fn show(
         }
     }
 
+    // Home/Shift+Home: "smart home" — jump to the line's first non-
+    // whitespace character, or column 0 if the cursor is already there
+    // (see `smart_home_target`'s doc comment for the exact toggle rule).
+    // Pre-apply, same interception shape as Tab/Alt+Arrow above: egui's own
+    // `TextEdit` would otherwise move the cursor to column 0 unconditionally
+    // via its native Home handling, which this needs to override. Doesn't
+    // call `apply_edit` — Home never changes the buffer, only where the
+    // cursor points into it.
+    if !multi_cursor_active_at_start {
+        let home_pressed =
+            ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Home, pressed: true, .. })));
+
+        if home_pressed {
+            let prior_range =
+                egui::text_edit::TextEditState::load(ui.ctx(), widget_id).and_then(|state| state.cursor.char_range());
+
+            if let Some(range) = prior_range {
+                let shift = ui.input(|i| i.modifiers.shift);
+                let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Home, pressed: true, .. }));
+
+                if removed.is_some() {
+                    let target = smart_home_target(&old_text, range.primary.index.0);
+                    manual_cursor_range = Some(if shift {
+                        CCursorRange { primary: CCursor::new(target), secondary: range.secondary, h_pos: None }
+                    } else {
+                        CCursorRange::one(CCursor::new(target))
+                    });
+                }
+            }
+        }
+    }
+
     // Ctrl+/: toggle `//` line comments on every line the selection
     // touches (or just the cursor's line, for a collapsed selection).
     // Pre-apply, same interception shape as Tab/Alt+Arrow above — and for
@@ -403,6 +437,53 @@ pub fn show(
                     manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
                     old_text = toggled.clone();
                     text = toggled;
+                }
+            }
+        }
+    }
+
+    // Ctrl+Shift+U/L (uppercase/lowercase — the two most commonly wanted)
+    // or a Tools menu click (`case_conversion_request`, which also offers
+    // Title Case) convert the selected text's case. Same pre-apply,
+    // persisted-selection-reading shape as Ctrl+/ above, and for the same
+    // reason. Unlike every other transform in this file, there's no
+    // sensible fallback to "the cursor's line" — case conversion needs an
+    // actual selection — so a request with nothing (or an empty range)
+    // selected reports that through `last_error` instead of silently
+    // doing nothing.
+    if !multi_cursor_active_at_start {
+        let command_shift_held = ui.input(|i| i.modifiers.command && i.modifiers.shift);
+        let keyboard_case_request = if command_shift_held && ui.input(|i| i.key_pressed(Key::U)) {
+            Some(CaseConversion::Upper)
+        } else if command_shift_held && ui.input(|i| i.key_pressed(Key::L)) {
+            Some(CaseConversion::Lower)
+        } else {
+            None
+        };
+
+        if let Some(case) = case_conversion_request.or(keyboard_case_request) {
+            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.as_sorted_char_range());
+
+            match prior_selection {
+                Some(range) if !range.is_empty() => {
+                    if let Some(key) = keyboard_case_request.map(|_| if case == CaseConversion::Upper { Key::U } else { Key::L }) {
+                        take_event(ui, |e| {
+                            matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.command && modifiers.shift)
+                        });
+                    }
+                    if let Some((converted, sel_start, sel_end)) =
+                        convert_selection_case(&old_text, range.start.0, range.end.0, case)
+                    {
+                        apply_edit(doc, parser, &old_text, &converted);
+                        manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                        old_text = converted.clone();
+                        text = converted;
+                    }
+                }
+                _ => {
+                    *last_error = Some("Select some text first, then try again.".to_string());
                 }
             }
         }
@@ -618,6 +699,26 @@ pub fn show(
         }
     }
 
+    // Passive, read-only highlight of every occurrence of the word under
+    // (or touching) the cursor — distinct from `Ctrl+D`'s *active*
+    // multi-cursor editing, so it only applies with a collapsed cursor and
+    // no multi-cursor selections active, to avoid competing visually with
+    // either. Uses `output.cursor_range` (post-show), the same source
+    // Ctrl+D/Ctrl+J already read for real, non-test usage — this is purely
+    // a display concern, not an edit, so there's no interception timing to
+    // get right here.
+    if doc.extra_selections.is_empty()
+        && let Some(primary_range) = output.cursor_range
+        && primary_range.is_empty()
+    {
+        let word_range = multi_cursor::word_range_at(&text, primary_range.primary.index.0);
+        if !word_range.is_empty() {
+            let word = &text[char_to_byte(&text, word_range.start)..char_to_byte(&text, word_range.end)];
+            let occurrences = multi_cursor::find_all_occurrences(&text, word, true);
+            paint_occurrence_highlights(ui, &output, &occurrences);
+        }
+    }
+
     paint_diagnostics(ui, &output, &text, &doc.diagnostics);
     paint_extra_selections(ui, &output, &doc.extra_selections);
     paint_line_numbers(ui, &output, gutter_left + gutter_width - GUTTER_PADDING, gutter_font_id, ui.visuals().dark_mode);
@@ -752,7 +853,7 @@ mod tests {
             // here with "is not bound to any fonts". Use the built-in family
             // instead — this test exercises the widget's rendering logic,
             // not font registration.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
     }
 
@@ -772,7 +873,20 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+        });
+    }
+
+    #[test]
+    fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
+        // A fresh widget's default (collapsed) cursor sits at char 0, which
+        // touches "abc" — this should compute and paint every occurrence
+        // ("abc" appears twice) without panicking.
+        let (_dir, mut doc) = open_fixture("abc def abc", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        egui::__run_test_ui(|ui| {
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
     }
 
@@ -783,7 +897,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
 
         assert!(doc.diagnostics.is_empty());
@@ -822,7 +936,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
     }
 
@@ -844,7 +958,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -853,7 +967,7 @@ mod tests {
         // A second frame over the very same, unedited document — as if the
         // tab were simply redrawn, or switched away from and back to.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -875,7 +989,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -883,7 +997,7 @@ mod tests {
 
         doc.buffer = Rope::from_str("hello world");
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -905,7 +1019,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -914,7 +1028,7 @@ mod tests {
         // Same unedited content, but a different font size — the cached
         // galley was shaped at the old size, so it must not be reused.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, None, &mut None);
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -961,7 +1075,7 @@ mod tests {
             // will target nothing.
             let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
     }
 
@@ -1003,7 +1117,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1028,8 +1142,52 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
+    }
+
+    /// Like `focused_frame_with_selection`, but returns the resulting
+    /// cursor/selection range — needed for a purely cursor-moving
+    /// interception like Home/Shift+Home, which leaves the buffer itself
+    /// unchanged, so `doc.buffer` alone can't confirm anything moved.
+    fn focused_frame_with_selection_returning_cursor(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        selection: std::ops::Range<usize>,
+        events: Vec<egui::Event>,
+    ) -> CCursorRange {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+        });
+
+        let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(selection.start),
+            CCursor::new(selection.end),
+        )));
+        state.store(&ctx, id);
+
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+        });
+
+        egui::text_edit::TextEditState::load(&ctx, id)
+            .and_then(|state| state.cursor.char_range())
+            .expect("cursor range should be set after a focused frame")
     }
 
     /// Like `focused_frame`, but for exercising multi-cursor edits: `show`
@@ -1056,7 +1214,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
 
         doc.extra_selections = extra_selections;
@@ -1071,7 +1229,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
         });
     }
 
@@ -1095,7 +1253,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
         });
 
         let modifiers = events
@@ -1108,7 +1266,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
         });
     }
 
@@ -1131,7 +1289,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1151,7 +1309,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
         });
     }
 
@@ -1175,6 +1333,48 @@ mod tests {
         focused_frame_with_selection(&mut doc, &mut parser, 5..9, vec![egui::Event::Text("<".to_string())]);
 
         assert_eq!(doc.buffer.to_string(), "List <Item>");
+    }
+
+    #[test]
+    fn home_from_mid_line_goes_to_first_non_whitespace() {
+        let (_dir, mut doc) = open_fixture("    foo", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // Collapsed cursor (6..6) mid "foo".
+        let range = focused_frame_with_selection_returning_cursor(&mut doc, &mut parser, 6..6, vec![key_event(egui::Key::Home)]);
+
+        assert_eq!(range.primary.index.0, 4);
+        assert!(range.is_empty(), "Home with no selection active must not create one");
+        assert_eq!(doc.buffer.to_string(), "    foo", "Home must never change the buffer");
+    }
+
+    #[test]
+    fn home_from_first_non_whitespace_goes_to_column_zero() {
+        let (_dir, mut doc) = open_fixture("    foo", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let range = focused_frame_with_selection_returning_cursor(&mut doc, &mut parser, 4..4, vec![key_event(egui::Key::Home)]);
+
+        assert_eq!(range.primary.index.0, 0);
+    }
+
+    #[test]
+    fn shift_home_extends_the_selection_instead_of_collapsing_it() {
+        let (_dir, mut doc) = open_fixture("    foo", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // Cursor at the end of "foo" (7), nothing selected yet.
+        let range = focused_frame_with_selection_returning_cursor(
+            &mut doc,
+            &mut parser,
+            7..7,
+            vec![shift_key_event(egui::Key::Home)],
+        );
+
+        // Primary (the moving end) lands on first-non-whitespace; secondary
+        // (the anchor) stays where Shift+Home started from.
+        assert_eq!(range.primary.index.0, 4);
+        assert_eq!(range.secondary.index.0, 7);
     }
 
     fn shift_key_event(key: egui::Key) -> egui::Event {
@@ -1546,10 +1746,142 @@ mod tests {
                 14.0,
                 IndentSettings::default(),
                 generate_request,
+                None,
                 &mut last_error,
             );
         });
         last_error
+    }
+
+    /// Like `focused_frame_with_selection`, but also lets the caller drive
+    /// `case_conversion_request` (the Tools menu path) and reads back
+    /// `last_error` — needed because case conversion, like Ctrl+/, reads
+    /// the *persisted* selection (see `show`'s comment on that
+    /// interception), so it needs the same warm-up-frame treatment
+    /// `focused_frame_with_selection` already gives wrap-selection/Tab.
+    fn focused_frame_with_selection_and_case_request(
+        doc: &mut Document,
+        parser: &mut Option<IncrementalParser>,
+        selection: std::ops::Range<usize>,
+        case_conversion_request: Option<CaseConversion>,
+        events: Vec<egui::Event>,
+    ) -> Option<String> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+        });
+
+        let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(selection.start),
+            CCursor::new(selection.end),
+        )));
+        state.store(&ctx, id);
+
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
+        let mut last_error = None;
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(
+                ui,
+                doc,
+                parser,
+                EditorFont::Default,
+                14.0,
+                IndentSettings::default(),
+                None,
+                case_conversion_request,
+                &mut last_error,
+            );
+        });
+        last_error
+    }
+
+    fn command_shift_u_event() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::U,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers { command: true, shift: true, ..egui::Modifiers::NONE },
+        }
+    }
+
+    fn command_shift_l_event() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::L,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers { command: true, shift: true, ..egui::Modifiers::NONE },
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_u_uppercases_the_selection() {
+        let (_dir, mut doc) = open_fixture("foo bar baz", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        // "bar" is chars 4..7.
+        let last_error =
+            focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..7, None, vec![command_shift_u_event()]);
+
+        assert_eq!(last_error, None);
+        assert_eq!(doc.buffer.to_string(), "foo BAR baz");
+    }
+
+    #[test]
+    fn ctrl_shift_l_lowercases_the_selection() {
+        let (_dir, mut doc) = open_fixture("foo BAR baz", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let last_error =
+            focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..7, None, vec![command_shift_l_event()]);
+
+        assert_eq!(last_error, None);
+        assert_eq!(doc.buffer.to_string(), "foo bar baz");
+    }
+
+    #[test]
+    fn tools_menu_convert_to_title_case() {
+        let (_dir, mut doc) = open_fixture("hello world", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+
+        let last_error = focused_frame_with_selection_and_case_request(
+            &mut doc,
+            &mut parser,
+            0..11,
+            Some(CaseConversion::Title),
+            vec![],
+        );
+
+        assert_eq!(last_error, None);
+        assert_eq!(doc.buffer.to_string(), "Hello World");
+    }
+
+    #[test]
+    fn case_conversion_with_no_selection_reports_why_instead_of_doing_nothing() {
+        let (_dir, mut doc) = open_fixture("foo bar baz", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+        let before = doc.buffer.to_string();
+
+        // Collapsed selection (4..4) — cursor positioned, nothing selected.
+        let last_error =
+            focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..4, None, vec![command_shift_u_event()]);
+
+        assert_eq!(doc.buffer.to_string(), before);
+        assert!(last_error.is_some_and(|msg| msg.contains("Select")));
     }
 
     #[test]

@@ -109,6 +109,35 @@ pub(super) fn find_next_unclaimed_occurrence(
     }
 }
 
+/// Every non-overlapping occurrence of `needle` in `text`, in order — used
+/// for "highlight every occurrence of the word under the cursor" (see
+/// `widgets::editor::show`'s occurrence-highlight painting), which wants
+/// the complete set at once rather than `find_next_occurrence`'s single
+/// forward/wrapping search from a cursor.
+pub(super) fn find_all_occurrences(text: &str, needle: &str, case_sensitive: bool) -> Vec<Range<usize>> {
+    let haystack: Vec<char> = text.chars().collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let hn = haystack.len();
+    let nn = needle_chars.len();
+    if nn == 0 || nn > hn {
+        return Vec::new();
+    }
+    let matches_at =
+        |start: usize| (0..nn).all(|i| chars_eq(haystack[start + i], needle_chars[i], case_sensitive));
+
+    let mut result = Vec::new();
+    let mut start = 0;
+    while start + nn <= hn {
+        if matches_at(start) {
+            result.push(start..start + nn);
+            start += nn; // non-overlapping: skip past this match
+        } else {
+            start += 1;
+        }
+    }
+    result
+}
+
 /// Applies `op` at every position in `selections` simultaneously, as if each
 /// were an independent cursor. Selections are assumed non-overlapping.
 /// Processes them in ascending order of `start`, tracking a running
@@ -259,6 +288,37 @@ mod tests {
             find_next_unclaimed_occurrence("foo bar foo", "foo", 1, &[], true),
             Some(8..11)
         );
+    }
+
+    #[test]
+    fn find_all_occurrences_finds_every_match_in_order() {
+        assert_eq!(find_all_occurrences("foo bar foo baz foo", "foo", true), vec![0..3, 8..11, 16..19]);
+    }
+
+    #[test]
+    fn find_all_occurrences_is_case_sensitive_by_default() {
+        assert_eq!(find_all_occurrences("foo FOO Foo", "foo", true), vec![0..3]);
+    }
+
+    #[test]
+    fn find_all_occurrences_case_insensitive_finds_every_casing() {
+        assert_eq!(find_all_occurrences("foo FOO Foo", "foo", false), vec![0..3, 4..7, 8..11]);
+    }
+
+    #[test]
+    fn find_all_occurrences_empty_needle_returns_nothing() {
+        assert_eq!(find_all_occurrences("foo bar", "", true), Vec::<Range<usize>>::new());
+    }
+
+    #[test]
+    fn find_all_occurrences_no_match_returns_nothing() {
+        assert_eq!(find_all_occurrences("foo bar", "baz", true), Vec::<Range<usize>>::new());
+    }
+
+    #[test]
+    fn find_all_occurrences_are_non_overlapping() {
+        // "aa" in "aaaa" — non-overlapping gives 2 matches, not 3.
+        assert_eq!(find_all_occurrences("aaaa", "aa", true), vec![0..2, 2..4]);
     }
 
     #[test]

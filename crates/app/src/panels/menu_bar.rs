@@ -6,13 +6,22 @@ use super::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
-use crate::widgets::editor::AccessorKind;
+use crate::widgets::editor::{AccessorKind, CaseConversion};
 use crate::widgets::modal::show_modal;
 
 /// Persistent state for menu-triggered dialogs.
 #[derive(Default)]
 pub struct MenuBarState {
     about_open: bool,
+}
+
+/// What the Tools menu wants the editor to do this frame — at most one of
+/// these is ever `Some` in a given frame, since each is set by a distinct
+/// button click.
+#[derive(Default)]
+pub struct MenuBarOutcome {
+    pub generate_request: Option<AccessorKind>,
+    pub case_conversion_request: Option<CaseConversion>,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -34,8 +43,8 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     zen_mode: &mut bool,
     last_error: &mut Option<String>,
-) -> Option<AccessorKind> {
-    let mut generate_request = None;
+) -> MenuBarOutcome {
+    let mut outcome = MenuBarOutcome::default();
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
@@ -131,18 +140,39 @@ pub fn show(
         });
 
         ui.menu_button("Tools", |ui| {
-            // Java-only, and only meaningful with the cursor inside a
-            // class body — `widgets::editor::show` reports that as an
-            // error (via `last_error`) rather than silently doing nothing
-            // if it doesn't apply, same as `Ctrl+Shift+G` (which requests
-            // both at once; these two are separate, narrower requests).
+            // Every item here is only meaningful given some precondition
+            // (Java + cursor inside a class body; a non-empty selection)
+            // that can't be checked from the menu — `widgets::editor::show`
+            // reports a mismatch through `last_error` rather than silently
+            // doing nothing, same as `Ctrl+Shift+G`/`Ctrl+Shift+U`/`L`
+            // (which request the same actions, just narrower or via the
+            // keyboard).
             let has_active_tab = state.active_tab.is_some();
             if ui.add_enabled(has_active_tab, egui::Button::new("Generate Getters")).clicked() {
-                generate_request = Some(AccessorKind::Getters);
+                outcome.generate_request = Some(AccessorKind::Getters);
                 ui.close();
             }
             if ui.add_enabled(has_active_tab, egui::Button::new("Generate Setters")).clicked() {
-                generate_request = Some(AccessorKind::Setters);
+                outcome.generate_request = Some(AccessorKind::Setters);
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Convert to UPPERCASE").shortcut_text("Ctrl+Shift+U"))
+                .clicked()
+            {
+                outcome.case_conversion_request = Some(CaseConversion::Upper);
+                ui.close();
+            }
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Convert to lowercase").shortcut_text("Ctrl+Shift+L"))
+                .clicked()
+            {
+                outcome.case_conversion_request = Some(CaseConversion::Lower);
+                ui.close();
+            }
+            if ui.add_enabled(has_active_tab, egui::Button::new("Convert to Title Case")).clicked() {
+                outcome.case_conversion_request = Some(CaseConversion::Title);
                 ui.close();
             }
         });
@@ -163,7 +193,7 @@ pub fn show(
 
     show_about(ui, menu);
 
-    generate_request
+    outcome
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
@@ -181,10 +211,12 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Ctrl+E — go to a recent file");
         ui.label("Ctrl+/ — toggle line comments");
         ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
-        ui.label("Tools menu — generate just getters, or just setters");
+        ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
+        ui.label("Tools menu — generate just getters/setters, or Title Case");
         ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
         ui.label("Alt+↑/↓ — move the current line up/down");
         ui.label("Alt+Shift+↑/↓ — duplicate the current line");
+        ui.label("Home — jump to first non-whitespace, then column 0");
         ui.separator();
         ui.button("Close").clicked()
     });

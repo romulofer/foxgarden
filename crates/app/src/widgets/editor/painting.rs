@@ -163,6 +163,36 @@ pub(super) fn paint_extra_selections(
     }
 }
 
+/// Paints a subtle background rect behind every occurrence of the word
+/// under the cursor (passive, read-only — see `widgets::editor::show`'s
+/// comment on when this runs), including the one the cursor itself sits
+/// on/in. Same `galley.pos_from_cursor` technique `paint_extra_selections`
+/// uses, deliberately with a much less prominent fill so it never reads as
+/// an active selection.
+pub(super) fn paint_occurrence_highlights(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    occurrences: &[Range<usize>],
+) {
+    let painter = ui.painter();
+    let fill = theme::occurrence_highlight(ui.visuals().dark_mode);
+
+    for range in occurrences {
+        let start_rect = output.galley.pos_from_cursor(CCursor::new(range.start));
+        let end_rect = output.galley.pos_from_cursor(CCursor::new(range.end));
+        let y_top = output.galley_pos.y + start_rect.top();
+        let y_bottom = output.galley_pos.y + start_rect.bottom();
+        let x_start = output.galley_pos.x + start_rect.left();
+        let x_end = output.galley_pos.x + end_rect.left();
+
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x_start, y_top), egui::pos2(x_end, y_bottom)),
+            2.0,
+            fill,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

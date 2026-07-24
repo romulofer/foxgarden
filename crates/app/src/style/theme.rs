@@ -32,6 +32,12 @@ const LIGHT_ERROR_SQUIGGLE: Color32 = Color32::from_rgb(202, 42, 42);
 const DARK_LINE_NUMBER: Color32 = Color32::from_rgb(92, 99, 112);
 const LIGHT_LINE_NUMBER: Color32 = Color32::from_rgb(160, 160, 160);
 
+/// Deliberately subtle — a passive, read-only "here's where else this word
+/// appears" cue, not a selection, so it must never compete visually with
+/// `egui::Visuals::selection`'s own background fill.
+const DARK_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(140, 140, 140, 55);
+const LIGHT_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(90, 90, 90, 35);
+
 /// The editor's default (non-highlighted) text color, adapted for legibility
 /// against the current theme's background — `color_for_scope`'s dark-theme
 /// palette reads poorly against `RAYWHITE`, so both need the `dark_mode`
@@ -56,6 +62,14 @@ pub fn line_number(dark_mode: bool) -> Color32 {
         DARK_LINE_NUMBER
     } else {
         LIGHT_LINE_NUMBER
+    }
+}
+
+pub fn occurrence_highlight(dark_mode: bool) -> Color32 {
+    if dark_mode {
+        DARK_OCCURRENCE_HIGHLIGHT
+    } else {
+        LIGHT_OCCURRENCE_HIGHLIGHT
     }
 }
 
