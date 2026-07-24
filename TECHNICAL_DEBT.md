@@ -16,7 +16,204 @@ shape" section still matches reality before trusting the rest of the entry;
 if it doesn't, the entry is stale and should be rewritten or removed, not
 blindly executed.
 
+Entry numbers are stable IDs assigned in discovery order, not a priority
+ranking or a sequential count within a section — a cross-reference like
+"see #2" always means the same entry regardless of which section (Open or
+Resolved) it currently lives in.
+
 ---
+
+# Open
+
+## 3. Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here
+
+**Where:** `crates/syntax/queries/highlights_kotlin.scm` vs.
+`../references/kotlin/languages/kotlin/highlights.scm`.
+
+**Status:** Partially addressed. The whole-file incompatibility below is
+still real — a direct line-by-line port remains off the table — but one
+concrete construct (enum-entry-as-constant) has now been ported by
+following this entry's own proposed methodology, now that `Scope::Constant`
+exists (added alongside TECHNICAL_DEBT.md #2) to route it into. Recorded
+below as a worked example for whichever construct gets picked up next.
+
+### What was found
+
+`crates/syntax/Cargo.toml` pins `tree-sitter-kotlin-ng = "1.1.0"`. Zed's own
+Kotlin extension (`../references/kotlin/extension.toml`) pins a grammar from
+`https://github.com/fwcd/tree-sitter-kotlin` instead — a different grammar
+project. Checked directly against both grammars' `node-types.json`: the
+fwcd grammar (which Zed's `highlights.scm` is written against) has
+`simple_identifier`, `type_identifier`, and `navigation_suffix` node types
+that `tree-sitter-kotlin-ng` simply doesn't define — it uses a single
+`identifier` node type for everything the fwcd grammar splits across
+`identifier`/`simple_identifier`. A query built against Zed's file would
+fail to compile (`Query::new` errors on any node type name the loaded
+grammar doesn't define) rather than silently under-match, so this isn't a
+subtle bug — it's a hard incompatibility.
+
+This is exactly the situation `highlights_kotlin.scm`'s own header comment
+already warns about ("check node-types.json ... instead of trusting the
+source") for individual keyword tokens; the same caution applies at the
+whole-file level to this specific reference.
+
+By contrast, `../references/java`'s grammar pin
+(`tree-sitter/tree-sitter-java`) is byte-for-byte the same crate
+`highlights_java.scm` is built against, which is why that file *was* a
+valid diff target (see the fixes made alongside this entry: record/
+annotation-type declaration names, `"@interface"`, `binary_integer_literal`).
+
+### Proposed fix
+
+Not a mechanical port. Any future Kotlin highlighting improvement needs to:
+1. Identify the *construct* worth adding from Zed's file (e.g. richer
+   modifier-keyword coverage, enum-entry-as-constant, regex-literal
+   detection) independent of its exact node names.
+2. Look up the equivalent node shape in `tree-sitter-kotlin-ng`'s own
+   `node-types.json` (bundled in the crate at
+   `~/.cargo/registry/src/.../tree-sitter-kotlin-ng-1.1.0/src/node-types.json`)
+   — don't assume node names carry over.
+3. Verify the resulting query compiles against this project's actual
+   grammar version (`cargo test -p syntax`) before trusting it, same as the
+   existing header comment's bisection approach for keyword tokens.
+
+### What was done
+
+Ported enum-entry-as-constant, the first item on this entry's own example
+list. Zed's file captures it as `(enum_entry (simple_identifier)
+@constant)`; per `tree-sitter-kotlin-ng`'s `node-types.json`, `enum_entry`
+has no `simple_identifier` at all — its name child is a plain `identifier`
+(the same collapsing this entry already documented for `identifier` vs.
+`simple_identifier` generally). `enum_entry`'s only other possible direct
+children are `modifiers`, `value_arguments`, and `class_body` — all
+distinct node types — so `(enum_entry (identifier) @constant)` unambiguously
+matches just the entry's own name, not an identifier buried inside a
+constructor-argument list. Added to `highlights_kotlin.scm`, with
+`Scope::Constant` (added for TECHNICAL_DEBT.md #2) as where it now renders.
+Verified via `cargo test -p syntax`: an `enum class Level { LOW, MEDIUM,
+HIGH }` fixture in `valid.kt` plus `has_scope_over("LOW"/"MEDIUM"/"HIGH",
+Scope::Constant)` assertions in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
+
+Remaining candidates from Zed's file (richer modifier-keyword coverage,
+regex-literal detection, `@variable.builtin` for `it`/`field`) are each
+still their own future pass, following the same three-step process.
+
+### Trigger condition
+
+Next time Kotlin highlighting is revisited — this entry just saves that
+future pass from re-discovering the grammar mismatch from scratch, and now
+also has one worked example of the fix process to follow.
+
+---
+
+## 5. Considered and rejected: splitting `widget.rs` further
+
+**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines, 2214 as
+of this recheck).
+
+**Status:** Not actual debt — recorded so a future review doesn't re-flag
+file size alone and fragment a file that's already been evaluated for
+exactly that. Re-checked while working through this file's other entries
+(#1-#4, three of which touched this exact file): still holds. Those
+changes only threaded one more plumbing parameter
+(`cached_clipboard_text`) through `show()` and its call sites — no new
+self-contained feature landed inside `show()` the way getters/setters
+generation once did, so the "Why it doesn't apply" reasoning below is
+unchanged and no split was made.
+
+### What was flagged
+
+A code-organization review this session already extracted two genuinely
+separable concerns out of this file — the right-click context menu (now
+`context_menu.rs`) and the getters/setters picker's rendering (moved into
+`codegen.rs`, next to the data/logic it already owned) — after `widget.rs`
+had grown to 2397 lines doing several distinct things. Even after that
+split the file is still large (dominated by the `show()` function and its
+colocated test module) and could get flagged again for size alone.
+
+### Why it doesn't apply
+
+What's left in `show()` is genuinely one thing: orchestrating a single
+frame of the `TextEdit` widget. Its interception blocks (Tab, Alt+Arrow,
+Home, `Ctrl+/`, wrap-selection, multi-cursor, the generate-request
+dispatch, the context-menu call, case conversion) all share the same
+`text`/`old_text`/`manual_cursor_range` locals, threaded sequentially
+through the function specifically because `TextEditState::store` can only
+be called once per frame (see that gotcha in `AGENTS.md`). Splitting
+further would mean either passing that whole bundle of state across a new
+function boundary for every remaining block (worse than the length it
+"fixes"), or bundling it into a struct — a bigger, riskier change than the
+size problem it would solve. `AGENTS.md`'s own architecture principle
+already covers this: a file earns a split once it's doing more than one
+identifiable thing, and this one, post-split, is back down to exactly one.
+
+### Proposed fix
+
+None right now. If a *specific* self-contained block within `show()` grows
+into its own feature the way getters/setters generation did — not just
+"the file is long" — extract that block specifically, the same way
+`codegen.rs`/`context_menu.rs` were.
+
+### Trigger condition
+
+A new feature that's genuinely separable (its own state, its own
+rendering, minimal interaction with the shared `text`/`old_text`/
+`manual_cursor_range` threading) lands inside `show()` and grows past a
+few dozen lines — extract that feature, not the file in general.
+
+---
+
+## 6. `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it directly
+
+**Where:** `crates/app/src/widgets/editor/widget.rs`'s test module, `fn
+open_fixture`.
+
+**Status:** Not real debt — recorded so a future cleanup pass doesn't
+"simplify" this into ~50 error-prone call-site edits for no real benefit.
+Re-checked alongside #5: `temp_document`'s argument order is unchanged, and
+today's ~23 mechanical edits to this same test module (appending one
+plumbing argument to each `show(...)` call, for #4) never touched
+`open_fixture` call sites or required reading each one's filename/content
+argument order, so it doesn't count as the "already touching most of this
+test module" trigger this entry calls for. Still not worth doing on its
+own.
+
+### What was found
+
+`crates/test-support`'s `temp_document(name, contents)` takes its
+arguments in the opposite order from this file's own
+`open_fixture(contents, filename)`, which is called roughly 50 times
+throughout this module's tests. `open_fixture` now just delegates to
+`temp_document` with the arguments swapped, rather than being deleted
+outright with every call site updated to match the shared crate's order.
+
+### Why it doesn't apply
+
+This was a deliberate choice, not an oversight: mechanically swapping two
+string-literal arguments across ~50 call sites by hand (or via a
+regex that has to distinguish which of two `&str` arguments is which at
+each site) is exactly the kind of change likely to silently swap a *test's
+own* filename and content at one or two sites without anyone noticing,
+since both are usually plausible-looking string literals. The one-line
+wrapper already achieves the actual goal — the file-writing logic isn't
+duplicated anymore — without that risk.
+
+### Proposed fix
+
+If `test_support::temp_document`'s argument order ever changes for an
+unrelated reason, or this test module gets touched heavily enough that a
+careful pass through all ~50 sites is already happening anyway, fold
+`open_fixture` away and call `test_support::temp_document` directly at
+each site under that same pass.
+
+### Trigger condition
+
+Only opportunistically, alongside other work that already touches most of
+this test module — not worth a dedicated pass on its own.
+
+---
+
+# Resolved
 
 ## 1. ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~ — Resolved
 
@@ -160,87 +357,6 @@ for adding a `Scope`-mapped constant is already in place.
 
 ---
 
-## 3. Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here
-
-**Where:** `crates/syntax/queries/highlights_kotlin.scm` vs.
-`../references/kotlin/languages/kotlin/highlights.scm`.
-
-**Status:** Partially addressed. The whole-file incompatibility below is
-still real — a direct line-by-line port remains off the table — but one
-concrete construct (enum-entry-as-constant) has now been ported by
-following this entry's own proposed methodology, now that `Scope::Constant`
-exists (added alongside TECHNICAL_DEBT.md #2) to route it into. Recorded
-below as a worked example for whichever construct gets picked up next.
-
-### What was found
-
-`crates/syntax/Cargo.toml` pins `tree-sitter-kotlin-ng = "1.1.0"`. Zed's own
-Kotlin extension (`../references/kotlin/extension.toml`) pins a grammar from
-`https://github.com/fwcd/tree-sitter-kotlin` instead — a different grammar
-project. Checked directly against both grammars' `node-types.json`: the
-fwcd grammar (which Zed's `highlights.scm` is written against) has
-`simple_identifier`, `type_identifier`, and `navigation_suffix` node types
-that `tree-sitter-kotlin-ng` simply doesn't define — it uses a single
-`identifier` node type for everything the fwcd grammar splits across
-`identifier`/`simple_identifier`. A query built against Zed's file would
-fail to compile (`Query::new` errors on any node type name the loaded
-grammar doesn't define) rather than silently under-match, so this isn't a
-subtle bug — it's a hard incompatibility.
-
-This is exactly the situation `highlights_kotlin.scm`'s own header comment
-already warns about ("check node-types.json ... instead of trusting the
-source") for individual keyword tokens; the same caution applies at the
-whole-file level to this specific reference.
-
-By contrast, `../references/java`'s grammar pin
-(`tree-sitter/tree-sitter-java`) is byte-for-byte the same crate
-`highlights_java.scm` is built against, which is why that file *was* a
-valid diff target (see the fixes made alongside this entry: record/
-annotation-type declaration names, `"@interface"`, `binary_integer_literal`).
-
-### Proposed fix
-
-Not a mechanical port. Any future Kotlin highlighting improvement needs to:
-1. Identify the *construct* worth adding from Zed's file (e.g. richer
-   modifier-keyword coverage, enum-entry-as-constant, regex-literal
-   detection) independent of its exact node names.
-2. Look up the equivalent node shape in `tree-sitter-kotlin-ng`'s own
-   `node-types.json` (bundled in the crate at
-   `~/.cargo/registry/src/.../tree-sitter-kotlin-ng-1.1.0/src/node-types.json`)
-   — don't assume node names carry over.
-3. Verify the resulting query compiles against this project's actual
-   grammar version (`cargo test -p syntax`) before trusting it, same as the
-   existing header comment's bisection approach for keyword tokens.
-
-### What was done
-
-Ported enum-entry-as-constant, the first item on this entry's own example
-list. Zed's file captures it as `(enum_entry (simple_identifier)
-@constant)`; per `tree-sitter-kotlin-ng`'s `node-types.json`, `enum_entry`
-has no `simple_identifier` at all — its name child is a plain `identifier`
-(the same collapsing this entry already documented for `identifier` vs.
-`simple_identifier` generally). `enum_entry`'s only other possible direct
-children are `modifiers`, `value_arguments`, and `class_body` — all
-distinct node types — so `(enum_entry (identifier) @constant)` unambiguously
-matches just the entry's own name, not an identifier buried inside a
-constructor-argument list. Added to `highlights_kotlin.scm`, with
-`Scope::Constant` (added for TECHNICAL_DEBT.md #2) as where it now renders.
-Verified via `cargo test -p syntax`: an `enum class Level { LOW, MEDIUM,
-HIGH }` fixture in `valid.kt` plus `has_scope_over("LOW"/"MEDIUM"/"HIGH",
-Scope::Constant)` assertions in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
-
-Remaining candidates from Zed's file (richer modifier-keyword coverage,
-regex-literal detection, `@variable.builtin` for `it`/`field`) are each
-still their own future pass, following the same three-step process.
-
-### Trigger condition
-
-Next time Kotlin highlighting is revisited — this entry just saves that
-future pass from re-discovering the grammar mismatch from scratch, and now
-also has one worked example of the fix process to follow.
-
----
-
 ## 4. ~~Context menu's Paste item creates a new OS clipboard connection every frame the menu is open~~ — Resolved
 
 **Where:** `crates/app/src/widgets/editor/context_menu.rs`, the
@@ -306,107 +422,52 @@ instead of waiting for that evidence.
 
 ---
 
-## 5. Considered and rejected: splitting `widget.rs` further
+## 7. ~~`widget::show`/`tabs::show`/`menu_bar::show` were missing the `too_many_arguments` allowance a sibling function's comment already claimed they had~~ — Resolved
 
-**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines, 2214 as
-of this recheck).
+**Where:** `crates/app/src/widgets/editor/widget.rs` (`show`),
+`crates/app/src/panels/tabs.rs` (`show`), `crates/app/src/panels/menu_bar.rs`
+(`show`).
 
-**Status:** Not actual debt — recorded so a future review doesn't re-flag
-file size alone and fragment a file that's already been evaluated for
-exactly that. Re-checked while working through this file's other entries
-(#1-#4, three of which touched this exact file): still holds. Those
-changes only threaded one more plumbing parameter
-(`cached_clipboard_text`) through `show()` and its call sites — no new
-self-contained feature landed inside `show()` the way getters/setters
-generation once did, so the "Why it doesn't apply" reasoning below is
-unchanged and no split was made.
-
-### What was flagged
-
-A code-organization review this session already extracted two genuinely
-separable concerns out of this file — the right-click context menu (now
-`context_menu.rs`) and the getters/setters picker's rendering (moved into
-`codegen.rs`, next to the data/logic it already owned) — after `widget.rs`
-had grown to 2397 lines doing several distinct things. Even after that
-split the file is still large (dominated by the `show()` function and its
-colocated test module) and could get flagged again for size alone.
-
-### Why it doesn't apply
-
-What's left in `show()` is genuinely one thing: orchestrating a single
-frame of the `TextEdit` widget. Its interception blocks (Tab, Alt+Arrow,
-Home, `Ctrl+/`, wrap-selection, multi-cursor, the generate-request
-dispatch, the context-menu call, case conversion) all share the same
-`text`/`old_text`/`manual_cursor_range` locals, threaded sequentially
-through the function specifically because `TextEditState::store` can only
-be called once per frame (see that gotcha in `AGENTS.md`). Splitting
-further would mean either passing that whole bundle of state across a new
-function boundary for every remaining block (worse than the length it
-"fixes"), or bundling it into a struct — a bigger, riskier change than the
-size problem it would solve. `AGENTS.md`'s own architecture principle
-already covers this: a file earns a split once it's doing more than one
-identifiable thing, and this one, post-split, is back down to exactly one.
-
-### Proposed fix
-
-None right now. If a *specific* self-contained block within `show()` grows
-into its own feature the way getters/setters generation did — not just
-"the file is long" — extract that block specifically, the same way
-`codegen.rs`/`context_menu.rs` were.
-
-### Trigger condition
-
-A new feature that's genuinely separable (its own state, its own
-rendering, minimal interaction with the shared `text`/`old_text`/
-`manual_cursor_range` threading) lands inside `show()` and grows past a
-few dozen lines — extract that feature, not the file in general.
-
----
-
-## 6. `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it directly
-
-**Where:** `crates/app/src/widgets/editor/widget.rs`'s test module, `fn
-open_fixture`.
-
-**Status:** Not real debt — recorded so a future cleanup pass doesn't
-"simplify" this into ~50 error-prone call-site edits for no real benefit.
-Re-checked alongside #5: `temp_document`'s argument order is unchanged, and
-today's ~23 mechanical edits to this same test module (appending one
-plumbing argument to each `show(...)` call, for #4) never touched
-`open_fixture` call sites or required reading each one's filename/content
-argument order, so it doesn't count as the "already touching most of this
-test module" trigger this entry calls for. Still not worth doing on its
-own.
+**Status:** Fixed. Found during a full re-read of the project for missed
+technical debt (prompted by working through #1-#4 above); fixed on the
+spot as a one-line, well-precedented, zero-risk change per function rather
+than recorded as deferred.
 
 ### What was found
 
-`crates/test-support`'s `temp_document(name, contents)` takes its
-arguments in the opposite order from this file's own
-`open_fixture(contents, filename)`, which is called roughly 50 times
-throughout this module's tests. `open_fixture` now just delegates to
-`temp_document` with the arguments swapped, rather than being deleted
-outright with every call site updated to match the shared crate's order.
+`crates/app/src/widgets/editor/context_menu.rs`'s `show_context_menu`
+carries `#[expect(clippy::too_many_arguments, reason = "... — see
+widget::show's own too-many-arguments allowance for the same shape")]` — a
+comment asserting `widget::show` has a matching suppression of its own. It
+didn't. `widget::show`, `tabs::show`, and `menu_bar::show` all had more
+parameters than clippy's default `too_many_arguments` threshold (7) — 12,
+13, and 12 respectively as of this fix — with no `#[allow]`/`#[expect]`
+anywhere, so `cargo clippy --workspace --all-targets` was silently emitting
+three unaddressed warnings for exactly the kind of function #5 above (the
+"splitting `widget.rs` further" entry) already argues is deliberately
+many-argument: each parameter is independently-threaded per-frame state,
+not a bundle worth turning into a struct.
 
-### Why it doesn't apply
+### Why this wasn't caught earlier
 
-This was a deliberate choice, not an oversight: mechanically swapping two
-string-literal arguments across ~50 call sites by hand (or via a
-regex that has to distinguish which of two `&str` arguments is which at
-each site) is exactly the kind of change likely to silently swap a *test's
-own* filename and content at one or two sites without anyone noticing,
-since both are usually plausible-looking string literals. The one-line
-wrapper already achieves the actual goal — the file-writing logic isn't
-duplicated anymore — without that risk.
+Both `tabs::show` and `widget::show` crossed the 7-argument threshold
+gradually, one new parameter at a time across several unrelated features
+(most recently `cached_clipboard_text`, added for #4 above) — there was
+never one single change that visibly introduced the warning, so nothing
+flagged it in the moment. `context_menu.rs`'s comment reads as though it
+was written assuming `widget::show` already carried (or would shortly
+carry) the same suppression; that half of the change evidently never
+landed.
 
-### Proposed fix
+### What was done
 
-If `test_support::temp_document`'s argument order ever changes for an
-unrelated reason, or this test module gets touched heavily enough that a
-careful pass through all ~50 sites is already happening anyway, fold
-`open_fixture` away and call `test_support::temp_document` directly at
-each site under that same pass.
+Added a matching `#[expect(clippy::too_many_arguments, reason = "...")]`
+to all three functions, each citing the same "independently-threaded
+frame state, not a bundle" reasoning already established for
+`context_menu::show_context_menu` and spelled out at length in #5's "Why
+it doesn't apply" section. `cargo clippy --workspace --all-targets` is
+clean of `too_many_arguments` warnings as of this fix.
 
 ### Trigger condition
 
-Only opportunistically, alongside other work that already touches most of
-this test module — not worth a dedicated pass on its own.
+N/A — already fixed.
