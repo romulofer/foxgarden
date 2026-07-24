@@ -90,6 +90,7 @@ fn save_tab(
 /// Renders the tab bar and the active document's editor. `parsers` is kept
 /// index-aligned with `state.open_tabs`; every close here removes the
 /// matching parser in the same step.
+#[expect(clippy::too_many_arguments, reason = "each parameter is independently threaded per-frame state (editor settings, dialog/request state, error/input plumbing) passed straight through to widgets::editor::show, not a bundle waiting to be a struct — same shape and reasoning as that function's own allowance")]
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,

@@ -73,11 +73,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
                 dialog = dialog.set_directory(root);
             }
-            if let Some(folder) = dialog.pick_folder() {
-                if let Err(err) = state.open_project(folder) {
+            if let Some(folder) = dialog.pick_folder()
+                && let Err(err) = state.open_project(folder) {
                     outcome.error = Some(format!("failed to open project: {err}"));
                 }
-            }
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if ui.button("📄").on_hover_text("New File").clicked() {
@@ -116,13 +115,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     // *existing* file (also carried on `outcome.open`, via a tree click)
     // doesn't touch the filesystem, so re-walking the whole project for it
     // would be a pointless full directory read on every single file click.
-    if created || outcome.renamed.is_some() || outcome.deleted.is_some() {
-        if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
-            if let Err(err) = state.open_project(root) {
+    if (created || outcome.renamed.is_some() || outcome.deleted.is_some())
+        && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
+            && let Err(err) = state.open_project(root) {
                 outcome.error = Some(format!("failed to refresh project tree: {err}"));
             }
-        }
-    }
 
     outcome
 }
@@ -256,8 +253,8 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
     if actions.cancel_rename {
         panel.rename_draft = None;
     }
-    if let Some(new_name) = actions.confirm_rename {
-        if let Some((old_path, _)) = panel.rename_draft.take() {
+    if let Some(new_name) = actions.confirm_rename
+        && let Some((old_path, _)) = panel.rename_draft.take() {
             let new_name = new_name.trim();
             let new_path = old_path.parent().map(|p| p.join(new_name));
             match new_path {
@@ -272,7 +269,6 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
                 None => outcome.error = Some("rename failed: no parent directory".to_string()),
             }
         }
-    }
 
     if let Some(path) = actions.delete_request {
         panel.pending_delete = Some(path);

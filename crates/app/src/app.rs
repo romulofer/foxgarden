@@ -194,11 +194,10 @@ fn restore_session(
 ) {
     if let Some(last_project) = storage.get_string(LAST_PROJECT_KEY) {
         let path = PathBuf::from(last_project);
-        if path.is_dir() {
-            if let Err(err) = state.open_project(path) {
+        if path.is_dir()
+            && let Err(err) = state.open_project(path) {
                 *last_error = Some(format!("failed to reopen last project: {err}"));
             }
-        }
     }
 
     if let Some(open_tabs) = storage.get_string(OPEN_TABS_KEY) {
@@ -222,11 +221,10 @@ fn restore_session(
         }
     }
 
-    if let Some(active_path) = storage.get_string(ACTIVE_TAB_KEY) {
-        if let Some(index) = state.find_tab(Path::new(&active_path)) {
+    if let Some(active_path) = storage.get_string(ACTIVE_TAB_KEY)
+        && let Some(index) = state.find_tab(Path::new(&active_path)) {
             state.focus_tab(index);
         }
-    }
 }
 
 /// Inverse of `restore_session`: writes the project folder, open tab paths
@@ -267,11 +265,10 @@ fn restore_settings(
     dark_mode: &mut bool,
     indent_settings: &mut IndentSettings,
 ) {
-    if let Some(key) = storage.get_string(EDITOR_FONT_KEY) {
-        if let Some(font) = EditorFont::from_storage_key(&key) {
+    if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
+        && let Some(font) = EditorFont::from_storage_key(&key) {
             *editor_font = font;
         }
-    }
     if let Some(size) = storage.get_string(FONT_SIZE_KEY).and_then(|s| s.parse::<f32>().ok()) {
         *font_size = size;
     }

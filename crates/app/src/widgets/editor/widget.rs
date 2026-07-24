@@ -94,6 +94,7 @@ pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalPars
 /// than `.java`/`.kt`) — such files still open and edit normally, they just
 /// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
 /// are language-agnostic and keep working regardless.
+#[expect(clippy::too_many_arguments, reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see TECHNICAL_DEBT.md #5 (the 'splitting widget.rs further' entry) for why bundling into a struct isn't a clear win here, and context_menu::show_context_menu's own allowance for the same shape")]
 pub fn show(
     ui: &mut egui::Ui,
     doc: &mut Document,
@@ -247,8 +248,8 @@ pub fn show(
                 let opener = take_event(ui, |e| single_pairable_char(e).is_some())
                     .map(|e| single_pairable_char(&e).expect("matched above"));
 
-                if let Some(opener) = opener {
-                    if let Some((wrapped, sel_start, sel_end)) =
+                if let Some(opener) = opener
+                    && let Some((wrapped, sel_start, sel_end)) =
                         wrap_selection(&old_text, range.start.0, range.end.0, opener)
                     {
                         apply_edit(doc, parser, &old_text, &wrapped);
@@ -257,7 +258,6 @@ pub fn show(
                         old_text = wrapped.clone();
                         text = wrapped;
                     }
-                }
             }
         }
     }
@@ -539,11 +539,10 @@ pub fn show(
             font_size_bits: font_size.to_bits(),
         };
 
-        if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedLayout>(layout_cache_id)) {
-            if cached.key == key {
+        if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedLayout>(layout_cache_id))
+            && cached.key == key {
                 return cached.galley;
             }
-        }
 
         let mut job = LayoutJob::default();
         job.wrap.max_width = wrap_width;

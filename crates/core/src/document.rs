@@ -237,7 +237,7 @@ mod tests {
         // (then fail UTF-8 validation) — the point of `looks_binary` is to
         // catch it from the first 8KB alone, before that full read happens.
         let mut contents = vec![0x89, b'P', b'N', b'G', 0x00];
-        contents.extend(std::iter::repeat(b'a').take(50 * 1024 * 1024));
+        contents.extend(std::iter::repeat_n(b'a', 50 * 1024 * 1024));
         std::fs::write(&path, &contents).unwrap();
 
         let result = Document::open(path.clone());

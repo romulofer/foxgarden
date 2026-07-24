@@ -30,6 +30,7 @@ const FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
 /// Clamp range for the Settings > Indentation width control.
 const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
 
+#[expect(clippy::too_many_arguments, reason = "each parameter is an independently-owned piece of app-wide state a distinct menu section reads or mutates (editor settings, dialog state, error/input plumbing), not a bundle waiting to be a struct — same shape and reasoning as widgets::editor::show's own allowance")]
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
@@ -55,11 +56,10 @@ pub fn show(
                 ui.close();
             }
             if ui.button("Open Folder…").clicked() {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                    if let Err(err) = state.open_project(folder) {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    && let Err(err) = state.open_project(folder) {
                         *last_error = Some(format!("failed to open project: {err}"));
                     }
-                }
                 ui.close();
             }
             ui.separator();
