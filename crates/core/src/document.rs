@@ -136,16 +136,9 @@ fn looks_binary(path: &Path) -> std::io::Result<bool> {
 mod tests {
     use super::*;
 
-    fn temp_java_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Hello.java");
-        std::fs::write(&path, contents).unwrap();
-        (dir, path)
-    }
-
     #[test]
     fn edit_marks_document_dirty() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
         assert!(!doc.is_dirty());
 
@@ -155,7 +148,7 @@ mod tests {
 
     #[test]
     fn save_clears_dirty_state() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path.clone()).unwrap();
 
         doc.buffer.insert(0, "// comment\n");
@@ -168,7 +161,7 @@ mod tests {
 
     #[test]
     fn edit_undone_to_original_content_is_not_dirty() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
 
         doc.buffer.insert(0, "// comment\n");
@@ -201,7 +194,7 @@ mod tests {
 
     #[test]
     fn save_trims_trailing_whitespace_from_every_line() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path.clone()).unwrap();
 
         doc.buffer = Rope::from_str("class Hello {   \n\tint x;\t\t\n}   \n");
@@ -215,7 +208,7 @@ mod tests {
 
     #[test]
     fn save_trims_a_final_line_with_no_trailing_newline() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
 
         doc.buffer = Rope::from_str("class Hello {}  ");
@@ -227,7 +220,7 @@ mod tests {
 
     #[test]
     fn save_preserves_crlf_line_endings_while_trimming() {
-        let (_dir, path) = temp_java_file("class Hello {}");
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
 
         doc.buffer = Rope::from_str("class Hello {}  \r\n  int x;\r\n");

@@ -251,7 +251,7 @@ fn show_close_confirm(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    show_modal(ui, "close_confirm", Some(index), |ui, &index| {
+    let outcome = show_modal(ui, "close_confirm", Some(index), |ui, &index| {
         ui.label(format!("Save changes to {name} before closing?"));
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
@@ -270,6 +270,11 @@ fn show_close_confirm(
             }
         });
     });
+    // Escape means "stop asking," the same as Cancel — neither saves nor
+    // discards the tab, it's still open with `pending_close` cleared.
+    if let Some((_, true)) = outcome {
+        *pending_close = None;
+    }
 }
 
 #[cfg(test)]

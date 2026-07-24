@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use super::auto_edit::char_to_byte;
+use super::text_offset::char_to_byte;
 
 /// Marks where the cursor should land after a template expands. Not a
 /// literal character sequence a user would type, so a plain substring

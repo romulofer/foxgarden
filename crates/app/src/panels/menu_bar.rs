@@ -48,7 +48,7 @@ pub fn show(
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
-            if ui.button("New File…").clicked() {
+            if ui.add(egui::Button::new("New File…").shortcut_text("Ctrl+N")).clicked() {
                 if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
                     side_panel.begin_new_file(root);
                 }
@@ -197,7 +197,7 @@ pub fn show(
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
-    let closed = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
+    let outcome = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
         ui.heading("FoxGarden");
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.label("A light code editor for Java and Kotlin.");
@@ -217,10 +217,14 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Alt+↑/↓ — move the current line up/down");
         ui.label("Alt+Shift+↑/↓ — duplicate the current line");
         ui.label("Home — jump to first non-whitespace, then column 0");
+        ui.label("Ctrl+N — new file");
+        ui.label("Esc — close the current dialog");
         ui.separator();
         ui.button("Close").clicked()
     });
-    if closed == Some(true) {
+    if let Some((close_clicked, escape_pressed)) = outcome
+        && (close_clicked || escape_pressed)
+    {
         menu.about_open = false;
     }
 }

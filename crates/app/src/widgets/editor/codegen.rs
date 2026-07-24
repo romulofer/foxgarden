@@ -1,4 +1,5 @@
-use super::auto_edit::{byte_to_char, char_to_byte};
+use super::text_offset::{byte_to_char, char_to_byte};
+use crate::widgets::modal::show_modal;
 use syntax::{ClassFields, FieldInfo};
 
 /// Which accessors to generate — driven by the Tools menu's separate
@@ -181,6 +182,88 @@ pub fn apply_dialog(dialog: &GenerateAccessorsDialog, text: &str, indent_unit: &
     Some(insert_at_class_end(text, class.insertion_byte, &generated))
 }
 
+/// Renders `generate_dialog`'s class/field picker, if it's open.
+/// `Some(Ok((new_text, new_cursor)))` once "Generate" produces something to
+/// insert, `Some(Err(message))` once it produces nothing (nothing checked,
+/// or every checked field turned out `final` under a `Setters`-only
+/// dialog), `None` while the dialog stays closed, is untouched this frame,
+/// or was just cancelled. Every intent from inside the modal (class pick,
+/// checkbox toggle, which button was clicked) is collected into plain
+/// locals first and only applied to `*generate_dialog` after `show_modal`
+/// returns — the "Generate"/"Cancel" buttons need to clear
+/// `*generate_dialog` itself, and doing that while a `&mut
+/// GenerateAccessorsDialog` borrowed from it is still captured several
+/// closures deep (the modal body, then `ui.horizontal`) would be two
+/// overlapping mutable borrows of the same `Option`.
+pub fn show_generate_accessors_dialog(
+    ui: &egui::Ui,
+    generate_dialog: &mut Option<GenerateAccessorsDialog>,
+    text: &str,
+    indent_unit: &str,
+) -> Option<Result<(String, usize), String>> {
+    let is_open = generate_dialog.is_some();
+
+    let mut new_selection = None;
+    let mut toggled = None;
+    let mut generate_clicked = false;
+    let mut cancel_clicked = false;
+
+    let modal_outcome = show_modal(ui, "generate_accessors_dialog", is_open.then_some(()), |ui, _| {
+        let dialog = generate_dialog.as_ref().expect("guarded by is_open above");
+
+        if dialog.classes().len() > 1 {
+            ui.label("Generate accessors for:");
+            for (index, class) in dialog.classes().iter().enumerate() {
+                if ui.radio(index == dialog.selected_class(), class.name.as_str()).clicked() {
+                    new_selection = Some(index);
+                }
+            }
+            ui.separator();
+        }
+
+        let class = &dialog.classes()[dialog.selected_class()];
+        for (index, field) in class.fields.iter().enumerate() {
+            let label = if field.is_final {
+                format!("{} : {} (final)", field.name, field.java_type)
+            } else {
+                format!("{} : {}", field.name, field.java_type)
+            };
+            let mut checked = dialog.checked()[index];
+            if ui.checkbox(&mut checked, label).changed() {
+                toggled = Some((index, checked));
+            }
+        }
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            generate_clicked = ui.button("Generate").clicked();
+            cancel_clicked = ui.button("Cancel").clicked();
+        });
+    });
+
+    let escape_pressed = modal_outcome.is_some_and(|(_, escape_pressed)| escape_pressed);
+
+    let dialog = generate_dialog.as_mut()?;
+    if let Some(index) = new_selection {
+        dialog.select_class(index);
+    }
+    if let Some((index, checked)) = toggled {
+        dialog.set_checked(index, checked);
+    }
+
+    if generate_clicked {
+        let result = apply_dialog(dialog, text, indent_unit)
+            .ok_or_else(|| "Nothing to generate: no fields selected.".to_string());
+        *generate_dialog = None;
+        Some(result)
+    } else if cancel_clicked || escape_pressed {
+        *generate_dialog = None;
+        None
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,15 +357,6 @@ mod tests {
         let (text, cursor) = insert_generated("class Foo {\n}\n", 12, "    // generated\n");
         assert_eq!(text, "class Foo {\n    // generated\n}\n");
         assert_eq!(cursor, 12 + "    // generated\n".chars().count());
-    }
-
-    #[test]
-    fn byte_to_char_round_trips_with_char_to_byte() {
-        let text = "class Foo { // café\n}\n";
-        for char_idx in 0..text.chars().count() {
-            let byte = char_to_byte(text, char_idx);
-            assert_eq!(byte_to_char(text, byte), char_idx);
-        }
     }
 
     #[test]

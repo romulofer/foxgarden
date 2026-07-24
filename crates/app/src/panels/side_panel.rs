@@ -298,7 +298,7 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
         format!("Delete {name}? This cannot be undone.")
     };
 
-    show_modal(ui, "delete_confirm", Some(path), |ui, path| {
+    let modal_outcome = show_modal(ui, "delete_confirm", Some(path), |ui, path| {
         ui.label(message);
         ui.horizontal(|ui| {
             if ui.button("Delete").clicked() {
@@ -313,6 +313,10 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
             }
         });
     });
+    // Escape cancels, same as the "Cancel" button — nothing gets deleted.
+    if let Some((_, true)) = modal_outcome {
+        panel.pending_delete = None;
+    }
 }
 
 /// Draws the inline rename text field + confirm/cancel buttons shown in

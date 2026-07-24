@@ -128,6 +128,21 @@ Three-crate workspace, dependency direction is strict:
 core  <-  syntax  <-  app
 ```
 
+A fourth crate, **`crates/test-support`**, sits outside that chain as a
+`[dev-dependencies]`-only leaf: `core`, `syntax` (once it needs one), and
+`app` each depend on it purely for shared test fixtures (`temp_file`/
+`temp_document`/`write_file` — a temp directory plus a file, or an opened
+`Document`, ready for a test to act on). It normally-depends on `fg-core`
+itself (to return `Document`s) — a `core` -> `test-support` dev-dependency
+alongside a `test-support` -> `core` normal dependency is a cycle, but
+Cargo explicitly allows dev-dependency cycles specifically because they
+only ever matter when building/testing the crate on the near end, never
+when it's pulled in as a library. Add a new fixture helper here, not as
+another per-file `fn open_fixture(...)`/`fn java_file(...)` — that
+duplication (identical helpers independently reimplemented in `core` and
+`app` before this crate existed) is what it exists to stop from
+recurring.
+
 - **`crates/core`** (package name `fg-core`, crate name `fg_core` — named to
   avoid colliding with Rust's built-in `core` crate): `Document`, `Project`/
   `FileNode`, `EditorState`, `Diagnostic`. No `egui` or `tree-sitter`
@@ -177,24 +192,69 @@ core  <-  syntax  <-  app
     windowing/render backend, so `FoxGardenApp::new` itself stays untested,
     same as the rest of its GUI-wiring functions.
   - `widgets/editor/` is the custom highlighted/squiggled text widget
-    (SPEC.md §5.4–5.5): `widget.rs` (the `show()` entry point and its
-    `TextEdit` wiring — including the line-number gutter, laid out via a
-    `ui.horizontal` with the gutter's width reserved before `TextEdit` is
-    shown), `auto_edit.rs` (pure auto-pair/auto-indent/join-lines text
-    transforms), `painting.rs` (diagnostic squiggles + hover tooltips,
-    multi-cursor overlay, and the line-number gutter's own paint call,
-    which reads row positions straight off the same `Galley`
-    `TextEdit` renders rather than recomputing them from font metrics —
-    see `paint_line_numbers`), `multi_cursor.rs` (Ctrl+D's pure search/edit
-    logic — see the gotchas below for why this can't just use egui's
-    `TextEdit` directly). Only `widgets::editor::show` is public outside
-    the module.
+    (SPEC.md §5.4–5.5), split one file per identifiable concern:
+    - `widget.rs`: the `show()` entry point and its `TextEdit` wiring
+      (including the line-number gutter, laid out via a `ui.horizontal`
+      with the gutter's width reserved before `TextEdit` is shown), plus
+      every interception block that has to run *before* `TextEdit::show()`
+      to compete with its own default key handling (Tab, Alt+Arrow, Home,
+      Ctrl+/, wrap-selection, multi-cursor). This is the one file in the
+      module that's allowed to stay large — it's genuinely one thing
+      (orchestrating the widget's single frame), not several things that
+      happen to be adjacent; splitting it further would mean breaking
+      apart blocks that all share the same `text`/`old_text`/
+      `manual_cursor_range` threading, which is a worse trade than the
+      length.
+    - `auto_edit.rs`: pure auto-pair/auto-indent/join-lines/
+      case-conversion/line-comment/move-and-duplicate-line text
+      transforms — no `egui` types, just `&str` in, `(String, ...)` out.
+    - `text_offset.rs`: `char_to_byte`/`byte_to_char`, the byte↔char offset
+      conversion every other file in this module needs (a syntax tree only
+      ever deals in bytes; egui's cursor API only ever deals in chars).
+      Promoted out of `auto_edit.rs` once a second and third file started
+      importing from it for something with nothing to do with auto-pair/
+      auto-indent — the tell that a helper has outgrown the file it was
+      born in: something reused *across* files, with zero domain
+      knowledge of any one of them, is exactly what earns its own file
+      (see `crates/test-support` below for the same principle one level
+      up, across whole crates).
+    - `painting.rs`: diagnostic squiggles + hover tooltips, multi-cursor
+      overlay, and the line-number gutter's own paint call, which reads
+      row positions straight off the same `Galley` `TextEdit` renders
+      rather than recomputing them from font metrics — see
+      `paint_line_numbers`.
+    - `multi_cursor.rs`: Ctrl+D's pure search/edit logic — see the gotchas
+      below for why this can't just use egui's `TextEdit` directly.
+    - `codegen.rs`: Java getters/setters generation end to end —
+      `syntax::java_classes_with_fields` finds every eligible class in the
+      whole file, `GenerateAccessorsDialog` is the picker's state when
+      more than one qualifies, and `show_generate_accessors_dialog`
+      renders it (lives here, not in `widget.rs`, precisely so this
+      feature's data/logic/rendering aren't split across files for no
+      reason).
+    - `templates.rs`: live-template trigger-word expansion.
+    - `context_menu.rs`: the right-click menu (Undo/Redo/Cut/Copy/Paste/
+      Select All/Toggle Line Comment/Duplicate Line/Save) — see the
+      `pending_input` gotcha below for why Undo/Redo/Select All are
+      queued rather than applied directly, unlike everything else here.
+
+    Only `widgets::editor::show`, `AccessorKind`, `GenerateAccessorsDialog`,
+    and `CaseConversion` are public outside the module.
+  - `widgets/modal.rs` (one level up, not inside `editor/`, since it's
+    shared by both the editor widget and the panels below it): the
+    `show_modal` helper every confirm/about/error/picker dialog in this
+    app is built on — including its `Escape`-closes-the-topmost-modal
+    behavior, which every caller must apply itself (see the return value's
+    doc comment).
   - `panels/` is the surrounding UI chrome built from that widget:
     `menu_bar.rs`, `side_panel.rs` (project tree + file create/rename/
-    delete), `tabs.rs` (tab bar + the parser-lifecycle helper above).
+    delete), `tabs.rs` (tab bar + the parser-lifecycle helper above, plus
+    `save_document` — the save-then-reparse sequence shared by `Ctrl+S`,
+    the close-confirmation modal's Save button, and the editor's
+    right-click Save), `quick_switcher.rs` (`Ctrl+E`'s recent-files popup).
   - `style/` is cross-cutting presentation: `fonts.rs` (`EditorFont`
     selection, JetBrains Mono registration), `theme.rs` (light/dark color
-    palette).
+    palette), `indent.rs` (tabs-vs-spaces + width settings).
 
 ## Non-obvious gotchas (learned the hard way this session)
 
@@ -349,6 +409,24 @@ core  <-  syntax  <-  app
   `manual_cursor_range: Option<CCursorRange>` through every branch that
   wants to override the cursor, and calls `set_char_range` + `store` exactly
   once at the very end.
+- **Every block in `widgets::editor::show` that edits the buffer must
+  refresh its local `text`/`old_text` right after, not just call
+  `apply_edit` and move on** — `apply_edit` updates `doc.buffer`, but
+  `text`/`old_text` are separate local `String`s computed once near the
+  top of the function; any later block that reads them (a subsequent
+  feature check, the trailing `manual_cursor_range` apply, right-click
+  menu items rendered near the end) sees stale content for the rest of
+  *that* frame otherwise. This bit for real with the right-click menu's
+  Save button: `Document::save` trims trailing whitespace as a side
+  effect, changing `doc.buffer`'s length, but the button only called
+  `tabs::save_document` and moved on — self-healed by the next frame (same
+  class of one-frame lag as the highlighting-catch-up gotcha above), but
+  it broke the invariant every *other* block in this function already
+  follows for no good reason. Fixed by adding the same
+  `old_text = saved_text.clone(); text = saved_text;` refresh every edit
+  path already does. If you add a new block here that can change the
+  buffer — including indirectly, like a save-time formatter would — refresh
+  both afterward.
 - **`TextEdit::id_salt(salt)` does not hash `salt` directly into the widget
   id — it combines it with whichever `Ui` calls `.show()`, so the id is
   *not* actually independent of where in the ui tree the widget renders,
@@ -422,11 +500,21 @@ core  <-  syntax  <-  app
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
   `crates/app/src/widgets/editor/widget.rs`'s test module for the pattern.
-- There is no click-automation tool available in this environment (no
-  `xdotool`). Verifying actual mouse-driven flows (native "Open Folder"
-  dialog, clicking a tree node) requires a human running `cargo run -p app`
-  by hand — don't claim those flows are verified without either doing that
-  or clearly disclosing that they weren't.
+- Click-automation tooling (`xdotool`) is not installed by default in a
+  fresh environment, but isn't ruled out either — it's been used
+  successfully in this project (launch `cargo run -p app` in the
+  background against a real `$DISPLAY`, `wmctrl` to find/activate the
+  window, `xdotool mousemove --window <id> x y click 1` / `type` / `key`
+  to drive it, `import -window <name> out.png` to screenshot and read the
+  result). Check whether it's present (`which xdotool`) before assuming
+  either way; if it's missing, ask before installing it rather than
+  silently skipping GUI verification or silently adding a system package.
+  A native file-picker dialog (`rfd`, "Open Folder…") is a separate OS
+  dialog outside egui's own event loop and likely needs different handling
+  than in-app widgets — don't assume the same click recipe reaches it
+  without checking. Either way, don't claim a mouse-driven flow was
+  verified without actually driving it or clearly disclosing that it
+  wasn't.
 - Anything that needs `eframe::Storage` (session persistence) or
   `egui::Context`'s persistent temp data (the layout cache) is testable
   without a real window: implement `eframe::Storage` yourself over a plain

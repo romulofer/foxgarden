@@ -107,16 +107,10 @@ impl EditorState {
 mod tests {
     use super::*;
 
-    fn java_file(dir: &tempfile::TempDir, name: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, format!("class {name} {{}}")).unwrap();
-        path
-    }
-
     #[test]
     fn reopening_same_file_focuses_existing_tab_without_duplicating() {
         let dir = tempfile::tempdir().unwrap();
-        let path = java_file(&dir, "A.java");
+        let path = test_support::placeholder_java_file(dir.path(), "A.java");
         let mut state = EditorState::new();
 
         let first_index = state.open_tab(path.clone()).unwrap();
@@ -130,9 +124,9 @@ mod tests {
     #[test]
     fn closing_active_tab_selects_sensible_neighbor() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
-        let b = java_file(&dir, "B.java");
-        let c = java_file(&dir, "C.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "B.java");
+        let c = test_support::placeholder_java_file(dir.path(), "C.java");
         let mut state = EditorState::new();
 
         state.open_tab(a).unwrap();
@@ -156,8 +150,8 @@ mod tests {
     #[test]
     fn reopen_last_closed_tab_restores_it_and_focuses_it() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
-        let b = java_file(&dir, "B.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "B.java");
         let mut state = EditorState::new();
 
         state.open_tab(a).unwrap();
@@ -174,8 +168,8 @@ mod tests {
     #[test]
     fn reopen_last_closed_tab_pops_in_lifo_order() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
-        let b = java_file(&dir, "B.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "B.java");
         let mut state = EditorState::new();
 
         state.open_tab(a).unwrap();
@@ -201,7 +195,7 @@ mod tests {
     #[test]
     fn reopening_a_tab_already_open_focuses_it_instead_of_duplicating() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
         let mut state = EditorState::new();
 
         state.open_tab(a.clone()).unwrap();
@@ -220,7 +214,7 @@ mod tests {
         let mut state = EditorState::new();
 
         let paths: Vec<PathBuf> = (0..=MAX_CLOSED_TABS)
-            .map(|i| java_file(&dir, &format!("F{i}.java")))
+            .map(|i| test_support::placeholder_java_file(dir.path(), &format!("F{i}.java")))
             .collect();
         for path in &paths {
             state.open_tab(path.clone()).unwrap();
@@ -246,7 +240,7 @@ mod tests {
     #[test]
     fn open_project_clears_closed_tabs_from_the_previous_project() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
         let mut state = EditorState::new();
 
         state.open_tab(a).unwrap();

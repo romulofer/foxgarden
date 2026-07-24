@@ -1,3 +1,4 @@
+use super::text_offset::char_to_byte;
 use crate::style::indent::IndentSettings;
 
 /// Auto-indents after Enter: matches the new line's indentation to the line
@@ -486,21 +487,6 @@ pub(super) fn convert_selection_case(text: &str, start_char: usize, end_char: us
     let new_text = format!("{}{converted}{}", &text[..start_byte], &text[end_byte..]);
     let new_end = start_char + converted.chars().count();
     Some((new_text, start_char, new_end))
-}
-
-pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
-    text.char_indices()
-        .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
-}
-
-/// Inverse of `char_to_byte`: the char offset of whatever byte offset
-/// `byte` falls on. Used to turn a byte position found by walking a
-/// syntax tree (which only ever deals in bytes) into the char position
-/// `insert_generated`/`TextEdit`'s cursor API expect.
-pub(super) fn byte_to_char(text: &str, byte: usize) -> usize {
-    text[..byte].chars().count()
 }
 
 /// Maps an auto-pairable opening character to its closing counterpart —

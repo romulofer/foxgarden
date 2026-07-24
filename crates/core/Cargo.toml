@@ -8,3 +8,4 @@ ropey = "1.6.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+test-support = { path = "../test-support" }

@@ -2,24 +2,26 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Event, FontId, Galley, Key, Modifiers};
+use egui::{Event, FontId, Galley, Key};
 use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    apply_auto_indent, apply_auto_pair, char_to_byte, convert_selection_case, duplicate_line, indent_selected_lines,
-    is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, toggle_line_comments, wrap_selection,
-    CaseConversion,
+    apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line, indent_selected_lines, is_pairable,
+    join_lines, move_line_down, move_line_up, smart_home_target, toggle_line_comments, wrap_selection, CaseConversion,
 };
-use super::codegen::{apply_dialog, generate_accessors, insert_at_class_end, AccessorKind, GenerateAccessorsDialog};
+use super::codegen::{self, generate_accessors, insert_at_class_end, AccessorKind, GenerateAccessorsDialog};
+use super::context_menu;
+#[cfg(test)]
+use super::context_menu::synthetic_shortcut;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers, paint_occurrence_highlights};
 use super::templates::{self, expand, find_template, word_before_cursor};
+use super::text_offset::char_to_byte;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
-use crate::widgets::modal::show_modal;
 
 /// Identifies what a laid-out galley depends on: the buffer's exact
 /// contents, which language (if any) is highlighting it, the color theme,
@@ -59,20 +61,6 @@ fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
     }
 }
 
-/// Builds a `Ctrl`(+`Shift`)+`key` press event, for the right-click menu's
-/// Undo/Redo/Select All items to queue into `pending_input` — they can't
-/// act directly (see `show`'s doc comment on `pending_input`), so a real
-/// keyboard-shaped event is what stands in for the click.
-fn synthetic_shortcut(key: Key, shift: bool) -> Event {
-    Event::Key {
-        key,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers: Modifiers { command: true, shift, ..Modifiers::NONE },
-    }
-}
-
 fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextFormat {
     TextFormat {
         font_id,
@@ -91,7 +79,7 @@ fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextF
 /// could forget the reparse step and silently drift out of sync, the same
 /// bug `save_tab` in `panels::tabs` had before it started reusing this
 /// pattern too).
-fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
+pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
     doc.buffer = Rope::from_str(new_text);
     if let Some(parser) = parser.as_mut() {
         let edit = syntax::diff_edit(old_text, new_text);
@@ -726,120 +714,44 @@ pub fn show(
         }
     }
 
-    let doc_text_for_dialog = doc.buffer.to_string();
-    if let Some(outcome) =
-        show_generate_accessors_dialog(ui, generate_dialog, &doc_text_for_dialog, &indent_settings.unit())
-    {
-        match outcome {
-            Ok((inserted, new_cursor)) => {
-                apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
-                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+    // Gated on `generate_dialog` already being open, not just deferred to
+    // `codegen::show_generate_accessors_dialog`'s own internal check —
+    // every other frame (the overwhelming majority: the dialog is only
+    // open right after a multi-class Generate request) would otherwise pay
+    // for cloning the whole buffer into `doc_text_for_dialog` just to
+    // immediately discover there was nothing to show.
+    if generate_dialog.is_some() {
+        let doc_text_for_dialog = doc.buffer.to_string();
+        if let Some(outcome) =
+            codegen::show_generate_accessors_dialog(ui, generate_dialog, &doc_text_for_dialog, &indent_settings.unit())
+        {
+            match outcome {
+                Ok((inserted, new_cursor)) => {
+                    apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
+                    manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                }
+                Err(message) => *last_error = Some(message),
             }
-            Err(message) => *last_error = Some(message),
         }
     }
 
-    // Right-click context menu: the common editor actions an IntelliJ-style
-    // menu offers, reachable here without the menu bar or a keyboard
-    // shortcut. `primary_cursor_range` is copied out before opening the
-    // menu so the closure below doesn't need to borrow `output` at all (it
-    // already has its own long-lived mutable borrow of `output.state` at
-    // the very end of this function) — `CCursorRange` is `Copy`, so this
-    // costs nothing; `.as_sorted_char_range()` is recomputed from it at
-    // each use site below since the `Range` it returns isn't `Copy`.
-    let primary_cursor_range = output.cursor_range;
-    let has_selection = primary_cursor_range.is_some_and(|r| !r.is_empty());
-    let cursor_char = primary_cursor_range.map(|r| r.primary.index.0);
-    output.response.context_menu(|ui| {
-        if ui.button("Undo").clicked() {
-            pending_input.push(synthetic_shortcut(Key::Z, false));
-            ui.memory_mut(|mem| mem.request_focus(widget_id));
-            ui.close();
-        }
-        if ui.button("Redo").clicked() {
-            pending_input.push(synthetic_shortcut(Key::Z, true));
-            ui.memory_mut(|mem| mem.request_focus(widget_id));
-            ui.close();
-        }
-
-        ui.separator();
-
-        if ui.add_enabled(has_selection, egui::Button::new("Cut")).clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let start = char_to_byte(&text, range.start.0);
-                let end = char_to_byte(&text, range.end.0);
-                ui.ctx().copy_text(text[start..end].to_string());
-                let new_text = format!("{}{}", &text[..start], &text[end..]);
-                apply_edit(doc, parser, &text, &new_text);
-                manual_cursor_range = Some(CCursorRange::one(CCursor::new(range.start.0)));
-                old_text = new_text.clone();
-                text = new_text;
-            }
-            ui.close();
-        }
-        if ui.add_enabled(has_selection, egui::Button::new("Copy")).clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let start = char_to_byte(&text, range.start.0);
-                let end = char_to_byte(&text, range.end.0);
-                ui.ctx().copy_text(text[start..end].to_string());
-            }
-            ui.close();
-        }
-        // Read fresh, only while the menu is actually open — egui has no
-        // public API to read the OS clipboard (only `Context::copy_text`
-        // to write it), so this is the one item here that needs `arboard`
-        // directly rather than something already exposed by egui.
-        let clipboard_text =
-            arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).ok().filter(|s| !s.is_empty());
-        if ui.add_enabled(clipboard_text.is_some(), egui::Button::new("Paste")).clicked() {
-            if let (Some(pasted), Some(range)) = (&clipboard_text, primary_cursor_range.map(|r| r.as_sorted_char_range())) {
-                let start = char_to_byte(&text, range.start.0);
-                let end = char_to_byte(&text, range.end.0);
-                let new_text = format!("{}{pasted}{}", &text[..start], &text[end..]);
-                let new_cursor = range.start.0 + pasted.chars().count();
-                apply_edit(doc, parser, &text, &new_text);
-                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
-                old_text = new_text.clone();
-                text = new_text;
-            }
-            ui.close();
-        }
-        if ui.button("Select All").clicked() {
-            pending_input.push(synthetic_shortcut(Key::A, false));
-            ui.memory_mut(|mem| mem.request_focus(widget_id));
-            ui.close();
-        }
-
-        ui.separator();
-
-        if ui.button("Toggle Line Comment").clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let (commented, new_start, new_end) = toggle_line_comments(&text, range.start.0, range.end.0);
-                apply_edit(doc, parser, &text, &commented);
-                manual_cursor_range = Some(CCursorRange::two(CCursor::new(new_start), CCursor::new(new_end)));
-                old_text = commented.clone();
-                text = commented;
-            }
-            ui.close();
-        }
-        if ui.button("Duplicate Line").clicked() {
-            if let Some(cursor_char) = cursor_char {
-                let (duplicated, new_cursor) = duplicate_line(&text, cursor_char);
-                apply_edit(doc, parser, &text, &duplicated);
-                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
-                old_text = duplicated.clone();
-                text = duplicated;
-            }
-            ui.close();
-        }
-
-        ui.separator();
-
-        if ui.add_enabled(doc.is_dirty(), egui::Button::new("Save")).clicked() {
-            crate::panels::tabs::save_document(doc, parser, last_error);
-            ui.close();
-        }
-    });
+    // Right-click context menu: see `context_menu::show_context_menu`.
+    // `output.cursor_range` is copied out before calling it so that
+    // function doesn't need to borrow `output` at all (it already has its
+    // own long-lived mutable borrow of `output.state` at the very end of
+    // this function) — `CCursorRange` is `Copy`, so this costs nothing.
+    context_menu::show_context_menu(
+        &output.response,
+        widget_id,
+        doc,
+        parser,
+        output.cursor_range,
+        &mut text,
+        &mut old_text,
+        &mut manual_cursor_range,
+        pending_input,
+        last_error,
+    );
 
     if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
         let should_collapse = ui.input(|i| i.events.iter().any(is_multi_cursor_collapse_event));
@@ -963,97 +875,18 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
     )
 }
 
-/// Renders `generate_dialog`'s class/field picker, if it's open.
-/// `Some(Ok((new_text, new_cursor)))` once "Generate" produces something to
-/// insert, `Some(Err(message))` once it produces nothing (nothing checked,
-/// or every checked field turned out `final` under a `Setters`-only
-/// dialog), `None` while the dialog stays closed, is untouched this frame,
-/// or was just cancelled. Every intent from inside the modal (class pick,
-/// checkbox toggle, which button was clicked) is collected into plain
-/// locals first and only applied to `*generate_dialog` after `show_modal`
-/// returns — the "Generate"/"Cancel" buttons need to clear
-/// `*generate_dialog` itself, and doing that while a `&mut
-/// GenerateAccessorsDialog` borrowed from it is still captured several
-/// closures deep (the modal body, then `ui.horizontal`) would be two
-/// overlapping mutable borrows of the same `Option`.
-fn show_generate_accessors_dialog(
-    ui: &egui::Ui,
-    generate_dialog: &mut Option<GenerateAccessorsDialog>,
-    text: &str,
-    indent_unit: &str,
-) -> Option<Result<(String, usize), String>> {
-    let is_open = generate_dialog.is_some();
-
-    let mut new_selection = None;
-    let mut toggled = None;
-    let mut generate_clicked = false;
-    let mut cancel_clicked = false;
-
-    show_modal(ui, "generate_accessors_dialog", is_open.then_some(()), |ui, _| {
-        let dialog = generate_dialog.as_ref().expect("guarded by is_open above");
-
-        if dialog.classes().len() > 1 {
-            ui.label("Generate accessors for:");
-            for (index, class) in dialog.classes().iter().enumerate() {
-                if ui.radio(index == dialog.selected_class(), class.name.as_str()).clicked() {
-                    new_selection = Some(index);
-                }
-            }
-            ui.separator();
-        }
-
-        let class = &dialog.classes()[dialog.selected_class()];
-        for (index, field) in class.fields.iter().enumerate() {
-            let label = if field.is_final {
-                format!("{} : {} (final)", field.name, field.java_type)
-            } else {
-                format!("{} : {}", field.name, field.java_type)
-            };
-            let mut checked = dialog.checked()[index];
-            if ui.checkbox(&mut checked, label).changed() {
-                toggled = Some((index, checked));
-            }
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            generate_clicked = ui.button("Generate").clicked();
-            cancel_clicked = ui.button("Cancel").clicked();
-        });
-    });
-
-    let dialog = generate_dialog.as_mut()?;
-    if let Some(index) = new_selection {
-        dialog.select_class(index);
-    }
-    if let Some((index, checked)) = toggled {
-        dialog.set_checked(index, checked);
-    }
-
-    if generate_clicked {
-        let result = apply_dialog(dialog, text, indent_unit)
-            .ok_or_else(|| "Nothing to generate: no fields selected.".to_string());
-        *generate_dialog = None;
-        Some(result)
-    } else if cancel_clicked {
-        *generate_dialog = None;
-        None
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use fg_core::Language;
 
+    /// `test_support::temp_document` takes `(name, contents)`; every one of
+    /// this module's ~50 call sites was already written the other way
+    /// around (`(contents, filename)`, matching how the fixture text reads
+    /// as the "main" argument in a test body), so this keeps that order
+    /// rather than touching all of them.
     fn open_fixture(contents: &str, filename: &str) -> (tempfile::TempDir, Document) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(filename);
-        std::fs::write(&path, contents).unwrap();
-        let doc = Document::open(path).unwrap();
-        (dir, doc)
+        test_support::temp_document(filename, contents)
     }
 
     /// Builds a freshly parsed `Some(IncrementalParser)`, matching what

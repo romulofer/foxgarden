@@ -343,11 +343,13 @@ impl FoxGardenApp {
 /// needing a separate `dismissed` flag mutated from inside the closure.
 fn show_error_modal(ui: &egui::Ui, last_error: &mut Option<String>) {
     let message = last_error.as_deref();
-    let dismissed = show_modal(ui, "error_modal", message, |ui, message| {
+    let outcome = show_modal(ui, "error_modal", message, |ui, message| {
         ui.label(*message);
         ui.button("OK").clicked()
     });
-    if dismissed == Some(true) {
+    if let Some((ok_clicked, escape_pressed)) = outcome
+        && (ok_clicked || escape_pressed)
+    {
         *last_error = None;
     }
 }
@@ -359,6 +361,11 @@ impl eframe::App for FoxGardenApp {
         }
         if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command) {
             self.quick_switcher.toggle();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            self.side_panel.begin_new_file(root);
         }
 
         let mut outcome = side_panel::SidePanelOutcome::default();
@@ -457,17 +464,11 @@ mod tests {
         fn flush(&mut self) {}
     }
 
-    fn java_file(dir: &tempfile::TempDir, name: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, format!("class {name} {{}}")).unwrap();
-        path
-    }
-
     #[test]
     fn persisted_session_round_trips_open_tabs_and_active_tab() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
-        let b = java_file(&dir, "B.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "B.java");
 
         let mut state = EditorState::new();
         state.open_tab(a.clone()).unwrap();
@@ -491,7 +492,7 @@ mod tests {
     #[test]
     fn restore_session_skips_tabs_whose_file_no_longer_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let kept = java_file(&dir, "Kept.java");
+        let kept = test_support::placeholder_java_file(dir.path(), "Kept.java");
         let deleted = dir.path().join("Deleted.java");
 
         let mut storage = FakeStorage::default();
@@ -586,9 +587,9 @@ mod tests {
     fn close_tabs_under_closes_every_tab_inside_a_deleted_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("pkg/sub")).unwrap();
-        let a = java_file(&dir, "pkg/A.java");
-        let b = java_file(&dir, "pkg/sub/B.java");
-        let root = java_file(&dir, "Root.java");
+        let a = test_support::placeholder_java_file(dir.path(), "pkg/A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "pkg/sub/B.java");
+        let root = test_support::placeholder_java_file(dir.path(), "Root.java");
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
@@ -607,7 +608,7 @@ mod tests {
     #[test]
     fn close_tabs_under_closes_a_single_file_by_exact_path() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "A.java");
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
@@ -624,8 +625,8 @@ mod tests {
     fn handle_rename_repoints_every_tab_inside_a_renamed_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("old_pkg/sub")).unwrap();
-        let a = java_file(&dir, "old_pkg/A.java");
-        let b = java_file(&dir, "old_pkg/sub/B.java");
+        let a = test_support::placeholder_java_file(dir.path(), "old_pkg/A.java");
+        let b = test_support::placeholder_java_file(dir.path(), "old_pkg/sub/B.java");
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
@@ -645,7 +646,7 @@ mod tests {
     #[test]
     fn renaming_the_open_file_itself_leaves_it_saveable() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "Old.java");
+        let a = test_support::placeholder_java_file(dir.path(), "Old.java");
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
@@ -667,7 +668,7 @@ mod tests {
     #[test]
     fn handle_rename_repoints_a_single_tab_by_exact_path() {
         let dir = tempfile::tempdir().unwrap();
-        let a = java_file(&dir, "Old.java");
+        let a = test_support::placeholder_java_file(dir.path(), "Old.java");
 
         let mut state = EditorState::new();
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
