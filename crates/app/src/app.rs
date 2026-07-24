@@ -132,14 +132,23 @@ fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<Incrementa
 /// `.java` -> `.txt`). A directory rename moves every file beneath it, so
 /// every tab pointing anywhere under `old` needs repointing; `strip_prefix`
 /// against a tab whose path *is* `old` (the plain file-rename case) yields
-/// an empty suffix, so `new.join(suffix)` is just `new` — one code path
-/// covers both cases.
+/// an empty suffix. `new.join(suffix)` on an empty suffix is *not* simply
+/// `new`: it appends a trailing separator (e.g. `new/`), which `PathBuf`'s
+/// `==` treats as equal to `new` but which the OS does not — a later
+/// `std::fs::write` to that path fails with "Is a directory", since a
+/// trailing separator tells the OS the path must resolve to one. So the
+/// empty-suffix case is handled separately, without going through `join` at
+/// all.
 fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
     for (index, doc) in state.open_tabs.iter_mut().enumerate() {
         let Ok(suffix) = doc.path().strip_prefix(old) else {
             continue;
         };
-        let new_path = new.join(suffix);
+        let new_path = if suffix.as_os_str().is_empty() {
+            new.to_path_buf()
+        } else {
+            new.join(suffix)
+        };
         doc.path = new_path.clone();
 
         let new_language = new_path
@@ -616,6 +625,28 @@ mod tests {
     }
 
     #[test]
+    fn renaming_the_open_file_itself_leaves_it_saveable() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = java_file(&dir, "Old.java");
+
+        let mut state = EditorState::new();
+        let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
+        let index = state.open_tab(a.clone()).unwrap();
+        parsers.push(tabs::open_parser_for(&mut state.open_tabs[index]));
+        state.open_tabs[index].buffer.insert(0, "// edited\n");
+
+        let new_path = dir.path().join("New.java");
+        std::fs::rename(&a, &new_path).unwrap();
+        handle_rename(&mut state, &mut parsers, &a, &new_path);
+
+        let mut last_error = None;
+        tabs::save_active_tab(&mut state, &mut parsers, &mut last_error);
+
+        assert_eq!(last_error, None, "save produced an error: {last_error:?}");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), "// edited\nclass Old.java {}");
+    }
+
+    #[test]
     fn handle_rename_repoints_a_single_tab_by_exact_path() {
         let dir = tempfile::tempdir().unwrap();
         let a = java_file(&dir, "Old.java");
@@ -629,5 +660,9 @@ mod tests {
         handle_rename(&mut state, &mut parsers, &a, &new_path);
 
         assert_eq!(state.open_tabs[0].path(), new_path.as_path());
+        // `Path`'s `==` normalizes away a trailing separator, so it alone
+        // wouldn't have caught `new.join("")` producing "New.java/" — the
+        // OS-facing representation has to be checked too.
+        assert_eq!(state.open_tabs[0].path().as_os_str(), new_path.as_os_str());
     }
 }
