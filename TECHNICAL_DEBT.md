@@ -179,3 +179,140 @@ Not a mechanical port. Any future Kotlin highlighting improvement needs to:
 
 Next time Kotlin highlighting is revisited — this entry just saves that
 future pass from re-discovering the grammar mismatch from scratch.
+
+---
+
+## 4. Context menu's Paste item creates a new OS clipboard connection every frame the menu is open
+
+**Where:** `crates/app/src/widgets/editor/context_menu.rs`, the
+`arboard::Clipboard::new()` call inside `show_context_menu`'s
+`context_menu` closure (used to decide whether "Paste" should be enabled).
+
+**Status:** Open, low priority.
+
+### What was found
+
+Determining whether "Paste" should be enabled reads the OS clipboard via
+`arboard::Clipboard::new().and_then(|mut cb| cb.get_text())`. Because this
+line lives inside the `context_menu` closure, it re-runs every single frame
+the menu is rendered, not just once when it opens — opening a clipboard
+connection isn't free (an X11/Wayland round-trip under the hood on Linux),
+and a user hovering the menu while deciding what to click could keep it
+open for many frames in a row.
+
+### Why this wasn't fixed on the spot
+
+Low severity: the context menu is a rare, deliberately user-initiated,
+short-lived interaction, not the typing/scrolling hot path `AGENTS.md`'s
+performance principle is actually concerned with. A clean fix means real
+new state — caching the clipboard read across frames, keyed to the
+open/closed transition — for a benefit that's unlikely to ever be
+perceptible. Not worth the complexity until there's evidence it matters.
+
+### Proposed fix
+
+If this ever shows up in profiling or a user-reported stutter: read the
+clipboard once on the frame the menu actually opens (detectable via
+`Response::secondary_clicked()`, or by diffing egui's own popup-open memory
+state across frames) and cache the result in a small piece of state
+threaded alongside `pending_input`, instead of on every frame the popup
+renders.
+
+### Trigger condition
+
+Only if actually observed to matter — speculative caching without a
+measured need is exactly the kind of premature complexity the "lightweight"
+principle in `AGENTS.md` warns against.
+
+---
+
+## 5. Considered and rejected: splitting `widget.rs` further
+
+**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines).
+
+**Status:** Not actual debt — recorded so a future review doesn't re-flag
+file size alone and fragment a file that's already been evaluated for
+exactly that.
+
+### What was flagged
+
+A code-organization review this session already extracted two genuinely
+separable concerns out of this file — the right-click context menu (now
+`context_menu.rs`) and the getters/setters picker's rendering (moved into
+`codegen.rs`, next to the data/logic it already owned) — after `widget.rs`
+had grown to 2397 lines doing several distinct things. Even after that
+split the file is still large (dominated by the `show()` function and its
+colocated test module) and could get flagged again for size alone.
+
+### Why it doesn't apply
+
+What's left in `show()` is genuinely one thing: orchestrating a single
+frame of the `TextEdit` widget. Its interception blocks (Tab, Alt+Arrow,
+Home, `Ctrl+/`, wrap-selection, multi-cursor, the generate-request
+dispatch, the context-menu call, case conversion) all share the same
+`text`/`old_text`/`manual_cursor_range` locals, threaded sequentially
+through the function specifically because `TextEditState::store` can only
+be called once per frame (see that gotcha in `AGENTS.md`). Splitting
+further would mean either passing that whole bundle of state across a new
+function boundary for every remaining block (worse than the length it
+"fixes"), or bundling it into a struct — a bigger, riskier change than the
+size problem it would solve. `AGENTS.md`'s own architecture principle
+already covers this: a file earns a split once it's doing more than one
+identifiable thing, and this one, post-split, is back down to exactly one.
+
+### Proposed fix
+
+None right now. If a *specific* self-contained block within `show()` grows
+into its own feature the way getters/setters generation did — not just
+"the file is long" — extract that block specifically, the same way
+`codegen.rs`/`context_menu.rs` were.
+
+### Trigger condition
+
+A new feature that's genuinely separable (its own state, its own
+rendering, minimal interaction with the shared `text`/`old_text`/
+`manual_cursor_range` threading) lands inside `show()` and grows past a
+few dozen lines — extract that feature, not the file in general.
+
+---
+
+## 6. `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it directly
+
+**Where:** `crates/app/src/widgets/editor/widget.rs`'s test module, `fn
+open_fixture`.
+
+**Status:** Not real debt — recorded so a future cleanup pass doesn't
+"simplify" this into ~50 error-prone call-site edits for no real benefit.
+
+### What was found
+
+`crates/test-support`'s `temp_document(name, contents)` takes its
+arguments in the opposite order from this file's own
+`open_fixture(contents, filename)`, which is called roughly 50 times
+throughout this module's tests. `open_fixture` now just delegates to
+`temp_document` with the arguments swapped, rather than being deleted
+outright with every call site updated to match the shared crate's order.
+
+### Why it doesn't apply
+
+This was a deliberate choice, not an oversight: mechanically swapping two
+string-literal arguments across ~50 call sites by hand (or via a
+regex that has to distinguish which of two `&str` arguments is which at
+each site) is exactly the kind of change likely to silently swap a *test's
+own* filename and content at one or two sites without anyone noticing,
+since both are usually plausible-looking string literals. The one-line
+wrapper already achieves the actual goal — the file-writing logic isn't
+duplicated anymore — without that risk.
+
+### Proposed fix
+
+If `test_support::temp_document`'s argument order ever changes for an
+unrelated reason, or this test module gets touched heavily enough that a
+careful pass through all ~50 sites is already happening anyway, fold
+`open_fixture` away and call `test_support::temp_document` directly at
+each site under that same pass.
+
+### Trigger condition
+
+Only opportunistically, alongside other work that already touches most of
+this test module — not worth a dedicated pass on its own.
