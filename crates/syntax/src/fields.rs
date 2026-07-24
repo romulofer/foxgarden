@@ -1,7 +1,7 @@
 use tree_sitter::{Node, Tree};
 
-/// One field found by `java_fields_in_enclosing_class`, with what's needed
-/// to generate a getter/setter for it.
+/// One field found in a class body, with what's needed to generate a
+/// getter/setter for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldInfo {
     pub name: String,
@@ -11,38 +11,24 @@ pub struct FieldInfo {
     pub is_final: bool,
 }
 
-/// The smallest descendant of `node` (including `node` itself) whose kind
-/// is `kind` and whose byte range contains `byte` — used to find "the
-/// class the cursor is currently inside," walking from the tree's root.
-fn smallest_containing<'tree>(node: Node<'tree>, byte: usize, kind: &str) -> Option<Node<'tree>> {
-    if !(node.start_byte() <= byte && byte <= node.end_byte()) {
-        return None;
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(found) = smallest_containing(child, byte, kind) {
-            return Some(found);
-        }
-    }
-    (node.kind() == kind).then_some(node)
+/// One Java class with at least one eligible field, found by
+/// `java_classes_with_fields`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassFields {
+    pub name: String,
+    pub fields: Vec<FieldInfo>,
+    /// Byte offset of the class body's closing `}` — where generated
+    /// accessors get inserted, right before it.
+    pub insertion_byte: usize,
 }
 
-/// Every field declared directly in the body of the Java class enclosing
-/// `cursor_byte`, in source order — the source data for generating
-/// getters/setters at the cursor. Static fields are skipped (accessors for
-/// them are a much rarer, more deliberate choice than for instance state,
-/// and this keeps the generated set to what's usually wanted). A
+/// Every field declared directly in `body` (a `class_declaration`'s body
+/// node), in source order. Static fields are skipped (accessors for them
+/// are a much rarer, more deliberate choice than for instance state, and
+/// this keeps the generated set to what's usually wanted). A
 /// multi-variable declaration (`int x, y;`) yields one `FieldInfo` per
-/// variable. Returns an empty `Vec` if the cursor isn't inside any class
-/// body.
-pub fn java_fields_in_enclosing_class(tree: &Tree, source: &str, cursor_byte: usize) -> Vec<FieldInfo> {
-    let Some(class_node) = smallest_containing(tree.root_node(), cursor_byte, "class_declaration") else {
-        return Vec::new();
-    };
-    let Some(body) = class_node.child_by_field_name("body") else {
-        return Vec::new();
-    };
-
+/// variable.
+fn fields_in_class_body(body: Node, source: &str) -> Vec<FieldInfo> {
     let mut fields = Vec::new();
     let mut body_cursor = body.walk();
     for field_decl in body.children(&mut body_cursor) {
@@ -80,25 +66,59 @@ pub fn java_fields_in_enclosing_class(tree: &Tree, source: &str, cursor_byte: us
     fields
 }
 
+/// Every class in the file with at least one eligible field, in source
+/// order — including nested classes, each keeping only its own directly
+/// declared fields (a nested class's fields aren't attributed to its
+/// enclosing class, since they're a separate `class_declaration` with its
+/// own body). The data source for the getters/setters picker: which
+/// classes exist to generate accessors for, and where to insert them.
+pub fn java_classes_with_fields(tree: &Tree, source: &str) -> Vec<ClassFields> {
+    let mut classes = Vec::new();
+    collect_classes_with_fields(tree.root_node(), source, &mut classes);
+    classes
+}
+
+fn collect_classes_with_fields(node: Node, source: &str, out: &mut Vec<ClassFields>) {
+    if node.kind() == "class_declaration"
+        && let Some(name_node) = node.child_by_field_name("name")
+        && let Some(body) = node.child_by_field_name("body")
+    {
+        let fields = fields_in_class_body(body, source);
+        if !fields.is_empty() {
+            out.push(ClassFields {
+                name: source[name_node.byte_range()].to_string(),
+                fields,
+                insertion_byte: body.end_byte().saturating_sub(1),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_classes_with_fields(child, source, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::IncrementalParser;
     use fg_core::Language;
 
-    fn fields_at(source: &str, cursor_byte: usize) -> Vec<FieldInfo> {
+    fn classes_in(source: &str) -> Vec<ClassFields> {
         let mut parser = IncrementalParser::new(Language::Java);
         let tree = parser.parse(source);
-        java_fields_in_enclosing_class(tree, source, cursor_byte)
+        java_classes_with_fields(tree, source)
     }
 
     #[test]
     fn finds_instance_fields_in_source_order() {
         let source = "public class Point {\n    private int x;\n    private int y;\n}\n";
-        let fields = fields_at(source, source.len() - 2);
+        let classes = classes_in(source);
 
+        assert_eq!(classes.len(), 1);
         assert_eq!(
-            fields,
+            classes[0].fields,
             vec![
                 FieldInfo { name: "x".to_string(), java_type: "int".to_string(), is_final: false },
                 FieldInfo { name: "y".to_string(), java_type: "int".to_string(), is_final: false },
@@ -109,26 +129,32 @@ mod tests {
     #[test]
     fn marks_final_fields() {
         let source = "class Foo {\n    private final String name;\n}\n";
-        let fields = fields_at(source, source.len() - 2);
+        let classes = classes_in(source);
 
-        assert_eq!(fields, vec![FieldInfo { name: "name".to_string(), java_type: "String".to_string(), is_final: true }]);
+        assert_eq!(
+            classes[0].fields,
+            vec![FieldInfo { name: "name".to_string(), java_type: "String".to_string(), is_final: true }]
+        );
     }
 
     #[test]
     fn skips_static_fields() {
         let source = "class Foo {\n    private static int counter;\n    private int id;\n}\n";
-        let fields = fields_at(source, source.len() - 2);
+        let classes = classes_in(source);
 
-        assert_eq!(fields, vec![FieldInfo { name: "id".to_string(), java_type: "int".to_string(), is_final: false }]);
+        assert_eq!(
+            classes[0].fields,
+            vec![FieldInfo { name: "id".to_string(), java_type: "int".to_string(), is_final: false }]
+        );
     }
 
     #[test]
     fn handles_a_multi_variable_declaration() {
         let source = "class Foo {\n    private int x, y;\n}\n";
-        let fields = fields_at(source, source.len() - 2);
+        let classes = classes_in(source);
 
         assert_eq!(
-            fields,
+            classes[0].fields,
             vec![
                 FieldInfo { name: "x".to_string(), java_type: "int".to_string(), is_final: false },
                 FieldInfo { name: "y".to_string(), java_type: "int".to_string(), is_final: false },
@@ -137,19 +163,44 @@ mod tests {
     }
 
     #[test]
-    fn cursor_outside_any_class_returns_empty() {
-        let fields = fields_at("// just a comment\n", 5);
-        assert!(fields.is_empty());
+    fn a_class_with_no_fields_is_excluded() {
+        let classes = classes_in("class Empty {\n}\n");
+        assert!(classes.is_empty());
     }
 
     #[test]
-    fn only_considers_the_innermost_enclosing_class() {
-        // Cursor inside `Inner`'s body — its own field should be found,
-        // not `Outer`'s.
-        let source = "class Outer {\n    private int outerField;\n    class Inner {\n        private int innerField;\n    }\n}\n";
-        let cursor = source.find("innerField;").unwrap();
-        let fields = fields_at(source, cursor);
+    fn a_file_with_no_classes_returns_empty() {
+        let classes = classes_in("// just a comment\n");
+        assert!(classes.is_empty());
+    }
 
-        assert_eq!(fields, vec![FieldInfo { name: "innerField".to_string(), java_type: "int".to_string(), is_final: false }]);
+    #[test]
+    fn multiple_top_level_classes_are_all_returned_in_source_order() {
+        let source = "class Foo {\n    private int x;\n}\nclass Bar {\n    private int y;\n}\n";
+        let classes = classes_in(source);
+
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].name, "Foo");
+        assert_eq!(classes[1].name, "Bar");
+    }
+
+    #[test]
+    fn a_nested_class_is_listed_separately_from_its_enclosing_class() {
+        let source = "class Outer {\n    private int outerField;\n    class Inner {\n        private int innerField;\n    }\n}\n";
+        let classes = classes_in(source);
+
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].name, "Outer");
+        assert_eq!(classes[0].fields, vec![FieldInfo { name: "outerField".to_string(), java_type: "int".to_string(), is_final: false }]);
+        assert_eq!(classes[1].name, "Inner");
+        assert_eq!(classes[1].fields, vec![FieldInfo { name: "innerField".to_string(), java_type: "int".to_string(), is_final: false }]);
+    }
+
+    #[test]
+    fn insertion_byte_points_just_before_the_closing_brace() {
+        let source = "class Foo {\n    private int x;\n}\n";
+        let classes = classes_in(source);
+
+        assert_eq!(&source[classes[0].insertion_byte..classes[0].insertion_byte + 1], "}");
     }
 }

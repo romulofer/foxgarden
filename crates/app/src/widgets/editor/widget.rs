@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Event, FontId, Galley, Key};
+use egui::{Event, FontId, Galley, Key, Modifiers};
 use fg_core::{Document, Language};
 use ropey::Rope;
 use syntax::IncrementalParser;
@@ -12,13 +12,14 @@ use super::auto_edit::{
     is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, toggle_line_comments, wrap_selection,
     CaseConversion,
 };
-use super::codegen::{generate_accessors, insert_generated, AccessorKind};
+use super::codegen::{apply_dialog, generate_accessors, insert_at_class_end, AccessorKind, GenerateAccessorsDialog};
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{paint_diagnostics, paint_extra_selections, paint_line_numbers, paint_occurrence_highlights};
 use super::templates::{self, expand, find_template, word_before_cursor};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
+use crate::widgets::modal::show_modal;
 
 /// Identifies what a laid-out galley depends on: the buffer's exact
 /// contents, which language (if any) is highlighting it, the color theme,
@@ -55,6 +56,20 @@ fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
         font_id,
         color: theme::default_text(dark_mode),
         ..Default::default()
+    }
+}
+
+/// Builds a `Ctrl`(+`Shift`)+`key` press event, for the right-click menu's
+/// Undo/Redo/Select All items to queue into `pending_input` — they can't
+/// act directly (see `show`'s doc comment on `pending_input`), so a real
+/// keyboard-shaped event is what stands in for the click.
+fn synthetic_shortcut(key: Key, shift: bool) -> Event {
+    Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers { command: true, shift, ..Modifiers::NONE },
     }
 }
 
@@ -99,9 +114,29 @@ pub fn show(
     font_size: f32,
     indent_settings: IndentSettings,
     generate_request: Option<AccessorKind>,
+    generate_dialog: &mut Option<GenerateAccessorsDialog>,
     case_conversion_request: Option<CaseConversion>,
     last_error: &mut Option<String>,
+    pending_input: &mut Vec<Event>,
 ) {
+    // Undo/Redo/Select All from the right-click menu (below) can't be
+    // driven directly — they're handled entirely *inside* egui's own
+    // `TextEdit::show()`, in response to real input events, and that
+    // widget's undo history is private state with no other API to trigger
+    // it. A click queues the matching key event into `pending_input`
+    // instead; since a fresh `InputState` is rebuilt from the platform's
+    // raw input every frame (nothing pushed into it survives on its own),
+    // draining the queue back in *before* `TextEdit::show()` runs below —
+    // right here, at the top of the very next frame after the click — is
+    // what makes the queued event arrive as genuine input for that frame,
+    // one frame later than a click on anything else in the menu. That's
+    // imperceptible, and it means Ctrl+Z and the menu item share the exact
+    // same undo stack instead of risking two that quietly disagree.
+    if !pending_input.is_empty() {
+        let events = std::mem::take(pending_input);
+        ui.ctx().input_mut(|i| i.events.extend(events));
+    }
+
     // Mutable: the wrap-selection interception below may replace both with
     // an already-edited version *before* `TextEdit::show()` ever runs, so
     // everything downstream (the layouter's highlighting, the
@@ -652,45 +687,159 @@ pub fn show(
 
     // Ctrl+Shift+G (always `Both`) or a Tools menu click (`generate_request`,
     // already narrowed to `Getters`/`Setters`/`Both`) generate accessors for
-    // the enclosing Java class's fields at the cursor. Java-only — Kotlin's
-    // `val`/`var` properties already *are* getters/setters, so generating
-    // explicit ones for them isn't the idiomatic move a Java accessor-
-    // boilerplate command is. Every non-applicable case sets `last_error`
-    // instead of silently doing nothing — a request that visibly changes
-    // nothing (wrong file type, cursor not inside a class, no matching
-    // fields) is easy to mistake for "the shortcut doesn't work" otherwise.
+    // the file's classes. Java-only — Kotlin's `val`/`var` properties
+    // already *are* getters/setters, so generating explicit ones for them
+    // isn't the idiomatic move a Java accessor-boilerplate command is.
+    // Every non-applicable case sets `last_error` instead of silently doing
+    // nothing — a request that visibly changes nothing (wrong file type, no
+    // matching fields) is easy to mistake for "the shortcut doesn't work"
+    // otherwise. A single eligible class generates immediately for every
+    // one of its fields; more than one opens `generate_dialog` so the user
+    // picks which class (then which fields) — see
+    // `codegen::GenerateAccessorsDialog`.
     let keyboard_requested_accessors =
         (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
         if doc.language != Some(Language::Java) {
             *last_error = Some("Generate getters/setters only works for Java files.".to_string());
-        } else if let Some(primary_range) = output.cursor_range {
-            if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
-                let text_now = doc.buffer.to_string();
-                let cursor_char = primary_range.primary.index.0;
-                let cursor_byte = char_to_byte(&text_now, cursor_char);
-                let fields = syntax::java_fields_in_enclosing_class(tree, &text_now, cursor_byte);
-                if fields.is_empty() {
-                    *last_error = Some("No class fields found at the cursor.".to_string());
-                } else {
-                    let generated = generate_accessors(&fields, &indent_settings.unit(), kind);
+        } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
+            let text_now = doc.buffer.to_string();
+            let classes = syntax::java_classes_with_fields(tree, &text_now);
+            match classes.len() {
+                0 => *last_error = Some("No class fields found in this file.".to_string()),
+                1 => {
+                    let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
                         *last_error = Some("Nothing to generate: every field here is final.".to_string());
                     } else {
-                        let (inserted, new_cursor) = insert_generated(&text_now, cursor_char, &generated);
+                        let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                         apply_edit(doc, parser, &text_now, &inserted);
                         manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
                     }
                 }
-            } else {
-                *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
+                _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some("Click inside the editor, then try again.".to_string());
+            *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
         }
     }
+
+    let doc_text_for_dialog = doc.buffer.to_string();
+    if let Some(outcome) =
+        show_generate_accessors_dialog(ui, generate_dialog, &doc_text_for_dialog, &indent_settings.unit())
+    {
+        match outcome {
+            Ok((inserted, new_cursor)) => {
+                apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
+                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+            }
+            Err(message) => *last_error = Some(message),
+        }
+    }
+
+    // Right-click context menu: the common editor actions an IntelliJ-style
+    // menu offers, reachable here without the menu bar or a keyboard
+    // shortcut. `primary_cursor_range` is copied out before opening the
+    // menu so the closure below doesn't need to borrow `output` at all (it
+    // already has its own long-lived mutable borrow of `output.state` at
+    // the very end of this function) — `CCursorRange` is `Copy`, so this
+    // costs nothing; `.as_sorted_char_range()` is recomputed from it at
+    // each use site below since the `Range` it returns isn't `Copy`.
+    let primary_cursor_range = output.cursor_range;
+    let has_selection = primary_cursor_range.is_some_and(|r| !r.is_empty());
+    let cursor_char = primary_cursor_range.map(|r| r.primary.index.0);
+    output.response.context_menu(|ui| {
+        if ui.button("Undo").clicked() {
+            pending_input.push(synthetic_shortcut(Key::Z, false));
+            ui.memory_mut(|mem| mem.request_focus(widget_id));
+            ui.close();
+        }
+        if ui.button("Redo").clicked() {
+            pending_input.push(synthetic_shortcut(Key::Z, true));
+            ui.memory_mut(|mem| mem.request_focus(widget_id));
+            ui.close();
+        }
+
+        ui.separator();
+
+        if ui.add_enabled(has_selection, egui::Button::new("Cut")).clicked() {
+            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
+                let start = char_to_byte(&text, range.start.0);
+                let end = char_to_byte(&text, range.end.0);
+                ui.ctx().copy_text(text[start..end].to_string());
+                let new_text = format!("{}{}", &text[..start], &text[end..]);
+                apply_edit(doc, parser, &text, &new_text);
+                manual_cursor_range = Some(CCursorRange::one(CCursor::new(range.start.0)));
+                old_text = new_text.clone();
+                text = new_text;
+            }
+            ui.close();
+        }
+        if ui.add_enabled(has_selection, egui::Button::new("Copy")).clicked() {
+            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
+                let start = char_to_byte(&text, range.start.0);
+                let end = char_to_byte(&text, range.end.0);
+                ui.ctx().copy_text(text[start..end].to_string());
+            }
+            ui.close();
+        }
+        // Read fresh, only while the menu is actually open — egui has no
+        // public API to read the OS clipboard (only `Context::copy_text`
+        // to write it), so this is the one item here that needs `arboard`
+        // directly rather than something already exposed by egui.
+        let clipboard_text =
+            arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).ok().filter(|s| !s.is_empty());
+        if ui.add_enabled(clipboard_text.is_some(), egui::Button::new("Paste")).clicked() {
+            if let (Some(pasted), Some(range)) = (&clipboard_text, primary_cursor_range.map(|r| r.as_sorted_char_range())) {
+                let start = char_to_byte(&text, range.start.0);
+                let end = char_to_byte(&text, range.end.0);
+                let new_text = format!("{}{pasted}{}", &text[..start], &text[end..]);
+                let new_cursor = range.start.0 + pasted.chars().count();
+                apply_edit(doc, parser, &text, &new_text);
+                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                old_text = new_text.clone();
+                text = new_text;
+            }
+            ui.close();
+        }
+        if ui.button("Select All").clicked() {
+            pending_input.push(synthetic_shortcut(Key::A, false));
+            ui.memory_mut(|mem| mem.request_focus(widget_id));
+            ui.close();
+        }
+
+        ui.separator();
+
+        if ui.button("Toggle Line Comment").clicked() {
+            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
+                let (commented, new_start, new_end) = toggle_line_comments(&text, range.start.0, range.end.0);
+                apply_edit(doc, parser, &text, &commented);
+                manual_cursor_range = Some(CCursorRange::two(CCursor::new(new_start), CCursor::new(new_end)));
+                old_text = commented.clone();
+                text = commented;
+            }
+            ui.close();
+        }
+        if ui.button("Duplicate Line").clicked() {
+            if let Some(cursor_char) = cursor_char {
+                let (duplicated, new_cursor) = duplicate_line(&text, cursor_char);
+                apply_edit(doc, parser, &text, &duplicated);
+                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                old_text = duplicated.clone();
+                text = duplicated;
+            }
+            ui.close();
+        }
+
+        ui.separator();
+
+        if ui.add_enabled(doc.is_dirty(), egui::Button::new("Save")).clicked() {
+            crate::panels::tabs::save_document(doc, parser, last_error);
+            ui.close();
+        }
+    });
 
     if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
         let should_collapse = ui.input(|i| i.events.iter().any(is_multi_cursor_collapse_event));
@@ -814,6 +963,86 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
     )
 }
 
+/// Renders `generate_dialog`'s class/field picker, if it's open.
+/// `Some(Ok((new_text, new_cursor)))` once "Generate" produces something to
+/// insert, `Some(Err(message))` once it produces nothing (nothing checked,
+/// or every checked field turned out `final` under a `Setters`-only
+/// dialog), `None` while the dialog stays closed, is untouched this frame,
+/// or was just cancelled. Every intent from inside the modal (class pick,
+/// checkbox toggle, which button was clicked) is collected into plain
+/// locals first and only applied to `*generate_dialog` after `show_modal`
+/// returns — the "Generate"/"Cancel" buttons need to clear
+/// `*generate_dialog` itself, and doing that while a `&mut
+/// GenerateAccessorsDialog` borrowed from it is still captured several
+/// closures deep (the modal body, then `ui.horizontal`) would be two
+/// overlapping mutable borrows of the same `Option`.
+fn show_generate_accessors_dialog(
+    ui: &egui::Ui,
+    generate_dialog: &mut Option<GenerateAccessorsDialog>,
+    text: &str,
+    indent_unit: &str,
+) -> Option<Result<(String, usize), String>> {
+    let is_open = generate_dialog.is_some();
+
+    let mut new_selection = None;
+    let mut toggled = None;
+    let mut generate_clicked = false;
+    let mut cancel_clicked = false;
+
+    show_modal(ui, "generate_accessors_dialog", is_open.then_some(()), |ui, _| {
+        let dialog = generate_dialog.as_ref().expect("guarded by is_open above");
+
+        if dialog.classes().len() > 1 {
+            ui.label("Generate accessors for:");
+            for (index, class) in dialog.classes().iter().enumerate() {
+                if ui.radio(index == dialog.selected_class(), class.name.as_str()).clicked() {
+                    new_selection = Some(index);
+                }
+            }
+            ui.separator();
+        }
+
+        let class = &dialog.classes()[dialog.selected_class()];
+        for (index, field) in class.fields.iter().enumerate() {
+            let label = if field.is_final {
+                format!("{} : {} (final)", field.name, field.java_type)
+            } else {
+                format!("{} : {}", field.name, field.java_type)
+            };
+            let mut checked = dialog.checked()[index];
+            if ui.checkbox(&mut checked, label).changed() {
+                toggled = Some((index, checked));
+            }
+        }
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            generate_clicked = ui.button("Generate").clicked();
+            cancel_clicked = ui.button("Cancel").clicked();
+        });
+    });
+
+    let dialog = generate_dialog.as_mut()?;
+    if let Some(index) = new_selection {
+        dialog.select_class(index);
+    }
+    if let Some((index, checked)) = toggled {
+        dialog.set_checked(index, checked);
+    }
+
+    if generate_clicked {
+        let result = apply_dialog(dialog, text, indent_unit)
+            .ok_or_else(|| "Nothing to generate: no fields selected.".to_string());
+        *generate_dialog = None;
+        Some(result)
+    } else if cancel_clicked {
+        *generate_dialog = None;
+        None
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,7 +1082,7 @@ mod tests {
             // here with "is not bound to any fonts". Use the built-in family
             // instead — this test exercises the widget's rendering logic,
             // not font registration.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -873,7 +1102,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -886,7 +1115,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -897,7 +1126,7 @@ mod tests {
         let mut parser: Option<IncrementalParser> = None;
 
         egui::__run_test_ui(|ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         assert!(doc.diagnostics.is_empty());
@@ -936,7 +1165,7 @@ mod tests {
         egui::__run_test_ui(|ui| {
             // EditorFont::Default, not JetBrainsMono: see comment on the
             // first test in this file for why.
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -958,7 +1187,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -967,7 +1196,7 @@ mod tests {
         // A second frame over the very same, unedited document — as if the
         // tab were simply redrawn, or switched away from and back to.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -989,7 +1218,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -997,7 +1226,7 @@ mod tests {
 
         doc.buffer = Rope::from_str("hello world");
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1019,7 +1248,7 @@ mod tests {
         let cache_id = layout_cache_id(&doc);
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let first = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1028,7 +1257,7 @@ mod tests {
         // Same unedited content, but a different font size — the cached
         // galley was shaped at the old size, so it must not be reused.
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, &mut doc, &mut parser, EditorFont::Default, 18.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
         let second = ctx
             .data(|d| d.get_temp::<CachedLayout>(cache_id))
@@ -1075,7 +1304,7 @@ mod tests {
             // will target nothing.
             let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -1117,7 +1346,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1142,7 +1371,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -1162,7 +1391,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1182,7 +1411,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         egui::text_edit::TextEditState::load(&ctx, id)
@@ -1214,7 +1443,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         doc.extra_selections = extra_selections;
@@ -1229,7 +1458,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -1253,7 +1482,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         let modifiers = events
@@ -1266,7 +1495,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -1289,7 +1518,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1309,7 +1538,7 @@ mod tests {
         let raw_input = egui::RawInput { events, modifiers, ..Default::default() };
         let _ = ctx.run_ui(raw_input, |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, indent_settings, None, &mut None, None, &mut None, &mut Vec::new());
         });
     }
 
@@ -1722,6 +1951,7 @@ mod tests {
         doc: &mut Document,
         parser: &mut Option<IncrementalParser>,
         generate_request: Option<AccessorKind>,
+        generate_dialog: &mut Option<GenerateAccessorsDialog>,
         events: Vec<egui::Event>,
     ) -> Option<String> {
         let ctx = egui::Context::default();
@@ -1746,8 +1976,10 @@ mod tests {
                 14.0,
                 IndentSettings::default(),
                 generate_request,
+                generate_dialog,
                 None,
                 &mut last_error,
+                &mut Vec::new(),
             );
         });
         last_error
@@ -1772,7 +2004,7 @@ mod tests {
 
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|mem| mem.request_focus(id));
-            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, None, &mut None);
+            show(ui, doc, parser, EditorFont::Default, 14.0, IndentSettings::default(), None, &mut None, None, &mut None, &mut Vec::new());
         });
 
         let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
@@ -1801,8 +2033,10 @@ mod tests {
                 14.0,
                 IndentSettings::default(),
                 None,
+                &mut None,
                 case_conversion_request,
                 &mut last_error,
+                &mut Vec::new(),
             );
         });
         last_error
@@ -1899,6 +2133,7 @@ mod tests {
             &mut doc,
             &mut parser,
             None,
+            &mut None,
             vec![command_shift_key_event(egui::Key::G)],
         );
 
@@ -1916,6 +2151,7 @@ mod tests {
             &mut doc,
             &mut parser,
             None,
+            &mut None,
             vec![command_shift_key_event(egui::Key::G)],
         );
 
@@ -1929,7 +2165,7 @@ mod tests {
         let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
         let last_error =
-            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Getters), vec![]);
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Getters), &mut None, vec![]);
 
         assert_eq!(last_error, None);
         let text = doc.buffer.to_string();
@@ -1943,7 +2179,7 @@ mod tests {
         let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
         let last_error =
-            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), vec![]);
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), &mut None, vec![]);
 
         assert_eq!(last_error, None);
         let text = doc.buffer.to_string();
@@ -1958,10 +2194,32 @@ mod tests {
         let before = doc.buffer.to_string();
 
         let last_error =
-            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), vec![]);
+            focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), &mut None, vec![]);
 
         assert_eq!(doc.buffer.to_string(), before);
         assert!(last_error.is_some_and(|msg| msg.contains("final")));
+    }
+
+    #[test]
+    fn tools_menu_generate_getters_on_a_multi_class_file_opens_the_picker_instead_of_generating() {
+        let (_dir, mut doc) =
+            open_fixture("class Foo {\n    private int x;\n}\nclass Bar {\n    private int y;\n}\n", "Foo.java");
+        let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+        let before = doc.buffer.to_string();
+        let mut generate_dialog = None;
+
+        let last_error = focused_frame_with_generate_request(
+            &mut doc,
+            &mut parser,
+            Some(AccessorKind::Getters),
+            &mut generate_dialog,
+            vec![],
+        );
+
+        assert_eq!(last_error, None);
+        assert_eq!(doc.buffer.to_string(), before, "nothing should be inserted until the picker's Generate is clicked");
+        let dialog = generate_dialog.expect("multiple eligible classes should open the picker");
+        assert_eq!(dialog.classes().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["Foo", "Bar"]);
     }
 
     #[test]
@@ -2053,5 +2311,66 @@ mod tests {
 
         assert!(doc.extra_selections.is_empty());
         assert_eq!(doc.buffer.to_string(), "\tabc");
+    }
+
+    #[test]
+    fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
+        // Proves the mechanism the right-click menu's Undo/Redo/Select All
+        // items depend on: a synthetic event pushed into `pending_input`
+        // (exactly as those menu items do — see `synthetic_shortcut`) is
+        // drained into real input *before* `TextEdit::show()` runs, so
+        // egui's own handling for it fires as if the user had actually
+        // pressed the key. Undo is the proof here specifically because
+        // it's the one whose entire reason for existing behind this queue
+        // is that it's driven by egui's own private per-widget undo
+        // history — nothing about it is reimplemented on our side, so
+        // watching it actually revert text proves the queued event reached
+        // real egui event handling, not just our own code.
+        //
+        // Three frames, with `time` advanced past `Undoer`'s stable-time
+        // window (1s) between the second and third: frame 1 (idle) seeds
+        // the initial undo point; frame 2 types a character via a real
+        // `Event::Text`, the same path any keystroke takes; frame 3, a
+        // full second later, both lets that edit's undo point actually
+        // commit *and* queues Ctrl+Z via `pending_input`.
+        let (_dir, mut doc) = open_fixture("hello world", "notes.txt");
+        let mut parser: Option<IncrementalParser> = None;
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+        let run_frame = |doc: &mut Document,
+                          parser: &mut Option<IncrementalParser>,
+                          time: f64,
+                          events: Vec<egui::Event>,
+                          pending_input: &mut Vec<egui::Event>| {
+            let raw_input = egui::RawInput { events, time: Some(time), ..Default::default() };
+            let _ = ctx.run_ui(raw_input, |ui| {
+                ui.memory_mut(|mem| mem.request_focus(id));
+                show(
+                    ui,
+                    doc,
+                    parser,
+                    EditorFont::Default,
+                    14.0,
+                    IndentSettings::default(),
+                    None,
+                    &mut None,
+                    None,
+                    &mut None,
+                    pending_input,
+                );
+            });
+        };
+
+        run_frame(&mut doc, &mut parser, 0.0, vec![], &mut Vec::new());
+        run_frame(&mut doc, &mut parser, 0.0, vec![egui::Event::Text("X".to_string())], &mut Vec::new());
+        assert_eq!(doc.buffer.to_string(), "Xhello world");
+
+        let mut pending_input = vec![synthetic_shortcut(egui::Key::Z, false)];
+        run_frame(&mut doc, &mut parser, 1.5, vec![], &mut pending_input);
+
+        assert!(pending_input.is_empty(), "the queue should be drained once used");
+        assert_eq!(doc.buffer.to_string(), "hello world", "the queued Ctrl+Z should have reverted the typed character");
     }
 }

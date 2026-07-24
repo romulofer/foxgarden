@@ -14,5 +14,5 @@ mod templates;
 mod widget;
 
 pub use auto_edit::CaseConversion;
-pub use codegen::AccessorKind;
+pub use codegen::{AccessorKind, GenerateAccessorsDialog};
 pub use widget::show;

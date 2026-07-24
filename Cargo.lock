@@ -206,6 +206,7 @@ dependencies = [
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "eframe",
  "egui",
  "fg-core",

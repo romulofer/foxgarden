@@ -1,5 +1,5 @@
-use super::auto_edit::char_to_byte;
-use syntax::FieldInfo;
+use super::auto_edit::{byte_to_char, char_to_byte};
+use syntax::{ClassFields, FieldInfo};
 
 /// Which accessors to generate — driven by the Tools menu's separate
 /// "Generate Getters"/"Generate Setters" items and `Ctrl+Shift+G` (which
@@ -96,6 +96,91 @@ pub fn insert_generated(text: &str, cursor_char: usize, generated: &str) -> (Str
     (new_text, new_cursor)
 }
 
+/// Inserts `generated` right before `insertion_byte` (a class body's
+/// closing `}`, per `ClassFields::insertion_byte`), prefixed with a blank
+/// line so it doesn't run into whatever line already precedes the brace.
+/// Delegates to `insert_generated` once the byte offset (from walking the
+/// syntax tree) is converted to the char offset it expects.
+pub fn insert_at_class_end(text: &str, insertion_byte: usize, generated: &str) -> (String, usize) {
+    let insertion_char = byte_to_char(text, insertion_byte);
+    insert_generated(text, insertion_char, &format!("\n{generated}"))
+}
+
+/// State for the "Generate Getters/Setters" picker shown when a file has
+/// more than one class with eligible fields — lets the user pick which
+/// class, then which of its fields, before generating. Not used when a
+/// file has exactly one eligible class: that case generates immediately
+/// for every field, no picker needed.
+pub struct GenerateAccessorsDialog {
+    kind: AccessorKind,
+    classes: Vec<ClassFields>,
+    selected_class: usize,
+    /// Index-aligned with `classes[selected_class].fields`; unchecked
+    /// fields are skipped when generating.
+    checked: Vec<bool>,
+}
+
+impl GenerateAccessorsDialog {
+    /// Starts on the first class, every field checked. Panics if `classes`
+    /// is empty — callers only build this dialog once they already know
+    /// there's more than one eligible class (see `widget::show`), so an
+    /// empty list here would be a caller bug, not a state to handle
+    /// gracefully.
+    pub fn new(classes: Vec<ClassFields>, kind: AccessorKind) -> Self {
+        let checked = vec![true; classes[0].fields.len()];
+        Self { kind, classes, selected_class: 0, checked }
+    }
+
+    pub fn classes(&self) -> &[ClassFields] {
+        &self.classes
+    }
+
+    pub fn selected_class(&self) -> usize {
+        self.selected_class
+    }
+
+    pub fn checked(&self) -> &[bool] {
+        &self.checked
+    }
+
+    /// Switches the picker to `index`'s class, resetting every one of its
+    /// fields back to checked — a field selection from the previously
+    /// viewed class wouldn't even line up with the new one's field list.
+    pub fn select_class(&mut self, index: usize) {
+        if let Some(class) = self.classes.get(index) {
+            self.selected_class = index;
+            self.checked = vec![true; class.fields.len()];
+        }
+    }
+
+    pub fn set_checked(&mut self, field_index: usize, value: bool) {
+        if let Some(slot) = self.checked.get_mut(field_index) {
+            *slot = value;
+        }
+    }
+}
+
+/// Generates `dialog`'s kind of accessors for whichever of the selected
+/// class's fields are checked, and inserts them at that class's end.
+/// `None` if nothing ends up generated — every field unchecked, or (for a
+/// `Setters`-only dialog) every checked field is `final`.
+pub fn apply_dialog(dialog: &GenerateAccessorsDialog, text: &str, indent_unit: &str) -> Option<(String, usize)> {
+    let class = &dialog.classes[dialog.selected_class];
+    let selected_fields: Vec<FieldInfo> = class
+        .fields
+        .iter()
+        .zip(dialog.checked.iter())
+        .filter(|&(_, &checked)| checked)
+        .map(|(field, _)| field.clone())
+        .collect();
+
+    let generated = generate_accessors(&selected_fields, indent_unit, dialog.kind);
+    if generated.is_empty() {
+        return None;
+    }
+    Some(insert_at_class_end(text, class.insertion_byte, &generated))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +274,80 @@ mod tests {
         let (text, cursor) = insert_generated("class Foo {\n}\n", 12, "    // generated\n");
         assert_eq!(text, "class Foo {\n    // generated\n}\n");
         assert_eq!(cursor, 12 + "    // generated\n".chars().count());
+    }
+
+    #[test]
+    fn byte_to_char_round_trips_with_char_to_byte() {
+        let text = "class Foo { // café\n}\n";
+        for char_idx in 0..text.chars().count() {
+            let byte = char_to_byte(text, char_idx);
+            assert_eq!(byte_to_char(text, byte), char_idx);
+        }
+    }
+
+    #[test]
+    fn insert_at_class_end_lands_right_before_the_closing_brace() {
+        let text = "class Foo {\n    private int x;\n}\n";
+        let insertion_byte = text.rfind('}').unwrap();
+        let (new_text, _) = insert_at_class_end(text, insertion_byte, "    public int getX() {\n        return this.x;\n    }\n");
+        assert_eq!(
+            new_text,
+            "class Foo {\n    private int x;\n\n    public int getX() {\n        return this.x;\n    }\n}\n"
+        );
+    }
+
+    fn class_fields(name: &str, fields: Vec<FieldInfo>, insertion_byte: usize) -> ClassFields {
+        ClassFields { name: name.to_string(), fields, insertion_byte }
+    }
+
+    #[test]
+    fn apply_dialog_targets_whichever_class_is_selected() {
+        let text = "class Foo {\n    private int x;\n}\nclass Bar {\n    private int y;\n}\n";
+        let foo_end = text.find("}\nclass Bar").unwrap();
+        let bar_end = text.rfind('}').unwrap();
+        let classes = vec![
+            class_fields("Foo", vec![field("x", "int", false)], foo_end),
+            class_fields("Bar", vec![field("y", "int", false)], bar_end),
+        ];
+        let mut dialog = GenerateAccessorsDialog::new(classes, AccessorKind::Getters);
+        dialog.select_class(1);
+
+        let (new_text, _) = apply_dialog(&dialog, text, "    ").expect("Bar has a field to generate for");
+        assert!(new_text.contains("getY"));
+        assert!(!new_text.contains("getX"));
+    }
+
+    #[test]
+    fn apply_dialog_skips_unchecked_fields() {
+        let text = "class Foo {\n    private int x;\n    private int y;\n}\n";
+        let insertion_byte = text.rfind('}').unwrap();
+        let classes = vec![class_fields("Foo", vec![field("x", "int", false), field("y", "int", false)], insertion_byte)];
+        let mut dialog = GenerateAccessorsDialog::new(classes, AccessorKind::Getters);
+        dialog.set_checked(1, false);
+
+        let (new_text, _) = apply_dialog(&dialog, text, "    ").expect("x is still checked");
+        assert!(new_text.contains("getX"));
+        assert!(!new_text.contains("getY"));
+    }
+
+    #[test]
+    fn apply_dialog_is_none_when_every_checked_field_is_final_for_setters() {
+        let text = "class Foo {\n    private final int id;\n}\n";
+        let insertion_byte = text.rfind('}').unwrap();
+        let classes = vec![class_fields("Foo", vec![field("id", "int", true)], insertion_byte)];
+        let dialog = GenerateAccessorsDialog::new(classes, AccessorKind::Setters);
+
+        assert_eq!(apply_dialog(&dialog, text, "    "), None);
+    }
+
+    #[test]
+    fn apply_dialog_is_none_when_nothing_is_checked() {
+        let text = "class Foo {\n    private int x;\n}\n";
+        let insertion_byte = text.rfind('}').unwrap();
+        let classes = vec![class_fields("Foo", vec![field("x", "int", false)], insertion_byte)];
+        let mut dialog = GenerateAccessorsDialog::new(classes, AccessorKind::Getters);
+        dialog.set_checked(0, false);
+
+        assert_eq!(apply_dialog(&dialog, text, "    "), None);
     }
 }

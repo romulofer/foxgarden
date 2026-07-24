@@ -10,6 +10,7 @@ use crate::panels::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
+use crate::widgets::editor::GenerateAccessorsDialog;
 use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
@@ -43,6 +44,19 @@ pub struct FoxGardenApp {
     /// open document.
     parsers: Vec<Option<IncrementalParser>>,
     pending_close: Option<usize>,
+    /// Open while the active tab's file has more than one class with
+    /// eligible fields and "Generate Getters/Setters" was just requested —
+    /// lets the user pick which class, then which fields, before
+    /// generating (see `widgets::editor::GenerateAccessorsDialog`). A
+    /// single eligible class skips this and generates immediately, so this
+    /// is only ever `Some` when there was real ambiguity to resolve.
+    generate_dialog: Option<GenerateAccessorsDialog>,
+    /// Synthetic key events (Undo/Redo/Select All) queued by the editor's
+    /// right-click menu, drained back into real input at the top of the
+    /// very next frame — see `widgets::editor::show`'s doc comment on why
+    /// that's the only way to drive those three from outside egui's own
+    /// `TextEdit`.
+    pending_editor_input: Vec<egui::Event>,
     side_panel: SidePanelState,
     menu_bar: MenuBarState,
     /// `Ctrl+E`'s recent-files popup.
@@ -303,6 +317,8 @@ impl FoxGardenApp {
             state,
             parsers,
             pending_close: None,
+            generate_dialog: None,
+            pending_editor_input: Vec::new(),
             side_panel: SidePanelState::default(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -396,8 +412,10 @@ impl eframe::App for FoxGardenApp {
                 self.font_size,
                 self.indent_settings,
                 menu_outcome.generate_request,
+                &mut self.generate_dialog,
                 menu_outcome.case_conversion_request,
                 &mut self.last_error,
+                &mut self.pending_editor_input,
             );
         });
 

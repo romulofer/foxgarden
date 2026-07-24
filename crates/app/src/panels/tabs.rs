@@ -3,7 +3,7 @@ use syntax::IncrementalParser;
 
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
-use crate::widgets::editor::{self, AccessorKind, CaseConversion};
+use crate::widgets::editor::{self, AccessorKind, CaseConversion, GenerateAccessorsDialog};
 use crate::widgets::modal::show_modal;
 
 /// Fully reparses `doc`'s *current* buffer contents against `parser` and
@@ -37,7 +37,7 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
     Some(parser)
 }
 
-/// Saves `index`'s document, then reparses it if it has a parser.
+/// Saves `doc`, then reparses it against `parser` if it has one.
 /// `Document::save` may itself rewrite the buffer (trimming trailing
 /// whitespace) as a side effect of saving — without a reparse afterward,
 /// the existing parse tree silently drifts out of sync with what's actually
@@ -49,10 +49,29 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
 /// instead of discarding the tree and reparsing from scratch — a save only
 /// ever changes a handful of trailing-whitespace bytes, not the whole file,
 /// so there's no reason to pay for a full reparse just because the edit
-/// came from `Document::save` instead of a keystroke. Shared by `Ctrl+S`/
-/// File > Save and the close-confirmation modal's "Save" button, so neither
-/// can reintroduce the "saved without reparsing at all" bug by skipping
-/// this.
+/// came from `Document::save` instead of a keystroke. Shared by `save_tab`
+/// (`Ctrl+S`/File > Save/the close-confirmation modal's "Save" button, all
+/// of which look the document up by tab index first) and the editor's
+/// right-click "Save" (which already has `doc`/`parser` in hand, with no
+/// tab index involved at all) — neither can reintroduce the "saved without
+/// reparsing at all" bug by skipping this.
+pub(crate) fn save_document(doc: &mut Document, parser: &mut Option<IncrementalParser>, last_error: &mut Option<String>) {
+    let old_text = doc.buffer.to_string();
+    if let Err(err) = doc.save() {
+        *last_error = Some(format!("failed to save: {err}"));
+        return;
+    }
+    if let Some(parser) = parser.as_mut() {
+        let new_text = doc.buffer.to_string();
+        let edit = syntax::diff_edit(&old_text, &new_text);
+        parser.reparse(&new_text, edit);
+        doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
+    }
+}
+
+/// Saves `index`'s document by tab index — the lookup `Ctrl+S`/File > Save/
+/// the close-confirmation modal all need before they can call
+/// `save_document`.
 fn save_tab(
     state: &mut EditorState,
     parsers: &mut [Option<IncrementalParser>],
@@ -62,17 +81,10 @@ fn save_tab(
     let Some(doc) = state.open_tabs.get_mut(index) else {
         return;
     };
-    let old_text = doc.buffer.to_string();
-    if let Err(err) = doc.save() {
-        *last_error = Some(format!("failed to save: {err}"));
+    let Some(parser) = parsers.get_mut(index) else {
         return;
-    }
-    if let Some(Some(parser)) = parsers.get_mut(index) {
-        let new_text = doc.buffer.to_string();
-        let edit = syntax::diff_edit(&old_text, &new_text);
-        parser.reparse(&new_text, edit);
-        doc.diagnostics = syntax::syntax_errors(parser.tree().expect("just reparsed"));
-    }
+    };
+    save_document(doc, parser, last_error);
 }
 
 /// Renders the tab bar and the active document's editor. `parsers` is kept
@@ -87,8 +99,10 @@ pub fn show(
     font_size: f32,
     indent_settings: IndentSettings,
     generate_request: Option<AccessorKind>,
+    generate_dialog: &mut Option<GenerateAccessorsDialog>,
     case_conversion_request: Option<CaseConversion>,
     last_error: &mut Option<String>,
+    pending_editor_input: &mut Vec<egui::Event>,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -165,8 +179,10 @@ pub fn show(
             font_size,
             indent_settings,
             generate_request,
+            generate_dialog,
             case_conversion_request,
             last_error,
+            pending_editor_input,
         );
     });
 }

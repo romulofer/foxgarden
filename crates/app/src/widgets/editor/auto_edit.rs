@@ -495,6 +495,14 @@ pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// Inverse of `char_to_byte`: the char offset of whatever byte offset
+/// `byte` falls on. Used to turn a byte position found by walking a
+/// syntax tree (which only ever deals in bytes) into the char position
+/// `insert_generated`/`TextEdit`'s cursor API expect.
+pub(super) fn byte_to_char(text: &str, byte: usize) -> usize {
+    text[..byte].chars().count()
+}
+
 /// Maps an auto-pairable opening character to its closing counterpart —
 /// shared by `apply_auto_pair` (typing an opener with no selection) and
 /// `wrap_selection` (typing one *over* a selection), so the two features
