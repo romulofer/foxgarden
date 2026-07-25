@@ -908,24 +908,31 @@ pub fn show(
     // the gutter's left edge to right-align digits against. Both live
     // inside the *same* `ScrollArea` call site (`panels::tabs::show`), so
     // they scroll together as one unit rather than independently.
-    let (mut shell_out, gutter_left) = ui
-        .horizontal(|ui| {
-            let gutter_left = ui.cursor().left();
-            ui.add_space(gutter_width);
-            let out = text_area::show_interactive(
-                ui,
-                widget_id,
-                &doc.buffer,
-                font_id,
-                text_color,
-                doc.read_only,
-                &spans,
-                &hidden,
-                view_settings.word_wrap,
-            );
-            (out, gutter_left)
-        })
-        .inner;
+    let horizontal_response = ui.horizontal(|ui| {
+        let gutter_left = ui.cursor().left();
+        ui.add_space(gutter_width);
+        let out = text_area::show_interactive(
+            ui,
+            widget_id,
+            &doc.buffer,
+            font_id,
+            text_color,
+            doc.read_only,
+            &spans,
+            &hidden,
+            view_settings.word_wrap,
+            view_settings.cursor_blink,
+        );
+        (out, gutter_left)
+    });
+    // The bounding rect of the whole gutter+text row, captured before
+    // `shell_out` is destructured further below — used to redraw the
+    // focus-aware border `egui::TextEdit` painted around itself for free,
+    // lost when this widget replaced it (PLAN.md 2g/2h) with the
+    // virtualized `text_area::show_interactive` shell, which paints only
+    // rows/caret and never a frame.
+    let editor_rect = horizontal_response.response.rect;
+    let (mut shell_out, gutter_left) = horizontal_response.inner;
 
     if let Some(raw_new_text) = shell_out.new_text.take() {
         if multi_cursor_active_at_start {
@@ -1412,6 +1419,32 @@ pub fn show(
                 );
             }
         }
+    }
+
+    // Redraws the border `egui::TextEdit` used to paint around itself —
+    // highlighted while focused, subdued otherwise — same stroke choice
+    // `TextEdit`'s own frame logic makes (`ui.visuals().selection.stroke`
+    // focused, `widgets.inactive.bg_stroke` otherwise), so swapping to the
+    // virtualized shell didn't also silently drop this cue that the pane is
+    // (or isn't) the one keystrokes go to. Painted last so it isn't drawn
+    // over by sticky scroll or any other overlay above.
+    if view_settings.show_editor_outline {
+        let stroke = if shell_out.caret.is_some() {
+            ui.visuals().selection.stroke
+        } else {
+            ui.visuals().widgets.inactive.bg_stroke
+        };
+        // `Inside`, not `Outside`: the top and left edges of `editor_rect`
+        // sit exactly on the surrounding `ScrollArea`/`horizontal`'s own
+        // clip rect, so a stroke drawn *outside* those edges (half past the
+        // boundary) was silently clipped away there — only the bottom/right
+        // edges (with slack beyond them) ever showed up.
+        ui.painter().rect_stroke(
+            editor_rect,
+            ui.visuals().widgets.inactive.corner_radius,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
     }
 
     // Auto-indent inserts content *before* where the widget placed the

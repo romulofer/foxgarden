@@ -77,7 +77,12 @@ struct TreeActions {
     paste_request: Option<PathBuf>,
 }
 
-pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelState) -> SidePanelOutcome {
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    panel: &mut SidePanelState,
+    side_panel_visible: &mut bool,
+) -> SidePanelOutcome {
     let mut outcome = SidePanelOutcome::default();
 
     ui.horizontal(|ui| {
@@ -106,6 +111,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
                 outcome.error = Some(format!("failed to open terminal: {err}"));
             }
         }
+        // Right-aligned within the same row as the buttons above — `egui`'s
+        // usual "two groups, one row" idiom (a `right_to_left` child `Ui`
+        // still measures its available width from the *row's* right edge,
+        // not from wherever the left-aligned buttons' cursor stopped) —
+        // rather than a separate row or a menu entry buried away from the
+        // other panel-level actions it sits beside.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("◀")
+                .on_hover_text("Collapse Side Panel (Ctrl+B)")
+                .clicked()
+            {
+                *side_panel_visible = false;
+            }
+        });
     });
 
     let created = show_new_file_row(ui, state, panel, &mut outcome);

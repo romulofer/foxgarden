@@ -205,22 +205,41 @@
     fn persisted_settings_round_trip() {
         let mut storage = FakeStorage::default();
         let saved_indent = IndentSettings { use_tabs: true, width: 2 };
-        let saved_view =
-            ViewSettings { word_wrap: false, show_whitespace: true, show_indent_guides: true, show_sticky_scroll: true };
-        persist_settings(&mut storage, EditorFont::Default, 22.5, false, saved_indent, saved_view);
+        let saved_view = ViewSettings {
+            word_wrap: false,
+            show_whitespace: true,
+            show_indent_guides: true,
+            show_sticky_scroll: true,
+            cursor_blink: false,
+            show_editor_outline: false,
+        };
+        persist_settings(&mut storage, EditorFont::Default, 22.5, false, saved_indent, saved_view, 275.0, false);
 
         let mut editor_font = EditorFont::JetBrainsMono;
         let mut font_size = DEFAULT_FONT_SIZE;
         let mut dark_mode = DEFAULT_DARK_MODE;
         let mut indent_settings = IndentSettings::default();
         let mut view_settings = ViewSettings::default();
-        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings, &mut view_settings);
+        let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+        let mut side_panel_visible = true;
+        restore_settings(
+            &storage,
+            &mut editor_font,
+            &mut font_size,
+            &mut dark_mode,
+            &mut indent_settings,
+            &mut view_settings,
+            &mut side_panel_width,
+            &mut side_panel_visible,
+        );
 
         assert_eq!(editor_font, EditorFont::Default);
         assert_eq!(font_size, 22.5);
         assert!(!dark_mode);
         assert_eq!(indent_settings, saved_indent);
         assert_eq!(view_settings, saved_view);
+        assert_eq!(side_panel_width, 275.0);
+        assert!(!side_panel_visible);
     }
 
     #[test]
@@ -231,14 +250,27 @@
         let mut dark_mode = DEFAULT_DARK_MODE;
         let mut indent_settings = IndentSettings::default();
         let mut view_settings = ViewSettings::default();
+        let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+        let mut side_panel_visible = true;
 
-        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings, &mut view_settings);
+        restore_settings(
+            &storage,
+            &mut editor_font,
+            &mut font_size,
+            &mut dark_mode,
+            &mut indent_settings,
+            &mut view_settings,
+            &mut side_panel_width,
+            &mut side_panel_visible,
+        );
 
         assert_eq!(editor_font, EditorFont::default());
         assert_eq!(font_size, DEFAULT_FONT_SIZE);
         assert_eq!(dark_mode, DEFAULT_DARK_MODE);
         assert_eq!(indent_settings, IndentSettings::default());
         assert_eq!(view_settings, ViewSettings::default());
+        assert_eq!(side_panel_width, DEFAULT_SIDE_PANEL_WIDTH);
+        assert!(side_panel_visible);
     }
 
     #[test]
@@ -250,8 +282,19 @@
         let mut dark_mode = DEFAULT_DARK_MODE;
         let mut indent_settings = IndentSettings::default();
         let mut view_settings = ViewSettings::default();
+        let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+        let mut side_panel_visible = true;
 
-        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings, &mut view_settings);
+        restore_settings(
+            &storage,
+            &mut editor_font,
+            &mut font_size,
+            &mut dark_mode,
+            &mut indent_settings,
+            &mut view_settings,
+            &mut side_panel_width,
+            &mut side_panel_visible,
+        );
 
         assert_eq!(font_size, DEFAULT_FONT_SIZE);
     }
@@ -265,8 +308,19 @@
         let mut dark_mode = DEFAULT_DARK_MODE;
         let mut indent_settings = IndentSettings::default();
         let mut view_settings = ViewSettings::default();
+        let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+        let mut side_panel_visible = true;
 
-        restore_settings(&storage, &mut editor_font, &mut font_size, &mut dark_mode, &mut indent_settings, &mut view_settings);
+        restore_settings(
+            &storage,
+            &mut editor_font,
+            &mut font_size,
+            &mut dark_mode,
+            &mut indent_settings,
+            &mut view_settings,
+            &mut side_panel_width,
+            &mut side_panel_visible,
+        );
 
         assert_eq!(indent_settings.width, IndentSettings::default().width);
     }

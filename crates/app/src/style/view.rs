@@ -18,10 +18,23 @@ pub struct ViewSettings {
     /// for now (needs a tree-sitter scope vocabulary; see
     /// `syntax::enclosing_scope_starts`), a no-op elsewhere.
     pub show_sticky_scroll: bool,
+    /// Whether the text caret blinks (on the `Visuals::text_cursor` on/off
+    /// timing — see `text_area::shell::caret_visible`) or stays solid.
+    pub cursor_blink: bool,
+    /// Whether the focused/unfocused border `widgets::editor::widget::show`
+    /// paints around the active editor pane is shown at all.
+    pub show_editor_outline: bool,
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
-        Self { word_wrap: true, show_whitespace: false, show_indent_guides: false, show_sticky_scroll: false }
+        Self {
+            word_wrap: true,
+            show_whitespace: false,
+            show_indent_guides: false,
+            show_sticky_scroll: false,
+            cursor_blink: true,
+            show_editor_outline: true,
+        }
     }
 }

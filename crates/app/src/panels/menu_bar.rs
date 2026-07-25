@@ -14,6 +14,8 @@ use crate::widgets::modal::show_modal;
 #[derive(Default)]
 pub struct MenuBarState {
     about_open: bool,
+    /// Settings > Font… — see `show_font_settings`.
+    font_settings_open: bool,
 }
 
 /// What the Tools menu wants the editor to do this frame — at most one of
@@ -55,6 +57,7 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
     zen_mode: &mut bool,
+    side_panel_visible: &mut bool,
     last_error: &mut Option<String>,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
@@ -128,22 +131,10 @@ pub fn show(
                     ui.close();
                 }
             });
-            ui.menu_button("Font", |ui| {
-                for font in EditorFont::ALL {
-                    if ui.radio(*editor_font == font, font.label()).clicked() {
-                        *editor_font = font;
-                        ui.close();
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Font Size");
-                ui.add(
-                    egui::DragValue::new(font_size)
-                        .range(FONT_SIZE_RANGE)
-                        .speed(0.25),
-                );
-            });
+            if ui.button("Font…").clicked() {
+                menu.font_settings_open = true;
+                ui.close();
+            }
             ui.menu_button("Indentation", |ui| {
                 if ui.radio(!indent_settings.use_tabs, "Spaces").clicked() {
                     indent_settings.use_tabs = false;
@@ -293,6 +284,13 @@ pub fn show(
             {
                 ui.close();
             }
+            if ui
+                .checkbox(side_panel_visible, "Side Panel")
+                .on_hover_text("Ctrl+B")
+                .changed()
+            {
+                ui.close();
+            }
             ui.separator();
             if ui
                 .checkbox(&mut view_settings.word_wrap, "Word Wrap")
@@ -315,6 +313,19 @@ pub fn show(
             if ui
                 .checkbox(&mut view_settings.show_sticky_scroll, "Sticky Scroll")
                 .on_hover_text("Pin the enclosing class/method header while scrolling (Java)")
+                .changed()
+            {
+                ui.close();
+            }
+            if ui
+                .checkbox(&mut view_settings.cursor_blink, "Blinking Cursor")
+                .changed()
+            {
+                ui.close();
+            }
+            if ui
+                .checkbox(&mut view_settings.show_editor_outline, "Editor Outline")
+                .on_hover_text("Border around the active editor pane, highlighted while it has focus")
                 .changed()
             {
                 ui.close();
@@ -343,11 +354,71 @@ pub fn show(
                 ui.close();
             }
         });
+
+        // Pinned to the far right of the menu bar — unlike the matching
+        // "◀" button in the side panel's own toolbar (which disappears
+        // along with the rest of that panel once collapsed), the menu bar
+        // stays up whenever the app isn't in Zen Mode, so this is always
+        // reachable to bring the panel back, not just to hide it.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (icon, hover) = if *side_panel_visible {
+                ("◀", "Collapse Side Panel (Ctrl+B)")
+            } else {
+                ("▶", "Expand Side Panel (Ctrl+B)")
+            };
+            if ui.button(icon).on_hover_text(hover).clicked() {
+                *side_panel_visible = !*side_panel_visible;
+            }
+        });
     });
 
     show_about(ui, menu);
+    show_font_settings(ui, menu, editor_font, font_size);
 
     outcome
+}
+
+/// Settings > Font… — family and size together in one dialog, rather than a
+/// "Font" submenu (family radios) plus a separately-placed "Font Size" row
+/// sitting right underneath it in the Settings menu, which read as two
+/// unrelated settings instead of the one "what does code look like" choice
+/// they actually are.
+fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut EditorFont, font_size: &mut f32) {
+    let outcome = show_modal(
+        ui,
+        "font_settings_dialog",
+        menu.font_settings_open.then_some(()),
+        |ui, ()| {
+            ui.heading("Font");
+            ui.separator();
+            for font in EditorFont::ALL {
+                if ui.radio(*editor_font == font, font.label()).clicked() {
+                    *editor_font = font;
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                // A plain numeric input (spinner) rather than the family
+                // radios' click-to-pick shape — `DragValue` doubles as both
+                // a drag-to-adjust slider and, on click, an editable number
+                // box, so typing an exact size still works alongside the
+                // drag.
+                ui.add(
+                    egui::DragValue::new(font_size)
+                        .range(FONT_SIZE_RANGE)
+                        .speed(0.25),
+                );
+            });
+            ui.separator();
+            ui.button("Close").clicked()
+        },
+    );
+    if let Some((close_clicked, escape_pressed)) = outcome
+        && (close_clicked || escape_pressed)
+    {
+        menu.font_settings_open = false;
+    }
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
@@ -365,6 +436,7 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
             ui.label("Ctrl+Shift+T — reopen the last closed tab");
             ui.label("Middle-click a tab — close it");
             ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
+            ui.label("Ctrl+B — toggle the side panel");
             ui.label("Ctrl+J — join the current line with the next one");
             ui.label("Ctrl+E — go to a recent file");
             ui.label("Ctrl+/ — toggle line comments");
@@ -372,8 +444,14 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
             ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
             ui.label("Tools menu — generate just getters/setters, or Title Case");
             ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
-            ui.label("Alt+↑/↓ — move the current line up/down");
-            ui.label("Alt+Shift+↑/↓ — duplicate the current line");
+            // Plain "Up"/"Down" rather than `↑`/`↓` glyphs — the bundled
+            // font set (Hack + Ubuntu-Light + the emoji fonts `style::
+            // fonts::install` leaves untouched, see that fn's doc comment)
+            // has no glyph for the plain Arrows-block `U+2191`/`U+2193`, so
+            // those rendered as tofu; every other line in this list is
+            // already plain shortcut text, not a symbol.
+            ui.label("Alt+Up/Down — move the current line up/down");
+            ui.label("Alt+Shift+Up/Down — duplicate the current line");
             ui.label("Home — jump to first non-whitespace, then column 0");
             ui.label("Ctrl+N — new file");
             ui.label("Esc — close the current dialog");

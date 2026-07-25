@@ -82,6 +82,7 @@ fn frame(
                     &[],
                     &[],
                     false,
+                    true,
                 ));
             });
     });

@@ -333,6 +333,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
         show_whitespace: true,
         show_indent_guides: true,
         show_sticky_scroll: false,
+        ..ViewSettings::default()
     };
 
     egui::__run_test_ui(|ui| {

@@ -40,6 +40,10 @@ const WORD_WRAP_KEY: &str = "word_wrap";
 const SHOW_WHITESPACE_KEY: &str = "show_whitespace";
 const SHOW_INDENT_GUIDES_KEY: &str = "show_indent_guides";
 const SHOW_STICKY_SCROLL_KEY: &str = "show_sticky_scroll";
+const CURSOR_BLINK_KEY: &str = "cursor_blink";
+const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
+const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
+const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -48,6 +52,10 @@ const DEFAULT_FONT_SIZE: f32 = 14.0;
 /// out-of-the-box theme before any Settings > Theme choice or persisted
 /// setting overrides it.
 const DEFAULT_DARK_MODE: bool = true;
+/// Matches `egui::Panel::left`'s own built-in default outer width, so a
+/// fresh install (no persisted `SIDE_PANEL_WIDTH_KEY` yet) looks exactly as
+/// if this app had never overridden it.
+const DEFAULT_SIDE_PANEL_WIDTH: f32 = 200.0;
 
 pub struct FoxGardenApp {
     state: EditorState,
@@ -87,6 +95,21 @@ pub struct FoxGardenApp {
     /// so only one context menu) is ever shown at a time.
     cached_clipboard_text: Option<String>,
     side_panel: SidePanelState,
+    /// The project tree panel's current width, in points — read back every
+    /// frame from `egui::Panel::left`'s own response rect (so it tracks a
+    /// live drag), fed back in as that same panel's `default_size` next
+    /// frame, and persisted/restored across launches by `persist_settings`/
+    /// `restore_settings` so a resize sticks around the way every other
+    /// Settings choice already does, rather than resetting to `egui::Panel`'s
+    /// built-in default on every relaunch.
+    side_panel_width: f32,
+    /// Whether the project tree panel is shown at all — toggled by its own
+    /// "◀ Collapse" button (`panels::side_panel::show`), the View menu's
+    /// "Side Panel" checkbox, or `Ctrl+B`, all three of which just flip this
+    /// one flag. Independent of `zen_mode`, which hides this *and* the menu
+    /// bar together; this hides only the project panel, leaving the menu bar
+    /// (and so a way back via the View menu) in place.
+    side_panel_visible: bool,
     menu_bar: MenuBarState,
     /// `Ctrl+E`'s recent-files popup.
     quick_switcher: QuickSwitcherState,
@@ -488,6 +511,10 @@ fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
 /// from that function because this is "how the editor looks/behaves," not
 /// "what was open"; the two happen to both live in `eframe::Storage` but
 /// are independent concerns.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently-owned Settings value restored from its own storage key, not a bundle waiting to be a struct — same shape and reasoning as menu_bar::show's own allowance"
+)]
 fn restore_settings(
     storage: &dyn eframe::Storage,
     editor_font: &mut EditorFont,
@@ -495,6 +522,8 @@ fn restore_settings(
     dark_mode: &mut bool,
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
+    side_panel_width: &mut f32,
+    side_panel_visible: &mut bool,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -531,9 +560,28 @@ fn restore_settings(
     if let Some(show_sticky_scroll) = storage.get_string(SHOW_STICKY_SCROLL_KEY) {
         view_settings.show_sticky_scroll = show_sticky_scroll == "true";
     }
+    if let Some(cursor_blink) = storage.get_string(CURSOR_BLINK_KEY) {
+        view_settings.cursor_blink = cursor_blink == "true";
+    }
+    if let Some(show_editor_outline) = storage.get_string(SHOW_EDITOR_OUTLINE_KEY) {
+        view_settings.show_editor_outline = show_editor_outline == "true";
+    }
+    if let Some(width) = storage
+        .get_string(SIDE_PANEL_WIDTH_KEY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        *side_panel_width = width;
+    }
+    if let Some(visible) = storage.get_string(SIDE_PANEL_VISIBLE_KEY) {
+        *side_panel_visible = visible == "true";
+    }
 }
 
 /// Inverse of `restore_settings`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently-owned Settings value written to its own storage key, not a bundle waiting to be a struct — same shape and reasoning as restore_settings' own allowance"
+)]
 fn persist_settings(
     storage: &mut dyn eframe::Storage,
     editor_font: EditorFont,
@@ -541,6 +589,8 @@ fn persist_settings(
     dark_mode: bool,
     indent_settings: IndentSettings,
     view_settings: ViewSettings,
+    side_panel_width: f32,
+    side_panel_visible: bool,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -560,6 +610,13 @@ fn persist_settings(
         SHOW_STICKY_SCROLL_KEY,
         view_settings.show_sticky_scroll.to_string(),
     );
+    storage.set_string(CURSOR_BLINK_KEY, view_settings.cursor_blink.to_string());
+    storage.set_string(
+        SHOW_EDITOR_OUTLINE_KEY,
+        view_settings.show_editor_outline.to_string(),
+    );
+    storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
+    storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
 }
 
 impl FoxGardenApp {
@@ -572,6 +629,8 @@ impl FoxGardenApp {
         let mut dark_mode = DEFAULT_DARK_MODE;
         let mut indent_settings = IndentSettings::default();
         let mut view_settings = ViewSettings::default();
+        let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+        let mut side_panel_visible = true;
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -582,6 +641,8 @@ impl FoxGardenApp {
                 &mut dark_mode,
                 &mut indent_settings,
                 &mut view_settings,
+                &mut side_panel_width,
+                &mut side_panel_visible,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -599,6 +660,8 @@ impl FoxGardenApp {
             pending_editor_input: Vec::new(),
             cached_clipboard_text: None,
             side_panel: SidePanelState::default(),
+            side_panel_width,
+            side_panel_visible,
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
@@ -657,6 +720,9 @@ impl eframe::App for FoxGardenApp {
         {
             self.side_panel.begin_new_file(root);
         }
+        if ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
+            self.side_panel_visible = !self.side_panel_visible;
+        }
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
         process_file_events(
@@ -686,16 +752,30 @@ impl eframe::App for FoxGardenApp {
                         &mut self.indent_settings,
                         &mut self.view_settings,
                         &mut self.zen_mode,
+                        &mut self.side_panel_visible,
                         &mut self.last_error,
                     )
                 })
                 .inner;
 
-            outcome = egui::Panel::left("project_panel")
-                .show(ui, |ui| {
-                    side_panel::show(ui, &mut self.state, &mut self.side_panel)
-                })
-                .inner;
+            if self.side_panel_visible {
+                let panel_response = egui::Panel::left("project_panel")
+                    .default_size(self.side_panel_width)
+                    .show(ui, |ui| {
+                        side_panel::show(
+                            ui,
+                            &mut self.state,
+                            &mut self.side_panel,
+                            &mut self.side_panel_visible,
+                        )
+                    });
+                // Tracks a live drag, not just the size at the frame the
+                // resize handle is released — so `self.side_panel_width`
+                // (what `save()` persists) always reflects exactly what's on
+                // screen.
+                self.side_panel_width = panel_response.response.rect.width();
+                outcome = panel_response.inner;
+            }
         }
 
         if let Some(path) = outcome.open {
@@ -793,6 +873,8 @@ impl eframe::App for FoxGardenApp {
             self.dark_mode,
             self.indent_settings,
             self.view_settings,
+            self.side_panel_width,
+            self.side_panel_visible,
         );
     }
 }

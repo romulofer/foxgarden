@@ -38,6 +38,13 @@ struct ShellState {
     /// (so the next `Preedit`/`Commit` knows what to replace), or `None`
     /// outside of composition.
     ime_range: Option<std::ops::Range<usize>>,
+    /// `ui.input(|i| i.time)` as of the caret's last move/edit (or the
+    /// widget's last gaining focus) — the same anchor `egui::text_edit::
+    /// TextEditState::last_interaction_time` uses to drive `paint_caret`'s
+    /// blink cycle, so the caret snaps solid-visible on every keystroke/
+    /// click instead of blinking mid-cycle right when the user is looking
+    /// at it.
+    last_interaction: f64,
 }
 
 impl Default for ShellState {
@@ -47,6 +54,7 @@ impl Default for ShellState {
             preferred_col: 0,
             history: History::default(),
             ime_range: None,
+            last_interaction: 0.0,
         }
     }
 }
@@ -78,10 +86,12 @@ pub fn peek_caret(ctx: &egui::Context, id: Id) -> Option<Caret> {
 /// getter/setter jumping to it, … — is exactly the "unrelated change in
 /// between" the coalescing rule exists to not silently merge past.
 pub fn set_caret(ctx: &egui::Context, id: Id, caret: Caret) {
+    let now = ctx.input(|i| i.time);
     ctx.data_mut(|d| {
         let state = d.get_temp_mut_or_insert_with(id, ShellState::default);
         state.caret = caret;
         state.history.break_run();
+        state.last_interaction = now;
     });
 }
 
@@ -172,8 +182,10 @@ pub fn show(
     spans: &[HighlightSpan],
     hidden: &[Range<usize>],
     word_wrap: bool,
+    cursor_blink: bool,
 ) -> ShellOutput {
     let mut state = load(ui, id);
+    let caret_at_frame_start = state.caret;
 
     // Read (and lock) focus *before* shaping below — `layout_visible`'s own
     // `ui.interact` call is what makes this widget "focusable," and if that
@@ -305,9 +317,24 @@ pub fn show(
         state.caret.primary = clamp_out_of_hidden(&final_text, state.caret.primary, hidden);
     }
 
+    // Resets the blink cycle to solid-visible on anything that should make
+    // the caret "jump to attention": just gaining focus, a click/drag moving
+    // it, an arrow/Home/End move, or an edit — the same set of triggers
+    // `egui::text_edit::TextEditState::last_interaction_time` resets on
+    // (`response.changed() || selection_changed`, plus the gained-focus
+    // case). Without this a click would leave the caret starting mid-blink
+    // (possibly invisible) instead of visible right where the user just
+    // looked.
+    if (!had_focus_at_frame_start && has_focus)
+        || state.caret != caret_at_frame_start
+        || new_text.is_some()
+    {
+        state.last_interaction = ui.input(|i| i.time);
+    }
+
     paint_rows(ui, &final_out, text_color);
     if has_focus {
-        paint_caret(ui, &final_out, final_buffer, &state, text_color);
+        paint_caret(ui, &final_out, final_buffer, &state, text_color, cursor_blink);
 
         // Tell the platform integration where to anchor its IME candidate
         // window — without this, an IME popup (e.g. composing Japanese/
@@ -336,16 +363,18 @@ pub fn show(
     }
 }
 
-/// Paints the primary caret (a blinking-free solid line for now — the
-/// time-since-interaction blink `egui::TextEdit` does is a pure polish item,
-/// not part of parity's functional surface) and, when there's a selection,
-/// a filled rect per visible row it touches.
+/// Paints the primary caret — blinking, on the same on/off cycle
+/// `egui::text_selection::visuals::paint_text_cursor` drives real
+/// `egui::TextEdit`s with, anchored at `state.last_interaction` rather than
+/// unconditionally solid — and, when there's a selection, a filled rect per
+/// visible row it touches.
 fn paint_caret(
     ui: &egui::Ui,
     out: &TextAreaOutput,
     buffer: &Rope,
     state: &ShellState,
     text_color: Color32,
+    cursor_blink: bool,
 ) {
     let painter = ui.painter();
     let caret_color = ui.visuals().text_cursor.stroke.color;
@@ -387,10 +416,12 @@ fn paint_caret(
     }
 
     if let Some(rect) = out.char_rect(buffer, state.caret.primary) {
-        painter.line_segment(
-            [rect.left_top(), rect.left_bottom()],
-            Stroke::new(1.5, caret_color),
-        );
+        if caret_visible(ui, state.last_interaction, cursor_blink) {
+            painter.line_segment(
+                [rect.left_top(), rect.left_bottom()],
+                Stroke::new(1.5, caret_color),
+            );
+        }
         if let Some(ime) = &state.ime_range
             && let (Some(start), Some(end)) = (
                 out.char_rect(buffer, ime.start),
@@ -404,6 +435,44 @@ fn paint_caret(
             );
         }
     }
+}
+
+/// Whether the caret should be drawn solid this frame, and the driver of the
+/// blink animation itself — mirrors `egui::text_selection::visuals::
+/// paint_text_cursor`'s own cycle math (`time_in_cycle` against `on_duration`/
+/// `off_duration` from `Visuals::text_cursor`) so this widget's blink looks
+/// and feels identical to a real `egui::TextEdit`'s, and schedules the next
+/// repaint itself (`request_repaint_after`) so the "off" half of the cycle
+/// actually arrives rather than only ever repainting in response to input.
+/// Respects `Visuals::text_cursor.blink` (always solid if the theme disables
+/// it), `cursor_blink` (View > Blinking Cursor — this app's own on/off
+/// switch, same idea as the theme's but user-facing and independent of it),
+/// and the viewport's own focus (no point animating — or repainting — a
+/// caret nobody can see because the OS window itself isn't focused).
+fn caret_visible(ui: &egui::Ui, last_interaction: f64, cursor_blink: bool) -> bool {
+    if !cursor_blink || !ui.visuals().text_cursor.blink || !ui.input(|i| i.focused) {
+        return true;
+    }
+
+    let on_duration = ui.visuals().text_cursor.on_duration;
+    let off_duration = ui.visuals().text_cursor.off_duration;
+    let total_duration = on_duration + off_duration;
+    if total_duration <= 0.0 {
+        return true;
+    }
+
+    let now = ui.input(|i| i.time);
+    let time_since_interaction = (now - last_interaction).max(0.0);
+    let time_in_cycle = (time_since_interaction % total_duration as f64) as f32;
+
+    let (visible, wake_in) = if time_in_cycle < on_duration {
+        (true, on_duration - time_in_cycle)
+    } else {
+        (false, total_duration - time_in_cycle)
+    };
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f32(wake_in.max(0.0)));
+    visible
 }
 
 /// Runs every event in this frame's queue against `text`/`state.caret` in
