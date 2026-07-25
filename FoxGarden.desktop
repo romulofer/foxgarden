@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=FoxGarden
+Comment=A light code editor for Java and Kotlin
+Exec=/home/romulo2/development/utilities/code_tools/foxgarden/target/release/app
+Icon=/home/romulo2/development/utilities/code_tools/foxgarden/crates/app/assets/icon/icon.png
+Terminal=false
+Categories=Development;IDE;

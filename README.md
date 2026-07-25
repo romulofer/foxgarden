@@ -24,8 +24,9 @@ cross-platform "open a terminal here" API to call instead.
 ### Project, files, and sessions
 
 - Menu bar: File (New File, Open Folder, Save, Close Tab, Reopen Closed Tab,
-  Exit), Settings (Light/Dark theme, editor font, font size, indentation),
-  Tools (Java code generation, case conversion), View (Zen Mode), Help
+  Exit), Settings (Light/Dark theme, Font…, indentation), Tools (Java code
+  generation, case conversion), View (Zen Mode, Side Panel, Blinking Cursor,
+  Editor Outline, word wrap/whitespace/indent guides/sticky scroll), Help
   (About)
 - `F11` toggles Zen Mode — hides the menu bar and side panel, leaving just
   the tab bar and editor; `F11` again brings them back
@@ -35,11 +36,16 @@ cross-platform "open a terminal here" API to call instead.
   VCS/build/dependency noise (`.git`, `target`, `node_modules`, `build`,
   `.idea`, `dist`, `out`, `.svn`, `.hg`) is skipped so it never clutters the
   tree or slows down opening a large real-world project
+- `Ctrl+B` (or the "◀"/"▶" button pinned to the right of the menu bar, or the
+  "◀" button in the side panel's own toolbar, or View > Side Panel) toggles
+  the side panel; its width (drag the edge to resize) and shown/hidden state
+  both persist across restarts
 - Files with no recognized extension still open and edit as plain text (no
   highlighting or diagnostics); actual binaries (images, class files, jars,
   fonts) are detected and refused rather than read in full
 - Remembers and restores your session on restart: the last project folder,
-  every tab that was open, and which one was focused
+  every tab that was open, which one was focused, every Settings/View
+  choice, and the side panel's width and shown/hidden state
 - Create, rename, and delete files from the side panel — via the "New
   File…" button, `Ctrl+N`, File > New File…, or right-click on a
   file/folder (delete asks for confirmation first); `Enter` confirms a
@@ -121,14 +127,20 @@ cross-platform "open a terminal here" API to call instead.
 
 ### Look and feel
 
-- Editor font is selectable (Settings > Font); defaults to bundled JetBrains
-  Mono (SIL OFL 1.1 — license included alongside the font under
-  `crates/app/assets/fonts/`)
+- Settings > Font… opens a modal with the editor font (bundled JetBrains
+  Mono, SIL OFL 1.1 — license included alongside the font under
+  `crates/app/assets/fonts/`, or the system default monospace) and a numeric
+  font-size box together, instead of a separate submenu and menu row
 - Light theme background uses raylib's `RAYWHITE` (245, 245, 245); syntax
   colors are adapted per-theme so both light and dark stay readable
 - Sticky scroll (View > Sticky Scroll): pins the enclosing class/method
   signature to the top of the editor while scrolling through its body, so you
   never lose track of where you are (Java; persisted)
+- The text caret blinks (View > Blinking Cursor to turn off), resetting to
+  solid on every click, keystroke, or focus change
+- The active editor pane is outlined — subdued when unfocused, highlighted
+  while focused, same as a real `egui::TextEdit` — toggle via View > Editor
+  Outline
 
 ## Tech stack
 
@@ -166,6 +178,13 @@ you don't have one).
 ```sh
 cargo build --workspace
 cargo run -p app
+```
+
+For a standalone binary (`target/release/app`), build with `--release`
+instead:
+
+```sh
+cargo build --release --bin app
 ```
 
 ## Testing
