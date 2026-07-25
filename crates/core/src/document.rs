@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,16 @@ pub struct Document {
     /// `zen_mode`. Blocks every edit path in `widgets::editor::show`, not
     /// just direct typing; see that function's `strip_mutating_events`.
     pub read_only: bool,
+    /// The `syntax::FoldRange::marker_line`s currently collapsed — session-
+    /// only, same as `read_only` (a fresh open always starts fully
+    /// expanded). Membership, not the ranges themselves: `syntax::
+    /// foldable_ranges` is cheap to recompute from the live tree every
+    /// frame, so there's nothing here to keep in sync across edits — a
+    /// marker line an edit has since made non-foldable (or moved) simply
+    /// stops matching anything in that fresh list and quietly falls out of
+    /// the collapsed set, rather than needing an explicit reconciliation
+    /// pass (PLAN.md Phase 3e's "first cut").
+    pub folded_lines: HashSet<usize>,
 }
 
 impl Document {
@@ -90,6 +101,7 @@ impl Document {
             diagnostics: Vec::new(),
             extra_selections: Vec::new(),
             read_only: false,
+            folded_lines: HashSet::new(),
         })
     }
 

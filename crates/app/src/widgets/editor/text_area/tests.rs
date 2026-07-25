@@ -13,7 +13,10 @@ use super::*;
 /// height to zero).
 fn sized_input() -> egui::RawInput {
     egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(800.0, 600.0),
+        )),
         ..Default::default()
     }
 }
@@ -57,6 +60,83 @@ fn row_at_y_maps_a_click_to_its_row_and_clamps() {
 }
 
 #[test]
+fn prefix_rows_is_cumulative_and_one_longer_than_its_input() {
+    assert_eq!(prefix_rows(&[1, 1, 1]), vec![0, 1, 2, 3]);
+    assert_eq!(prefix_rows(&[2, 3, 1]), vec![0, 2, 5, 6]);
+    // A folded-away line contributes nothing to the running total.
+    assert_eq!(prefix_rows(&[1, 0, 0, 1]), vec![0, 1, 1, 1, 2]);
+    assert_eq!(prefix_rows(&[]), vec![0]);
+}
+
+#[test]
+fn visible_lines_matches_visible_rows_in_the_uniform_one_row_per_line_case() {
+    // With every line contributing exactly one row, `visible_lines` over
+    // `prefix_rows` of an all-1s array must answer exactly what `visible_
+    // rows` (the no-wrap fast path it generalizes) already does — checked
+    // across several scroll positions, not just one, since an off-by-one in
+    // the binary search would likely only show up near a boundary.
+    let total = 1000;
+    let row_counts = vec![1; total];
+    let prefix = prefix_rows(&row_counts);
+    for scroll_y in [0.0, 17.0, 200.0, 199.9, 9_999.0, 20_000.0] {
+        let expected = visible_rows(scroll_y, 100.0, 20.0, total);
+        let actual = visible_lines(scroll_y, 100.0, 20.0, &prefix);
+        // Both empty ranges count as a match regardless of exactly where
+        // their (otherwise-meaningless) boundary landed — `visible_rows`
+        // clamps an out-of-range scroll to `total..total`, `visible_lines`
+        // short-circuits to `0..0`; either way nothing gets shaped, which is
+        // the only thing virtualization actually depends on.
+        if expected.is_empty() && actual.is_empty() {
+            continue;
+        }
+        assert_eq!(actual, expected, "scroll_y={scroll_y}");
+    }
+}
+
+#[test]
+fn visible_lines_widens_around_a_wrapped_line() {
+    // Lines 0,1 unwrapped (1 row each); line 2 wraps to 3 rows; line 3
+    // unwrapped. Visual row layout: line0@0, line1@1, line2@2..5, line3@5.
+    let prefix = prefix_rows(&[1, 1, 3, 1]);
+    assert_eq!(prefix, vec![0, 1, 2, 5, 6]);
+
+    // A viewport landing entirely inside line 2's wrapped block (rows 3..4)
+    // must still report line 2 (not skip past it or split it).
+    let visible = visible_lines(60.0, 20.0, 20.0, &prefix); // rows 3..4
+    assert_eq!(visible, 2..3);
+
+    // A viewport spanning from mid-line-2 through line 3.
+    let visible = visible_lines(80.0, 40.0, 20.0, &prefix); // rows 4..6
+    assert_eq!(visible, 2..4);
+}
+
+#[test]
+fn visible_lines_includes_a_folded_line_in_range_with_nothing_to_paint_for_it() {
+    // Line 1 is folded away (0 rows); its block collapses to nothing between
+    // line 0 (row 0) and line 2 (row 1). `visible_lines` still reports it as
+    // part of the touched *line* range (0..3, not a gap) — it's the caller's
+    // shaping loop that skips a `row_counts[line] == 0` entry when it goes
+    // to actually paint, the same way it'd skip any other zero-row line;
+    // `visible_lines` itself only ever needs to answer "which lines' blocks
+    // does the viewport touch," and a zero-width block trivially always does.
+    let prefix = prefix_rows(&[1, 0, 1]);
+    assert_eq!(prefix, vec![0, 1, 1, 2]);
+    let visible = visible_lines(0.0, 100.0, 20.0, &prefix);
+    assert_eq!(visible, 0..3);
+}
+
+#[test]
+fn visible_lines_handles_degenerate_input() {
+    assert_eq!(visible_lines(0.0, 100.0, 0.0, &prefix_rows(&[1, 1])), 0..0);
+    assert_eq!(visible_lines(0.0, 100.0, 20.0, &prefix_rows(&[])), 0..0);
+    assert_eq!(
+        visible_lines(100_000.0, 100.0, 20.0, &prefix_rows(&[1, 1, 1])),
+        0..0,
+        "scrolled past the end is empty, same as visible_rows(100_000.0, 100.0, 20.0, 3)"
+    );
+}
+
+#[test]
 fn foldmap_with_no_folds_is_the_identity() {
     let map = FoldMap::new(&[]);
     assert_eq!(map.visual_count(10), 10);
@@ -96,8 +176,16 @@ fn foldmap_handles_multiple_ranges() {
 
     let expected_visible = [0, 1, 4, 5, 8, 9];
     for (visual, &logical) in expected_visible.iter().enumerate() {
-        assert_eq!(map.to_logical(visual), logical, "visual {visual} -> logical");
-        assert_eq!(map.to_visual(logical), Some(visual), "logical {logical} -> visual");
+        assert_eq!(
+            map.to_logical(visual),
+            logical,
+            "visual {visual} -> logical"
+        );
+        assert_eq!(
+            map.to_visual(logical),
+            Some(visual),
+            "logical {logical} -> visual"
+        );
     }
     // Every hidden line reports None.
     for hidden_line in [2, 3, 6, 7] {
@@ -128,20 +216,119 @@ fn readonly_render_shapes_only_visible_rows_not_the_whole_buffer() {
     let mut shaped = 0;
     let mut in_bounds = true;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-            let out = show_readonly(ui, &buffer, egui::FontId::monospace(14.0), egui::Color32::WHITE, &[]);
-            shaped = out.row_galleys.len();
-            in_bounds = out.row_galleys.iter().all(|(logical, _)| *logical < buffer.len_lines())
-                && out.row_galleys.len() == out.visible_rows.len();
-        });
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                let out = super::render::show_readonly(
+                    ui,
+                    egui::Id::new("test"),
+                    &buffer,
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                    &[],
+                );
+                shaped = out.row_galleys.len();
+                in_bounds = out
+                    .row_galleys
+                    .iter()
+                    .all(|(logical, _)| *logical < buffer.len_lines())
+                    && out.row_galleys.len() == out.visible_rows.len();
+            });
     });
 
-    assert!(in_bounds, "every shaped row maps to a real line, one galley per visible row");
+    assert!(
+        in_bounds,
+        "every shaped row maps to a real line, one galley per visible row"
+    );
     assert!(shaped > 0, "some rows should render into the viewport");
     // The load-bearing invariant: a bounded viewport shapes strictly fewer
     // rows than the whole 500-line buffer. (Exact count depends on the test
     // harness's row height, so this stays a "not everything" bound.)
-    assert!(shaped < 500, "virtualization must not shape all 500 rows, got {shaped}");
+    assert!(
+        shaped < 500,
+        "virtualization must not shape all 500 rows, got {shaped}"
+    );
+}
+
+#[test]
+fn highlight_spans_bake_their_color_and_leave_the_rest_placeholder() {
+    // "let x" with "let" (bytes 0..3) highlighted red — the rest of the line
+    // ("x", byte 3 on) should fall back to `Color32::PLACEHOLDER`, resolved
+    // to whatever color the caller passes `Painter::galley` at paint time.
+    let buffer = ropey::Rope::from_str("let x");
+    let ctx = egui::Context::default();
+    let spans = [super::render::HighlightSpan {
+        range: 0..3,
+        color: egui::Color32::RED,
+    }];
+
+    let mut sections = Vec::new();
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                let out = super::render::layout_visible(
+                    ui,
+                    egui::Id::new("test"),
+                    &buffer,
+                    egui::FontId::monospace(14.0),
+                    &[],
+                    &spans,
+                );
+                let (_, galley) = &out.row_galleys[0];
+                sections = galley
+                    .job
+                    .sections
+                    .iter()
+                    .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
+                    .collect();
+            });
+    });
+
+    assert_eq!(
+        sections.len(),
+        2,
+        "one highlighted section plus one placeholder gap, got {sections:?}"
+    );
+    assert_eq!(sections[0], (0..3, egui::Color32::RED));
+    assert_eq!(sections[1], (3..5, egui::Color32::PLACEHOLDER));
+}
+
+#[test]
+fn a_line_with_no_matching_spans_still_shapes_a_single_placeholder_section() {
+    let buffer = ropey::Rope::from_str("plain");
+    let ctx = egui::Context::default();
+    // A span on a different line entirely shouldn't leave line 0 without any
+    // section at all.
+    let spans = [super::render::HighlightSpan {
+        range: 100..103,
+        color: egui::Color32::RED,
+    }];
+
+    let mut sections = Vec::new();
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                let out = super::render::layout_visible(
+                    ui,
+                    egui::Id::new("test"),
+                    &buffer,
+                    egui::FontId::monospace(14.0),
+                    &[],
+                    &spans,
+                );
+                let (_, galley) = &out.row_galleys[0];
+                sections = galley
+                    .job
+                    .sections
+                    .iter()
+                    .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
+                    .collect();
+            });
+    });
+
+    assert_eq!(sections, vec![(0..5, egui::Color32::PLACEHOLDER)]);
 }
 
 #[test]
@@ -153,21 +340,36 @@ fn char_rect_locates_visible_chars_and_skips_offscreen_ones() {
     let mut on_screen_has_rect = false;
     let mut off_screen_is_none = false;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-            let out = show_readonly(ui, &buffer, egui::FontId::monospace(14.0), egui::Color32::WHITE, &[]);
-            // A char on the first shaped row resolves to a rect...
-            if let Some((first_line, _)) = out.row_galleys.first() {
-                let char0 = buffer.line_to_char(*first_line);
-                on_screen_has_rect = out.char_rect(&buffer, char0).is_some();
-            }
-            // ...while a char on a line far below the viewport does not.
-            let far = buffer.line_to_char(400);
-            off_screen_is_none = out.char_rect(&buffer, far).is_none();
-        });
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                let out = super::render::show_readonly(
+                    ui,
+                    egui::Id::new("test"),
+                    &buffer,
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                    &[],
+                );
+                // A char on the first shaped row resolves to a rect...
+                if let Some((first_line, _)) = out.row_galleys.first() {
+                    let char0 = buffer.line_to_char(*first_line);
+                    on_screen_has_rect = out.char_rect(&buffer, char0).is_some();
+                }
+                // ...while a char on a line far below the viewport does not.
+                let far = buffer.line_to_char(400);
+                off_screen_is_none = out.char_rect(&buffer, far).is_none();
+            });
     });
 
-    assert!(on_screen_has_rect, "a visible char should resolve to a screen rect");
-    assert!(off_screen_is_none, "an off-screen char should resolve to None");
+    assert!(
+        on_screen_has_rect,
+        "a visible char should resolve to a screen rect"
+    );
+    assert!(
+        off_screen_is_none,
+        "an off-screen char should resolve to None"
+    );
 }
 
 #[test]
@@ -176,10 +378,19 @@ fn readonly_render_handles_an_empty_buffer() {
     let ctx = egui::Context::default();
     let mut rows = usize::MAX;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-            let out = show_readonly(ui, &buffer, egui::FontId::monospace(14.0), egui::Color32::WHITE, &[]);
-            rows = out.row_galleys.len();
-        });
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                let out = super::render::show_readonly(
+                    ui,
+                    egui::Id::new("test"),
+                    &buffer,
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                    &[],
+                );
+                rows = out.row_galleys.len();
+            });
     });
     // An empty buffer is one (empty) logical line — never a panic, never a
     // negative/huge row count.

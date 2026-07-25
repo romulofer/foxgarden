@@ -1,56 +1,35 @@
-use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
 
-use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
-use egui::{Event, FontId, Galley, Key};
+use egui::{Event, FontId, Key};
 use fg_core::{Document, Language, Project};
 use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line, indent_selected_lines, is_pairable,
-    join_lines, move_line_down, move_line_up, smart_home_target, sort_lines, toggle_line_comments, unique_lines,
-    wrap_selection, CaseConversion,
+    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line,
+    indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up,
+    smart_home_target, sort_lines, toggle_line_comments, unique_lines, wrap_selection,
 };
 use super::codegen::{
-    self, generate_accessors, insert_at_class_end, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog,
-    GenerateMethodKind, OverrideMethodDialog,
+    self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
+    OverrideMethodDialog, generate_accessors, insert_at_class_end,
 };
 use super::context_menu;
 #[cfg(test)]
 use super::context_menu::synthetic_shortcut;
+use super::folding;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
-    paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides, paint_line_numbers,
-    paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
+    paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
+    paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
 use super::templates::{self, expand, find_template, word_before_cursor};
+use super::text_area::{self, Caret, HighlightSpan};
 use super::text_offset::{byte_to_char, char_to_byte};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-
-/// Identifies what a laid-out galley depends on: the buffer's exact
-/// contents, which language (if any) is highlighting it, the color theme,
-/// the wrap width, and the font size. Two frames with an equal key produce
-/// an identical `Galley`, so a match means the cached one from
-/// `CachedLayout` can be reused outright.
-#[derive(Clone, Copy, PartialEq)]
-struct LayoutCacheKey {
-    content_hash: u64,
-    language: Option<Language>,
-    dark_mode: bool,
-    wrap_width_bits: u32,
-    font_size_bits: u32,
-}
-
-#[derive(Clone)]
-struct CachedLayout {
-    key: LayoutCacheKey,
-    galley: Arc<Galley>,
-}
 
 /// Persisted (via `egui::Context`'s per-frame-surviving temp storage, same
 /// mechanism `CachedLayout` above uses) across `Ctrl+W`/`Ctrl+Shift+W`
@@ -88,29 +67,37 @@ const STICKY_MAX_DEPTH: usize = 5;
 /// tree-free so it's unit-testable without a frame, the same split
 /// `selection.rs` uses to test its Range bookkeeping apart from the tree walk.
 fn sticky_headers_to_pin(scope_lines: &[usize], top_line: usize, max_depth: usize) -> Vec<usize> {
-    scope_lines.iter().copied().filter(|&line| line < top_line).take(max_depth).collect()
+    scope_lines
+        .iter()
+        .copied()
+        .filter(|&line| line < top_line)
+        .take(max_depth)
+        .collect()
 }
 
-fn hash_source(source: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    source.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn plain_format(font_id: FontId, dark_mode: bool) -> TextFormat {
-    TextFormat {
-        font_id,
-        color: theme::default_text(dark_mode),
-        ..Default::default()
-    }
-}
-
-fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextFormat {
-    TextFormat {
-        font_id,
-        color: theme::color_for_scope(scope, dark_mode),
-        ..Default::default()
-    }
+/// Resolves the syntax-highlighting spans for the widget's shape pass —
+/// `syntax::highlight_spans` over the reparsed tree, each `Scope` resolved
+/// to a concrete `Color32` via `theme::color_for_scope` right here (rather
+/// than inside `text_area`, which stays decoupled from both tree-sitter and
+/// theming — see `text_area::HighlightSpan`'s doc comment). Empty for a
+/// language-less file or one with no tree yet, which `text_area` already
+/// treats as "no highlighting, everything falls through to the plain text
+/// color."
+fn highlight_spans_for(
+    parser: Option<&IncrementalParser>,
+    source: &str,
+    dark_mode: bool,
+) -> Vec<HighlightSpan> {
+    let Some((tree, language)) = parser.and_then(|p| p.tree().map(|t| (t, p.language()))) else {
+        return Vec::new();
+    };
+    syntax::highlight_spans(tree, source, language)
+        .into_iter()
+        .map(|(range, scope)| HighlightSpan {
+            range,
+            color: theme::color_for_scope(scope, dark_mode),
+        })
+        .collect()
 }
 
 /// Commits `new_text` as `doc`'s buffer and brings `parser` (if any) back in
@@ -123,7 +110,12 @@ fn scope_format(font_id: FontId, scope: syntax::Scope, dark_mode: bool) -> TextF
 /// could forget the reparse step and silently drift out of sync, the same
 /// bug `save_tab` in `panels::tabs` had before it started reusing this
 /// pattern too).
-pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
+pub(super) fn apply_edit(
+    doc: &mut Document,
+    parser: &mut Option<IncrementalParser>,
+    old_text: &str,
+    new_text: &str,
+) {
     doc.buffer = Rope::from_str(new_text);
     if let Some(parser) = parser.as_mut() {
         let edit = syntax::diff_edit(old_text, new_text);
@@ -156,8 +148,15 @@ pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalPars
 fn is_mutating_event(event: &Event) -> bool {
     match event {
         Event::Text(_) | Event::Paste(_) | Event::Cut => true,
-        Event::Key { key: Key::ArrowUp | Key::ArrowDown, pressed: true, modifiers, .. } if modifiers.alt => true,
-        Event::Key { key, pressed: true, .. } => matches!(
+        Event::Key {
+            key: Key::ArrowUp | Key::ArrowDown,
+            pressed: true,
+            modifiers,
+            ..
+        } if modifiers.alt => true,
+        Event::Key {
+            key, pressed: true, ..
+        } => matches!(
             key,
             Key::Backspace
                 | Key::Delete
@@ -189,7 +188,10 @@ fn strip_mutating_events(ui: &egui::Ui) {
 /// than `.java`/`.kt`) — such files still open and edit normally, they just
 /// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
 /// are language-agnostic and keep working regardless.
-#[expect(clippy::too_many_arguments, reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see TECHNICAL_DEBT.md #5 (the 'splitting widget.rs further' entry) for why bundling into a struct isn't a clear win here, and context_menu::show_context_menu's own allowance for the same shape")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see TECHNICAL_DEBT.md #5 (the 'splitting widget.rs further' entry) for why bundling into a struct isn't a clear win here, and context_menu::show_context_menu's own allowance for the same shape"
+)]
 pub fn show(
     ui: &mut egui::Ui,
     doc: &mut Document,
@@ -208,6 +210,8 @@ pub fn show(
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
+    fold_all_request: bool,
+    expand_all_request: bool,
     last_error: &mut Option<String>,
     pending_input: &mut Vec<Event>,
     cached_clipboard_text: &mut Option<String>,
@@ -246,10 +250,22 @@ pub fn show(
     if doc.read_only {
         strip_mutating_events(ui);
     }
-    let generate_request = if doc.read_only { None } else { generate_request };
-    let generate_method_request = if doc.read_only { None } else { generate_method_request };
+    let generate_request = if doc.read_only {
+        None
+    } else {
+        generate_request
+    };
+    let generate_method_request = if doc.read_only {
+        None
+    } else {
+        generate_method_request
+    };
     let override_method_request = !doc.read_only && override_method_request;
-    let case_conversion_request = if doc.read_only { None } else { case_conversion_request };
+    let case_conversion_request = if doc.read_only {
+        None
+    } else {
+        case_conversion_request
+    };
 
     // Mutable: the wrap-selection interception below may replace both with
     // an already-edited version *before* `TextEdit::show()` ever runs, so
@@ -273,51 +289,43 @@ pub fn show(
     // pure hash of the salt with no `Ui` involved, so it actually holds.
     let id_salt = doc.path.to_string_lossy().into_owned();
     let widget_id = egui::Id::new(&id_salt);
-    // A galley is expensive to shape (font lookups, kerning, glyph layout)
-    // but egui's own galley cache (`Fonts`) is flushed of anything not
-    // touched *this* frame, every frame — and only the active tab's editor
-    // renders each frame. So switching back to a tab that was merely
-    // sitting open (not the active one for a few frames) would otherwise
-    // force a full reshape of its entire buffer, no matter how big it is.
-    // This cache lives in `egui::Context`'s persistent temp storage instead
-    // (keyed off this document's `id_salt`), which isn't subject to that
-    // per-frame flush — it survives tab switches and is only replaced when
-    // `LayoutCacheKey` actually changes, i.e. the buffer, language, theme,
-    // or wrap width changed since it was last shaped.
-    let layout_cache_id = egui::Id::new(("editor_layout_cache", id_salt.as_str()));
 
     let multi_cursor_active_at_start = !doc.extra_selections.is_empty();
 
-    // `TextEditState::store` takes `self` by value, so it can only be
-    // called once per frame — every path below that wants to override
-    // egui's own post-edit cursor/selection just records the target range
-    // here, and a single `set_char_range` + `store` happens at the very
-    // end.
-    let mut manual_cursor_range: Option<CCursorRange> = None;
+    // `text_area::set_caret` only takes effect on the *next* `show`, so
+    // every path below that wants to override the widget's post-frame
+    // caret/selection just records the target here, and a single
+    // `set_caret` call happens at the very end — the same "collect, apply
+    // once" shape `TextEditState::store`'s once-per-frame constraint used
+    // to force.
+    let mut manual_caret: Option<Caret> = None;
 
     // While extra (Ctrl+D) cursors are active, an editing keystroke must
-    // land at every active cursor at once, not just the one egui's own
-    // single-cursor `TextEdit` logic would edit alone. This reads the
-    // *persisted* selection and applies the edit manually *before*
-    // `TextEdit::show()` runs — the same pre-apply timing wrap-selection and
-    // the indent interception below use — so this frame already renders the
-    // fully multi-edited result instead of a stale one needing a follow-up
+    // land at every active cursor at once, not just the one the widget's own
+    // single-cursor editing would edit alone. This reads the *persisted*
+    // selection and applies the edit manually *before* the widget's own
+    // `show` runs — the same pre-apply timing wrap-selection and the indent
+    // interception below use — so this frame already renders the fully
+    // multi-edited result instead of a stale one needing a follow-up
     // `request_repaint()`. (A previous version of this function applied the
-    // edit *after* `show()`, off `output.cursor_range`, and ate a stale
+    // edit *after* `show()`, off the post-frame cursor, and ate a stale
     // frame; see the resolved entry in `TECHNICAL_DEBT.md` for why that was
     // debt worth fixing rather than a style difference from wrap-selection.)
     // `doc.extra_selections` only ever becomes non-empty via a prior
     // `Ctrl+D` frame, so by the time `multi_cursor_active_at_start` is true
-    // here, a persisted `TextEditState` from that prior frame is always
-    // expected to exist.
+    // here, a persisted caret from that prior frame is always expected to
+    // exist.
     if multi_cursor_active_at_start {
-        let primary_range = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-            .and_then(|state| state.cursor.char_range())
-            .map(|range| range.as_sorted_char_range());
+        let primary_range = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
         if let Some(primary_range) = primary_range {
             let intercepted_events = ui.input_mut(|i| {
-                let matched: Vec<Event> = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
+                let matched: Vec<Event> = i
+                    .events
+                    .iter()
+                    .filter(|e| is_multi_edit_event(e))
+                    .cloned()
+                    .collect();
                 i.events.retain(|e| !is_multi_edit_event(e));
                 matched
             });
@@ -325,13 +333,14 @@ pub fn show(
             if !intercepted_events.is_empty() {
                 let op = multi_edit_op_from_events(&intercepted_events);
                 let mut selections = Vec::with_capacity(1 + doc.extra_selections.len());
-                selections.push(primary_range.start.0..primary_range.end.0);
+                selections.push(primary_range.start..primary_range.end);
                 selections.extend(doc.extra_selections.iter().cloned());
 
-                let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
+                let (new_text, new_cursors) =
+                    multi_cursor::apply_multi_edit(&old_text, &selections, &op);
 
                 apply_edit(doc, parser, &old_text, &new_text);
-                manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursors[0])));
+                manual_caret = Some(Caret::at(new_cursors[0]));
                 doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
                 old_text = new_text.clone();
                 text = new_text;
@@ -354,18 +363,16 @@ pub fn show(
     // concept, and the primary selection's meaning while `Ctrl+D` extras
     // exist is already spoken for by the multi-edit path above.
     if !multi_cursor_active_at_start {
-        // Cheap check first: only load the persisted `TextEditState` (a
-        // `ctx.data` mutex lock + hashmap probe + struct clone, paid again
-        // moments later by `TextEdit::show()`'s own internal load of the
-        // exact same state) on the frames where there's actually a
-        // candidate keystroke queued — not on every idle/mouse-only/
-        // arrow-key frame the editor is visible.
-        let has_candidate_keystroke = ui.input(|i| i.events.iter().any(|e| single_pairable_char(e).is_some()));
+        // Cheap check first: only load the persisted caret (a `ctx.data`
+        // mutex lock + hashmap probe + struct clone) on the frames where
+        // there's actually a candidate keystroke queued — not on every
+        // idle/mouse-only/arrow-key frame the editor is visible.
+        let has_candidate_keystroke =
+            ui.input(|i| i.events.iter().any(|e| single_pairable_char(e).is_some()));
 
         if has_candidate_keystroke {
-            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range())
+            let prior_selection = text_area::peek_caret(ui.ctx(), widget_id)
+                .map(|c| c.range())
                 .filter(|range| !range.is_empty());
 
             if let Some(range) = prior_selection {
@@ -374,14 +381,16 @@ pub fn show(
 
                 if let Some(opener) = opener
                     && let Some((wrapped, sel_start, sel_end)) =
-                        wrap_selection(&old_text, range.start.0, range.end.0, opener)
-                    {
-                        apply_edit(doc, parser, &old_text, &wrapped);
-                        manual_cursor_range =
-                            Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
-                        old_text = wrapped.clone();
-                        text = wrapped;
-                    }
+                        wrap_selection(&old_text, range.start, range.end, opener)
+                {
+                    apply_edit(doc, parser, &old_text, &wrapped);
+                    manual_caret = Some(Caret {
+                        primary: sel_end,
+                        anchor: sel_start,
+                    });
+                    old_text = wrapped.clone();
+                    text = wrapped;
+                }
             }
         }
     }
@@ -409,30 +418,54 @@ pub fn show(
     // is left to egui's own no-selection handling either way, same as
     // before either feature existed.
     if !multi_cursor_active_at_start {
-        let tab_pressed =
-            ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. })));
+        let tab_pressed = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Key {
+                        key: Key::Tab,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+        });
 
         if tab_pressed {
-            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range());
+            let prior_selection = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
             if let Some(range) = prior_selection {
                 if !range.is_empty() {
-                    let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+                    let removed = take_event(ui, |e| {
+                        matches!(
+                            e,
+                            Event::Key {
+                                key: Key::Tab,
+                                pressed: true,
+                                ..
+                            }
+                        )
+                    });
 
                     if removed.is_some() {
                         let dedent = ui.input(|i| i.modifiers.shift);
-                        let (indented, sel_start, sel_end) =
-                            indent_selected_lines(&old_text, range.start.0, range.end.0, dedent, indent_settings);
+                        let (indented, sel_start, sel_end) = indent_selected_lines(
+                            &old_text,
+                            range.start,
+                            range.end,
+                            dedent,
+                            indent_settings,
+                        );
                         apply_edit(doc, parser, &old_text, &indented);
-                        manual_cursor_range =
-                            Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                        manual_caret = Some(Caret {
+                            primary: sel_end,
+                            anchor: sel_start,
+                        });
                         old_text = indented.clone();
                         text = indented;
                     }
                 } else if !ui.input(|i| i.modifiers.shift) {
-                    let word_range = word_before_cursor(&old_text, range.start.0);
+                    let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
                     let templates = match doc.language {
@@ -440,23 +473,33 @@ pub fn show(
                         Some(Language::Kotlin) => templates::KOTLIN_TEMPLATES,
                         _ => &[],
                     };
-                    let template_body = find_template(templates, &old_text[word_start_byte..word_end_byte]);
+                    let template_body =
+                        find_template(templates, &old_text[word_start_byte..word_end_byte]);
 
                     if template_body.is_some() || !indent_settings.use_tabs {
-                        let removed =
-                            take_event(ui, |e| matches!(e, Event::Key { key: Key::Tab, pressed: true, .. }));
+                        let removed = take_event(ui, |e| {
+                            matches!(
+                                e,
+                                Event::Key {
+                                    key: Key::Tab,
+                                    pressed: true,
+                                    ..
+                                }
+                            )
+                        });
 
                         if removed.is_some() {
                             let (new_full_text, new_cursor) = if let Some(body) = template_body {
                                 expand(&old_text, word_range, body)
                             } else {
                                 let unit = indent_settings.unit();
-                                let byte = char_to_byte(&old_text, range.start.0);
-                                let inserted = format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
-                                (inserted, range.start.0 + unit.chars().count())
+                                let byte = char_to_byte(&old_text, range.start);
+                                let inserted =
+                                    format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
+                                (inserted, range.start + unit.chars().count())
                             };
                             apply_edit(doc, parser, &old_text, &new_full_text);
-                            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                            manual_caret = Some(Caret::at(new_cursor));
                             old_text = new_full_text.clone();
                             text = new_full_text;
                         }
@@ -476,24 +519,24 @@ pub fn show(
     if !multi_cursor_active_at_start {
         let alt_arrow = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
-                Event::Key { key: key @ (Key::ArrowUp | Key::ArrowDown), pressed: true, modifiers, .. }
-                    if modifiers.alt =>
-                {
-                    Some((*key, modifiers.shift))
-                }
+                Event::Key {
+                    key: key @ (Key::ArrowUp | Key::ArrowDown),
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.alt => Some((*key, modifiers.shift)),
                 _ => None,
             })
         });
 
         if let Some((key, shift)) = alt_arrow {
-            let prior_cursor = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.primary.index.0);
+            let prior_cursor = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary);
 
             if let Some(cursor_char) = prior_cursor {
-                let removed = take_event(ui, |e| {
-                    matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.alt && modifiers.shift == shift)
-                });
+                let removed = take_event(
+                    ui,
+                    |e| matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.alt && modifiers.shift == shift),
+                );
 
                 if removed.is_some() {
                     let outcome = match (key, shift) {
@@ -504,14 +547,15 @@ pub fn show(
                             Some((duplicated, cursor_char))
                         }
                         (Key::ArrowDown, true) => {
-                            let (duplicated, cursor_on_duplicate) = duplicate_line(&old_text, cursor_char);
+                            let (duplicated, cursor_on_duplicate) =
+                                duplicate_line(&old_text, cursor_char);
                             Some((duplicated, cursor_on_duplicate))
                         }
                         _ => None,
                     };
                     if let Some((new_full_text, new_cursor)) = outcome {
                         apply_edit(doc, parser, &old_text, &new_full_text);
-                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                        manual_caret = Some(Caret::at(new_cursor));
                         old_text = new_full_text.clone();
                         text = new_full_text;
                     }
@@ -529,23 +573,44 @@ pub fn show(
     // call `apply_edit` — Home never changes the buffer, only where the
     // cursor points into it.
     if !multi_cursor_active_at_start {
-        let home_pressed =
-            ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Home, pressed: true, .. })));
+        let home_pressed = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Key {
+                        key: Key::Home,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+        });
 
         if home_pressed {
-            let prior_range =
-                egui::text_edit::TextEditState::load(ui.ctx(), widget_id).and_then(|state| state.cursor.char_range());
+            let prior_caret = text_area::peek_caret(ui.ctx(), widget_id);
 
-            if let Some(range) = prior_range {
+            if let Some(caret) = prior_caret {
                 let shift = ui.input(|i| i.modifiers.shift);
-                let removed = take_event(ui, |e| matches!(e, Event::Key { key: Key::Home, pressed: true, .. }));
+                let removed = take_event(ui, |e| {
+                    matches!(
+                        e,
+                        Event::Key {
+                            key: Key::Home,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                });
 
                 if removed.is_some() {
-                    let target = smart_home_target(&old_text, range.primary.index.0);
-                    manual_cursor_range = Some(if shift {
-                        CCursorRange { primary: CCursor::new(target), secondary: range.secondary, h_pos: None }
+                    let target = smart_home_target(&old_text, caret.primary);
+                    manual_caret = Some(if shift {
+                        Caret {
+                            primary: target,
+                            anchor: caret.anchor,
+                        }
                     } else {
-                        CCursorRange::one(CCursor::new(target))
+                        Caret::at(target)
                     });
                 }
             }
@@ -555,13 +620,13 @@ pub fn show(
     // Ctrl+/: toggle `//` line comments on every line the selection
     // touches (or just the cursor's line, for a collapsed selection).
     // Pre-apply, same interception shape as Tab/Alt+Arrow above — and for
-    // an extra reason beyond "egui's own handling would otherwise compete
-    // with it": reading the *persisted* selection from before this frame's
-    // `TextEdit::show()` call is what makes an externally set/dragged
-    // selection actually usable here. `output.cursor_range` (the post-show
-    // value simpler shortcuts like Ctrl+D/Ctrl+J read) doesn't reliably
-    // agree with it — the same class of caveat `focused_frame_with_
-    // selection`'s doc comment already documents for a different case.
+    // an extra reason beyond "the widget's own handling would otherwise
+    // compete with it": reading the *persisted* selection from before this
+    // frame's `show` call is what makes an externally set/dragged selection
+    // actually usable here. `shell_out.caret` (the post-frame value simpler
+    // shortcuts like Ctrl+D/Ctrl+J read) doesn't reliably agree with it —
+    // the same class of caveat `focused_frame_with_selection`'s doc comment
+    // already documents for a different case.
     if !multi_cursor_active_at_start {
         let ctrl_slash_pressed = ui.input(|i| {
             i.events
@@ -570,19 +635,22 @@ pub fn show(
         });
 
         if ctrl_slash_pressed {
-            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range());
+            let prior_selection = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
             if let Some(range) = prior_selection {
-                let removed = take_event(ui, |e| {
-                    matches!(e, Event::Key { key: Key::Slash, pressed: true, modifiers, .. } if modifiers.command)
-                });
+                let removed = take_event(
+                    ui,
+                    |e| matches!(e, Event::Key { key: Key::Slash, pressed: true, modifiers, .. } if modifiers.command),
+                );
 
                 if removed.is_some() {
-                    let (toggled, sel_start, sel_end) = toggle_line_comments(&old_text, range.start.0, range.end.0);
+                    let (toggled, sel_start, sel_end) =
+                        toggle_line_comments(&old_text, range.start, range.end);
                     apply_edit(doc, parser, &old_text, &toggled);
-                    manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                    manual_caret = Some(Caret {
+                        primary: sel_end,
+                        anchor: sel_start,
+                    });
                     old_text = toggled.clone();
                     text = toggled;
                 }
@@ -610,22 +678,30 @@ pub fn show(
         };
 
         if let Some(case) = case_conversion_request.or(keyboard_case_request) {
-            let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range());
+            let prior_selection = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
             match prior_selection {
                 Some(range) if !range.is_empty() => {
-                    if let Some(key) = keyboard_case_request.map(|_| if case == CaseConversion::Upper { Key::U } else { Key::L }) {
-                        take_event(ui, |e| {
-                            matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.command && modifiers.shift)
-                        });
+                    if let Some(key) = keyboard_case_request.map(|_| {
+                        if case == CaseConversion::Upper {
+                            Key::U
+                        } else {
+                            Key::L
+                        }
+                    }) {
+                        take_event(
+                            ui,
+                            |e| matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.command && modifiers.shift),
+                        );
                     }
                     if let Some((converted, sel_start, sel_end)) =
-                        convert_selection_case(&old_text, range.start.0, range.end.0, case)
+                        convert_selection_case(&old_text, range.start, range.end, case)
                     {
                         apply_edit(doc, parser, &old_text, &converted);
-                        manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+                        manual_caret = Some(Caret {
+                            primary: sel_end,
+                            anchor: sel_start,
+                        });
                         old_text = converted.clone();
                         text = converted;
                     }
@@ -648,19 +724,23 @@ pub fn show(
     // `doc.read_only` needs an explicit check here — the raw-event
     // stripping above only blocks *keyboard* paths, and these two are
     // plain `bool` parameters instead.
-    if !multi_cursor_active_at_start && !doc.read_only && (sort_lines_request || unique_lines_request) {
-        let prior_selection = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-            .and_then(|state| state.cursor.char_range())
-            .map(|range| range.as_sorted_char_range());
+    if !multi_cursor_active_at_start
+        && !doc.read_only
+        && (sort_lines_request || unique_lines_request)
+    {
+        let prior_selection = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
         if let Some(range) = prior_selection {
             let (transformed, sel_start, sel_end) = if sort_lines_request {
-                sort_lines(&old_text, range.start.0, range.end.0)
+                sort_lines(&old_text, range.start, range.end)
             } else {
-                unique_lines(&old_text, range.start.0, range.end.0)
+                unique_lines(&old_text, range.start, range.end)
             };
             apply_edit(doc, parser, &old_text, &transformed);
-            manual_cursor_range = Some(CCursorRange::two(CCursor::new(sel_start), CCursor::new(sel_end)));
+            manual_caret = Some(Caret {
+                primary: sel_end,
+                anchor: sel_start,
+            });
             old_text = transformed.clone();
             text = transformed;
         }
@@ -693,14 +773,14 @@ pub fn show(
 
         if w_pressed {
             let shrink = modifiers.shift;
-            take_event(ui, |e| {
-                matches!(e, Event::Key { key: Key::W, pressed: true, modifiers, .. } if modifiers.command)
-            });
+            take_event(
+                ui,
+                |e| matches!(e, Event::Key { key: Key::W, pressed: true, modifiers, .. } if modifiers.command),
+            );
 
             if let Some(tree) = parser.as_ref().and_then(|p| p.tree())
-                && let Some(prior_range) = egui::text_edit::TextEditState::load(ui.ctx(), widget_id)
-                .and_then(|state| state.cursor.char_range())
-                .map(|range| range.as_sorted_char_range())
+                && let Some(prior_range) =
+                    text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range())
             {
                 let history_id = egui::Id::new(("selection_expand_history", id_salt.as_str()));
                 let mut expand_state = ui
@@ -708,7 +788,7 @@ pub fn show(
                     .data(|d| d.get_temp::<SelectionExpandState>(history_id))
                     .unwrap_or_default();
 
-                let current = prior_range.start.0..prior_range.end.0;
+                let current = prior_range;
                 if expand_state.last_applied.as_ref() != Some(&current) {
                     expand_state.history.clear();
                 }
@@ -724,7 +804,11 @@ pub fn show(
                     // "select the word here."
                     let probe = if current.is_empty() {
                         let word = multi_cursor::word_range_at(&old_text, current.start);
-                        if word.is_empty() { current.clone() } else { word }
+                        if word.is_empty() {
+                            current.clone()
+                        } else {
+                            word
+                        }
                     } else {
                         current.clone()
                     };
@@ -739,176 +823,156 @@ pub fn show(
                         expand_state.history.push(current);
                     }
                     expand_state.last_applied = Some(new_range.clone());
-                    manual_cursor_range =
-                        Some(CCursorRange::two(CCursor::new(new_range.start), CCursor::new(new_range.end)));
+                    manual_caret = Some(Caret {
+                        primary: new_range.end,
+                        anchor: new_range.start,
+                    });
                 }
 
-                ui.ctx().data_mut(|d| d.insert_temp(history_id, expand_state));
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(history_id, expand_state));
             }
         }
     }
 
+    // Code folding (PLAN.md Phase 3): recomputed fresh every frame from the
+    // live tree — cheap, and it means an edit that changes the tree's shape
+    // needs no separate reconciliation pass, see `Document::folded_lines`'s
+    // doc comment — then narrowed to just the currently-collapsed ones as
+    // the line-space hidden-range list `text_area`'s `FoldMap` skips.
+    let folds = parser
+        .as_ref()
+        .and_then(|p| {
+            p.tree()
+                .map(|tree| syntax::foldable_ranges(tree, &old_text, p.language()))
+        })
+        .unwrap_or_default();
+    if fold_all_request {
+        folding::fold_all(&folds, &mut doc.folded_lines);
+    }
+    if expand_all_request {
+        folding::expand_all(&mut doc.folded_lines);
+    }
+    let hidden = folding::hidden_ranges(&doc.buffer, &folds, &doc.folded_lines);
+
     // Sized to the widest line number the buffer currently has, so a
     // 9-line file gets a narrow gutter and a 10,000-line one gets a wider
-    // one rather than every file paying for a fixed worst-case width.
+    // one rather than every file paying for a fixed worst-case width. An
+    // extra `FOLD_GUTTER_WIDTH` is reserved only when the file actually has
+    // foldable regions, so a plain-text file's gutter stays exactly as
+    // narrow as before this feature existed.
     let gutter_font_id = FontId::new(font_size, editor_font.family());
     let digit_width = ui.fonts_mut(|f| f.glyph_width(&gutter_font_id, '0'));
     let line_count = doc.buffer.len_lines().max(1);
-    let gutter_width = digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0;
-
-    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-        let source = buf.as_str();
-        let dark_mode = ui.visuals().dark_mode;
-        // Matches the rounding epaint's own galley cache applies to
-        // `wrap.max_width` before hashing it — without this, float jitter
-        // from upstream layout rounding would make the key flap between
-        // frames and defeat the cache. `ViewSettings::word_wrap` off means
-        // "don't wrap at all," folded into this same value (rather than a
-        // separate `LayoutCacheKey` field) so the existing
-        // `wrap_width_bits` key naturally invalidates the cache on toggle —
-        // `f32::INFINITY`'s bit pattern differs from any finite width, so a
-        // stale wrapped galley can never be mistaken for the unwrapped one.
-        let wrap_width = if view_settings.word_wrap { wrap_width.round() } else { f32::INFINITY };
-
-        let tree_and_language = parser.as_ref().and_then(|p| p.tree().map(|tree| (tree, p.language())));
-        let key = LayoutCacheKey {
-            content_hash: hash_source(source),
-            language: tree_and_language.as_ref().map(|(_, language)| *language),
-            dark_mode,
-            wrap_width_bits: wrap_width.to_bits(),
-            font_size_bits: font_size.to_bits(),
-        };
-
-        if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedLayout>(layout_cache_id))
-            && cached.key == key {
-                return cached.galley;
-            }
-
-        let mut job = LayoutJob::default();
-        job.wrap.max_width = wrap_width;
-
-        let font_id = FontId::new(font_size, editor_font.family());
-
-        if let Some((tree, language)) = tree_and_language {
-            let spans = syntax::highlight_spans(tree, &old_text, language);
-            let mut cursor = 0usize;
-            for (range, scope) in spans {
-                if range.start > range.end
-                    || range.end > source.len()
-                    || !source.is_char_boundary(range.start)
-                    || !source.is_char_boundary(range.end)
-                    || range.start < cursor
-                {
-                    continue;
-                }
-                if range.start > cursor {
-                    job.append(&source[cursor..range.start], 0.0, plain_format(font_id.clone(), dark_mode));
-                }
-                job.append(
-                    &source[range.start..range.end],
-                    0.0,
-                    scope_format(font_id.clone(), scope, dark_mode),
-                );
-                cursor = range.end;
-            }
-            if cursor < source.len() {
-                job.append(&source[cursor..], 0.0, plain_format(font_id.clone(), dark_mode));
-            }
-        } else if !source.is_empty() {
-            job.append(source, 0.0, plain_format(font_id, dark_mode));
-        }
-
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(layout_cache_id, CachedLayout { key, galley: galley.clone() })
-        });
-        galley
+    let fold_gutter_width = if folds.is_empty() {
+        0.0
+    } else {
+        folding::FOLD_GUTTER_WIDTH
     };
+    let gutter_width = digit_width * line_count.to_string().len() as f32
+        + GUTTER_PADDING * 2.0
+        + fold_gutter_width;
+
+    // `text_area` shapes with real per-token colors (`HighlightSpan`) instead
+    // of egui's own `layouter` closure — resolved here (against `old_text`'s
+    // *not-yet-reparsed-this-frame* tree, the same timing the old layouter
+    // read `parser` at, since it ran inside the same `TextEdit::show()` call
+    // that any of this frame's own edits land in too) rather than inside
+    // `text_area`, which stays decoupled from `syntax`/`theme` on purpose.
+    let dark_mode = ui.visuals().dark_mode;
+    let spans = highlight_spans_for(parser.as_ref(), &old_text, dark_mode);
+    let font_id = FontId::new(font_size, editor_font.family());
+    let text_color = theme::default_text(dark_mode);
 
     // Alt+Click adds a bare secondary cursor at the click position without
-    // disturbing the primary one — captured here, *before* `TextEdit::
-    // show()` runs, since that call's own internal click handling
+    // disturbing the primary one — captured here, *before* the widget's own
+    // `show` runs, since that call's own internal click handling
     // unconditionally moves the primary cursor to wherever was just
     // clicked (Alt held or not — it doesn't know the difference). Holding
     // onto the primary selection as it stood right before that happens is
     // what lets the block below restore it afterward. `i.pointer.
     // primary_clicked()` is the cheap pre-check (mirrors `wrap_selection`'s
-    // `has_candidate_keystroke` above: don't pay for a `TextEditState`
-    // load on every idle/non-click frame) — the actual click position
-    // comes from `output.response.interact_pointer_pos()` once `output`
-    // exists, below.
+    // `has_candidate_keystroke` above: don't pay for a persisted-caret load
+    // on every idle/non-click frame) — the actual click position comes from
+    // `shell_out.base.response.interact_pointer_pos()` once it exists, below.
     let alt_click_prior_primary = if ui.input(|i| i.modifiers.alt && i.pointer.primary_clicked()) {
-        egui::text_edit::TextEditState::load(ui.ctx(), widget_id).and_then(|state| state.cursor.char_range())
+        text_area::peek_caret(ui.ctx(), widget_id)
     } else {
         None
     };
 
     // The gutter and the text field are laid out side by side, in that
-    // order, inside one `horizontal` — that's what shifts the `TextEdit`
-    // right to make room, and what gives `paint_line_numbers` (called once
-    // `output` is available, alongside the other overlay painting below)
+    // order, inside one `horizontal` — that's what shifts the editor right
+    // to make room, and what gives `paint_line_numbers` (called once
+    // `shell_out` is available, alongside the other overlay painting below)
     // the gutter's left edge to right-align digits against. Both live
     // inside the *same* `ScrollArea` call site (`panels::tabs::show`), so
     // they scroll together as one unit rather than independently.
-    let (mut output, gutter_left) = ui
+    let (mut shell_out, gutter_left) = ui
         .horizontal(|ui| {
             let gutter_left = ui.cursor().left();
             ui.add_space(gutter_width);
-            let output = egui::TextEdit::multiline(&mut text)
-                .id(widget_id)
-                .code_editor()
-                .desired_width(f32::INFINITY)
-                .layouter(&mut layouter)
-                .show(ui);
-            (output, gutter_left)
+            let out = text_area::show_interactive(
+                ui,
+                widget_id,
+                &doc.buffer,
+                font_id,
+                text_color,
+                doc.read_only,
+                &spans,
+                &hidden,
+                view_settings.word_wrap,
+            );
+            (out, gutter_left)
         })
         .inner;
 
-    if output.response.changed() {
+    if let Some(raw_new_text) = shell_out.new_text.take() {
         if multi_cursor_active_at_start {
             // A mutating event that wasn't applied by the multi-cursor block
             // above — Tab, undo/redo, an IME commit, or (in principle, never
             // observed in practice — see that block's comment) no persisted
-            // selection yet to apply against — reached egui's own
-            // single-cursor logic and edited the primary cursor alone.
-            // `doc.extra_selections` is now stale relative to `text`, so
-            // rather than paint/edit at wrong offsets next frame, treat
-            // this as an implicit collapse back to single-cursor mode.
+            // selection yet to apply against — reached the widget's own
+            // single-cursor editing. `doc.extra_selections` is now stale
+            // relative to `text`, so rather than paint/edit at wrong offsets
+            // next frame, treat this as an implicit collapse back to
+            // single-cursor mode.
             doc.extra_selections.clear();
         }
 
-        let cursor_char = output.cursor_range.map(|r| r.primary.index.0);
-        let (text_after_indent, indent_cursor) = apply_auto_indent(&old_text, &text, cursor_char, indent_settings);
+        let cursor_char = shell_out.caret.map(|c| c.primary);
+        let (text_after_indent, indent_cursor) =
+            apply_auto_indent(&old_text, &raw_new_text, cursor_char, indent_settings);
         let corrected = if indent_cursor.is_some() {
-            manual_cursor_range = indent_cursor.map(|c| CCursorRange::one(CCursor::new(c)));
+            manual_caret = indent_cursor.map(Caret::at);
             text_after_indent
         } else {
-            apply_auto_pair(&old_text, &text, cursor_char)
+            apply_auto_pair(&old_text, &raw_new_text, cursor_char)
         };
 
         apply_edit(doc, parser, &old_text, &corrected);
+        old_text = corrected.clone();
+        text = corrected;
     }
 
-    // Completes the Alt+Click interception begun above `output`: place a
+    // Completes the Alt+Click interception begun above `shell_out`: place a
     // bare secondary cursor at the click position, then restore the
-    // primary cursor to `alt_click_prior_primary` (undoing the move
-    // `TextEdit::show()`'s own click handling just made) — same
-    // `manual_cursor_range` override mechanism every other post-`output`
-    // cursor adjustment in this file uses. `interact_pointer_pos()` is
-    // `None` if `alt_click_prior_primary` was captured but the click
-    // actually landed outside the `TextEdit`'s own bounds (the gutter,
-    // say), which correctly no-ops this rather than adding a caret at a
-    // stale/wrong position.
+    // primary cursor to `alt_click_prior_primary` (undoing the move the
+    // widget's own click handling just made) — same `manual_caret` override
+    // mechanism every other post-frame cursor adjustment in this file uses.
+    // `interact_pointer_pos()` is `None` if `alt_click_prior_primary` was
+    // captured but the click actually landed outside the widget's own
+    // bounds (the gutter, say), which correctly no-ops this rather than
+    // adding a caret at a stale/wrong position.
     if let Some(prior_primary) = alt_click_prior_primary
-        && let Some(click_pos) = output.response.interact_pointer_pos()
+        && let Some(click_pos) = shell_out.base.response.interact_pointer_pos()
     {
-        let local = click_pos - output.galley_pos;
-        let click_char = output.galley.cursor_from_pos(local).index.0;
+        let click_char = text_area::char_offset_for_pos(&shell_out.base, &doc.buffer, click_pos);
 
         if !doc.extra_selections.contains(&(click_char..click_char)) {
             doc.extra_selections.push(click_char..click_char);
         }
-        manual_cursor_range = Some(prior_primary);
+        manual_caret = Some(prior_primary);
 
         // Must be removed from the queue, not just acted on: the
         // multi-cursor collapse check further below
@@ -918,23 +982,33 @@ pub fn show(
         // check would immediately wipe the very extra selection just
         // pushed above, in this same frame.
         take_event(ui, |e| {
-            matches!(e, Event::PointerButton { pressed: true, button: egui::PointerButton::Primary, .. })
+            matches!(
+                e,
+                Event::PointerButton {
+                    pressed: true,
+                    button: egui::PointerButton::Primary,
+                    ..
+                }
+            )
         });
     }
 
     let modifiers = ui.input(|i| i.modifiers);
     let ctrl_d_pressed = ui.input(|i| i.key_pressed(Key::D)) && modifiers.command;
-    if ctrl_d_pressed && let Some(primary_range) = output.cursor_range {
-        if primary_range.is_empty() {
-            let word = multi_cursor::word_range_at(&doc.buffer.to_string(), primary_range.primary.index.0);
+    if ctrl_d_pressed && let Some(primary_caret) = shell_out.caret {
+        if primary_caret.is_collapsed() {
+            let word = multi_cursor::word_range_at(&doc.buffer.to_string(), primary_caret.primary);
             if !word.is_empty() {
-                manual_cursor_range = Some(CCursorRange::two(CCursor::new(word.start), CCursor::new(word.end)));
+                manual_caret = Some(Caret {
+                    primary: word.end,
+                    anchor: word.start,
+                });
             }
         } else {
             let text_now = doc.buffer.to_string();
-            let sorted = primary_range.as_sorted_char_range();
-            let needle_range = sorted.start.0..sorted.end.0;
-            let needle = text_now[char_to_byte(&text_now, needle_range.start)..char_to_byte(&text_now, needle_range.end)]
+            let needle_range = primary_caret.range();
+            let needle = text_now[char_to_byte(&text_now, needle_range.start)
+                ..char_to_byte(&text_now, needle_range.end)]
                 .to_string();
 
             let mut claimed = doc.extra_selections.clone();
@@ -949,20 +1023,22 @@ pub fn show(
                 case_sensitive,
             ) {
                 doc.extra_selections.push(needle_range);
-                manual_cursor_range = Some(CCursorRange::two(CCursor::new(found.start), CCursor::new(found.end)));
+                manual_caret = Some(Caret {
+                    primary: found.end,
+                    anchor: found.start,
+                });
             }
         }
     }
 
     let ctrl_j_pressed = ui.input(|i| i.key_pressed(Key::J)) && modifiers.command;
-    if ctrl_j_pressed && let Some(primary_range) = output.cursor_range {
+    if ctrl_j_pressed && let Some(primary_caret) = shell_out.caret {
         let text_now = doc.buffer.to_string();
-        if let Some((joined, new_cursor)) = join_lines(&text_now, primary_range.primary.index.0) {
+        if let Some((joined, new_cursor)) = join_lines(&text_now, primary_caret.primary) {
             apply_edit(doc, parser, &text_now, &joined);
-            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+            manual_caret = Some(Caret::at(new_cursor));
         }
     }
-
 
     // Ctrl+Shift+G (always `Both`) or a Tools menu click (`generate_request`,
     // already narrowed to `Getters`/`Setters`/`Both`) generate accessors for
@@ -977,7 +1053,8 @@ pub fn show(
     // picks which class (then which fields) — see
     // `codegen::GenerateAccessorsDialog`.
     let keyboard_requested_accessors =
-        (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
+        (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift)
+            .then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
         if doc.language != Some(Language::Java) {
             *last_error = Some("Generate getters/setters only works for Java files.".to_string());
@@ -987,21 +1064,25 @@ pub fn show(
             match classes.len() {
                 0 => *last_error = Some("No class fields found in this file.".to_string()),
                 1 => {
-                    let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
+                    let generated =
+                        generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
-                        *last_error = Some("Nothing to generate: every field here is final.".to_string());
+                        *last_error =
+                            Some("Nothing to generate: every field here is final.".to_string());
                     } else {
-                        let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
+                        let (inserted, new_cursor) =
+                            insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                         apply_edit(doc, parser, &text_now, &inserted);
-                        manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                        manual_caret = Some(Caret::at(new_cursor));
                     }
                 }
                 _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
+            *last_error =
+                Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
         }
     }
 
@@ -1013,13 +1094,16 @@ pub fn show(
     // immediately discover there was nothing to show.
     if generate_dialog.is_some() {
         let doc_text_for_dialog = doc.buffer.to_string();
-        if let Some(outcome) =
-            codegen::show_generate_accessors_dialog(ui, generate_dialog, &doc_text_for_dialog, &indent_settings.unit())
-        {
+        if let Some(outcome) = codegen::show_generate_accessors_dialog(
+            ui,
+            generate_dialog,
+            &doc_text_for_dialog,
+            &indent_settings.unit(),
+        ) {
             match outcome {
                 Ok((inserted, new_cursor)) => {
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
-                    manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                    manual_caret = Some(Caret::at(new_cursor));
                 }
                 Err(message) => *last_error = Some(message),
             }
@@ -1035,18 +1119,25 @@ pub fn show(
     // templates are all valid Java even with zero fields selected).
     if let Some(kind) = generate_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some("Generate Constructor/toString/equals() only works for Java files.".to_string());
+            *last_error = Some(
+                "Generate Constructor/toString/equals() only works for Java files.".to_string(),
+            );
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
                 0 => *last_error = Some("No class fields found in this file.".to_string()),
                 1 => {
-                    let generated =
-                        codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
-                    let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
+                    let generated = codegen::generate_method(
+                        &classes[0].name,
+                        &classes[0].fields,
+                        &indent_settings.unit(),
+                        kind,
+                    );
+                    let (inserted, new_cursor) =
+                        insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                     apply_edit(doc, parser, &text_now, &inserted);
-                    manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                    manual_caret = Some(Caret::at(new_cursor));
                 }
                 _ => *generate_method_dialog = Some(GenerateMethodDialog::new(classes, kind)),
             }
@@ -1064,7 +1155,7 @@ pub fn show(
             &indent_settings.unit(),
         ) {
             apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
-            manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+            manual_caret = Some(Caret::at(new_cursor));
         }
     }
 
@@ -1085,69 +1176,96 @@ pub fn show(
             *last_error = Some("Override Method only works for Java files.".to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
-            let cursor_byte = output.cursor_range.map(|r| char_to_byte(&text_now, r.primary.index.0));
+            let cursor_byte = shell_out.caret.map(|c| char_to_byte(&text_now, c.primary));
             let enclosing = cursor_byte.and_then(|c| syntax::enclosing_class(tree, &text_now, c));
 
             match enclosing {
-                None => *last_error = Some("Place the cursor inside a class to override a method.".to_string()),
-                Some((class_name, insertion_byte)) => match syntax::superclass_name(tree, &text_now, &class_name) {
-                    None => {
-                        *last_error =
-                            Some(format!("{class_name} has no superclass or interface to override methods from."));
-                    }
-                    Some(super_name) => {
-                        let super_path = project.and_then(|p| codegen::find_java_file_by_stem(&p.tree, &super_name));
-                        match super_path {
-                            None => {
-                                *last_error = Some(format!(
-                                    "Override Method only looks up superclasses in this project (couldn't find {super_name}.java)."
-                                ));
-                            }
-                            Some(super_path) => match std::fs::read_to_string(&super_path) {
-                                Err(err) => {
-                                    *last_error = Some(format!("failed to read {}: {err}", super_path.display()));
+                None => {
+                    *last_error =
+                        Some("Place the cursor inside a class to override a method.".to_string())
+                }
+                Some((class_name, insertion_byte)) => {
+                    match syntax::superclass_name(tree, &text_now, &class_name) {
+                        None => {
+                            *last_error = Some(format!(
+                                "{class_name} has no superclass or interface to override methods from."
+                            ));
+                        }
+                        Some(super_name) => {
+                            let super_path = project.and_then(|p| {
+                                codegen::find_java_file_by_stem(&p.tree, &super_name)
+                            });
+                            match super_path {
+                                None => {
+                                    *last_error = Some(format!(
+                                        "Override Method only looks up superclasses in this project (couldn't find {super_name}.java)."
+                                    ));
                                 }
-                                Ok(super_source) => {
-                                    let mut super_parser = IncrementalParser::new(Language::Java);
-                                    let super_tree = super_parser.parse(&super_source);
-                                    let inherited = syntax::methods_in_type(super_tree, &super_source, &super_name);
-                                    let already_here = syntax::methods_in_type(tree, &text_now, &class_name);
-                                    let candidates: Vec<_> = inherited
-                                        .into_iter()
-                                        .filter(|m| {
-                                            !already_here
-                                                .iter()
-                                                .any(|existing| existing.name == m.name && existing.params.len() == m.params.len())
-                                        })
-                                        .collect();
-
-                                    if candidates.is_empty() {
+                                Some(super_path) => match std::fs::read_to_string(&super_path) {
+                                    Err(err) => {
                                         *last_error = Some(format!(
-                                            "No overridable methods found on {super_name} (or they're all already overridden)."
+                                            "failed to read {}: {err}",
+                                            super_path.display()
                                         ));
-                                    } else {
-                                        *override_method_dialog = Some(OverrideMethodDialog::new(candidates, insertion_byte));
                                     }
-                                }
-                            },
+                                    Ok(super_source) => {
+                                        let mut super_parser =
+                                            IncrementalParser::new(Language::Java);
+                                        let super_tree = super_parser.parse(&super_source);
+                                        let inherited = syntax::methods_in_type(
+                                            super_tree,
+                                            &super_source,
+                                            &super_name,
+                                        );
+                                        let already_here =
+                                            syntax::methods_in_type(tree, &text_now, &class_name);
+                                        let candidates: Vec<_> = inherited
+                                            .into_iter()
+                                            .filter(|m| {
+                                                !already_here.iter().any(|existing| {
+                                                    existing.name == m.name
+                                                        && existing.params.len() == m.params.len()
+                                                })
+                                            })
+                                            .collect();
+
+                                        if candidates.is_empty() {
+                                            *last_error = Some(format!(
+                                                "No overridable methods found on {super_name} (or they're all already overridden)."
+                                            ));
+                                        } else {
+                                            *override_method_dialog =
+                                                Some(OverrideMethodDialog::new(
+                                                    candidates,
+                                                    insertion_byte,
+                                                ));
+                                        }
+                                    }
+                                },
+                            }
                         }
                     }
-                },
+                }
             }
         } else {
-            *last_error = Some("Couldn't find overridable methods: no syntax tree available yet.".to_string());
+            *last_error = Some(
+                "Couldn't find overridable methods: no syntax tree available yet.".to_string(),
+            );
         }
     }
 
     if override_method_dialog.is_some() {
         let doc_text_for_dialog = doc.buffer.to_string();
-        if let Some(outcome) =
-            codegen::show_override_method_dialog(ui, override_method_dialog, &doc_text_for_dialog, &indent_settings.unit())
-        {
+        if let Some(outcome) = codegen::show_override_method_dialog(
+            ui,
+            override_method_dialog,
+            &doc_text_for_dialog,
+            &indent_settings.unit(),
+        ) {
             match outcome {
                 Ok((inserted, new_cursor)) => {
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
-                    manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                    manual_caret = Some(Caret::at(new_cursor));
                 }
                 Err(message) => *last_error = Some(message),
             }
@@ -1155,19 +1273,18 @@ pub fn show(
     }
 
     // Right-click context menu: see `context_menu::show_context_menu`.
-    // `output.cursor_range` is copied out before calling it so that
-    // function doesn't need to borrow `output` at all (it already has its
-    // own long-lived mutable borrow of `output.state` at the very end of
-    // this function) — `CCursorRange` is `Copy`, so this costs nothing.
+    // `shell_out.caret` is copied out before calling it so that function
+    // doesn't need to borrow `shell_out` at all — `Caret` is `Copy`, so this
+    // costs nothing.
     context_menu::show_context_menu(
-        &output.response,
+        &shell_out.base.response,
         widget_id,
         doc,
         parser,
-        output.cursor_range,
+        shell_out.caret,
         &mut text,
         &mut old_text,
-        &mut manual_cursor_range,
+        &mut manual_caret,
         pending_input,
         last_error,
         cached_clipboard_text,
@@ -1184,19 +1301,20 @@ pub fn show(
     // (or touching) the cursor — distinct from `Ctrl+D`'s *active*
     // multi-cursor editing, so it only applies with a collapsed cursor and
     // no multi-cursor selections active, to avoid competing visually with
-    // either. Uses `output.cursor_range` (post-show), the same source
+    // either. Uses `shell_out.caret` (post-frame), the same source
     // Ctrl+D/Ctrl+J already read for real, non-test usage — this is purely
     // a display concern, not an edit, so there's no interception timing to
     // get right here.
     if doc.extra_selections.is_empty()
-        && let Some(primary_range) = output.cursor_range
-        && primary_range.is_empty()
+        && let Some(primary_caret) = shell_out.caret
+        && primary_caret.is_collapsed()
     {
-        let word_range = multi_cursor::word_range_at(&text, primary_range.primary.index.0);
+        let word_range = multi_cursor::word_range_at(&text, primary_caret.primary);
         if !word_range.is_empty() {
-            let word = &text[char_to_byte(&text, word_range.start)..char_to_byte(&text, word_range.end)];
+            let word =
+                &text[char_to_byte(&text, word_range.start)..char_to_byte(&text, word_range.end)];
             let occurrences = multi_cursor::find_all_occurrences(&text, word, true);
-            paint_occurrence_highlights(ui, &output, &occurrences);
+            paint_occurrence_highlights(ui, &shell_out.base, &doc.buffer, &occurrences);
         }
     }
 
@@ -1207,26 +1325,42 @@ pub fn show(
     // with no recognized language (no `parser`) just skips this, same as
     // every other tree-driven feature in this file.
     if doc.extra_selections.is_empty()
-        && let Some(primary_range) = output.cursor_range
-        && primary_range.is_empty()
+        && let Some(primary_caret) = shell_out.caret
+        && primary_caret.is_collapsed()
         && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
     {
-        let cursor_byte = char_to_byte(&text, primary_range.primary.index.0);
+        let cursor_byte = char_to_byte(&text, primary_caret.primary);
         if let Some(pair) = syntax::bracket_match(tree, &text, cursor_byte) {
-            paint_bracket_match(ui, &output, &text, pair);
+            paint_bracket_match(ui, &shell_out.base, &doc.buffer, pair);
         }
     }
 
     if view_settings.show_indent_guides {
-        paint_indent_guides(ui, &output, &text, indent_settings);
+        paint_indent_guides(ui, &shell_out.base, &doc.buffer, indent_settings);
     }
     if view_settings.show_whitespace {
-        paint_whitespace(ui, &output, &text);
+        paint_whitespace(ui, &shell_out.base, &doc.buffer);
     }
 
-    paint_diagnostics(ui, &output, &text, &doc.diagnostics);
-    paint_extra_selections(ui, &output, &doc.extra_selections);
-    paint_line_numbers(ui, &output, gutter_left + gutter_width - GUTTER_PADDING, gutter_font_id, ui.visuals().dark_mode);
+    paint_diagnostics(ui, &shell_out.base, &doc.buffer, &text, &doc.diagnostics);
+    paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);
+    paint_line_numbers(
+        ui,
+        &shell_out.base,
+        gutter_left + gutter_width - GUTTER_PADDING,
+        gutter_font_id,
+        ui.visuals().dark_mode,
+    );
+    folding::show_fold_gutter(
+        ui,
+        &shell_out.base,
+        &folds,
+        &mut doc.folded_lines,
+        &id_salt,
+        gutter_left,
+        dark_mode,
+    );
+    folding::paint_collapsed_markers(ui, &shell_out.base, &folds, &doc.folded_lines, dark_mode);
 
     // Sticky scroll: pin the enclosing class/method header line(s) at the top
     // of the viewport while their body scrolls under them. Painted last so it
@@ -1234,24 +1368,28 @@ pub fn show(
     // is opaque). Tree-driven (Java only today), so a no-parser file skips it
     // like every other tree feature.
     //
-    // The top visible *logical* line is found by hit-testing the galley at the
-    // viewport's top edge (`cursor_from_pos(..).index.0`, the same inverse of
-    // `pos_from_cursor` the Alt+Click path uses) and mapping that char to its
-    // line — not by counting galley rows. That distinction matters with
-    // word-wrap on (the default): a wrapped line spans several rows but is one
-    // logical line, so a raw row count would drift and pin the wrong header,
-    // where the galley's own hit-testing stays wrap-correct. The enclosing
-    // scopes come from the reparsed tree via `doc.buffer`, whose line indices
+    // The top visible *logical* line is found by hit-testing at the
+    // viewport's top edge (`char_offset_for_pos`, the same inverse the
+    // Alt+Click path uses) and mapping that char to its line — not by
+    // counting shaped rows. That distinction matters once Phase 4 brings
+    // word-wrap back to this widget: a wrapped line spans several rows but
+    // is one logical line, so a raw row count would drift and pin the wrong
+    // header, where hit-testing stays wrap-correct. The enclosing scopes
+    // come from the reparsed tree via `doc.buffer`, whose line indices
     // match the displayed text's (auto-indent/auto-pair only ever add
     // characters, never lines, so the two agree even if they differ by a few
     // whitespace bytes on the exact frame of such an edit).
     if view_settings.show_sticky_scroll
-        && let Some((tree, language)) = parser.as_ref().and_then(|p| p.tree().map(|t| (t, p.language())))
+        && let Some((tree, language)) = parser
+            .as_ref()
+            .and_then(|p| p.tree().map(|t| (t, p.language())))
     {
-        let local_top = (ui.clip_rect().top() - output.galley_pos.y).max(0.0);
-        let top_char = output.galley.cursor_from_pos(egui::vec2(0.0, local_top)).index.0;
+        let top_pos = egui::pos2(shell_out.base.content_origin.x, ui.clip_rect().top());
+        let top_char = text_area::char_offset_for_pos(&shell_out.base, &doc.buffer, top_pos);
         let line_count = doc.buffer.len_lines();
-        let top_line = doc.buffer.char_to_line(top_char.min(doc.buffer.len_chars()));
+        let top_line = doc
+            .buffer
+            .char_to_line(top_char.min(doc.buffer.len_chars()));
         if top_line > 0 && line_count > 0 {
             let top_byte = doc.buffer.line_to_byte(top_line.min(line_count - 1));
             let scope_lines: Vec<usize> = syntax::enclosing_scope_starts(tree, top_byte, language)
@@ -1260,23 +1398,30 @@ pub fn show(
                 .collect();
             let pin_lines = sticky_headers_to_pin(&scope_lines, top_line, STICKY_MAX_DEPTH);
             if !pin_lines.is_empty() {
-                let headers: Vec<String> =
-                    pin_lines.iter().map(|&line| doc.buffer.line(line).chars().collect()).collect();
+                let headers: Vec<String> = pin_lines
+                    .iter()
+                    .map(|&line| doc.buffer.line(line).chars().collect())
+                    .collect();
                 let sticky_font = FontId::new(font_size, editor_font.family());
-                paint_sticky_scroll(ui, &output, &headers, sticky_font, ui.visuals().dark_mode);
+                paint_sticky_scroll(
+                    ui,
+                    &shell_out.base,
+                    &headers,
+                    sticky_font,
+                    ui.visuals().dark_mode,
+                );
             }
         }
     }
 
-    // Auto-indent inserts content *before* where egui placed the cursor
-    // (unlike auto-pair, which only ever inserts after it), so the cursor
-    // needs to be pushed forward past the inserted indentation manually.
-    // The multi-cursor paths above reuse the same mechanism to land the
-    // primary cursor after a multi-edit or a Ctrl+D word/occurrence jump.
-    if let Some(range) = manual_cursor_range {
-        output.state.cursor.set_char_range(Some(range));
-        let id = output.response.id;
-        output.state.store(ui.ctx(), id);
+    // Auto-indent inserts content *before* where the widget placed the
+    // cursor (unlike auto-pair, which only ever inserts after it), so the
+    // cursor needs to be pushed forward past the inserted indentation
+    // manually. The multi-cursor paths above reuse the same mechanism to
+    // land the primary cursor after a multi-edit or a Ctrl+D word/
+    // occurrence jump.
+    if let Some(caret) = manual_caret {
+        text_area::set_caret(ui.ctx(), widget_id, caret);
     }
 }
 
@@ -1297,8 +1442,8 @@ fn take_event(ui: &egui::Ui, predicate: impl Fn(&Event) -> bool) -> Option<Event
 /// The single character `event` types, if it's exactly one character *and*
 /// one this editor auto-pairs — the condition that makes it a candidate for
 /// wrap-selection to intercept. Shared between the cheap "is there anything
-/// worth loading `TextEditState` for" check and the actual removal, so the
-/// two can't drift apart on what counts as a match.
+/// worth loading the persisted caret for" check and the actual removal, so
+/// the two can't drift apart on what counts as a match.
 fn single_pairable_char(event: &Event) -> Option<char> {
     let Event::Text(s) = event else { return None };
     let mut chars = s.chars();
@@ -1327,9 +1472,16 @@ fn multi_edit_op_from_events(events: &[Event]) -> MultiEditOp {
         match event {
             Event::Text(s) => inserted.push_str(s),
             Event::Paste(s) => inserted.push_str(s),
-            Event::Key { key: Key::Enter, .. } => inserted.push('\n'),
-            Event::Key { key: Key::Backspace, .. } => return MultiEditOp::Backspace,
-            Event::Key { key: Key::Delete, .. } => return MultiEditOp::Delete,
+            Event::Key {
+                key: Key::Enter, ..
+            } => inserted.push('\n'),
+            Event::Key {
+                key: Key::Backspace,
+                ..
+            } => return MultiEditOp::Backspace,
+            Event::Key {
+                key: Key::Delete, ..
+            } => return MultiEditOp::Delete,
             _ => {}
         }
     }

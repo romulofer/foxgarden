@@ -8,6 +8,7 @@
 //! syntax highlighting slots in with the overlay/`char_rect` work (2c), where
 //! the visible-range span slicing lives.
 
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -15,24 +16,51 @@ use egui::text::LayoutJob;
 use egui::{Color32, FontId, Galley, Sense, TextFormat};
 use ropey::Rope;
 
-use super::{content_height, visible_rows, FoldMap};
+use super::{FoldMap, content_height, prefix_rows, visible_lines, visible_rows};
+
+/// One already-resolved syntax-highlighting span: a **byte** range into the
+/// buffer's full text, and the theme color to paint it. Deliberately just
+/// `(Range<usize>, Color32)` rather than a tree-sitter/`syntax::Scope`
+/// dependency — `text_area` stays decoupled from parsing and theming;
+/// `widget.rs` computes these once per frame from `syntax::highlight_spans`
+/// combined with `theme::color_for_scope`, the same way its own `layouter`
+/// closure already does for the `egui::TextEdit` path today, and hands the
+/// result down. An empty slice means "no highlighting" (a non-Java/Kotlin
+/// file, or no parsed tree yet) — every byte then falls through to the
+/// caller's single fallback color, same as before this existed.
+#[derive(Clone)]
+pub struct HighlightSpan {
+    pub range: Range<usize>,
+    pub color: Color32,
+}
 
 /// What a virtualized editor frame produces for the overlay/interception code
 /// to read — the hand-built analogue of `egui::text_edit::TextEditOutput`.
 /// Grows a caret/selection field in 2d; for now it carries the geometry and
 /// the per-visible-row galleys the overlays will position against.
+#[derive(Clone)]
 pub struct TextAreaOutput {
     pub response: egui::Response,
-    /// Uniform height of one row, in points.
+    /// Uniform height of one **visual row**, in points — with word-wrap on,
+    /// a logical line can span several of these; see `row_offsets`.
     pub row_height: f32,
     /// Screen position of logical line 0, column 0 — already scroll-adjusted,
-    /// so `content_origin.y + line * row_height` is a line's screen y.
+    /// so `content_origin.y + row_offset * row_height` is a row's screen y.
     pub content_origin: egui::Pos2,
     /// The visual-row range shaped and painted this frame.
     pub visible_rows: Range<usize>,
-    /// `(logical line index, shaped galley)` for each visible row, in render
-    /// order — the overlays index into these for intra-line x positions.
+    /// `(logical line index, shaped galley)` for each visible **logical
+    /// line** touched this frame, in ascending order — one entry per line,
+    /// *not* one per visual row (with word-wrap on, one line's galley
+    /// already contains all of its own wrapped rows internally, the same
+    /// way `egui::Galley` always has; see `row_offsets`).
     pub row_galleys: Vec<(usize, Arc<Galley>)>,
+    /// Index-aligned with `row_galleys`: the visual row each entry's galley
+    /// starts painting at. `visible_rows.start + i` in the no-wrap case
+    /// (every line is exactly one row), but diverges once a wrapped line
+    /// upstream of a given entry has pushed everything after it further
+    /// down than a flat per-*line* count would predict.
+    pub row_offsets: Vec<usize>,
 }
 
 impl TextAreaOutput {
@@ -42,29 +70,76 @@ impl TextAreaOutput {
     /// the overlays' `galley.pos_from_cursor(CCursor::new(char))` idiom — an
     /// overlay maps each decoration's char offset through this and simply skips
     /// the `None`s, since there's nothing visible to decorate off-screen.
+    /// Correct for a char on any of a wrapped line's rows: `galley.
+    /// pos_from_cursor` already resolves a column to the right *sub*-row
+    /// within that line's own multi-row galley and returns a rect relative
+    /// to the galley's top — adding that to the line's own block-start
+    /// screen position (`row_offsets[idx] * row_height`) lands on the
+    /// correct absolute row without this function needing to know which
+    /// sub-row it was.
     pub fn char_rect(&self, buffer: &Rope, char_offset: usize) -> Option<egui::Rect> {
         let clamped = char_offset.min(buffer.len_chars());
         let line = buffer.char_to_line(clamped);
         let col = clamped - buffer.line_to_char(line);
         let idx = self.row_galleys.iter().position(|(l, _)| *l == line)?;
         let galley = &self.row_galleys[idx].1;
-        let visual_row = self.visible_rows.start + idx;
-        let y = self.content_origin.y + visual_row as f32 * self.row_height;
+        let block_top = self.content_origin.y + self.row_offsets[idx] as f32 * self.row_height;
         let local = galley.pos_from_cursor(egui::text::CCursor::new(col));
         let x = self.content_origin.x + local.left();
-        Some(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(1.0, self.row_height)))
+        let y = block_top + local.top();
+        Some(egui::Rect::from_min_size(
+            egui::pos2(x, y),
+            egui::vec2(1.0, self.row_height),
+        ))
     }
 }
 
 /// Paints `buffer` read-only into the current (scroll-area) `ui`, virtualized:
 /// only rows inside `ui.clip_rect()` are shaped. `hidden` is the fold set
-/// (empty in Phase 2 — no folding yet).
+/// (empty in Phase 2 — no folding yet). Unused in production since the swap
+/// to `shell::show` (PLAN 2h) — kept for a future read-only viewer (e.g. a
+/// diff/preview pane) that wants virtualized rendering without a caret;
+/// exercised directly by `text_area/tests.rs` today, hence the `cfg_attr`
+/// rather than a plain `#[expect]` (which would misfire as "unfulfilled" in
+/// test builds, where this genuinely is used).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "future read-only-viewer API surface")
+)]
 pub fn show_readonly(
     ui: &mut egui::Ui,
+    id: egui::Id,
     buffer: &Rope,
     font_id: FontId,
     text_color: Color32,
     hidden: &[Range<usize>],
+) -> TextAreaOutput {
+    let out = layout_visible(ui, id, buffer, font_id, hidden, &[]);
+    paint_rows(ui, &out, text_color);
+    out
+}
+
+/// Allocates the widget's rect/response (sized to the buffer's full virtual
+/// extent, so the enclosing `ScrollArea` and click/drag sensing behave
+/// exactly as `show_readonly` always did) and shapes the currently-visible
+/// rows' galleys, **without painting them**.
+///
+/// Split out from `show_readonly` so the interactive shell (`shell.rs`) can
+/// shape once against the pre-edit buffer (to resolve a pointer event against
+/// what's actually on screen this frame) and, only on a frame where an edit
+/// actually changed the text, re-shape+paint the *post*-edit buffer — instead
+/// of always painting stale, pre-edit galleys for one frame after every
+/// keystroke the way a naive single-pass `show_readonly` call would.
+/// `allocate_exact_size` must run exactly once per frame (calling it twice
+/// would double-reserve layout space), which is why shaping and painting are
+/// separate steps here rather than two full `show_readonly` calls.
+pub(super) fn layout_visible(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    buffer: &Rope,
+    font_id: FontId,
+    hidden: &[Range<usize>],
+    spans: &[HighlightSpan],
 ) -> TextAreaOutput {
     let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
     let total_lines = buffer.len_lines().max(1);
@@ -77,33 +152,316 @@ pub fn show_readonly(
     // `desired_width`-style infinite growth isn't needed since we paint
     // absolutely, not via layout.
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, content_height(total_rows, row_height)), Sense::click_and_drag());
+    // `ui.interact` with the caller's own stable `id` (rather than
+    // `allocate_exact_size`'s auto-generated one) so the response is
+    // reachable via `Context::read_response(id)` the same way `egui::
+    // TextEdit::multiline(..).id(widget_id)` used to make it — callers
+    // (Alt+Click's rect lookup, tests) depend on that exact identity.
+    let (_, rect) = ui.allocate_space(egui::vec2(width, content_height(total_rows, row_height)));
+    let response = ui.interact(rect, id, Sense::click_and_drag());
     let content_origin = rect.min;
 
     // How far the content's top has scrolled above the viewport's top.
     let clip = ui.clip_rect();
     let scroll_y = (clip.top() - rect.top()).max(0.0);
     let rows = visible_rows(scroll_y, clip.height(), row_height, total_rows);
+    let row_galleys = shape_range(ui, buffer, rows.clone(), hidden, &font_id, spans);
+    // No-wrap fast path: every visible logical line is exactly one visual
+    // row, so its offset is trivially its position in `rows` — no wrapped
+    // line ever pushes a later one further down than that.
+    let row_offsets = rows.clone().collect();
 
-    let painter = ui.painter();
-    let mut row_galleys = Vec::with_capacity(rows.len());
-    for visual_row in rows.clone() {
-        let logical = map.to_logical(visual_row);
-        let galley = shape_line(ui, buffer, logical, &font_id, text_color);
-        let pos = egui::pos2(content_origin.x, content_origin.y + visual_row as f32 * row_height);
-        painter.galley(pos, galley.clone(), text_color);
-        row_galleys.push((logical, galley));
+    TextAreaOutput {
+        response,
+        row_height,
+        content_origin,
+        visible_rows: rows,
+        row_galleys,
+        row_offsets,
     }
+}
 
-    TextAreaOutput { response, row_height, content_origin, visible_rows: rows, row_galleys }
+/// Shapes just `rows` (a **visual** row range) against `buffer`, with no
+/// allocation and no painting — the piece `layout_visible` uses for its own
+/// first shaping pass, and that the shell (`shell.rs`) calls a second time,
+/// against the post-edit buffer but the *same* row range, to repaint
+/// same-frame after a keystroke without allocating layout space twice.
+pub(super) fn shape_range(
+    ui: &egui::Ui,
+    buffer: &Rope,
+    rows: Range<usize>,
+    hidden: &[Range<usize>],
+    font_id: &FontId,
+    spans: &[HighlightSpan],
+) -> Vec<(usize, Arc<Galley>)> {
+    let map = FoldMap::new(hidden);
+    rows.map(|visual_row| {
+        let logical = map.to_logical(visual_row);
+        (
+            logical,
+            shape_line(ui, buffer, logical, font_id, spans, f32::INFINITY),
+        )
+    })
+    .collect()
+}
+
+/// The word-wrap analogue of `shape_range`: shapes every logical line in
+/// `lines` (not a visual-row range — with wrap on, one line can be several
+/// rows, so the caller works in line space via `prefix_rows`/`visible_lines`
+/// instead) against `wrap_width`. Lines inside `hidden` are skipped (`0`
+/// rows, nothing to shape) rather than shaped and discarded.
+pub(super) fn shape_line_range(
+    ui: &egui::Ui,
+    buffer: &Rope,
+    lines: Range<usize>,
+    hidden: &[Range<usize>],
+    font_id: &FontId,
+    spans: &[HighlightSpan],
+    wrap_width: f32,
+) -> Vec<(usize, Arc<Galley>)> {
+    lines
+        .filter(|line| !hidden.iter().any(|h| h.contains(line)))
+        .map(|line| {
+            (
+                line,
+                shape_line(ui, buffer, line, font_id, spans, wrap_width),
+            )
+        })
+        .collect()
+}
+
+/// Paints the galleys `layout_visible` already shaped — the other half of
+/// `show_readonly`'s split, so the shell can defer painting until it knows
+/// which buffer version (pre- or post-edit) should actually appear on
+/// screen this frame.
+pub(super) fn paint_rows(ui: &egui::Ui, out: &TextAreaOutput, text_color: Color32) {
+    let painter = ui.painter();
+    for (i, (_, galley)) in out.row_galleys.iter().enumerate() {
+        let pos = egui::pos2(
+            out.content_origin.x,
+            out.content_origin.y + out.row_offsets[i] as f32 * out.row_height,
+        );
+        painter.galley(pos, galley.clone(), text_color);
+    }
 }
 
 /// Shapes one logical line (its trailing newline stripped, so it stays a
-/// single row) into a plain-format galley.
-fn shape_line(ui: &egui::Ui, buffer: &Rope, logical: usize, font_id: &FontId, color: Color32) -> Arc<Galley> {
-    let raw = buffer.line(logical.min(buffer.len_lines().saturating_sub(1)));
+/// single row unless `wrap_width` is finite and the line is long enough to
+/// wrap) into a galley, one section per `spans` entry that touches the line
+/// (clipped to it and converted from global to line-local byte offsets)
+/// plus `Color32::PLACEHOLDER` sections filling every gap — so a line with
+/// no matching spans at all (plain text, or a language-less file) still
+/// shapes exactly as it did before highlighting existed: one placeholder-
+/// colored section, resolved to the caller's fallback color at paint time.
+/// `wrap_width` is `f32::INFINITY` for the no-wrap path (PLAN.md Phase 2/3),
+/// or the viewport width for Phase 4's word-wrap — `egui::Galley` already
+/// lays a wrapped job out as several internal rows on its own, which is
+/// what makes `galley.rows.len()` (`line_row_count`) and `galley.pos_from_
+/// cursor`'s existing multi-row-aware hit-testing (`char_rect`) both work
+/// here for free, with no separate "which sub-row" bookkeeping of our own.
+fn shape_line(
+    ui: &egui::Ui,
+    buffer: &Rope,
+    logical: usize,
+    font_id: &FontId,
+    spans: &[HighlightSpan],
+    wrap_width: f32,
+) -> Arc<Galley> {
+    let line_idx = logical.min(buffer.len_lines().saturating_sub(1));
+    let raw = buffer.line(line_idx);
     let text: String = raw.chars().filter(|&c| c != '\n' && c != '\r').collect();
-    let mut job = LayoutJob::single_section(text, TextFormat { font_id: font_id.clone(), color, ..Default::default() });
-    job.wrap.max_width = f32::INFINITY; // no wrap in v1 — uniform row height
+    let line_start_byte = buffer.line_to_byte(line_idx);
+    let line_len_bytes = text.len();
+    let line_end_byte = line_start_byte + line_len_bytes;
+
+    let format = |color: Color32| TextFormat {
+        font_id: font_id.clone(),
+        color,
+        ..Default::default()
+    };
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+
+    let mut cursor = 0usize; // local byte offset into `text`
+    for span in spans {
+        if span.range.end <= line_start_byte || span.range.start >= line_end_byte {
+            continue; // doesn't touch this line
+        }
+        let local_start = span
+            .range
+            .start
+            .saturating_sub(line_start_byte)
+            .clamp(cursor, line_len_bytes);
+        let local_end = span
+            .range
+            .end
+            .saturating_sub(line_start_byte)
+            .min(line_len_bytes);
+        if local_start >= local_end
+            || !text.is_char_boundary(local_start)
+            || !text.is_char_boundary(local_end)
+        {
+            continue;
+        }
+        if local_start > cursor {
+            job.append(
+                &text[cursor..local_start],
+                0.0,
+                format(Color32::PLACEHOLDER),
+            );
+        }
+        job.append(&text[local_start..local_end], 0.0, format(span.color));
+        cursor = local_end;
+    }
+    if cursor < text.len() || job.sections.is_empty() {
+        job.append(&text[cursor..], 0.0, format(Color32::PLACEHOLDER));
+    }
+
     ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// PLAN.md Phase 4: word-wrap's own `layout_visible` — same contract
+/// (allocate once, shape only what's currently visible, don't paint), but
+/// working in *logical line* space via `text_area::{prefix_rows,
+/// visible_lines}` instead of a flat visual-row count, since a wrapped line
+/// can be more than one row.
+pub(super) fn layout_visible_wrapped(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    buffer: &Rope,
+    font_id: FontId,
+    hidden: &[Range<usize>],
+    spans: &[HighlightSpan],
+) -> TextAreaOutput {
+    let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
+    let total_lines = buffer.len_lines().max(1);
+    let width = ui.available_width();
+
+    let counts = cached_row_counts(ui, id, buffer, &font_id, width, hidden, total_lines);
+    let prefix = prefix_rows(&counts);
+    let total_rows = *prefix
+        .last()
+        .expect("prefix_rows always returns at least one entry");
+
+    // Same stable-`id` reasoning as `layout_visible`'s own allocate/interact
+    // split (see its doc comment).
+    let (_, rect) = ui.allocate_space(egui::vec2(width, content_height(total_rows, row_height)));
+    let response = ui.interact(rect, id, Sense::click_and_drag());
+    let content_origin = rect.min;
+
+    let clip = ui.clip_rect();
+    let scroll_y = (clip.top() - rect.top()).max(0.0);
+    let lines = visible_lines(scroll_y, clip.height(), row_height, &prefix);
+    let row_galleys = shape_line_range(ui, buffer, lines.clone(), hidden, &font_id, spans, width);
+    // Derived *from* `row_galleys` (not independently re-filtered over
+    // `lines`) so the two can never drift out of index-alignment with each
+    // other — every entry's offset is just its own line's prefix-sum value.
+    let row_offsets: Vec<usize> = row_galleys.iter().map(|(line, _)| prefix[*line]).collect();
+    let visible_rows = prefix.get(lines.start).copied().unwrap_or(0)
+        ..prefix.get(lines.end).copied().unwrap_or(total_rows);
+
+    TextAreaOutput {
+        response,
+        row_height,
+        content_origin,
+        visible_rows,
+        row_galleys,
+        row_offsets,
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct RowCountsKey {
+    content_hash: u64,
+    hidden_hash: u64,
+    wrap_width_bits: u32,
+    font_size_bits: u32,
+}
+
+#[derive(Clone)]
+struct CachedRowCounts {
+    key: RowCountsKey,
+    counts: Arc<Vec<usize>>,
+}
+
+/// How many visual rows each logical line in `buffer` occupies at
+/// `wrap_width` (`0` for a line inside `hidden`) — needed up front to build
+/// `layout_visible_wrapped`'s prefix sum, and there's no way to learn a
+/// line's wrap point other than actually laying it out. Cached in `ctx.data`
+/// keyed by `id` plus a hash of everything that can invalidate it (buffer
+/// content, the fold set, wrap width, font size), so a frame where none of
+/// those changed — by far the common case: idle repaints, pure scrolling,
+/// an edit to a *different* tab's document — reuses last frame's table
+/// instead of reshaping the whole buffer again. This is the "rebuilt on
+/// content/wrap-width change" scope PLAN.md's own Phase 4 entry calls for,
+/// not the fully incremental patch-on-edit structure that entry also
+/// gestures at — an editing frame still pays for a whole-buffer pass here
+/// (unlike the virtualized *painting* path, which never has), a deliberate
+/// first-cut trade-off flagged rather than silently accepted.
+fn cached_row_counts(
+    ui: &egui::Ui,
+    id: egui::Id,
+    buffer: &Rope,
+    font_id: &FontId,
+    wrap_width: f32,
+    hidden: &[Range<usize>],
+    total_lines: usize,
+) -> Arc<Vec<usize>> {
+    let cache_id = egui::Id::new(("text_area_row_counts", id));
+    let key = RowCountsKey {
+        content_hash: hash_rope_content(buffer),
+        hidden_hash: hash_hidden(hidden),
+        wrap_width_bits: wrap_width.to_bits(),
+        font_size_bits: font_id.size.to_bits(),
+    };
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedRowCounts>(cache_id))
+        && cached.key == key
+    {
+        return cached.counts;
+    }
+
+    let counts: Vec<usize> = (0..total_lines)
+        .map(|line| {
+            if hidden.iter().any(|h| h.contains(&line)) {
+                0
+            } else {
+                shape_line(ui, buffer, line, font_id, &[], wrap_width)
+                    .rows
+                    .len()
+            }
+        })
+        .collect();
+    let counts = Arc::new(counts);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedRowCounts {
+                key,
+                counts: counts.clone(),
+            },
+        )
+    });
+    counts
+}
+
+fn hash_rope_content(buffer: &Rope) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Hashes each chunk of the rope's own internal representation rather
+    // than `buffer.to_string()` first, so cache-checking (the common,
+    // nothing-changed case too) never pays for a whole-buffer string
+    // allocation just to throw it away.
+    for chunk in buffer.chunks() {
+        chunk.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn hash_hidden(hidden: &[Range<usize>]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for range in hidden {
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+    }
+    hasher.finish()
 }

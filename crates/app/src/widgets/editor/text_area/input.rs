@@ -24,7 +24,10 @@ pub struct Caret {
 
 impl Caret {
     pub fn at(pos: usize) -> Self {
-        Self { primary: pos, anchor: pos }
+        Self {
+            primary: pos,
+            anchor: pos,
+        }
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -44,7 +47,10 @@ impl Caret {
     /// Sets `primary` to `pos`, keeping `anchor` when `extend` (Shift held) or
     /// collapsing onto `pos` otherwise — the shared tail of every motion.
     fn moved_to(self, pos: usize, extend: bool) -> Self {
-        Self { primary: pos, anchor: if extend { self.anchor } else { pos } }
+        Self {
+            primary: pos,
+            anchor: if extend { self.anchor } else { pos },
+        }
     }
 }
 
@@ -101,7 +107,12 @@ fn last_line(text: &str) -> usize {
 /// Char offset of the end of the line containing `char_off` — the next `\n`, or
 /// end-of-text on the last line.
 fn line_end(text: &str, char_off: usize) -> usize {
-    text.chars().enumerate().skip(char_off).find(|&(_, c)| c == '\n').map(|(i, _)| i).unwrap_or_else(|| char_len(text))
+    text.chars()
+        .enumerate()
+        .skip(char_off)
+        .find(|&(_, c)| c == '\n')
+        .map(|(i, _)| i)
+        .unwrap_or_else(|| char_len(text))
 }
 
 /// Replaces the caret's selection (or inserts at a collapsed caret) with
@@ -129,7 +140,10 @@ pub fn backspace(text: &str, caret: Caret) -> Option<(String, Caret)> {
     if caret.primary == 0 {
         return None;
     }
-    let del = Caret { primary: caret.primary - 1, anchor: caret.primary };
+    let del = Caret {
+        primary: caret.primary - 1,
+        anchor: caret.primary,
+    };
     Some(replace_selection(text, del, ""))
 }
 
@@ -142,7 +156,10 @@ pub fn delete_forward(text: &str, caret: Caret) -> Option<(String, Caret)> {
     if caret.primary >= char_len(text) {
         return None;
     }
-    let del = Caret { primary: caret.primary, anchor: caret.primary + 1 };
+    let del = Caret {
+        primary: caret.primary,
+        anchor: caret.primary + 1,
+    };
     Some(replace_selection(text, del, ""))
 }
 
@@ -190,6 +207,38 @@ pub fn move_down(text: &str, caret: Caret, extend: bool, preferred_col: usize) -
 /// End key: to the end of the current line.
 pub fn move_end(text: &str, caret: Caret, extend: bool) -> Caret {
     caret.moved_to(line_end(text, caret.primary), extend)
+}
+
+/// Home key: to column 0 of the current line. Plain column-0 semantics —
+/// the "first non-whitespace vs. column 0" Smart Home toggle
+/// (`auto_edit::smart_home_target`) is an interception layered on top by the
+/// caller, the same way it layers on top of `egui::TextEdit` today.
+pub fn move_home(text: &str, caret: Caret, extend: bool) -> Caret {
+    let (line, _) = line_col(text, caret.primary);
+    caret.moved_to(line_col_to_char(text, line, 0), extend)
+}
+
+/// If `char_off`'s line falls inside any of `hidden`'s line ranges, returns
+/// the char offset at the end of the line just above that range (a folded
+/// region's marker line) instead — the pure half of PLAN.md 3d's "caret
+/// clamp-into-marker" rule: a hidden line is never a valid resting place, so
+/// motion or a click landing on one snaps to the nearest visible line, which
+/// is always the marker line above it (where the fold's own `⋯` affordance
+/// sits — landing there reads as "you're at the fold," not at some arbitrary
+/// point inside content you can't see). A no-op when the line isn't hidden.
+/// `hidden` is expected sorted and non-overlapping, the same invariant
+/// `text_area::FoldMap` requires of it.
+pub fn clamp_out_of_hidden(
+    text: &str,
+    char_off: usize,
+    hidden: &[std::ops::Range<usize>],
+) -> usize {
+    let (line, _) = line_col(text, char_off);
+    let Some(range) = hidden.iter().find(|r| r.contains(&line)) else {
+        return char_off;
+    };
+    let marker_line = range.start.saturating_sub(1);
+    line_col_to_char(text, marker_line, usize::MAX)
 }
 
 /// The column (for `preferred_col` bookkeeping) of a caret position.

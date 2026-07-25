@@ -1,6 +1,10 @@
 //! Table tests for the pure caret + edit model ([`super`](input.rs)) — the
 //! parity net for the virtualized editor's motion/editing, run without a frame.
 
+// Fixtures like `[1..2]` are a one-element slice of hidden line *ranges*, not
+// a mistaken range-of-ranges — the shape `clamp_out_of_hidden` genuinely takes.
+#![allow(clippy::single_range_in_vec_init)]
+
 use super::*;
 
 // ---- editing ----
@@ -15,24 +19,55 @@ fn insert_at_a_collapsed_caret_splices_and_advances() {
 #[test]
 fn insert_over_a_selection_replaces_it() {
     // Select "llo" (chars 2..5), type "y".
-    let (text, caret) = replace_selection("hello", Caret { primary: 5, anchor: 2 }, "y");
+    let (text, caret) = replace_selection(
+        "hello",
+        Caret {
+            primary: 5,
+            anchor: 2,
+        },
+        "y",
+    );
     assert_eq!(text, "hey");
     assert_eq!(caret, Caret::at(3));
 }
 
 #[test]
 fn backspace_removes_the_prior_char_or_the_selection() {
-    assert_eq!(backspace("abc", Caret::at(2)), Some(("ac".to_string(), Caret::at(1))));
+    assert_eq!(
+        backspace("abc", Caret::at(2)),
+        Some(("ac".to_string(), Caret::at(1)))
+    );
     // With a selection, backspace deletes the whole selection.
-    assert_eq!(backspace("abcd", Caret { primary: 1, anchor: 3 }), Some(("ad".to_string(), Caret::at(1))));
+    assert_eq!(
+        backspace(
+            "abcd",
+            Caret {
+                primary: 1,
+                anchor: 3
+            }
+        ),
+        Some(("ad".to_string(), Caret::at(1)))
+    );
     // At the start with no selection: nothing to delete.
     assert_eq!(backspace("abc", Caret::at(0)), None);
 }
 
 #[test]
 fn delete_forward_removes_the_next_char_or_the_selection() {
-    assert_eq!(delete_forward("abc", Caret::at(1)), Some(("ac".to_string(), Caret::at(1))));
-    assert_eq!(delete_forward("abcd", Caret { primary: 1, anchor: 3 }), Some(("ad".to_string(), Caret::at(1))));
+    assert_eq!(
+        delete_forward("abc", Caret::at(1)),
+        Some(("ac".to_string(), Caret::at(1)))
+    );
+    assert_eq!(
+        delete_forward(
+            "abcd",
+            Caret {
+                primary: 1,
+                anchor: 3
+            }
+        ),
+        Some(("ad".to_string(), Caret::at(1)))
+    );
     // At the end with no selection: nothing to delete.
     assert_eq!(delete_forward("abc", Caret::at(3)), None);
 }
@@ -58,7 +93,10 @@ fn move_left_right_step_one_char_and_clamp() {
 
 #[test]
 fn arrow_without_shift_collapses_a_selection_to_the_matching_edge() {
-    let sel = Caret { primary: 4, anchor: 1 }; // selection 1..4
+    let sel = Caret {
+        primary: 4,
+        anchor: 1,
+    }; // selection 1..4
     // Left collapses to the left edge (1), not 3.
     assert_eq!(move_left("abcdef", sel, false), Caret::at(1));
     // Right collapses to the right edge (4).
@@ -69,9 +107,21 @@ fn arrow_without_shift_collapses_a_selection_to_the_matching_edge() {
 fn shift_arrow_extends_the_selection_from_the_anchor() {
     let c = Caret::at(2);
     let c = move_right("abcdef", c, true);
-    assert_eq!(c, Caret { primary: 3, anchor: 2 });
+    assert_eq!(
+        c,
+        Caret {
+            primary: 3,
+            anchor: 2
+        }
+    );
     let c = move_right("abcdef", c, true);
-    assert_eq!(c, Caret { primary: 4, anchor: 2 }); // anchor stays put
+    assert_eq!(
+        c,
+        Caret {
+            primary: 4,
+            anchor: 2
+        }
+    ); // anchor stays put
 }
 
 // ---- vertical motion ----
@@ -119,4 +169,30 @@ fn column_of_reports_within_line_column() {
     assert_eq!(column_of(GRID, 0), 0);
     assert_eq!(column_of(GRID, 3), 3);
     assert_eq!(column_of(GRID, line_col_to_char(GRID, 2, 2)), 2);
+}
+
+#[test]
+fn clamp_out_of_hidden_snaps_to_the_marker_line_end() {
+    // Line 1 ("ef") is folded away (hidden lines 1..2); a caret that ended
+    // up there snaps to the end of line 0 (the marker line), not line 1.
+    let hidden = [1..2];
+    let inside = line_col_to_char(GRID, 1, 1);
+    let clamped = clamp_out_of_hidden(GRID, inside, &hidden);
+    assert_eq!(
+        line_col(GRID, clamped),
+        (0, 4),
+        "snaps to the end of line 0, the marker line"
+    );
+}
+
+#[test]
+fn clamp_out_of_hidden_is_a_no_op_on_a_visible_line() {
+    let hidden = [1..2];
+    let visible = line_col_to_char(GRID, 2, 1);
+    assert_eq!(clamp_out_of_hidden(GRID, visible, &hidden), visible);
+}
+
+#[test]
+fn clamp_out_of_hidden_handles_an_empty_hidden_set() {
+    assert_eq!(clamp_out_of_hidden(GRID, 5, &[]), 5);
 }

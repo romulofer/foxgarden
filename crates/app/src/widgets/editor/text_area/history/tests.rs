@@ -4,7 +4,10 @@
 use super::*;
 
 fn snap(text: &str, pos: usize) -> Snapshot {
-    Snapshot { text: text.to_string(), caret: Caret::at(pos) }
+    Snapshot {
+        text: text.to_string(),
+        caret: Caret::at(pos),
+    }
 }
 
 #[test]

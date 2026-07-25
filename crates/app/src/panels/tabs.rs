@@ -5,8 +5,8 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
-    OverrideMethodDialog,
+    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog,
+    GenerateMethodKind, OverrideMethodDialog,
 };
 use crate::widgets::modal::show_modal;
 
@@ -59,7 +59,11 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
 /// right-click "Save" (which already has `doc`/`parser` in hand, with no
 /// tab index involved at all) — neither can reintroduce the "saved without
 /// reparsing at all" bug by skipping this.
-pub(crate) fn save_document(doc: &mut Document, parser: &mut Option<IncrementalParser>, last_error: &mut Option<String>) {
+pub(crate) fn save_document(
+    doc: &mut Document,
+    parser: &mut Option<IncrementalParser>,
+    last_error: &mut Option<String>,
+) {
     let old_text = doc.buffer.to_string();
     if let Err(err) = doc.save() {
         *last_error = Some(format!("failed to save: {err}"));
@@ -94,7 +98,10 @@ fn save_tab(
 /// Renders the tab bar and the active document's editor. `parsers` is kept
 /// index-aligned with `state.open_tabs`; every close here removes the
 /// matching parser in the same step.
-#[expect(clippy::too_many_arguments, reason = "each parameter is independently threaded per-frame state (editor settings, dialog/request state, error/input plumbing) passed straight through to widgets::editor::show, not a bundle waiting to be a struct — same shape and reasoning as that function's own allowance")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is independently threaded per-frame state (editor settings, dialog/request state, error/input plumbing) passed straight through to widgets::editor::show, not a bundle waiting to be a struct — same shape and reasoning as that function's own allowance"
+)]
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
@@ -113,6 +120,8 @@ pub fn show(
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
+    fold_all_request: bool,
+    expand_all_request: bool,
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
     cached_clipboard_text: &mut Option<String>,
@@ -147,7 +156,11 @@ pub fn show(
                     close_request = Some(index);
                 }
                 label_response.context_menu(|ui| {
-                    let toggle_label = if doc.read_only { "Allow Editing" } else { "Read-Only" };
+                    let toggle_label = if doc.read_only {
+                        "Allow Editing"
+                    } else {
+                        "Read-Only"
+                    };
                     if ui.button(toggle_label).clicked() {
                         toggle_read_only_request = Some(index);
                         ui.close();
@@ -226,6 +239,8 @@ pub fn show(
             case_conversion_request,
             sort_lines_request,
             unique_lines_request,
+            fold_all_request,
+            expand_all_request,
             last_error,
             pending_editor_input,
             cached_clipboard_text,
@@ -266,7 +281,10 @@ pub fn request_close_tab(
 /// opened file gets its parser in `app.rs`. A no-op if there's nothing left
 /// to reopen, or if that tab is already open (in which case `EditorState`
 /// just focuses it, so `parsers` needs no change).
-pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>) {
+pub fn reopen_last_closed_tab(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+) {
     let Some(index) = state.reopen_last_closed_tab() else {
         return;
     };
@@ -343,7 +361,11 @@ mod tests {
         // first put the trimmed whitespace *after* all the highlighted
         // tokens: nothing downstream of the trim to shift meant a stale
         // tree and a fresh one produced identical spans by accident).
-        std::fs::write(&path, "public class Hello {   \n    private String name;\n}\n").unwrap();
+        std::fs::write(
+            &path,
+            "public class Hello {   \n    private String name;\n}\n",
+        )
+        .unwrap();
 
         let mut state = EditorState::new();
         state.open_tab(path).unwrap();
@@ -354,8 +376,14 @@ mod tests {
         save_tab(&mut state, &mut parsers, 0, &mut last_error);
 
         let doc = &state.open_tabs[0];
-        assert_eq!(doc.buffer.to_string(), "public class Hello {\n    private String name;\n}\n");
-        assert!(!doc.is_dirty(), "buffer and saved_buffer must agree right after save");
+        assert_eq!(
+            doc.buffer.to_string(),
+            "public class Hello {\n    private String name;\n}\n"
+        );
+        assert!(
+            !doc.is_dirty(),
+            "buffer and saved_buffer must agree right after save"
+        );
 
         let tree = parsers[0].as_ref().unwrap().tree().unwrap();
         let text = doc.buffer.to_string();
@@ -368,7 +396,8 @@ mod tests {
         // with `text` at all past the trimmed line.
         let mut fresh_parser = IncrementalParser::new(Language::Java);
         fresh_parser.parse(&text);
-        let fresh_spans = syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
+        let fresh_spans =
+            syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
         assert_eq!(spans, fresh_spans);
     }
 }

@@ -28,6 +28,8 @@ pub struct MenuBarOutcome {
     pub sort_lines_request: bool,
     pub unique_lines_request: bool,
     pub open_run_configs_request: bool,
+    pub fold_all_request: bool,
+    pub expand_all_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -36,7 +38,10 @@ const FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
 /// Clamp range for the Settings > Indentation width control.
 const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
 
-#[expect(clippy::too_many_arguments, reason = "each parameter is an independently-owned piece of app-wide state a distinct menu section reads or mutates (editor settings, dialog state, error/input plumbing), not a bundle waiting to be a struct — same shape and reasoning as widgets::editor::show's own allowance")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independently-owned piece of app-wide state a distinct menu section reads or mutates (editor settings, dialog state, error/input plumbing), not a bundle waiting to be a struct — same shape and reasoning as widgets::editor::show's own allowance"
+)]
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
@@ -56,7 +61,10 @@ pub fn show(
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
-            if ui.add(egui::Button::new("New File…").shortcut_text("Ctrl+N")).clicked() {
+            if ui
+                .add(egui::Button::new("New File…").shortcut_text("Ctrl+N"))
+                .clicked()
+            {
                 if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
                     side_panel.begin_new_file(root);
                 }
@@ -64,14 +72,18 @@ pub fn show(
             }
             if ui.button("Open Folder…").clicked() {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder()
-                    && let Err(err) = state.open_project(folder) {
-                        *last_error = Some(format!("failed to open project: {err}"));
-                    }
+                    && let Err(err) = state.open_project(folder)
+                {
+                    *last_error = Some(format!("failed to open project: {err}"));
+                }
                 ui.close();
             }
             ui.separator();
             if ui
-                .add_enabled(state.active_tab.is_some(), egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                .add_enabled(
+                    state.active_tab.is_some(),
+                    egui::Button::new("Save").shortcut_text("Ctrl+S"),
+                )
                 .clicked()
             {
                 tabs::save_active_tab(state, parsers, last_error);
@@ -126,7 +138,11 @@ pub fn show(
             });
             ui.horizontal(|ui| {
                 ui.label("Font Size");
-                ui.add(egui::DragValue::new(font_size).range(FONT_SIZE_RANGE).speed(0.25));
+                ui.add(
+                    egui::DragValue::new(font_size)
+                        .range(FONT_SIZE_RANGE)
+                        .speed(0.25),
+                );
             });
             ui.menu_button("Indentation", |ui| {
                 if ui.radio(!indent_settings.use_tabs, "Spaces").clicked() {
@@ -140,7 +156,10 @@ pub fn show(
                 ui.add_enabled_ui(!indent_settings.use_tabs, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Width");
-                        ui.add(egui::DragValue::new(&mut indent_settings.width).range(INDENT_WIDTH_RANGE));
+                        ui.add(
+                            egui::DragValue::new(&mut indent_settings.width)
+                                .range(INDENT_WIDTH_RANGE),
+                        );
                     });
                 });
             });
@@ -156,84 +175,141 @@ pub fn show(
             // keyboard).
             let has_active_tab = state.active_tab.is_some();
             if let Some(active) = state.active_tab
-                && ui.checkbox(&mut state.open_tabs[active].read_only, "Read-Only").clicked()
+                && ui
+                    .checkbox(&mut state.open_tabs[active].read_only, "Read-Only")
+                    .clicked()
             {
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Getters")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Generate Getters"))
+                .clicked()
+            {
                 outcome.generate_request = Some(AccessorKind::Getters);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Setters")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Generate Setters"))
+                .clicked()
+            {
                 outcome.generate_request = Some(AccessorKind::Setters);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Generate Constructor")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Generate Constructor"))
+                .clicked()
+            {
                 outcome.generate_method_request = Some(GenerateMethodKind::Constructor);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Generate toString()")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Generate toString()"))
+                .clicked()
+            {
                 outcome.generate_method_request = Some(GenerateMethodKind::ToString);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Generate equals() and hashCode()")).clicked() {
+            if ui
+                .add_enabled(
+                    has_active_tab,
+                    egui::Button::new("Generate equals() and hashCode()"),
+                )
+                .clicked()
+            {
                 outcome.generate_method_request = Some(GenerateMethodKind::EqualsAndHashCode);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Override Method")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Override Method"))
+                .clicked()
+            {
                 outcome.override_method_request = true;
                 ui.close();
             }
             ui.separator();
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Convert to UPPERCASE").shortcut_text("Ctrl+Shift+U"))
+                .add_enabled(
+                    has_active_tab,
+                    egui::Button::new("Convert to UPPERCASE").shortcut_text("Ctrl+Shift+U"),
+                )
                 .clicked()
             {
                 outcome.case_conversion_request = Some(CaseConversion::Upper);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Convert to lowercase").shortcut_text("Ctrl+Shift+L"))
+                .add_enabled(
+                    has_active_tab,
+                    egui::Button::new("Convert to lowercase").shortcut_text("Ctrl+Shift+L"),
+                )
                 .clicked()
             {
                 outcome.case_conversion_request = Some(CaseConversion::Lower);
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Convert to Title Case")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Convert to Title Case"))
+                .clicked()
+            {
                 outcome.case_conversion_request = Some(CaseConversion::Title);
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(has_active_tab, egui::Button::new("Sort Lines")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Sort Lines"))
+                .clicked()
+            {
                 outcome.sort_lines_request = true;
                 ui.close();
             }
-            if ui.add_enabled(has_active_tab, egui::Button::new("Unique Lines")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Unique Lines"))
+                .clicked()
+            {
                 outcome.unique_lines_request = true;
                 ui.close();
             }
         });
 
         ui.menu_button("Run", |ui| {
-            if ui.add_enabled(state.project.is_some(), egui::Button::new("Edit Configurations…")).clicked() {
+            if ui
+                .add_enabled(
+                    state.project.is_some(),
+                    egui::Button::new("Edit Configurations…"),
+                )
+                .clicked()
+            {
                 outcome.open_run_configs_request = true;
                 ui.close();
             }
         });
 
         ui.menu_button("View", |ui| {
-            if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
+            if ui
+                .checkbox(zen_mode, "Zen Mode")
+                .on_hover_text("F11")
+                .changed()
+            {
                 ui.close();
             }
             ui.separator();
-            if ui.checkbox(&mut view_settings.word_wrap, "Word Wrap").changed() {
+            if ui
+                .checkbox(&mut view_settings.word_wrap, "Word Wrap")
+                .changed()
+            {
                 ui.close();
             }
-            if ui.checkbox(&mut view_settings.show_whitespace, "Render Whitespace").changed() {
+            if ui
+                .checkbox(&mut view_settings.show_whitespace, "Render Whitespace")
+                .changed()
+            {
                 ui.close();
             }
-            if ui.checkbox(&mut view_settings.show_indent_guides, "Indentation Guides").changed() {
+            if ui
+                .checkbox(&mut view_settings.show_indent_guides, "Indentation Guides")
+                .changed()
+            {
                 ui.close();
             }
             if ui
@@ -241,6 +317,22 @@ pub fn show(
                 .on_hover_text("Pin the enclosing class/method header while scrolling (Java)")
                 .changed()
             {
+                ui.close();
+            }
+            ui.separator();
+            let has_active_tab = state.active_tab.is_some();
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Fold All"))
+                .clicked()
+            {
+                outcome.fold_all_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new("Expand All"))
+                .clicked()
+            {
+                outcome.expand_all_request = true;
                 ui.close();
             }
         });
@@ -259,31 +351,36 @@ pub fn show(
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
-    let outcome = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
-        ui.heading("FoxGarden");
-        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-        ui.label("A light code editor for Java and Kotlin.");
-        ui.separator();
-        ui.label("Shortcuts:");
-        ui.label("Ctrl+S — save the active tab");
-        ui.label("Ctrl+Shift+T — reopen the last closed tab");
-        ui.label("Middle-click a tab — close it");
-        ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
-        ui.label("Ctrl+J — join the current line with the next one");
-        ui.label("Ctrl+E — go to a recent file");
-        ui.label("Ctrl+/ — toggle line comments");
-        ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
-        ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
-        ui.label("Tools menu — generate just getters/setters, or Title Case");
-        ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
-        ui.label("Alt+↑/↓ — move the current line up/down");
-        ui.label("Alt+Shift+↑/↓ — duplicate the current line");
-        ui.label("Home — jump to first non-whitespace, then column 0");
-        ui.label("Ctrl+N — new file");
-        ui.label("Esc — close the current dialog");
-        ui.separator();
-        ui.button("Close").clicked()
-    });
+    let outcome = show_modal(
+        ui,
+        "about_dialog",
+        menu.about_open.then_some(()),
+        |ui, ()| {
+            ui.heading("FoxGarden");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label("A light code editor for Java and Kotlin.");
+            ui.separator();
+            ui.label("Shortcuts:");
+            ui.label("Ctrl+S — save the active tab");
+            ui.label("Ctrl+Shift+T — reopen the last closed tab");
+            ui.label("Middle-click a tab — close it");
+            ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
+            ui.label("Ctrl+J — join the current line with the next one");
+            ui.label("Ctrl+E — go to a recent file");
+            ui.label("Ctrl+/ — toggle line comments");
+            ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
+            ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
+            ui.label("Tools menu — generate just getters/setters, or Title Case");
+            ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
+            ui.label("Alt+↑/↓ — move the current line up/down");
+            ui.label("Alt+Shift+↑/↓ — duplicate the current line");
+            ui.label("Home — jump to first non-whitespace, then column 0");
+            ui.label("Ctrl+N — new file");
+            ui.label("Esc — close the current dialog");
+            ui.separator();
+            ui.button("Close").clicked()
+        },
+    );
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
     {

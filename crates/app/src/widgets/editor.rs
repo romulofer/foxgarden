@@ -11,6 +11,7 @@
 mod auto_edit;
 mod codegen;
 mod context_menu;
+mod folding;
 mod multi_cursor;
 mod painting;
 mod templates;
@@ -19,5 +20,8 @@ mod text_offset;
 mod widget;
 
 pub use auto_edit::CaseConversion;
-pub use codegen::{AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog};
+pub use codegen::{
+    AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
+    OverrideMethodDialog,
+};
 pub use widget::show;

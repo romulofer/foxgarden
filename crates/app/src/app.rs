@@ -7,8 +7,8 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::file_watch::{self, ReconcileOutcome};
-use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::go_to_file::{self, GoToFileState};
+use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
@@ -159,7 +159,12 @@ pub struct FoxGardenApp {
 /// `last_error`. Shared by the side panel's "open a file from the tree"
 /// outcome and the recent-files quick switcher (`Ctrl+E`) — both just want
 /// "open this path, tell the user if it didn't work," identically.
-fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, last_error: &mut Option<String>, path: PathBuf) {
+fn open_path(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    last_error: &mut Option<String>,
+    path: PathBuf,
+) {
     match state.open_tab(path) {
         Ok(index) => {
             if index == parsers.len() {
@@ -172,8 +177,12 @@ fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser
             // is built here in the failure arm only, instead of
             // unconditionally before the match on every open attempt.
             let message = match &err {
-                fg_core::OpenDocumentError::Binary(path) => format!("Couldn't open {}: not a text file.", path.display()),
-                fg_core::OpenDocumentError::Io(path, e) => format!("Couldn't open {}:\n{e}", path.display()),
+                fg_core::OpenDocumentError::Binary(path) => {
+                    format!("Couldn't open {}: not a text file.", path.display())
+                }
+                fg_core::OpenDocumentError::Io(path, e) => {
+                    format!("Couldn't open {}:\n{e}", path.display())
+                }
             };
             *last_error = Some(message);
         }
@@ -188,7 +197,11 @@ fn open_path(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser
 /// just the case where the only tab that can match is `path` itself.
 /// Iterates back-to-front so removing an index never shifts the position
 /// of one still to be checked.
-fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, path: &Path) {
+fn close_tabs_under(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    path: &Path,
+) {
     for index in (0..state.open_tabs.len()).rev() {
         if state.open_tabs[index].path().starts_with(path) {
             state.close_tab(index);
@@ -210,7 +223,12 @@ fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<Incrementa
 /// trailing separator tells the OS the path must resolve to one. So the
 /// empty-suffix case is handled separately, without going through `join` at
 /// all.
-fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
+fn handle_rename(
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+    old: &Path,
+    new: &Path,
+) {
     for (index, doc) in state.open_tabs.iter_mut().enumerate() {
         let Ok(suffix) = doc.path().strip_prefix(old) else {
             continue;
@@ -239,7 +257,12 @@ fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParse
 /// the existing tree, start over" move `handle_rename` already makes for a
 /// rename that changes a file's language, and every brand-new tab open
 /// already makes for its very first parse.
-fn reload_tab_from_disk(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], index: usize, new_content: &str) {
+fn reload_tab_from_disk(
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+    index: usize,
+    new_content: &str,
+) {
     let doc = &mut state.open_tabs[index];
     doc.buffer = Rope::from_str(new_content);
     doc.saved_buffer = doc.buffer.clone();
@@ -256,7 +279,11 @@ fn reload_tab_from_disk(state: &mut EditorState, parsers: &mut [Option<Increment
 /// every frame regardless of whether anything actually changed, so a
 /// persistently-failing directory would otherwise spam the same error
 /// every frame forever.
-fn sync_watched_dirs(watcher: &mut Option<notify::RecommendedWatcher>, watched_dirs: &mut HashSet<PathBuf>, state: &EditorState) {
+fn sync_watched_dirs(
+    watcher: &mut Option<notify::RecommendedWatcher>,
+    watched_dirs: &mut HashSet<PathBuf>,
+    state: &EditorState,
+) {
     let Some(watcher) = watcher else { return };
     let needed = file_watch::watched_dirs_for(state.open_tabs.iter().map(|doc| doc.path()));
     for dir in needed.difference(watched_dirs) {
@@ -286,15 +313,23 @@ fn process_file_events(
         let Ok(event) = event_result else { continue };
         if !matches!(
             event.kind,
-            notify::EventKind::Modify(_) | notify::EventKind::Create(_) | notify::EventKind::Remove(_)
+            notify::EventKind::Modify(_)
+                | notify::EventKind::Create(_)
+                | notify::EventKind::Remove(_)
         ) {
             continue;
         }
         for path in &event.paths {
-            let Some(index) = state.find_tab(path) else { continue };
+            let Some(index) = state.find_tab(path) else {
+                continue;
+            };
             let disk_content = std::fs::read_to_string(path).ok();
             let doc = &state.open_tabs[index];
-            let outcome = file_watch::reconcile(doc.is_dirty(), &doc.buffer.to_string(), disk_content.as_deref());
+            let outcome = file_watch::reconcile(
+                doc.is_dirty(),
+                &doc.buffer.to_string(),
+                disk_content.as_deref(),
+            );
 
             match outcome {
                 ReconcileOutcome::Unchanged => {
@@ -302,7 +337,12 @@ fn process_file_events(
                     externally_deleted.remove(path);
                 }
                 ReconcileOutcome::ReloadTransparently => {
-                    reload_tab_from_disk(state, parsers, index, &disk_content.expect("Some per ReloadTransparently"));
+                    reload_tab_from_disk(
+                        state,
+                        parsers,
+                        index,
+                        &disk_content.expect("Some per ReloadTransparently"),
+                    );
                     external_conflicts.remove(path);
                     externally_deleted.remove(path);
                 }
@@ -331,9 +371,14 @@ fn show_external_change_banner(
     external_conflicts: &mut HashSet<PathBuf>,
     externally_deleted: &mut HashSet<PathBuf>,
 ) {
-    let Some(active) = state.active_tab else { return };
+    let Some(active) = state.active_tab else {
+        return;
+    };
     let path = state.open_tabs[active].path().to_path_buf();
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     if externally_deleted.contains(&path) {
         ui.horizontal(|ui| {
@@ -375,9 +420,10 @@ fn restore_session(
     if let Some(last_project) = storage.get_string(LAST_PROJECT_KEY) {
         let path = PathBuf::from(last_project);
         if path.is_dir()
-            && let Err(err) = state.open_project(path) {
-                *last_error = Some(format!("failed to reopen last project: {err}"));
-            }
+            && let Err(err) = state.open_project(path)
+        {
+            *last_error = Some(format!("failed to reopen last project: {err}"));
+        }
     }
 
     if let Some(open_tabs) = storage.get_string(OPEN_TABS_KEY) {
@@ -402,9 +448,10 @@ fn restore_session(
     }
 
     if let Some(active_path) = storage.get_string(ACTIVE_TAB_KEY)
-        && let Some(index) = state.find_tab(Path::new(&active_path)) {
-            state.focus_tab(index);
-        }
+        && let Some(index) = state.find_tab(Path::new(&active_path))
+    {
+        state.focus_tab(index);
+    }
 }
 
 /// Inverse of `restore_session`: writes the project folder, open tab paths
@@ -412,7 +459,10 @@ fn restore_session(
 /// reconstruct the same session.
 fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
     if let Some(project) = &state.project {
-        storage.set_string(LAST_PROJECT_KEY, project.root.to_string_lossy().into_owned());
+        storage.set_string(
+            LAST_PROJECT_KEY,
+            project.root.to_string_lossy().into_owned(),
+        );
     }
 
     let open_tabs = state
@@ -447,10 +497,14 @@ fn restore_settings(
     view_settings: &mut ViewSettings,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
-        && let Some(font) = EditorFont::from_storage_key(&key) {
-            *editor_font = font;
-        }
-    if let Some(size) = storage.get_string(FONT_SIZE_KEY).and_then(|s| s.parse::<f32>().ok()) {
+        && let Some(font) = EditorFont::from_storage_key(&key)
+    {
+        *editor_font = font;
+    }
+    if let Some(size) = storage
+        .get_string(FONT_SIZE_KEY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
         *font_size = size;
     }
     if let Some(dark) = storage.get_string(DARK_MODE_KEY) {
@@ -459,7 +513,10 @@ fn restore_settings(
     if let Some(use_tabs) = storage.get_string(INDENT_USE_TABS_KEY) {
         indent_settings.use_tabs = use_tabs == "true";
     }
-    if let Some(width) = storage.get_string(INDENT_WIDTH_KEY).and_then(|s| s.parse::<usize>().ok()) {
+    if let Some(width) = storage
+        .get_string(INDENT_WIDTH_KEY)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
         indent_settings.width = width;
     }
     if let Some(word_wrap) = storage.get_string(WORD_WRAP_KEY) {
@@ -491,9 +548,18 @@ fn persist_settings(
     storage.set_string(INDENT_USE_TABS_KEY, indent_settings.use_tabs.to_string());
     storage.set_string(INDENT_WIDTH_KEY, indent_settings.width.to_string());
     storage.set_string(WORD_WRAP_KEY, view_settings.word_wrap.to_string());
-    storage.set_string(SHOW_WHITESPACE_KEY, view_settings.show_whitespace.to_string());
-    storage.set_string(SHOW_INDENT_GUIDES_KEY, view_settings.show_indent_guides.to_string());
-    storage.set_string(SHOW_STICKY_SCROLL_KEY, view_settings.show_sticky_scroll.to_string());
+    storage.set_string(
+        SHOW_WHITESPACE_KEY,
+        view_settings.show_whitespace.to_string(),
+    );
+    storage.set_string(
+        SHOW_INDENT_GUIDES_KEY,
+        view_settings.show_indent_guides.to_string(),
+    );
+    storage.set_string(
+        SHOW_STICKY_SCROLL_KEY,
+        view_settings.show_sticky_scroll.to_string(),
+    );
 }
 
 impl FoxGardenApp {
@@ -626,12 +692,19 @@ impl eframe::App for FoxGardenApp {
                 .inner;
 
             outcome = egui::Panel::left("project_panel")
-                .show(ui, |ui| side_panel::show(ui, &mut self.state, &mut self.side_panel))
+                .show(ui, |ui| {
+                    side_panel::show(ui, &mut self.state, &mut self.side_panel)
+                })
                 .inner;
         }
 
         if let Some(path) = outcome.open {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                path,
+            );
         }
         if let Some((old, new)) = outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, &old, &new);
@@ -675,6 +748,8 @@ impl eframe::App for FoxGardenApp {
                 menu_outcome.case_conversion_request,
                 menu_outcome.sort_lines_request,
                 menu_outcome.unique_lines_request,
+                menu_outcome.fold_all_request,
+                menu_outcome.expand_all_request,
                 &mut self.last_error,
                 &mut self.pending_editor_input,
                 &mut self.cached_clipboard_text,
@@ -682,13 +757,28 @@ impl eframe::App for FoxGardenApp {
         });
 
         if let Some(path) = quick_switcher::show(ui, &self.state, &mut self.quick_switcher) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                path,
+            );
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                path,
+            );
         }
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {
-            run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);
+            run_configs::show(
+                ui,
+                &root,
+                &mut self.run_configs_dialog,
+                &mut self.last_error,
+            );
         }
 
         show_error_modal(ui, &mut self.last_error);

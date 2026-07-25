@@ -216,6 +216,71 @@ this test module — not worth a dedicated pass on its own.
 
 ---
 
+## 8. A `cargo fmt` run (no project `rustfmt.toml`) reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults
+
+**Where:** Every file touched while landing PLAN.md Phase 2 (the
+`egui::TextEdit` → `text_area` swap), Phase 3 (code folding), and Phase 4
+(word-wrap) — `widget.rs`, `widget/tests.rs`, `painting.rs`,
+`context_menu.rs`, `folding.rs`, everything under `text_area/`,
+`menu_bar.rs`, `tabs.rs`, `app.rs`, `widgets/editor.rs`.
+
+**Status:** Open, left as-is on purpose for this session (see "Why it
+wasn't fixed immediately") rather than fixed on the spot.
+
+### What was found
+
+Mid-session, a mechanical `sed`/Python edit across `shell.rs`/`painting.rs`/
+`folding.rs` left a few lines mis-indented, and `cargo fmt -p app` was run
+to clean it up. This repo has no `rustfmt.toml` at any level, so that ran
+with rustfmt's *defaults* — roughly 90-column wrapping, and (for imports
+specifically) alphabetized `use` braces — against a codebase that
+consistently hand-formats much wider (single-line function signatures and
+`use` blocks well past 100 columns are the norm throughout, e.g. `widget.rs`
+`show`'s own 20-parameter signature) and doesn't alphabetize within `use`
+braces. The result: every file touched from that point on in the session
+got a large, purely-cosmetic reformatting pass layered on top of the real
+logic changes, on top of an already-substantial diff (the `TextEdit` swap
+alone touched ~15 files). ~17 files that had been touched by an earlier,
+unrelated `cargo fmt` invocation but carried no intentional edits were
+caught and reverted to `HEAD` in the same session (pure noise, zero risk);
+the files listed above still carry the reformatting mixed into real changes
+and were not reverted.
+
+### Why it wasn't fixed immediately
+
+No clean pre-`fmt` snapshot existed to diff against (all of Phase 2–4 was
+uncommitted working-tree state, not a commit), so separating "my intentional
+edit" from "rustfmt's rewrap" line-by-line across ~15 files would have meant
+either a slow, error-prone manual pass (real risk of reintroducing a bug
+while doing so) or re-deriving each file's content from scratch. Neither
+was worth the risk this deep into an already-large, already-tested change,
+and the reformatting itself is purely cosmetic — verified functionally
+inert (`cargo build`, `cargo test --workspace`, `cargo clippy --all-targets`
+all stayed green across the revert). Flagged here instead, per explicit
+direction to keep going and track it as debt rather than block on it.
+
+### Proposed fix
+
+Add a `rustfmt.toml` at the workspace root that actually matches this
+project's established style (`max_width` well past rustfmt's 100 default —
+look at `widget.rs`'s existing signatures/`use` blocks for a real target
+number; `imports_granularity`/import-sorting settings that stop
+alphabetizing within a `use` brace), then run `cargo fmt --all` **once**,
+deliberately, as its own commit — so the whole workspace converges to one
+consistent, chosen style in a single reviewable diff instead of the
+accidental partial one this entry describes. Until that lands, avoid running
+bare `cargo fmt`/`cargo fmt -p <crate>` again on this repo; fix any stray
+indentation by hand or with a narrowly-scoped editor action instead.
+
+### Trigger condition
+
+Whenever there's appetite for a dedicated formatting-normalization pass —
+not urgent (no functional impact), but the longer it's deferred the bigger
+that one-time diff gets as more files accumulate hand-formatting drift from
+whatever rustfmt's defaults would produce.
+
+---
+
 # Resolved
 
 ## 1. ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~ — Resolved

@@ -3,12 +3,12 @@
 //! Toggle Line Comment, Duplicate Line, Save), reachable without the menu
 //! bar or a keyboard shortcut.
 
-use egui::text::{CCursor, CCursorRange};
 use egui::{Event, Key, Modifiers};
 use fg_core::Document;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{duplicate_line, toggle_line_comments};
+use super::text_area::Caret;
 use super::text_offset::char_to_byte;
 use super::widget::apply_edit;
 
@@ -25,33 +25,43 @@ pub(super) fn synthetic_shortcut(key: Key, shift: bool) -> Event {
         physical_key: None,
         pressed: true,
         repeat: false,
-        modifiers: Modifiers { command: true, shift, ..Modifiers::NONE },
+        modifiers: Modifiers {
+            command: true,
+            shift,
+            ..Modifiers::NONE
+        },
     }
 }
 
-/// Attaches the context menu to `response` (the editor `TextEdit`'s own
+/// Attaches the context menu to `response` (the editor widget's own
 /// response) and handles every item's click. `text`/`old_text`/
-/// `manual_cursor_range` are the same locals `widget::show` threads
-/// through every other edit path, so an edit made here flows through the
-/// identical apply-cursor-at-the-end machinery; `pending_input` is drained
-/// back into real input at the top of the *next* frame (see `widget::show`)
-/// for the three items egui's own `TextEdit` has to handle itself.
-#[expect(clippy::too_many_arguments, reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see widget::show's own too-many-arguments allowance for the same shape")]
+/// `manual_caret` are the same locals `widget::show` threads through every
+/// other edit path, so an edit made here flows through the identical
+/// apply-cursor-at-the-end machinery; `pending_input` is drained back into
+/// real input at the top of the *next* frame (see `widget::show`) for the
+/// three items the editor's own key handling has to process itself (undo/
+/// redo/select-all are events `text_area::shell`'s `process_events` reads
+/// from the same input queue `egui::TextEdit` used to, so replaying a
+/// synthetic keypress into it next frame still works unchanged).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see widget::show's own too-many-arguments allowance for the same shape"
+)]
 pub(super) fn show_context_menu(
     response: &egui::Response,
     widget_id: egui::Id,
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,
-    primary_cursor_range: Option<CCursorRange>,
+    primary_caret: Option<Caret>,
     text: &mut String,
     old_text: &mut String,
-    manual_cursor_range: &mut Option<CCursorRange>,
+    manual_caret: &mut Option<Caret>,
     pending_input: &mut Vec<Event>,
     last_error: &mut Option<String>,
     cached_clipboard_text: &mut Option<String>,
 ) {
-    let has_selection = primary_cursor_range.is_some_and(|r| !r.is_empty());
-    let cursor_char = primary_cursor_range.map(|r| r.primary.index.0);
+    let has_selection = primary_caret.is_some_and(|c| !c.is_collapsed());
+    let cursor_char = primary_caret.map(|c| c.primary);
 
     // Refreshed only on the frame the menu actually opens (a right click on
     // `response`), not on every frame it stays open — opening a clipboard
@@ -62,8 +72,10 @@ pub(super) fn show_context_menu(
     // `context_menu` checks internally to decide whether to open the popup
     // in the first place, so it's true on exactly that one frame.
     if response.secondary_clicked() {
-        *cached_clipboard_text =
-            arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).ok().filter(|s| !s.is_empty());
+        *cached_clipboard_text = arboard::Clipboard::new()
+            .and_then(|mut cb| cb.get_text())
+            .ok()
+            .filter(|s| !s.is_empty());
     }
 
     response.context_menu(|ui| {
@@ -80,23 +92,29 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui.add_enabled(has_selection, egui::Button::new("Cut")).clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let start = char_to_byte(text, range.start.0);
-                let end = char_to_byte(text, range.end.0);
+        if ui
+            .add_enabled(has_selection, egui::Button::new("Cut"))
+            .clicked()
+        {
+            if let Some(range) = primary_caret.map(|c| c.range()) {
+                let start = char_to_byte(text, range.start);
+                let end = char_to_byte(text, range.end);
                 ui.ctx().copy_text(text[start..end].to_string());
                 let new_text = format!("{}{}", &text[..start], &text[end..]);
                 apply_edit(doc, parser, text, &new_text);
-                *manual_cursor_range = Some(CCursorRange::one(CCursor::new(range.start.0)));
+                *manual_caret = Some(Caret::at(range.start));
                 *old_text = new_text.clone();
                 *text = new_text;
             }
             ui.close();
         }
-        if ui.add_enabled(has_selection, egui::Button::new("Copy")).clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let start = char_to_byte(text, range.start.0);
-                let end = char_to_byte(text, range.end.0);
+        if ui
+            .add_enabled(has_selection, egui::Button::new("Copy"))
+            .clicked()
+        {
+            if let Some(range) = primary_caret.map(|c| c.range()) {
+                let start = char_to_byte(text, range.start);
+                let end = char_to_byte(text, range.end);
                 ui.ctx().copy_text(text[start..end].to_string());
             }
             ui.close();
@@ -105,16 +123,20 @@ pub(super) fn show_context_menu(
         // `Context::copy_text` to write it), so this is the one item here
         // that needs `arboard` directly rather than something already
         // exposed by egui — see the cache refresh above this closure.
-        if ui.add_enabled(cached_clipboard_text.is_some(), egui::Button::new("Paste")).clicked() {
-            if let (Some(pasted), Some(range)) =
-                (cached_clipboard_text.as_ref(), primary_cursor_range.map(|r| r.as_sorted_char_range()))
-            {
-                let start = char_to_byte(text, range.start.0);
-                let end = char_to_byte(text, range.end.0);
+        if ui
+            .add_enabled(cached_clipboard_text.is_some(), egui::Button::new("Paste"))
+            .clicked()
+        {
+            if let (Some(pasted), Some(range)) = (
+                cached_clipboard_text.as_ref(),
+                primary_caret.map(|c| c.range()),
+            ) {
+                let start = char_to_byte(text, range.start);
+                let end = char_to_byte(text, range.end);
                 let new_text = format!("{}{pasted}{}", &text[..start], &text[end..]);
-                let new_cursor = range.start.0 + pasted.chars().count();
+                let new_cursor = range.start + pasted.chars().count();
                 apply_edit(doc, parser, text, &new_text);
-                *manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                *manual_caret = Some(Caret::at(new_cursor));
                 *old_text = new_text.clone();
                 *text = new_text;
             }
@@ -129,10 +151,14 @@ pub(super) fn show_context_menu(
         ui.separator();
 
         if ui.button("Toggle Line Comment").clicked() {
-            if let Some(range) = primary_cursor_range.map(|r| r.as_sorted_char_range()) {
-                let (commented, new_start, new_end) = toggle_line_comments(text, range.start.0, range.end.0);
+            if let Some(range) = primary_caret.map(|c| c.range()) {
+                let (commented, new_start, new_end) =
+                    toggle_line_comments(text, range.start, range.end);
                 apply_edit(doc, parser, text, &commented);
-                *manual_cursor_range = Some(CCursorRange::two(CCursor::new(new_start), CCursor::new(new_end)));
+                *manual_caret = Some(Caret {
+                    primary: new_end,
+                    anchor: new_start,
+                });
                 *old_text = commented.clone();
                 *text = commented;
             }
@@ -142,7 +168,7 @@ pub(super) fn show_context_menu(
             if let Some(cursor_char) = cursor_char {
                 let (duplicated, new_cursor) = duplicate_line(text, cursor_char);
                 apply_edit(doc, parser, text, &duplicated);
-                *manual_cursor_range = Some(CCursorRange::one(CCursor::new(new_cursor)));
+                *manual_caret = Some(Caret::at(new_cursor));
                 *old_text = duplicated.clone();
                 *text = duplicated;
             }
@@ -151,7 +177,10 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui.add_enabled(doc.is_dirty(), egui::Button::new("Save")).clicked() {
+        if ui
+            .add_enabled(doc.is_dirty(), egui::Button::new("Save"))
+            .clicked()
+        {
             crate::panels::tabs::save_document(doc, parser, last_error);
             // `Document::save` trims trailing whitespace, which can change
             // `doc.buffer` out from under `text`/`old_text` — every other

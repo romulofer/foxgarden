@@ -29,6 +29,7 @@ pub enum EditKind {
     Other,
 }
 
+#[derive(Clone)]
 pub struct History {
     past: Vec<Snapshot>,
     future: Vec<Snapshot>,
@@ -40,7 +41,12 @@ pub struct History {
 
 impl Default for History {
     fn default() -> Self {
-        Self { past: Vec::new(), future: Vec::new(), last_kind: None, cap: 500 }
+        Self {
+            past: Vec::new(),
+            future: Vec::new(),
+            last_kind: None,
+            cap: 500,
+        }
     }
 }
 

@@ -4,7 +4,9 @@ use std::ops::Range;
 use egui::text::CCursor;
 use egui::{Align2, Color32, FontId, Shape, Stroke};
 use fg_core::Diagnostic;
+use ropey::Rope;
 
+use super::text_area::TextAreaOutput;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 
@@ -19,7 +21,11 @@ use crate::style::theme;
 fn char_offsets_for(text: &str, queries: &[usize]) -> HashMap<usize, usize> {
     let mut result = HashMap::with_capacity(queries.len());
     let mut qi = 0;
-    for (char_count, (byte_idx, _)) in text.char_indices().chain(std::iter::once((text.len(), '\0'))).enumerate() {
+    for (char_count, (byte_idx, _)) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), '\0')))
+        .enumerate()
+    {
         while qi < queries.len() && queries[qi] == byte_idx {
             result.insert(byte_idx, char_count);
             qi += 1;
@@ -28,9 +34,16 @@ fn char_offsets_for(text: &str, queries: &[usize]) -> HashMap<usize, usize> {
     result
 }
 
+/// A diagnostic's start/end char offset resolves to `None` exactly when
+/// that offset's line isn't among this frame's shaped rows (`TextAreaOutput::
+/// char_rect`'s own off-screen signal) — every overlay in this file skips
+/// painting a decoration whose position isn't currently visible, rather than
+/// forcing a shape of an off-screen row just to decorate it. That's the
+/// point of the virtualized render this file's overlays now sit on top of.
 pub(super) fn paint_diagnostics(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
+    out: &TextAreaOutput,
+    buffer: &Rope,
     text: &str,
     diagnostics: &[Diagnostic],
 ) {
@@ -38,9 +51,6 @@ pub(super) fn paint_diagnostics(
         return;
     }
 
-    // Clamp/validate each diagnostic's byte range up front, keeping its
-    // original index so painting order below matches `diagnostics`' order
-    // unchanged from before this function stopped scanning per-diagnostic.
     let spans: Vec<(usize, usize, usize)> = diagnostics
         .iter()
         .enumerate()
@@ -51,7 +61,10 @@ pub(super) fn paint_diagnostics(
         })
         .collect();
 
-    let mut queries: Vec<usize> = spans.iter().flat_map(|&(_, start, end)| [start, end]).collect();
+    let mut queries: Vec<usize> = spans
+        .iter()
+        .flat_map(|&(_, start, end)| [start, end])
+        .collect();
     queries.sort_unstable();
     queries.dedup();
     let char_offset_for = char_offsets_for(text, &queries);
@@ -63,18 +76,19 @@ pub(super) fn paint_diagnostics(
         let char_start = char_offset_for[&start];
         let char_end = char_offset_for[&end].max(char_start + 1);
 
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
-        let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
-
-        let top = output.galley_pos.y + start_rect.top();
-        let y = output.galley_pos.y + start_rect.bottom();
-        let x_start = output.galley_pos.x + start_rect.left();
-        let x_end = (output.galley_pos.x + end_rect.left()).max(x_start + 4.0);
+        let Some(start_rect) = out.char_rect(buffer, char_start) else {
+            continue;
+        };
+        let x_end = out
+            .char_rect(buffer, char_end)
+            .map_or(start_rect.left() + 4.0, |r| r.left())
+            .max(start_rect.left() + 4.0);
+        let (x_start, top, y) = (start_rect.left(), start_rect.top(), start_rect.bottom());
 
         paint_squiggle(painter, y, x_start, x_end, squiggle_color);
 
         // Sense::hover() only — this must not steal clicks/drags from the
-        // TextEdit underneath, just report when the pointer is sitting over
+        // editor underneath, just report when the pointer is sitting over
         // this squiggle so its message can show as a tooltip.
         let hover_rect = egui::Rect::from_min_max(egui::pos2(x_start, top), egui::pos2(x_end, y));
         let id = egui::Id::new(("diagnostic_tooltip", start, end));
@@ -98,29 +112,24 @@ fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, col
     painter.add(Shape::line(points, Stroke::new(1.5, color)));
 }
 
-/// Paints one right-aligned line number per visual row of `output.galley`,
-/// flush against `gutter_right_edge`. Driven directly by the galley's own
-/// rows (each row's `pos`/`size`, via `PlacedRow::rect`) rather than
-/// independently recomputing row positions from font metrics — that keeps
-/// the numbers pixel-aligned with the text no matter what the row height
-/// actually is, and automatically scrolls in sync since `output.galley_pos`
-/// already accounts for the `ScrollArea`'s current offset (same technique
-/// `paint_diagnostics`/`paint_extra_selections` use).
+/// Paints one right-aligned line number per row `out` actually shaped this
+/// frame, flush against `gutter_right_edge` — virtualized the same way the
+/// text itself is, rather than iterating a whole-buffer galley's rows.
 pub(super) fn paint_line_numbers(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
+    out: &TextAreaOutput,
     gutter_right_edge: f32,
     font_id: FontId,
     dark_mode: bool,
 ) {
     let painter = ui.painter();
     let color = theme::line_number(dark_mode);
-    for (index, row) in output.galley.rows.iter().enumerate() {
-        let y = output.galley_pos.y + row.rect().center().y;
+    for (i, (logical, _)) in out.row_galleys.iter().enumerate() {
+        let y = out.content_origin.y + (out.row_offsets[i] as f32 + 0.5) * out.row_height;
         painter.text(
             egui::pos2(gutter_right_edge, y),
             Align2::RIGHT_CENTER,
-            index + 1,
+            logical + 1,
             font_id.clone(),
             color,
         );
@@ -128,13 +137,11 @@ pub(super) fn paint_line_numbers(
 }
 
 /// Paints the Ctrl+D secondary cursors/selections: a thin caret for a bare
-/// position, or a translucent rect for a claimed occurrence — same
-/// `galley.pos_from_cursor` technique `paint_diagnostics` uses, just
-/// char-index based instead of byte based since `extra_selections` is
-/// already in char space.
+/// position, or a translucent rect for a claimed occurrence.
 pub(super) fn paint_extra_selections(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
+    out: &TextAreaOutput,
+    buffer: &Rope,
     extra_selections: &[Range<usize>],
 ) {
     let painter = ui.painter();
@@ -142,19 +149,18 @@ pub(super) fn paint_extra_selections(
     let selection_color = ui.visuals().selection.bg_fill;
 
     for range in extra_selections {
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(range.start));
-        let y_top = output.galley_pos.y + start_rect.top();
-        let y_bottom = output.galley_pos.y + start_rect.bottom();
-        let x_start = output.galley_pos.x + start_rect.left();
+        let Some(start_rect) = out.char_rect(buffer, range.start) else {
+            continue;
+        };
+        let (y_top, y_bottom, x_start) = (start_rect.top(), start_rect.bottom(), start_rect.left());
 
         if range.is_empty() {
             painter.line_segment(
                 [egui::pos2(x_start, y_top), egui::pos2(x_start, y_bottom)],
                 Stroke::new(1.5, caret_color),
             );
-        } else {
-            let end_rect = output.galley.pos_from_cursor(CCursor::new(range.end));
-            let x_end = output.galley_pos.x + end_rect.left();
+        } else if let Some(end_rect) = out.char_rect(buffer, range.end) {
+            let x_end = end_rect.left();
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::pos2(x_start, y_top), egui::pos2(x_end, y_bottom)),
                 0.0,
@@ -165,137 +171,166 @@ pub(super) fn paint_extra_selections(
 }
 
 /// Paints a subtle background rect behind every occurrence of the word
-/// under the cursor (passive, read-only — see `widgets::editor::show`'s
-/// comment on when this runs), including the one the cursor itself sits
-/// on/in. Same `galley.pos_from_cursor` technique `paint_extra_selections`
-/// uses, deliberately with a much less prominent fill so it never reads as
-/// an active selection.
+/// under the cursor (passive, read-only), including the one the cursor
+/// itself sits on/in. Deliberately a much less prominent fill than
+/// `paint_extra_selections` so it never reads as an active selection.
 pub(super) fn paint_occurrence_highlights(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
+    out: &TextAreaOutput,
+    buffer: &Rope,
     occurrences: &[Range<usize>],
 ) {
     let painter = ui.painter();
     let fill = theme::occurrence_highlight(ui.visuals().dark_mode);
 
     for range in occurrences {
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(range.start));
-        let end_rect = output.galley.pos_from_cursor(CCursor::new(range.end));
-        let y_top = output.galley_pos.y + start_rect.top();
-        let y_bottom = output.galley_pos.y + start_rect.bottom();
-        let x_start = output.galley_pos.x + start_rect.left();
-        let x_end = output.galley_pos.x + end_rect.left();
-
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x_start, y_top), egui::pos2(x_end, y_bottom)),
-            2.0,
-            fill,
+        let (Some(start_rect), Some(end_rect)) = (
+            out.char_rect(buffer, range.start),
+            out.char_rect(buffer, range.end),
+        ) else {
+            continue;
+        };
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(start_rect.left(), start_rect.top()),
+            egui::pos2(end_rect.left(), end_rect.bottom()),
         );
+        painter.rect_filled(rect, 2.0, fill);
     }
 }
 
-/// Paints a subtle outline box around each bracket of a matched pair — the
-/// bracket-pair-highlighting overlay. `pair` holds each bracket's **byte**
-/// range (as `syntax::bracket_match` returns them, tree-sitter's own
-/// byte-range currency), converted to char offsets here the same way
-/// `paint_diagnostics` does, just without that function's `HashMap`
-/// batching: there are only ever two ranges to convert for a single matched
-/// pair, not a per-diagnostic-file count, so a direct
-/// `text[..byte].chars().count()` call twice is simpler and just as cheap.
-/// An outline (not `paint_occurrence_highlights`' filled rect) deliberately
-/// reads as "these two characters pair up," not "this span is
-/// selected/repeated" — a different visual vocabulary for a different kind
-/// of highlight.
+/// Paints a subtle outline box around each bracket of a matched pair —
+/// `pair` holds each bracket's **byte** range (as `syntax::bracket_match`
+/// returns them), converted to char offsets via `buffer.byte_to_char`
+/// (`Rope`'s own O(log n) lookup — no need for `paint_diagnostics`'
+/// batching machinery for just two ranges). An outline (not
+/// `paint_occurrence_highlights`' filled rect) deliberately reads as "these
+/// two characters pair up," not "this span is selected/repeated."
 pub(super) fn paint_bracket_match(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
-    text: &str,
+    out: &TextAreaOutput,
+    buffer: &Rope,
     pair: (Range<usize>, Range<usize>),
 ) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.0, theme::bracket_match(ui.visuals().dark_mode));
 
     for range in [pair.0, pair.1] {
-        let char_start = text[..range.start].chars().count();
-        let char_end = text[..range.end].chars().count();
-        let start_rect = output.galley.pos_from_cursor(CCursor::new(char_start));
-        let end_rect = output.galley.pos_from_cursor(CCursor::new(char_end));
+        let char_start = buffer.byte_to_char(range.start.min(buffer.len_bytes()));
+        let char_end = buffer.byte_to_char(range.end.min(buffer.len_bytes()));
+        let (Some(start_rect), Some(end_rect)) = (
+            out.char_rect(buffer, char_start),
+            out.char_rect(buffer, char_end),
+        ) else {
+            continue;
+        };
         let rect = egui::Rect::from_min_max(
-            egui::pos2(output.galley_pos.x + start_rect.left(), output.galley_pos.y + start_rect.top()),
-            egui::pos2(output.galley_pos.x + end_rect.left(), output.galley_pos.y + end_rect.bottom()),
+            egui::pos2(start_rect.left(), start_rect.top()),
+            egui::pos2(end_rect.left(), end_rect.bottom()),
         );
         painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
     }
 }
 
 /// Paints a small dot for each space and a short arrow for each tab —
-/// `ViewSettings::show_whitespace`. Walks `text` char by char rather than
-/// reusing the range-based technique every other overlay here uses: there's
-/// no contiguous span to paint, just individually-scattered single
-/// characters, so a per-char `pos_from_cursor` call is the natural fit
-/// (same cost class as `paint_indent_guides`'s per-level lookups below, not
-/// the per-diagnostic-file count `paint_diagnostics` optimizes for).
-pub(super) fn paint_whitespace(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str) {
+/// `ViewSettings::show_whitespace`. Walks only the rows `out` actually
+/// shaped this frame (each row's own logical line, read straight from
+/// `buffer`) rather than every char in the whole buffer the way the
+/// `egui::TextEdit`-era version had to (that version had only one
+/// whole-buffer galley to query positions from in the first place) — a
+/// genuine virtualization win for this specific overlay on a large file.
+pub(super) fn paint_whitespace(ui: &egui::Ui, out: &TextAreaOutput, buffer: &Rope) {
     let painter = ui.painter();
     let color = theme::structure(ui.visuals().dark_mode);
 
-    for (char_idx, c) in text.chars().enumerate() {
-        match c {
-            ' ' => {
-                let rect = output.galley.pos_from_cursor(CCursor::new(char_idx));
-                let center = egui::pos2(output.galley_pos.x + rect.center().x, output.galley_pos.y + rect.center().y);
-                painter.circle_filled(center, 1.5, color);
+    for (i, (logical, galley)) in out.row_galleys.iter().enumerate() {
+        let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
+        let line_start = buffer.line_to_char(*logical);
+        let line = buffer.line(*logical);
+
+        for (col, c) in line.chars().enumerate() {
+            match c {
+                ' ' => {
+                    let rect = galley.pos_from_cursor(CCursor::new(col));
+                    let center =
+                        egui::pos2(out.content_origin.x + rect.center().x, y + rect.center().y);
+                    painter.circle_filled(center, 1.5, color);
+                }
+                '\t' => {
+                    let start = galley.pos_from_cursor(CCursor::new(col));
+                    let end = galley.pos_from_cursor(CCursor::new(col + 1));
+                    let row_center_y = y + start.center().y;
+                    let x_start = out.content_origin.x + start.left() + 2.0;
+                    let x_end = (out.content_origin.x + end.left() - 2.0).max(x_start + 2.0);
+                    painter.line_segment(
+                        [
+                            egui::pos2(x_start, row_center_y),
+                            egui::pos2(x_end, row_center_y),
+                        ],
+                        Stroke::new(1.0, color),
+                    );
+                    painter.line_segment(
+                        [
+                            egui::pos2(x_end, row_center_y),
+                            egui::pos2(x_end - 3.0, row_center_y - 3.0),
+                        ],
+                        Stroke::new(1.0, color),
+                    );
+                    painter.line_segment(
+                        [
+                            egui::pos2(x_end, row_center_y),
+                            egui::pos2(x_end - 3.0, row_center_y + 3.0),
+                        ],
+                        Stroke::new(1.0, color),
+                    );
+                }
+                '\n' | '\r' => break, // the line slice includes its own terminator
+                _ => {}
             }
-            '\t' => {
-                let start = output.galley.pos_from_cursor(CCursor::new(char_idx));
-                let end = output.galley.pos_from_cursor(CCursor::new(char_idx + 1));
-                let y = output.galley_pos.y + start.center().y;
-                let x_start = output.galley_pos.x + start.left() + 2.0;
-                let x_end = (output.galley_pos.x + end.left() - 2.0).max(x_start + 2.0);
-                painter.line_segment([egui::pos2(x_start, y), egui::pos2(x_end, y)], Stroke::new(1.0, color));
-                painter.line_segment([egui::pos2(x_end, y), egui::pos2(x_end - 3.0, y - 3.0)], Stroke::new(1.0, color));
-                painter.line_segment([egui::pos2(x_end, y), egui::pos2(x_end - 3.0, y + 3.0)], Stroke::new(1.0, color));
-            }
-            _ => {}
         }
+        let _ = line_start; // kept for symmetry with paint_indent_guides's per-row lookups; not otherwise needed here
     }
 }
 
 /// Paints a thin vertical line through every indent level a line's leading
-/// whitespace spans — `ViewSettings::show_indent_guides`. Assumes each
-/// `output.galley.rows` entry corresponds 1:1 to a logical (`\n`-separated)
-/// line of `text`, the same simplifying assumption `paint_line_numbers`
-/// already makes (both break down identically for a wrapped long line —
-/// see that function's doc comment); `indent_settings` decides how many
-/// leading whitespace characters make up one level, same as every other
-/// indent-aware transform in `auto_edit.rs`.
+/// whitespace spans — `ViewSettings::show_indent_guides`. Iterates the rows
+/// `out` actually shaped (its own logical line's leading whitespace, read
+/// directly from `buffer`) instead of walking `text` char-by-char to
+/// rediscover each row's line — a row **is** a logical line while word-wrap
+/// is off (Phase 2/2h's scope; Phase 4 revisits this for wrapped rows).
 pub(super) fn paint_indent_guides(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
-    text: &str,
+    out: &TextAreaOutput,
+    buffer: &Rope,
     indent_settings: IndentSettings,
 ) {
     let painter = ui.painter();
     let color = theme::structure(ui.visuals().dark_mode);
-    let unit_width = if indent_settings.use_tabs { 1 } else { indent_settings.width.max(1) };
+    let unit_width = if indent_settings.use_tabs {
+        1
+    } else {
+        indent_settings.width.max(1)
+    };
 
-    let mut char_offset = 0usize;
-    for (row_index, line) in text.split('\n').enumerate() {
-        let Some(row) = output.galley.rows.get(row_index) else { break };
-        let leading_ws = line.chars().take_while(|&c| c == ' ' || c == '\t').count();
+    for (i, (logical, galley)) in out.row_galleys.iter().enumerate() {
+        let y_top = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
+        let y_bottom = y_top + out.row_height;
+
+        let leading_ws = buffer
+            .line(*logical)
+            .chars()
+            .take_while(|&c| c == ' ' || c == '\t')
+            .count();
         let levels = leading_ws / unit_width;
 
-        let y_top = output.galley_pos.y + row.rect().top();
-        let y_bottom = output.galley_pos.y + row.rect().bottom();
-
         for level in 0..levels {
-            let level_char = char_offset + level * unit_width;
-            let pos = output.galley.pos_from_cursor(CCursor::new(level_char));
-            let x = output.galley_pos.x + pos.left();
-            painter.line_segment([egui::pos2(x, y_top), egui::pos2(x, y_bottom)], Stroke::new(1.0, color));
+            let level_char = level * unit_width;
+            let pos = galley.pos_from_cursor(CCursor::new(level_char));
+            let x = out.content_origin.x + pos.left();
+            painter.line_segment(
+                [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
+                Stroke::new(1.0, color),
+            );
         }
-
-        char_offset += line.chars().count() + 1; // +1 skips the '\n' separator itself
     }
 }
 
@@ -304,7 +339,7 @@ pub(super) fn paint_indent_guides(
 /// class/method signatures stay visible while their body scrolls underneath.
 ///
 /// Painted in **screen space off `ui.clip_rect().top()`** — a fixed viewport
-/// pixel, deliberately *not* `output.galley_pos.y` (which scrolls) — so the
+/// pixel, deliberately *not* `out.content_origin.y` (which scrolls) — so the
 /// bands stay put as the body moves under them. Each band is opaque
 /// (`theme::sticky_background`) precisely to occlude that scrolling body; a
 /// thin bottom line separates the whole stack from the live content below.
@@ -312,22 +347,19 @@ pub(super) fn paint_indent_guides(
 /// Header text is drawn in the plain editor text color rather than
 /// syntax-highlighted for this first cut: re-deriving per-token colors here
 /// would mean a whole-file `highlight_spans` pass every frame sticky scroll is
-/// active (the main galley's cache would no longer cover it), which isn't
-/// worth it for a handful of pinned signature lines — a colored pinned header
-/// is a clear later refinement, not a correctness gap.
+/// active, which isn't worth it for a handful of pinned signature lines — a
+/// colored pinned header is a clear later refinement, not a correctness gap.
 pub(super) fn paint_sticky_scroll(
     ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
+    out: &TextAreaOutput,
     header_lines: &[String],
     font_id: FontId,
     dark_mode: bool,
 ) {
-    let Some(row_height) = output.galley.rows.first().map(|r| r.rect().height()) else {
-        return; // empty buffer — nothing laid out, nothing to enclose
-    };
     if header_lines.is_empty() {
         return;
     }
+    let row_height = out.row_height;
 
     let painter = ui.painter();
     let clip = ui.clip_rect();
@@ -335,8 +367,8 @@ pub(super) fn paint_sticky_scroll(
     let text_color = theme::default_text(dark_mode);
     // Keep the signature readable even when the body is scrolled right: clamp
     // the text's left edge into the viewport rather than letting it slide off
-    // with `galley_pos.x`.
-    let text_left = output.galley_pos.x.max(clip.left() + 2.0);
+    // with the content's own x origin.
+    let text_left = out.content_origin.x.max(clip.left() + 2.0);
 
     for (i, line) in header_lines.iter().enumerate() {
         let band_top = clip.top() + i as f32 * row_height;
@@ -357,7 +389,10 @@ pub(super) fn paint_sticky_scroll(
     // One separator line under the whole pinned stack.
     let divider_y = clip.top() + header_lines.len() as f32 * row_height;
     painter.line_segment(
-        [egui::pos2(clip.left(), divider_y), egui::pos2(clip.right(), divider_y)],
+        [
+            egui::pos2(clip.left(), divider_y),
+            egui::pos2(clip.right(), divider_y),
+        ],
         Stroke::new(1.0, theme::structure(dark_mode)),
     );
 }
