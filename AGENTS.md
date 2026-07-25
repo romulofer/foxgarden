@@ -80,6 +80,10 @@ ourselves in `crates/app/src/widgets/editor/widget.rs`).
 
 - **Do not author commits. Do not push upstream.** (Carried over from
   `CLAUDE.md` — these apply regardless of which agent is working here.)
+- **On the rare occasion the user explicitly authorizes a commit anyway,
+  the user is the sole author — no `Co-Authored-By` trailer, no mention of
+  the agent in the message.** This repo's commit history is attributed to
+  the human, full stop, even when an agent typed the diff.
 - `PLAN.md`, `SPEC.md`, and `FEATURES.md` are intentionally gitignored
   (local planning docs, not part of the published repo). Don't assume they
   exist in a fresh clone.
