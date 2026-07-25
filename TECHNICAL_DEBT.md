@@ -108,8 +108,9 @@ also has one worked example of the fix process to follow.
 
 ## 5. Considered and rejected: splitting `widget.rs` further
 
-**Where:** `crates/app/src/widgets/editor/widget.rs` (~2200 lines, 2214 as
-of this recheck).
+**Where:** `crates/app/src/widgets/editor/widget.rs` (~1360 lines since its
+colocated test module was extracted to the sibling `widget/tests.rs`; ~2214
+before that extraction).
 
 **Status:** Not actual debt — recorded so a future review doesn't re-flag
 file size alone and fragment a file that's already been evaluated for
@@ -127,9 +128,11 @@ A code-organization review this session already extracted two genuinely
 separable concerns out of this file — the right-click context menu (now
 `context_menu.rs`) and the getters/setters picker's rendering (moved into
 `codegen.rs`, next to the data/logic it already owned) — after `widget.rs`
-had grown to 2397 lines doing several distinct things. Even after that
-split the file is still large (dominated by the `show()` function and its
-colocated test module) and could get flagged again for size alone.
+had grown to 2397 lines doing several distinct things. The colocated test
+module has since been extracted to a sibling `widget/tests.rs` (an orthogonal
+split — it moves ~2100 lines of tests out without touching `show()`'s
+frame-orchestration at all), leaving the module file dominated by the
+`show()` function itself. It could still get flagged again for size alone.
 
 ### Why it doesn't apply
 
@@ -165,8 +168,8 @@ few dozen lines — extract that feature, not the file in general.
 
 ## 6. `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it directly
 
-**Where:** `crates/app/src/widgets/editor/widget.rs`'s test module, `fn
-open_fixture`.
+**Where:** `crates/app/src/widgets/editor/widget/tests.rs` (the extracted test
+module), `fn open_fixture`.
 
 **Status:** Not real debt — recorded so a future cleanup pass doesn't
 "simplify" this into ~50 error-prone call-site edits for no real benefit.

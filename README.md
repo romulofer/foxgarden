@@ -126,6 +126,9 @@ cross-platform "open a terminal here" API to call instead.
   `crates/app/assets/fonts/`)
 - Light theme background uses raylib's `RAYWHITE` (245, 245, 245); syntax
   colors are adapted per-theme so both light and dark stay readable
+- Sticky scroll (View > Sticky Scroll): pins the enclosing class/method
+  signature to the top of the editor while scrolling through its body, so you
+  never lose track of where you are (Java; persisted)
 
 ## Tech stack
 

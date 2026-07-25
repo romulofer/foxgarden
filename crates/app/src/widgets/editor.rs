@@ -14,6 +14,7 @@ mod context_menu;
 mod multi_cursor;
 mod painting;
 mod templates;
+mod text_area;
 mod text_offset;
 mod widget;
 

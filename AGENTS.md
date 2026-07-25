@@ -187,7 +187,7 @@ recurring.
     newline-joined strings — no `serde` dependency for just a list of paths.
     Both are free functions taking `&dyn eframe::Storage` rather than
     methods on `FoxGardenApp`, specifically so they're unit-testable against
-    a hand-rolled fake `Storage` (see `app.rs`'s test module) — a real
+    a hand-rolled fake `Storage` (see `app/tests.rs`) — a real
     `eframe::CreationContext` isn't practically constructible outside a live
     windowing/render backend, so `FoxGardenApp::new` itself stays untested,
     same as the rest of its GUI-wiring functions.
@@ -519,13 +519,20 @@ recurring.
 - `core` and `syntax` are fully headless-testable; prefer adding coverage
   there over the `app` crate when the logic doesn't strictly need a GUI.
 - `app` is a binary crate (no `[lib]` target), so its tests live as
-  `#[cfg(test)] mod tests` inside the relevant `src/*.rs` file, not under
-  `tests/` (integration tests there can't `use` binary-crate internals).
+  `#[cfg(test)] mod tests` colocated with the code they cover, not under
+  `tests/` (integration tests there can't `use` binary-crate internals). A
+  small file keeps that module inline at the bottom; once a file grows large,
+  the module moves to a sibling `<module>/tests.rs` file (the module file just
+  declares `#[cfg(test)] mod tests;`) so it stays focused on the code under
+  test — e.g. `widget.rs`'s tests are in `widget/tests.rs`, `app.rs`'s in
+  `app/tests.rs`, `side_panel.rs`'s in `side_panel/tests.rs`. Same module,
+  separate file; `use super::*;` reaches the code exactly as an inline module
+  would.
 - GUI widget logic (highlighting, squiggle painting) can be exercised
   headlessly via `egui::__run_test_ui(|ui| { ... })` — it runs a real egui
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
-  `crates/app/src/widgets/editor/widget.rs`'s test module for the pattern.
+  `crates/app/src/widgets/editor/widget/tests.rs` for the pattern.
 - Click-automation tooling (`xdotool`) is not installed by default in a
   fresh environment, but isn't ruled out either — it's been used
   successfully in this project (launch `cargo run -p app` in the
@@ -544,10 +551,10 @@ recurring.
 - Anything that needs `eframe::Storage` (session persistence) or
   `egui::Context`'s persistent temp data (the layout cache) is testable
   without a real window: implement `eframe::Storage` yourself over a plain
-  `HashMap` (`FakeStorage` in `app.rs`'s test module) for the former; for
+  `HashMap` (`FakeStorage` in `app/tests.rs`) for the former; for
   the latter, drive a real, reused `egui::Context` through two or more
   `ctx.run_ui(...)` passes and read `ctx.data(|d| d.get_temp::<T>(id))`
-  directly (see `widget.rs`'s `layout_cache_reuses_galley_across_
+  directly (see `widget/tests.rs`'s `layout_cache_reuses_galley_across_
   unchanged_frames` / `_reshapes_after_an_edit`, which assert `Arc::ptr_eq`
   to prove a galley either was or wasn't reused across frames). Neither
   needs a real `eframe::CreationContext`, which isn't practically
