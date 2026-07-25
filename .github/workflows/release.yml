@@ -1,0 +1,89 @@
+name: Release
+
+# Triggered by pushing a version tag (e.g. `v0.1.0`), or manually via the
+# Actions tab (workflow_dispatch) for a re-run without needing a new tag.
+# Builds a release binary on Linux, Windows, and macOS, then publishes all
+# three as assets on a single GitHub Release named after the tag.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: foxgarden-linux-x86_64
+            binary_path: target/release/app
+          - os: windows-latest
+            asset_name: foxgarden-windows-x86_64.exe
+            binary_path: target/release/app.exe
+          - os: macos-latest
+            asset_name: foxgarden-macos-aarch64
+            binary_path: target/release/app
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # eframe (winit) needs X11/Wayland/xkbcommon dev headers to build, and
+      # rfd's Linux backend needs GTK3 for its native file-open/save
+      # dialogs — none of this applies on Windows/macOS, which use their
+      # own OS-native windowing/file-dialog APIs already present on the
+      # runner image.
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxkbcommon-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb-render0-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --bin app
+
+      # Uploaded under a stable, matrix-independent name so the release job
+      # below can download every platform's binary by iterating a known
+      # `artifacts/*` glob rather than hard-coding each matrix entry again.
+      - name: Stage binary for upload
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp "${{ matrix.binary_path }}" "staging/${{ matrix.asset_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: staging/${{ matrix.asset_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
