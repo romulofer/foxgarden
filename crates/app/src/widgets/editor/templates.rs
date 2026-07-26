@@ -26,19 +26,20 @@ pub struct UserTemplate {
     pub body: String,
 }
 
-/// A user's saved live templates, one list per language — the in-memory
-/// form `menu_bar`'s Live Templates dialog edits directly and `app.rs`
-/// persists/restores via `serialize_user_templates`/`parse_user_templates`.
+/// A user's saved live templates, one list per language plus `global` (see
+/// `GLOBAL_TEMPLATES`'s doc comment) — the in-memory form `menu_bar`'s Live
+/// Templates dialog edits directly and `app.rs` persists/restores via
+/// `serialize_user_templates`/`parse_user_templates`.
 #[derive(Debug, Clone, Default)]
 pub struct UserTemplates {
     pub java: Vec<UserTemplate>,
     pub kotlin: Vec<UserTemplate>,
+    pub global: Vec<UserTemplate>,
 }
 
-/// Built-in Java live templates. Deliberately not settings-editable yet
-/// (see `FEATURES.md`'s "Live templates" entry) — the expansion mechanism
-/// itself is what this covers; a user-editable template list is a
-/// follow-up, not blocked by this shape.
+/// Built-in Java live templates — alongside a user's own custom ones
+/// (`UserTemplates::java`, editable via Help > Live Templates…), which take
+/// priority when a trigger collides (see `find_expansion`).
 pub const JAVA_TEMPLATES: &[Template] = &[
     Template {
         trigger: "sout",
@@ -76,10 +77,6 @@ pub const JAVA_TEMPLATES: &[Template] = &[
         trigger: "trycatch",
         body: "try {\n    ${cursor}\n} catch (Exception e) {\n    e.printStackTrace();\n}",
     },
-    Template {
-        trigger: "pipe",
-        body: "|",
-    },
 ];
 
 /// Built-in Kotlin live templates.
@@ -112,11 +109,20 @@ pub const KOTLIN_TEMPLATES: &[Template] = &[
         trigger: "trycatch",
         body: "try {\n    ${cursor}\n} catch (e: Exception) {\n    e.printStackTrace()\n}",
     },
-    Template {
-        trigger: "pipe",
-        body: "|",
-    },
 ];
+
+/// Built-in templates that expand the same way regardless of the active
+/// file's language — checked *in addition to* `JAVA_TEMPLATES`/
+/// `KOTLIN_TEMPLATES` (see `find_expansion`'s call site in `widget::show`),
+/// not instead of them, and unlike those two, still available in a file
+/// with no recognized language at all (plain text, an unrecognized
+/// extension). `pipe` is the prototypical example: a literal `|` isn't
+/// Java- or Kotlin-specific, so it belongs here rather than duplicated in
+/// both language tables.
+pub const GLOBAL_TEMPLATES: &[Template] = &[Template {
+    trigger: "pipe",
+    body: "|",
+}];
 
 /// The maximal run of identifier characters (letters, digits, underscore)
 /// ending exactly at `cursor_char` — the word a just-pressed Tab would be
@@ -142,17 +148,27 @@ pub fn find_template(templates: &[Template], word: &str) -> Option<&'static str>
         .map(|template| template.body)
 }
 
-/// Same lookup as `find_template`, but checking `custom` (a user's own
-/// saved templates for the active language) first — a user redefining a
-/// built-in trigger like `sout` gets their own version back, not the
-/// built-in one shadowed underneath it, the same "your config wins" rule
-/// most editors apply to user-vs-default settings.
-pub fn find_expansion<'a>(built_in: &'a [Template], custom: &'a [UserTemplate], word: &str) -> Option<&'a str> {
-    custom
-        .iter()
-        .find(|template| template.trigger == word)
-        .map(|template| template.body.as_str())
-        .or_else(|| find_template(built_in, word))
+/// Looks up `word` across any number of custom-template groups (checked
+/// first, in the order given) then any number of built-in groups — e.g. a
+/// file's own language group plus the always-on global group (`GLOBAL_
+/// TEMPLATES`/`UserTemplates::global`), letting one lookup cover both
+/// "language-specific" and "applies everywhere" triggers together. A custom
+/// group is always checked before any built-in one regardless of which
+/// group either lives in, so a user redefining a built-in trigger like
+/// `sout` (in their language group) or `pipe` (in their global group) gets
+/// their own version back — the same "your config wins" rule most editors
+/// apply to user-vs-default settings.
+pub fn find_expansion<'a>(
+    custom_groups: &[&'a [UserTemplate]],
+    built_in_groups: &[&'a [Template]],
+    word: &str,
+) -> Option<&'a str> {
+    for group in custom_groups {
+        if let Some(template) = group.iter().find(|template| template.trigger == word) {
+            return Some(template.body.as_str());
+        }
+    }
+    built_in_groups.iter().find_map(|group| find_template(group, word))
 }
 
 /// Escapes a template body for `serialize_user_templates`' one-line-per-
@@ -306,7 +322,7 @@ mod tests {
     #[test]
     fn find_expansion_falls_back_to_the_built_in_table_when_custom_has_no_match() {
         assert_eq!(
-            find_expansion(JAVA_TEMPLATES, &[], "sout"),
+            find_expansion(&[], &[JAVA_TEMPLATES], "sout"),
             Some("System.out.println(${cursor});")
         );
     }
@@ -318,7 +334,7 @@ mod tests {
             body: "my.own.println(${cursor});".to_string(),
         }];
         assert_eq!(
-            find_expansion(JAVA_TEMPLATES, &custom, "sout"),
+            find_expansion(&[&custom], &[JAVA_TEMPLATES], "sout"),
             Some("my.own.println(${cursor});")
         );
     }
@@ -329,8 +345,43 @@ mod tests {
             trigger: "myown".to_string(),
             body: "custom body".to_string(),
         }];
-        assert_eq!(find_expansion(JAVA_TEMPLATES, &custom, "myown"), Some("custom body"));
-        assert_eq!(find_expansion(JAVA_TEMPLATES, &custom, "nope"), None);
+        assert_eq!(find_expansion(&[&custom], &[JAVA_TEMPLATES], "myown"), Some("custom body"));
+        assert_eq!(find_expansion(&[&custom], &[JAVA_TEMPLATES], "nope"), None);
+    }
+
+    #[test]
+    fn find_expansion_falls_through_to_the_global_built_in_group() {
+        // "pipe" lives only in `GLOBAL_TEMPLATES`, not `JAVA_TEMPLATES` —
+        // still found once that group is included in the lookup, the same
+        // way `widget::show` includes it regardless of a file's language.
+        assert_eq!(
+            find_expansion(&[], &[JAVA_TEMPLATES, GLOBAL_TEMPLATES], "pipe"),
+            Some("|")
+        );
+    }
+
+    #[test]
+    fn find_expansion_checks_custom_groups_in_order() {
+        let language_custom = [UserTemplate {
+            trigger: "pipe".to_string(),
+            body: "language override".to_string(),
+        }];
+        let global_custom = [UserTemplate {
+            trigger: "pipe".to_string(),
+            body: "global override".to_string(),
+        }];
+        // The language-specific custom group is listed first, so it wins
+        // over the global custom group even though both define "pipe".
+        assert_eq!(
+            find_expansion(&[&language_custom, &global_custom], &[], "pipe"),
+            Some("language override")
+        );
+        // With no language-specific match, the global custom group is
+        // still reached.
+        assert_eq!(
+            find_expansion(&[&[], &global_custom], &[], "pipe"),
+            Some("global override")
+        );
     }
 
     #[test]

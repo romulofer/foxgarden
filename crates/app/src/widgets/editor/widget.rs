@@ -587,13 +587,22 @@ pub fn show(
                     let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
-                    let (templates, custom): (&[templates::Template], &[templates::UserTemplate]) = match doc.language
-                    {
-                        Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
-                        Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
-                        _ => (&[], &[]),
-                    };
-                    let template_body = find_expansion(templates, custom, &old_text[word_start_byte..word_end_byte]);
+                    let (language_templates, language_custom): (&[templates::Template], &[templates::UserTemplate]) =
+                        match doc.language {
+                            Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
+                            Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
+                            _ => (&[], &[]),
+                        };
+                    // `templates::GLOBAL_TEMPLATES`/`custom_templates.global` are
+                    // included unconditionally, even for a file with no
+                    // recognized language at all — a global trigger like `pipe`
+                    // expands the same way everywhere, language-specific tables
+                    // included or not.
+                    let template_body = find_expansion(
+                        &[language_custom, &custom_templates.global],
+                        &[language_templates, templates::GLOBAL_TEMPLATES],
+                        &old_text[word_start_byte..word_end_byte],
+                    );
 
                     if template_body.is_some() || !indent_settings.use_tabs {
                         let removed = take_event(ui, |e| {

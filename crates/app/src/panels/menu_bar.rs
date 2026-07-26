@@ -8,7 +8,8 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    AccessorKind, CaseConversion, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES, UserTemplate, UserTemplates,
+    AccessorKind, CaseConversion, GLOBAL_TEMPLATES, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES,
+    UserTemplate, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -27,6 +28,10 @@ pub struct MenuBarState {
     /// Same as `new_java_trigger`/`new_java_body`, for Kotlin.
     new_kotlin_trigger: String,
     new_kotlin_body: String,
+    /// Same as `new_java_trigger`/`new_java_body`, for the language-agnostic
+    /// Global section (`UserTemplates::global`).
+    new_global_trigger: String,
+    new_global_body: String,
 }
 
 /// What the Tools menu wants the editor to do this frame — at most one of
@@ -427,11 +432,13 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
 /// user's own custom triggers (`custom_templates`, threaded all the way
 /// down to `widgets::editor::widget::show`'s Tab-expansion lookup, which
 /// checks these before the built-ins — see `templates::find_expansion`).
-/// Lists both languages' built-in tables unconditionally rather than only
-/// the active tab's language: this is a reference dialog a user opens to
-/// remember what's available, not a context-sensitive one, so showing just
-/// one language when e.g. no file is open, or a non-Java/Kotlin file is
-/// active, would leave it with nothing to show at all.
+/// Three sections: Global (`GLOBAL_TEMPLATES`/`UserTemplates::global`, which
+/// expand the same way in any file regardless of language), then Java and
+/// Kotlin. Lists every section unconditionally rather than only the active
+/// tab's language: this is a reference dialog a user opens to remember
+/// what's available, not a context-sensitive one, so showing just one
+/// language when e.g. no file is open, or a non-Java/Kotlin file is active,
+/// would leave it with nothing to show at all.
 fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, custom_templates: &mut UserTemplates) {
     let outcome = show_modal(
         ui,
@@ -444,6 +451,23 @@ fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, 
             ui.label("Add your own below — a custom trigger overrides a built-in one of the same name.");
             ui.separator();
             egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+                ui.strong("Global");
+                ui.label(egui::RichText::new("Expands the same way in every file, Java/Kotlin or not.").weak());
+                ui.add_space(4.0);
+                show_template_group(ui, GLOBAL_TEMPLATES, dark_mode);
+                show_user_templates_editor(
+                    ui,
+                    "global_user_templates",
+                    &mut custom_templates.global,
+                    &mut menu.new_global_trigger,
+                    &mut menu.new_global_body,
+                    dark_mode,
+                );
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+
                 ui.strong("Java");
                 ui.add_space(4.0);
                 show_template_group(ui, JAVA_TEMPLATES, dark_mode);

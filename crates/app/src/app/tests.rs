@@ -233,6 +233,10 @@ fn persisted_settings_round_trip() {
             body: "custom body".to_string(),
         }],
         kotlin: vec![],
+        global: vec![UserTemplate {
+            trigger: "mypipe".to_string(),
+            body: "|".to_string(),
+        }],
     };
     persist_settings(
         &mut storage,
@@ -275,6 +279,7 @@ fn persisted_settings_round_trip() {
     assert!(!side_panel_visible);
     assert_eq!(custom_templates.java, saved_templates.java);
     assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
+    assert_eq!(custom_templates.global, saved_templates.global);
 }
 
 #[test]

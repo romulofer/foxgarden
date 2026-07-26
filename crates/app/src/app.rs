@@ -46,6 +46,7 @@ const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
 const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
+const CUSTOM_GLOBAL_TEMPLATES_KEY: &str = "custom_global_templates";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -570,6 +571,9 @@ fn restore_settings(
     if let Some(saved) = storage.get_string(CUSTOM_KOTLIN_TEMPLATES_KEY) {
         custom_templates.kotlin = crate::widgets::editor::parse_user_templates(&saved);
     }
+    if let Some(saved) = storage.get_string(CUSTOM_GLOBAL_TEMPLATES_KEY) {
+        custom_templates.global = crate::widgets::editor::parse_user_templates(&saved);
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -608,6 +612,10 @@ fn persist_settings(
     storage.set_string(
         CUSTOM_KOTLIN_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.kotlin),
+    );
+    storage.set_string(
+        CUSTOM_GLOBAL_TEMPLATES_KEY,
+        crate::widgets::editor::serialize_user_templates(&custom_templates.global),
     );
 }
 
