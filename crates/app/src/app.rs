@@ -17,7 +17,9 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-use crate::widgets::editor::{GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog, UserTemplates};
+use crate::widgets::editor::{
+    CompletionState, GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog, UserTemplates,
+};
 use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
@@ -85,6 +87,12 @@ pub struct FoxGardenApp {
     /// made is *which* methods to override, not a class-ambiguity
     /// resolution step that's only sometimes needed.
     override_method_dialog: Option<OverrideMethodDialog>,
+    /// The completion popup for whichever tab is currently focused — see
+    /// `widgets::editor::completion::CompletionState`. Same "one field, not
+    /// one per open tab" shape `override_method_dialog` already uses: only
+    /// the active tab's editor ever renders, so there's never more than one
+    /// popup open at a time regardless of how many tabs are open.
+    completion: Option<CompletionState>,
     /// Synthetic key events (Undo/Redo/Select All) queued by the editor's
     /// right-click menu, drained back into real input at the top of the
     /// very next frame — see `widgets::editor::show`'s doc comment on why
@@ -659,6 +667,7 @@ impl FoxGardenApp {
             generate_dialog: None,
             generate_method_dialog: None,
             override_method_dialog: None,
+            completion: None,
             pending_editor_input: Vec::new(),
             cached_clipboard_text: None,
             side_panel: SidePanelState::default(),
@@ -819,6 +828,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.generate_method_dialog,
                 menu_outcome.override_method_request,
                 &mut self.override_method_dialog,
+                &mut self.completion,
                 menu_outcome.case_conversion_request,
                 menu_outcome.sort_lines_request,
                 menu_outcome.unique_lines_request,

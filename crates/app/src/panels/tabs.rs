@@ -5,8 +5,8 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
-    OverrideMethodDialog, UserTemplates,
+    self, AccessorKind, CaseConversion, CompletionState, GenerateAccessorsDialog, GenerateMethodDialog,
+    GenerateMethodKind, OverrideMethodDialog, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -117,6 +117,7 @@ pub fn show(
     generate_method_dialog: &mut Option<GenerateMethodDialog>,
     override_method_request: bool,
     override_method_dialog: &mut Option<OverrideMethodDialog>,
+    completion: &mut Option<CompletionState>,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -172,6 +173,13 @@ pub fn show(
 
     if let Some(index) = focus_request {
         state.focus_tab(index);
+        // `anchor_byte` is a byte offset into whichever document was
+        // focused when the popup opened — meaningless (or, worse,
+        // coincidentally in-bounds but wrong) once a different tab's
+        // buffer is what's on screen, so switching tabs always closes it,
+        // the same way it would if the file itself changed out from under
+        // an open dialog.
+        *completion = None;
     }
 
     if let Some(index) = close_request {
@@ -233,6 +241,7 @@ pub fn show(
             project,
             override_method_request,
             override_method_dialog,
+            completion,
             case_conversion_request,
             sort_lines_request,
             unique_lines_request,

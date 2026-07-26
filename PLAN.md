@@ -337,7 +337,7 @@ through the same code.
 
 ## Build status (live)
 
-- [ ] Phase 0 — popup shell
+- [x] Phase 0 — popup shell
 - [ ] Phase 1 — word-completion end to end
 - [ ] Phase 2a — Java receiver-type resolution
 - [ ] Phase 2b — Kotlin receiver-type resolution

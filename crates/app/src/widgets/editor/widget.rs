@@ -15,6 +15,7 @@ use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
     generate_accessors, insert_at_class_end,
 };
+use super::completion::{CompletionItem, CompletionKind, CompletionState};
 use super::context_menu;
 #[cfg(test)]
 use super::context_menu::synthetic_shortcut;
@@ -349,6 +350,7 @@ pub fn show(
     project: Option<&Project>,
     override_method_request: bool,
     override_method_dialog: &mut Option<OverrideMethodDialog>,
+    completion: &mut Option<CompletionState>,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -392,6 +394,10 @@ pub fn show(
     // read-only browsing this feature is meant to still allow.
     if doc.read_only {
         strip_mutating_events(ui);
+        // A read-only file can't accept the popup's own insertion anyway
+        // — same "no point offering an edit this file can't take" reasoning
+        // `generate_request`/`override_method_request` already apply below.
+        *completion = None;
     }
     let generate_request = if doc.read_only { None } else { generate_request };
     let generate_method_request = if doc.read_only { None } else { generate_method_request };
@@ -433,6 +439,126 @@ pub fn show(
     // once" shape `TextEditState::store`'s once-per-frame constraint used
     // to force.
     let mut manual_caret: Option<Caret> = None;
+
+    // Debug-only "always populate with 3 dummy candidates on Ctrl+Space"
+    // hook (`PLAN.md` Phase 0 checkpoint) — proves the popup's open/filter/
+    // navigate/accept/dismiss lifecycle works live before Phase 1 wires a
+    // real candidate source (`identifiers_in`) into `CompletionState::
+    // open`. Delete this `if` once Phase 1's real trigger takes over
+    // opening the popup; the interception block below it is permanent.
+    if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() {
+        let ctrl_space_pressed = ui.input(|i| i.key_pressed(Key::Space) && i.modifiers.command);
+        if ctrl_space_pressed
+            && let Some(cursor_char) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary)
+        {
+            let anchor_byte = char_to_byte(&old_text, cursor_char);
+            let dummy_candidates = vec![
+                CompletionItem {
+                    label: "alpha".to_string(),
+                    kind: CompletionKind::Word,
+                    detail: None,
+                },
+                CompletionItem {
+                    label: "beta".to_string(),
+                    kind: CompletionKind::Word,
+                    detail: None,
+                },
+                CompletionItem {
+                    label: "gamma".to_string(),
+                    kind: CompletionKind::Word,
+                    detail: None,
+                },
+            ];
+            *completion = Some(CompletionState::open(anchor_byte, dummy_candidates));
+        }
+    }
+
+    // Completion popup lifecycle (`SPEC.md` §0): while open, Enter/Tab/
+    // ArrowUp/ArrowDown/Escape must be consumed here, before `text_area::
+    // show_interactive` runs (and before every other Tab-consuming block
+    // below it, in particular the live-template interception at
+    // `widget.rs:586-610`-ish) — same "intercept before the widget's own
+    // default" shape that block already establishes for Tab specifically,
+    // just running earlier so this popup always wins the same keystroke.
+    if !multi_cursor_active_at_start
+        && let Some(state) = completion.as_mut()
+        && let Some(cursor_char) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary)
+    {
+        let cursor_byte = char_to_byte(&old_text, cursor_char);
+
+        // Cursor backed up before the anchor (backspacing past the `.`/
+        // word-start that opened the popup, or a left-arrow) — the popup's
+        // own filter slice would go out of range, so this closes it rather
+        // than let anything below try to read `old_text[anchor..cursor]`
+        // with `cursor < anchor`. A cursor that's moved *forward* off the
+        // anchor's line entirely (e.g. an unrelated click) is a known,
+        // narrow gap this simple check doesn't catch — see `SPEC.md` §0's
+        // own "moved off the thing being edited" close rule, which this
+        // approximates rather than fully implements.
+        let closed_by_anchor_or_escape = cursor_byte < state.anchor_byte()
+            || take_event(ui, |e| matches!(e, Event::Key { key: Key::Escape, pressed: true, .. })).is_some();
+
+        if closed_by_anchor_or_escape {
+            *completion = None;
+        } else {
+            let arrow_key = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    Event::Key {
+                        key: key @ (Key::ArrowUp | Key::ArrowDown),
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.is_none() => Some(*key),
+                    _ => None,
+                })
+            });
+
+            if let Some(key) = arrow_key {
+                let removed = take_event(ui, |e| {
+                    matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none())
+                });
+                if removed.is_some() {
+                    let visible_len = state.visible(&old_text, cursor_byte).len();
+                    state.move_selection(if key == Key::ArrowDown { 1 } else { -1 }, visible_len);
+                }
+            } else {
+                let accept_key = ui.input(|i| {
+                    i.events.iter().find_map(|e| match e {
+                        Event::Key {
+                            key: key @ (Key::Enter | Key::Tab),
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } if modifiers.is_none() => Some(*key),
+                        _ => None,
+                    })
+                });
+
+                if let Some(key) = accept_key {
+                    let anchor_byte = state.anchor_byte();
+                    let selected_label = state
+                        .visible(&old_text, cursor_byte)
+                        .get(state.selected())
+                        .map(|item| item.label.clone());
+
+                    if let Some(label) = selected_label {
+                        take_event(ui, |e| {
+                            matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none())
+                        });
+                        let new_text = format!("{}{}{}", &old_text[..anchor_byte], label, &old_text[cursor_byte..]);
+                        let new_cursor_char = byte_to_char(&old_text, anchor_byte) + label.chars().count();
+                        apply_edit(doc, parser, &old_text, &new_text);
+                        manual_caret = Some(Caret::at(new_cursor_char));
+                        old_text = new_text;
+                    }
+                    // Either way — accepted, or nothing left to accept
+                    // (the filtered list emptied out since the last
+                    // frame's paint) — Enter/Tab is done with the popup.
+                    *completion = None;
+                }
+            }
+        }
+    }
 
     // While extra (Ctrl+D) cursors are active, an editing keystroke must
     // land at every active cursor at once, not just the one the widget's own
@@ -1363,6 +1489,24 @@ pub fn show(
         let should_collapse = ui.input(|i| i.events.iter().any(is_multi_cursor_collapse_event));
         if should_collapse {
             doc.extra_selections.clear();
+        }
+    }
+
+    // Completion popup: post-frame close check + render (`SPEC.md` §0).
+    // Reads `shell_out.caret`/`old_text` — the cursor and buffer as they
+    // stand *after* this frame's own typing/edits landed, the same timing
+    // the occurrence highlight below reads them at — so a keystroke that
+    // narrows the filtered list to nothing closes the popup the same frame
+    // it happens, rather than one frame late. `editor_rect` (the gutter+
+    // text row captured above) stands in for "the editor pane" `popup_
+    // position` clamps against.
+    if let Some(state) = completion.as_ref() {
+        match shell_out.caret.map(|c| char_to_byte(&old_text, c.primary)) {
+            Some(cursor_byte) if !state.visible(&old_text, cursor_byte).is_empty() => {
+                let popup_id = egui::Id::new(("completion_popup", widget_id));
+                state.paint(ui, popup_id, &shell_out.base, &doc.buffer, &old_text, cursor_byte, editor_rect);
+            }
+            _ => *completion = None,
         }
     }
 
