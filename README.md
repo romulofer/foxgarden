@@ -2,10 +2,11 @@
 
 A light, native code editor for `.java` and `.kt` files, built entirely in Rust.
 This is checkpoint 1 of a longer-term goal: a full-featured Spring Boot IDE for
-Maven/Kotlin/Java projects. This checkpoint proves out the editor core —
-project tree, tabs, dirty-state tracking, syntax highlighting, and syntax-error
-squiggles — that later checkpoints (Maven awareness, LSP, build/run) will
-layer on top of.
+Maven/Kotlin/Java projects. Checkpoint 1 (released as `v0.2.0`) proves out the
+editor core — project tree, tabs, dirty-state tracking, syntax highlighting,
+syntax-error squiggles, code generation, and live templates. Work is now
+moving on to checkpoint 2 (Maven awareness, LSP, build/run) on the
+`ide-henshin` branch.
 
 Speed is a hard requirement, not a nice-to-have — [Zed](https://zed.dev) is
 the bar FoxGarden holds itself to for startup time, input latency, and idle
@@ -27,7 +28,10 @@ cross-platform "open a terminal here" API to call instead.
   Exit), Settings (Light/Dark theme, Font…, indentation), Tools (Java code
   generation, case conversion), View (Zen Mode, Side Panel, Blinking Cursor,
   Editor Outline, word wrap/whitespace/indent guides/sticky scroll), Help
-  (About)
+  (Live Templates…, About). Every action with a keyboard shortcut shows it
+  right beside the item, in both the menu bar and the editor's right-click
+  context menu
+- Help > About shows the app version, author, and a link to this repo
 - `F11` toggles Zen Mode — hides the menu bar and side panel, leaving just
   the tab bar and editor; `F11` again brings them back
 - Side panel with the open project's file tree, with icons per entry
@@ -61,8 +65,8 @@ cross-platform "open a terminal here" API to call instead.
   recently-closed ones, most-recent first — type to filter, arrow keys +
   Enter or click to jump
 - `Escape` closes whichever dialog is on top (error, delete/close
-  confirmation, About, the getters/setters picker), the same as its
-  Cancel/OK/Close button — never Save or Delete
+  confirmation, About, Live Templates, the getters/setters picker), the
+  same as its Cancel/OK/Close button — never Save or Delete
 - New Java/Kotlin files get boilerplate: a class declaration named after the
   file, plus a `package` line inferred from a Maven/Gradle-style
   `src/main/java|kotlin` (or `src/test/...`) path
@@ -112,10 +116,17 @@ cross-platform "open a terminal here" API to call instead.
   UPPERCASE/lowercase; Tools menu also offers Title Case
 - Smart Home: `Home` toggles between the line's first non-whitespace
   character and column 0; `Shift+Home` does the same while selecting
-- Live templates: type a trigger word (`sout`, `psvm`, `fori` for Java;
-  `sout`, `main` for Kotlin), press Tab with no selection to expand it
+- Live templates: type a trigger word, press Tab with no selection to
+  expand it. Built-in triggers — Global (any file, language or not):
+  `pipe`; Java: `sout`, `souf`, `serr`, `psvm`, `fori`, `iter`, `ifn`,
+  `inn`, `trycatch`; Kotlin: `sout`, `serr`, `main`, `fori`, `ifn`, `inn`,
+  `trycatch`. Help > Live Templates… lists every trigger and lets you add,
+  edit, or remove your own (Global, Java, or Kotlin) — a custom trigger
+  overrides a built-in one of the same name, and custom templates persist
+  across restarts
 - Right-click the editor for Undo, Redo, Cut, Copy, Paste, Select All,
-  Toggle Line Comment, Duplicate Line, and Save
+  Toggle Line Comment, Duplicate Line, and Save — each with its keyboard
+  shortcut shown beside it
 
 ### Java code generation
 
