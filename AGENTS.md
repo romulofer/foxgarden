@@ -100,9 +100,9 @@ ourselves in `crates/app/src/widgets/editor/widget.rs`).
 
 ```sh
 cargo build --workspace        # build everything
-cargo test --workspace         # run all tests (core + syntax + app)
-cargo run -p app               # launch the editor
-cargo test -p <core|syntax|app>  # test a single crate
+cargo test --workspace         # run all tests (core + syntax + foxgarden)
+cargo run -p foxgarden         # launch the editor
+cargo test -p <core|syntax|foxgarden>  # test a single crate
 ```
 
 The first build after a clean checkout, `cargo clean`, or a `Cargo.lock`
@@ -539,7 +539,7 @@ recurring.
   `crates/app/src/widgets/editor/widget/tests.rs` for the pattern.
 - Click-automation tooling (`xdotool`) is not installed by default in a
   fresh environment, but isn't ruled out either — it's been used
-  successfully in this project (launch `cargo run -p app` in the
+  successfully in this project (launch `cargo run -p foxgarden` in the
   background against a real `$DISPLAY`, `wmctrl` to find/activate the
   window, `xdotool mousemove --window <id> x y click 1` / `type` / `key`
   to drive it, `import -window <name> out.png` to screenshot and read the

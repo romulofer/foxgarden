@@ -21,13 +21,13 @@ jobs:
         include:
           - os: ubuntu-latest
             asset_name: foxgarden-linux-x86_64
-            binary_path: target/release/app
+            binary_path: target/release/foxgarden
           - os: windows-latest
             asset_name: foxgarden-windows-x86_64.exe
-            binary_path: target/release/app.exe
+            binary_path: target/release/foxgarden.exe
           - os: macos-latest
             asset_name: foxgarden-macos-aarch64
-            binary_path: target/release/app
+            binary_path: target/release/foxgarden
 
     runs-on: ${{ matrix.os }}
 
@@ -57,7 +57,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --bin app
+        run: cargo build --release --bin foxgarden
 
       # Uploaded under a stable, matrix-independent name so the release job
       # below can download every platform's binary by iterating a known

@@ -177,14 +177,14 @@ you don't have one).
 
 ```sh
 cargo build --workspace
-cargo run -p app
+cargo run -p foxgarden
 ```
 
-For a standalone binary (`target/release/app`), build with `--release`
+For a standalone binary (`target/release/foxgarden`), build with `--release`
 instead:
 
 ```sh
-cargo build --release --bin app
+cargo build --release --bin foxgarden
 ```
 
 ## Testing

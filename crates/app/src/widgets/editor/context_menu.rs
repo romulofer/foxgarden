@@ -78,12 +78,18 @@ pub(super) fn show_context_menu(
     }
 
     response.context_menu(|ui| {
-        if ui.button("Undo").clicked() {
+        if ui
+            .add(egui::Button::new("Undo").shortcut_text("Ctrl+Z"))
+            .clicked()
+        {
             pending_input.push(synthetic_shortcut(Key::Z, false));
             ui.memory_mut(|mem| mem.request_focus(widget_id));
             ui.close();
         }
-        if ui.button("Redo").clicked() {
+        if ui
+            .add(egui::Button::new("Redo").shortcut_text("Ctrl+Shift+Z"))
+            .clicked()
+        {
             pending_input.push(synthetic_shortcut(Key::Z, true));
             ui.memory_mut(|mem| mem.request_focus(widget_id));
             ui.close();
@@ -91,7 +97,13 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui.add_enabled(has_selection, egui::Button::new("Cut")).clicked() {
+        if ui
+            .add_enabled(
+                has_selection,
+                egui::Button::new("Cut").shortcut_text("Ctrl+X"),
+            )
+            .clicked()
+        {
             if let Some(range) = primary_caret.map(|c| c.range()) {
                 let start = char_to_byte(text, range.start);
                 let end = char_to_byte(text, range.end);
@@ -103,7 +115,13 @@ pub(super) fn show_context_menu(
             }
             ui.close();
         }
-        if ui.add_enabled(has_selection, egui::Button::new("Copy")).clicked() {
+        if ui
+            .add_enabled(
+                has_selection,
+                egui::Button::new("Copy").shortcut_text("Ctrl+C"),
+            )
+            .clicked()
+        {
             if let Some(range) = primary_caret.map(|c| c.range()) {
                 let start = char_to_byte(text, range.start);
                 let end = char_to_byte(text, range.end);
@@ -116,7 +134,10 @@ pub(super) fn show_context_menu(
         // that needs `arboard` directly rather than something already
         // exposed by egui — see the cache refresh above this closure.
         if ui
-            .add_enabled(cached_clipboard_text.is_some(), egui::Button::new("Paste"))
+            .add_enabled(
+                cached_clipboard_text.is_some(),
+                egui::Button::new("Paste").shortcut_text("Ctrl+V"),
+            )
             .clicked()
         {
             if let (Some(pasted), Some(range)) = (cached_clipboard_text.as_ref(), primary_caret.map(|c| c.range())) {
@@ -130,7 +151,10 @@ pub(super) fn show_context_menu(
             }
             ui.close();
         }
-        if ui.button("Select All").clicked() {
+        if ui
+            .add(egui::Button::new("Select All").shortcut_text("Ctrl+A"))
+            .clicked()
+        {
             pending_input.push(synthetic_shortcut(Key::A, false));
             ui.memory_mut(|mem| mem.request_focus(widget_id));
             ui.close();
@@ -138,7 +162,10 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui.button("Toggle Line Comment").clicked() {
+        if ui
+            .add(egui::Button::new("Toggle Line Comment").shortcut_text("Ctrl+/"))
+            .clicked()
+        {
             if let Some(range) = primary_caret.map(|c| c.range()) {
                 let (commented, new_start, new_end) = toggle_line_comments(text, range.start, range.end);
                 apply_edit(doc, parser, text, &commented);
@@ -150,7 +177,10 @@ pub(super) fn show_context_menu(
             }
             ui.close();
         }
-        if ui.button("Duplicate Line").clicked() {
+        if ui
+            .add(egui::Button::new("Duplicate Line").shortcut_text("Alt+Shift+Up/Down"))
+            .clicked()
+        {
             if let Some(cursor_char) = cursor_char {
                 let (duplicated, new_cursor) = duplicate_line(text, cursor_char);
                 apply_edit(doc, parser, text, &duplicated);
@@ -162,7 +192,13 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui.add_enabled(doc.is_dirty(), egui::Button::new("Save")).clicked() {
+        if ui
+            .add_enabled(
+                doc.is_dirty(),
+                egui::Button::new("Save").shortcut_text("Ctrl+S"),
+            )
+            .clicked()
+        {
             crate::panels::tabs::save_document(doc, parser, last_error);
             // `Document::save` trims trailing whitespace, which can change
             // `doc.buffer` out from under `text` — every other branch in

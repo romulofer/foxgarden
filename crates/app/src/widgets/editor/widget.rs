@@ -24,7 +24,7 @@ use super::painting::{
     paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides, paint_line_numbers,
     paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
-use super::templates::{self, expand, find_template, word_before_cursor};
+use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
 use super::text_offset::{byte_to_char, char_to_byte};
 use crate::style::fonts::EditorFont;
@@ -357,6 +357,7 @@ pub fn show(
     last_error: &mut Option<String>,
     pending_input: &mut Vec<Event>,
     cached_clipboard_text: &mut Option<String>,
+    custom_templates: &UserTemplates,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -586,12 +587,13 @@ pub fn show(
                     let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
-                    let templates = match doc.language {
-                        Some(Language::Java) => templates::JAVA_TEMPLATES,
-                        Some(Language::Kotlin) => templates::KOTLIN_TEMPLATES,
-                        _ => &[],
+                    let (templates, custom): (&[templates::Template], &[templates::UserTemplate]) = match doc.language
+                    {
+                        Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
+                        Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
+                        _ => (&[], &[]),
                     };
-                    let template_body = find_template(templates, &old_text[word_start_byte..word_end_byte]);
+                    let template_body = find_expansion(templates, custom, &old_text[word_start_byte..word_end_byte]);
 
                     if template_body.is_some() || !indent_settings.use_tabs {
                         let removed = take_event(ui, |e| {

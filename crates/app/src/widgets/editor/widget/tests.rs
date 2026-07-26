@@ -84,6 +84,7 @@ fn sticky_scroll_enabled_renders_without_panicking() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -127,6 +128,7 @@ fn renders_highlighted_valid_file_without_panicking() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -176,6 +178,7 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
                 &mut None,
                 &mut Vec::new(),
                 &mut None,
+                &UserTemplates::default(),
             );
         });
     };
@@ -257,6 +260,7 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -293,6 +297,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -337,6 +342,7 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
                 &mut None,
                 &mut Vec::new(),
                 &mut None,
+                &UserTemplates::default(),
             );
         });
     };
@@ -386,6 +392,7 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -448,6 +455,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -488,6 +496,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -554,6 +563,7 @@ fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalParser>, eve
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -616,6 +626,7 @@ fn focused_frame_with_selection(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -670,6 +681,7 @@ fn focused_frame_with_selection(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -713,6 +725,7 @@ fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -762,6 +775,7 @@ fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -815,6 +829,7 @@ fn focused_frame_with_extra_selections(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -857,6 +872,7 @@ fn focused_frame_with_extra_selections(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -904,6 +920,7 @@ fn focused_frame_with_indent_settings(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -944,6 +961,7 @@ fn focused_frame_with_indent_settings(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -990,6 +1008,7 @@ fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -1039,6 +1058,7 @@ fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -1571,6 +1591,7 @@ fn run_frame_reading_selection(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::peek_caret(ctx, id)
@@ -1614,6 +1635,7 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(
@@ -1701,6 +1723,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(
@@ -1785,6 +1808,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
@@ -1834,6 +1858,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -1894,6 +1919,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     let widget_rect = ctx
@@ -1937,6 +1963,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 &mut None,
                 &mut Vec::new(),
                 &mut None,
+                &UserTemplates::default(),
             );
         });
     }
@@ -2068,6 +2095,7 @@ fn focused_frame_with_generate_request(
             &mut last_error,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     last_error
@@ -2115,6 +2143,7 @@ fn focused_frame_with_selection_and_case_request(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -2165,6 +2194,7 @@ fn focused_frame_with_selection_and_case_request(
             &mut last_error,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     last_error
@@ -2211,6 +2241,7 @@ fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -2248,6 +2279,7 @@ fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 }
@@ -2519,6 +2551,7 @@ fn focused_frame_with_generate_method_request(
             &mut last_error,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     last_error
@@ -2678,6 +2711,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(
@@ -2716,6 +2750,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut last_error,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -2771,6 +2806,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(
@@ -2808,6 +2844,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -2857,6 +2894,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut None,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
     text_area::set_caret(
@@ -2895,6 +2933,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut last_error,
             &mut Vec::new(),
             &mut None,
+            &UserTemplates::default(),
         );
     });
 
@@ -3054,6 +3093,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 &mut None,
                 pending_input,
                 &mut None,
+                &UserTemplates::default(),
             );
         });
     };

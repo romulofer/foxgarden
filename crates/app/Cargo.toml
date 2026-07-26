@@ -1,7 +1,9 @@
 [package]
-name = "app"
+name = "foxgarden"
 version = "0.1.0"
 edition = "2024"
+description = "A light, native code editor for Java and Kotlin, built in Rust."
+repository = "https://github.com/romulofer/foxgarden"
 
 [dependencies]
 arboard = "3.6.1"

@@ -3,6 +3,7 @@
 //! on the code under test. Behavior-identical to the inline module it replaced.
 
 use super::*;
+use crate::widgets::editor::UserTemplate;
 use eframe::Storage as _;
 use std::collections::HashMap;
 
@@ -226,6 +227,13 @@ fn persisted_settings_round_trip() {
         cursor_blink: false,
         show_editor_outline: false,
     };
+    let saved_templates = UserTemplates {
+        java: vec![UserTemplate {
+            trigger: "myown".to_string(),
+            body: "custom body".to_string(),
+        }],
+        kotlin: vec![],
+    };
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -235,6 +243,7 @@ fn persisted_settings_round_trip() {
         saved_view,
         275.0,
         false,
+        &saved_templates,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -244,6 +253,7 @@ fn persisted_settings_round_trip() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut custom_templates = UserTemplates::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -253,6 +263,7 @@ fn persisted_settings_round_trip() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut custom_templates,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -262,6 +273,8 @@ fn persisted_settings_round_trip() {
     assert_eq!(view_settings, saved_view);
     assert_eq!(side_panel_width, 275.0);
     assert!(!side_panel_visible);
+    assert_eq!(custom_templates.java, saved_templates.java);
+    assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
 }
 
 #[test]
@@ -284,6 +297,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut UserTemplates::default(),
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -316,6 +330,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut UserTemplates::default(),
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -342,6 +357,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut UserTemplates::default(),
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);

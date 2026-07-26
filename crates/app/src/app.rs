@@ -17,7 +17,7 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-use crate::widgets::editor::{GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog};
+use crate::widgets::editor::{GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog, UserTemplates};
 use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
@@ -44,6 +44,8 @@ const CURSOR_BLINK_KEY: &str = "cursor_blink";
 const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
+const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
+const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -136,6 +138,13 @@ pub struct FoxGardenApp {
     /// overlay painting — display-only, unlike `indent_settings`, which
     /// governs editing behavior.
     view_settings: ViewSettings,
+    /// User-added live templates (Help > Live Templates…), alongside the
+    /// built-in `widgets::editor::JAVA_TEMPLATES`/`KOTLIN_TEMPLATES` — a
+    /// personal editor preference like `editor_font`/`indent_settings`, not
+    /// project-specific data like `RunConfig` (see that type's own doc
+    /// comment on the distinction), so it's persisted the same way as every
+    /// other Settings value here rather than under a project's `.foxgarden/`.
+    custom_templates: UserTemplates,
     /// Hides the menu bar and side panel, leaving just the tab bar and
     /// editor. Toggled by `F11` (checked every frame, independent of
     /// whether the menu bar is currently shown — otherwise there'd be no
@@ -506,6 +515,7 @@ fn restore_settings(
     view_settings: &mut ViewSettings,
     side_panel_width: &mut f32,
     side_panel_visible: &mut bool,
+    custom_templates: &mut UserTemplates,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -554,6 +564,12 @@ fn restore_settings(
     if let Some(visible) = storage.get_string(SIDE_PANEL_VISIBLE_KEY) {
         *side_panel_visible = visible == "true";
     }
+    if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
+        custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
+    }
+    if let Some(saved) = storage.get_string(CUSTOM_KOTLIN_TEMPLATES_KEY) {
+        custom_templates.kotlin = crate::widgets::editor::parse_user_templates(&saved);
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -570,6 +586,7 @@ fn persist_settings(
     view_settings: ViewSettings,
     side_panel_width: f32,
     side_panel_visible: bool,
+    custom_templates: &UserTemplates,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -584,6 +601,14 @@ fn persist_settings(
     storage.set_string(SHOW_EDITOR_OUTLINE_KEY, view_settings.show_editor_outline.to_string());
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
+    storage.set_string(
+        CUSTOM_JAVA_TEMPLATES_KEY,
+        crate::widgets::editor::serialize_user_templates(&custom_templates.java),
+    );
+    storage.set_string(
+        CUSTOM_KOTLIN_TEMPLATES_KEY,
+        crate::widgets::editor::serialize_user_templates(&custom_templates.kotlin),
+    );
 }
 
 impl FoxGardenApp {
@@ -598,6 +623,7 @@ impl FoxGardenApp {
         let mut view_settings = ViewSettings::default();
         let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
         let mut side_panel_visible = true;
+        let mut custom_templates = UserTemplates::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -610,6 +636,7 @@ impl FoxGardenApp {
                 &mut view_settings,
                 &mut side_panel_width,
                 &mut side_panel_visible,
+                &mut custom_templates,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -638,6 +665,7 @@ impl FoxGardenApp {
             dark_mode,
             indent_settings,
             view_settings,
+            custom_templates,
             zen_mode: false,
             last_error,
             file_watcher,
@@ -721,6 +749,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.last_error,
+                        &mut self.custom_templates,
                     )
                 })
                 .inner;
@@ -790,6 +819,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.last_error,
                 &mut self.pending_editor_input,
                 &mut self.cached_clipboard_text,
+                &self.custom_templates,
             );
         });
 
@@ -817,6 +847,7 @@ impl eframe::App for FoxGardenApp {
             self.view_settings,
             self.side_panel_width,
             self.side_panel_visible,
+            &self.custom_templates,
         );
     }
 }

@@ -1,5 +1,5 @@
 use fg_core::EditorState;
-use syntax::IncrementalParser;
+use syntax::{IncrementalParser, Scope};
 
 use super::side_panel::SidePanelState;
 use super::tabs;
@@ -7,7 +7,9 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-use crate::widgets::editor::{AccessorKind, CaseConversion, GenerateMethodKind};
+use crate::widgets::editor::{
+    AccessorKind, CaseConversion, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES, UserTemplate, UserTemplates,
+};
 use crate::widgets::modal::show_modal;
 
 /// Persistent state for menu-triggered dialogs.
@@ -16,6 +18,15 @@ pub struct MenuBarState {
     about_open: bool,
     /// Settings > Font… — see `show_font_settings`.
     font_settings_open: bool,
+    /// Help > Live Templates… — see `show_live_templates`.
+    live_templates_open: bool,
+    /// A new custom Java template being typed, not yet added to
+    /// `UserTemplates::java` — see `show_user_templates_editor`.
+    new_java_trigger: String,
+    new_java_body: String,
+    /// Same as `new_java_trigger`/`new_java_body`, for Kotlin.
+    new_kotlin_trigger: String,
+    new_kotlin_body: String,
 }
 
 /// What the Tools menu wants the editor to do this frame — at most one of
@@ -59,6 +70,7 @@ pub fn show(
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     last_error: &mut Option<String>,
+    custom_templates: &mut UserTemplates,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -265,14 +277,10 @@ pub fn show(
         });
 
         ui.menu_button("View", |ui| {
-            if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
+            if checkbox_with_shortcut(ui, zen_mode, "Zen Mode", "F11").changed() {
                 ui.close();
             }
-            if ui
-                .checkbox(side_panel_visible, "Side Panel")
-                .on_hover_text("Ctrl+B")
-                .changed()
-            {
+            if checkbox_with_shortcut(ui, side_panel_visible, "Side Panel", "Ctrl+B").changed() {
                 ui.close();
             }
             ui.separator();
@@ -327,6 +335,10 @@ pub fn show(
         });
 
         ui.menu_button("Help", |ui| {
+            if ui.button("Live Templates…").clicked() {
+                menu.live_templates_open = true;
+                ui.close();
+            }
             if ui.button("About").clicked() {
                 menu.about_open = true;
                 ui.close();
@@ -352,8 +364,22 @@ pub fn show(
 
     show_about(ui, menu);
     show_font_settings(ui, menu, editor_font, font_size);
+    show_live_templates(ui, menu, *dark_mode, custom_templates);
 
     outcome
+}
+
+/// Draws a checkbox with its keyboard shortcut right-aligned in weak text,
+/// the same visual as `egui::Button::shortcut_text` — `egui::Checkbox` has
+/// no such builder method of its own, but it does accept the same `Atoms`
+/// tuple shape `shortcut_text` builds internally (label, then a growing
+/// spacer, then the weak shortcut text), so building that tuple by hand gets
+/// the identical look.
+fn checkbox_with_shortcut(ui: &mut egui::Ui, checked: &mut bool, label: &str, shortcut: &str) -> egui::Response {
+    ui.add(egui::Checkbox::new(
+        checked,
+        (label, egui::Atom::grow(), egui::RichText::new(shortcut).weak()),
+    ))
 }
 
 /// Settings > Font… — family and size together in one dialog, rather than a
@@ -395,11 +421,172 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
     }
 }
 
+/// Help > Live Templates… — a lookup reference for the built-in snippet
+/// triggers `templates::expand` recognizes (type the trigger word, press Tab
+/// with no selection, get the expansion in its place), plus an editor for a
+/// user's own custom triggers (`custom_templates`, threaded all the way
+/// down to `widgets::editor::widget::show`'s Tab-expansion lookup, which
+/// checks these before the built-ins — see `templates::find_expansion`).
+/// Lists both languages' built-in tables unconditionally rather than only
+/// the active tab's language: this is a reference dialog a user opens to
+/// remember what's available, not a context-sensitive one, so showing just
+/// one language when e.g. no file is open, or a non-Java/Kotlin file is
+/// active, would leave it with nothing to show at all.
+fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, custom_templates: &mut UserTemplates) {
+    let outcome = show_modal(
+        ui,
+        "live_templates_dialog",
+        menu.live_templates_open.then_some(()),
+        |ui, ()| {
+            ui.set_min_width(380.0);
+            ui.heading("Live Templates");
+            ui.label("Type a trigger below, then press Tab with no selection to expand it.");
+            ui.label("Add your own below — a custom trigger overrides a built-in one of the same name.");
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+                ui.strong("Java");
+                ui.add_space(4.0);
+                show_template_group(ui, JAVA_TEMPLATES, dark_mode);
+                show_user_templates_editor(
+                    ui,
+                    "java_user_templates",
+                    &mut custom_templates.java,
+                    &mut menu.new_java_trigger,
+                    &mut menu.new_java_body,
+                    dark_mode,
+                );
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                ui.strong("Kotlin");
+                ui.add_space(4.0);
+                show_template_group(ui, KOTLIN_TEMPLATES, dark_mode);
+                show_user_templates_editor(
+                    ui,
+                    "kotlin_user_templates",
+                    &mut custom_templates.kotlin,
+                    &mut menu.new_kotlin_trigger,
+                    &mut menu.new_kotlin_body,
+                    dark_mode,
+                );
+            });
+            ui.separator();
+            ui.button("Close").clicked()
+        },
+    );
+    if let Some((close_clicked, escape_pressed)) = outcome
+        && (close_clicked || escape_pressed)
+    {
+        menu.live_templates_open = false;
+    }
+}
+
+/// One language's built-in trigger/expansion cards for `show_live_templates`
+/// — each template gets its own bordered `ui.group` card (rather than a
+/// striped grid row) so a multi-line expansion like `psvm`'s stays visually
+/// separated from its neighbors instead of blending into the next row's
+/// stripe. The trigger is colored with the same "Function" highlight
+/// `color_for_scope` uses in the editor itself, so it reads as a callable
+/// name at a glance rather than plain body text. The `${cursor}` marker
+/// `templates::expand` strips out at expansion time is shown here as `|`,
+/// standing in for where the cursor lands, since a user reading this table
+/// never sees the literal marker text.
+fn show_template_group(ui: &mut egui::Ui, templates: &[crate::widgets::editor::Template], dark_mode: bool) {
+    let trigger_color = theme::color_for_scope(Scope::Function, dark_mode);
+    for template in templates {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(template.trigger).monospace().strong().color(trigger_color));
+            ui.label(egui::RichText::new(template.body.replace("${cursor}", "|")).monospace());
+        });
+        ui.add_space(6.0);
+    }
+}
+
+/// The editable "Your Templates" section beneath one language's built-in
+/// cards: an editable trigger/body pair per existing custom template (with
+/// a "✗" to remove it) plus a blank trigger/body row at the bottom that
+/// appends a new one to `templates` on "+ Add" — same "type into scratch
+/// fields, `mem::take` them into a new entry" shape as `run_configs`' own
+/// environment-variable adder. `id_prefix` keeps the two languages'
+/// multiline text edits (which need a stable `egui::Id` to track cursor/
+/// selection state across frames) from colliding, since both would
+/// otherwise share the same auto-generated id derived from position alone.
+fn show_user_templates_editor(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    templates: &mut Vec<UserTemplate>,
+    new_trigger: &mut String,
+    new_body: &mut String,
+    dark_mode: bool,
+) {
+    let trigger_color = theme::color_for_scope(Scope::Function, dark_mode);
+    ui.add_space(4.0);
+    ui.weak("Your Templates");
+    ui.add_space(4.0);
+
+    let mut remove_index = None;
+    for (index, template) in templates.iter_mut().enumerate() {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut template.trigger)
+                        .id_salt((id_prefix, index))
+                        .font(egui::TextStyle::Monospace)
+                        .text_color(trigger_color)
+                        .desired_width(100.0),
+                );
+                if ui.small_button("✗").on_hover_text("Remove").clicked() {
+                    remove_index = Some(index);
+                }
+            });
+            ui.add(
+                egui::TextEdit::multiline(&mut template.body)
+                    .id_salt((id_prefix, "body", index))
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(1)
+                    .desired_width(ui.available_width()),
+            );
+        });
+        ui.add_space(6.0);
+    }
+    if let Some(index) = remove_index {
+        templates.remove(index);
+    }
+
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(new_trigger)
+                .id_salt((id_prefix, "new_trigger"))
+                .hint_text("trigger")
+                .font(egui::TextStyle::Monospace)
+                .desired_width(100.0),
+        );
+        ui.add(
+            egui::TextEdit::singleline(new_body)
+                .id_salt((id_prefix, "new_body"))
+                .hint_text("expansion — ${cursor} marks where the cursor lands")
+                .font(egui::TextStyle::Monospace),
+        );
+        if ui.button("+ Add").clicked() && !new_trigger.is_empty() {
+            templates.push(UserTemplate {
+                trigger: std::mem::take(new_trigger),
+                body: std::mem::take(new_body),
+            });
+        }
+    });
+}
+
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
     let outcome = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
         ui.heading("FoxGarden");
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-        ui.label("A light code editor for Java and Kotlin.");
+        ui.label(env!("CARGO_PKG_DESCRIPTION"));
+        ui.label("By Rômulo Fernandes Evangelista");
+        ui.hyperlink_to("github.com/romulofer/foxgarden", env!("CARGO_PKG_REPOSITORY"));
         ui.separator();
         ui.label("Shortcuts:");
         ui.label("Ctrl+S — save the active tab");
@@ -414,6 +601,7 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
         ui.label("Tools menu — generate just getters/setters, or Title Case");
         ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
+        ui.label("Help > Live Templates… — full list of snippet triggers");
         // Plain "Up"/"Down" rather than `↑`/`↓` glyphs — the bundled
         // font set (Hack + Ubuntu-Light + the emoji fonts `style::
         // fonts::install` leaves untouched, see that fn's doc comment)

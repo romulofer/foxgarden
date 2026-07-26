@@ -6,7 +6,7 @@ use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
     self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
-    OverrideMethodDialog,
+    OverrideMethodDialog, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -125,6 +125,7 @@ pub fn show(
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
     cached_clipboard_text: &mut Option<String>,
+    custom_templates: &UserTemplates,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -240,6 +241,7 @@ pub fn show(
             last_error,
             pending_editor_input,
             cached_clipboard_text,
+            custom_templates,
         );
     });
 }
