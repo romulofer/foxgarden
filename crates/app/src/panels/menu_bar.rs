@@ -64,10 +64,7 @@ pub fn show(
 
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
-            if ui
-                .add(egui::Button::new("New File…").shortcut_text("Ctrl+N"))
-                .clicked()
-            {
+            if ui.add(egui::Button::new("New File…").shortcut_text("Ctrl+N")).clicked() {
                 if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
                     side_panel.begin_new_file(root);
                 }
@@ -147,10 +144,7 @@ pub fn show(
                 ui.add_enabled_ui(!indent_settings.use_tabs, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Width");
-                        ui.add(
-                            egui::DragValue::new(&mut indent_settings.width)
-                                .range(INDENT_WIDTH_RANGE),
-                        );
+                        ui.add(egui::DragValue::new(&mut indent_settings.width).range(INDENT_WIDTH_RANGE));
                     });
                 });
             });
@@ -202,10 +196,7 @@ pub fn show(
                 ui.close();
             }
             if ui
-                .add_enabled(
-                    has_active_tab,
-                    egui::Button::new("Generate equals() and hashCode()"),
-                )
+                .add_enabled(has_active_tab, egui::Button::new("Generate equals() and hashCode()"))
                 .clicked()
             {
                 outcome.generate_method_request = Some(GenerateMethodKind::EqualsAndHashCode);
@@ -265,10 +256,7 @@ pub fn show(
 
         ui.menu_button("Run", |ui| {
             if ui
-                .add_enabled(
-                    state.project.is_some(),
-                    egui::Button::new("Edit Configurations…"),
-                )
+                .add_enabled(state.project.is_some(), egui::Button::new("Edit Configurations…"))
                 .clicked()
             {
                 outcome.open_run_configs_request = true;
@@ -277,11 +265,7 @@ pub fn show(
         });
 
         ui.menu_button("View", |ui| {
-            if ui
-                .checkbox(zen_mode, "Zen Mode")
-                .on_hover_text("F11")
-                .changed()
-            {
+            if ui.checkbox(zen_mode, "Zen Mode").on_hover_text("F11").changed() {
                 ui.close();
             }
             if ui
@@ -292,10 +276,7 @@ pub fn show(
                 ui.close();
             }
             ui.separator();
-            if ui
-                .checkbox(&mut view_settings.word_wrap, "Word Wrap")
-                .changed()
-            {
+            if ui.checkbox(&mut view_settings.word_wrap, "Word Wrap").changed() {
                 ui.close();
             }
             if ui
@@ -332,10 +313,7 @@ pub fn show(
             }
             ui.separator();
             let has_active_tab = state.active_tab.is_some();
-            if ui
-                .add_enabled(has_active_tab, egui::Button::new("Fold All"))
-                .clicked()
-            {
+            if ui.add_enabled(has_active_tab, egui::Button::new("Fold All")).clicked() {
                 outcome.fold_all_request = true;
                 ui.close();
             }
@@ -404,11 +382,7 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
                 // a drag-to-adjust slider and, on click, an editable number
                 // box, so typing an exact size still works alongside the
                 // drag.
-                ui.add(
-                    egui::DragValue::new(font_size)
-                        .range(FONT_SIZE_RANGE)
-                        .speed(0.25),
-                );
+                ui.add(egui::DragValue::new(font_size).range(FONT_SIZE_RANGE).speed(0.25));
             });
             ui.separator();
             ui.button("Close").clicked()
@@ -422,43 +396,38 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
 }
 
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
-    let outcome = show_modal(
-        ui,
-        "about_dialog",
-        menu.about_open.then_some(()),
-        |ui, ()| {
-            ui.heading("FoxGarden");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-            ui.label("A light code editor for Java and Kotlin.");
-            ui.separator();
-            ui.label("Shortcuts:");
-            ui.label("Ctrl+S — save the active tab");
-            ui.label("Ctrl+Shift+T — reopen the last closed tab");
-            ui.label("Middle-click a tab — close it");
-            ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
-            ui.label("Ctrl+B — toggle the side panel");
-            ui.label("Ctrl+J — join the current line with the next one");
-            ui.label("Ctrl+E — go to a recent file");
-            ui.label("Ctrl+/ — toggle line comments");
-            ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
-            ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
-            ui.label("Tools menu — generate just getters/setters, or Title Case");
-            ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
-            // Plain "Up"/"Down" rather than `↑`/`↓` glyphs — the bundled
-            // font set (Hack + Ubuntu-Light + the emoji fonts `style::
-            // fonts::install` leaves untouched, see that fn's doc comment)
-            // has no glyph for the plain Arrows-block `U+2191`/`U+2193`, so
-            // those rendered as tofu; every other line in this list is
-            // already plain shortcut text, not a symbol.
-            ui.label("Alt+Up/Down — move the current line up/down");
-            ui.label("Alt+Shift+Up/Down — duplicate the current line");
-            ui.label("Home — jump to first non-whitespace, then column 0");
-            ui.label("Ctrl+N — new file");
-            ui.label("Esc — close the current dialog");
-            ui.separator();
-            ui.button("Close").clicked()
-        },
-    );
+    let outcome = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
+        ui.heading("FoxGarden");
+        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+        ui.label("A light code editor for Java and Kotlin.");
+        ui.separator();
+        ui.label("Shortcuts:");
+        ui.label("Ctrl+S — save the active tab");
+        ui.label("Ctrl+Shift+T — reopen the last closed tab");
+        ui.label("Middle-click a tab — close it");
+        ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
+        ui.label("Ctrl+B — toggle the side panel");
+        ui.label("Ctrl+J — join the current line with the next one");
+        ui.label("Ctrl+E — go to a recent file");
+        ui.label("Ctrl+/ — toggle line comments");
+        ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
+        ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
+        ui.label("Tools menu — generate just getters/setters, or Title Case");
+        ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
+        // Plain "Up"/"Down" rather than `↑`/`↓` glyphs — the bundled
+        // font set (Hack + Ubuntu-Light + the emoji fonts `style::
+        // fonts::install` leaves untouched, see that fn's doc comment)
+        // has no glyph for the plain Arrows-block `U+2191`/`U+2193`, so
+        // those rendered as tofu; every other line in this list is
+        // already plain shortcut text, not a symbol.
+        ui.label("Alt+Up/Down — move the current line up/down");
+        ui.label("Alt+Shift+Up/Down — duplicate the current line");
+        ui.label("Home — jump to first non-whitespace, then column 0");
+        ui.label("Ctrl+N — new file");
+        ui.label("Esc — close the current dialog");
+        ui.separator();
+        ui.button("Close").clicked()
+    });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
     {

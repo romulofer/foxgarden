@@ -1,13 +1,22 @@
 ; Minimal highlight query for checkpoint 1's fixed theme:
 ; keyword / string / comment / type / function.
 
-; "break", "continue", and "reified" are deliberately excluded: they exist as
-; literal strings in the grammar's grammar.js source, but don't survive as
-; matchable node types in the compiled parser this crate ships (verified by
-; bisecting each keyword through `tree_sitter::Query::new` individually —
-; those three are the only ones that fail with "Invalid node type"). A
-; grammar.js literal isn't a reliable signal that a query can match it;
-; check node-types.json (or bisect like this) instead of trusting the source.
+; "break" and "continue" are deliberately excluded: they exist as literal
+; strings in the grammar's grammar.js source, but don't survive as matchable
+; node types in the compiled parser this crate ships (verified by bisecting
+; each keyword through `tree_sitter::Query::new` individually — those two are
+; the only ones left that fail with "Invalid node type"). A grammar.js
+; literal isn't a reliable signal that a query can match it; check
+; node-types.json (or bisect like this) instead of trusting the source.
+;
+; "reified" used to be on this exclusion list for the same reason — bare
+; `"reified" @keyword` fails to compile — but grammar.js wraps it in its own
+; `reification_modifier` rule (`reification_modifier: _ => 'reified'`), and
+; unlike the bare literal, `(reification_modifier)` *does* compile and
+; matches the same token (TECHNICAL_DEBT.md #3's "richer modifier-keyword
+; coverage" candidate, ported via this grammar's node-type wrapper rather
+; than Zed's `fwcd`-grammar node names, same methodology as the enum-entry
+; fix below).
 [
   "abstract" "actual" "annotation" "as" "as?" "by" "catch" "class"
   "companion" "const" "constructor" "crossinline" "data" "delegate" "do"
@@ -19,6 +28,8 @@
   "this" "this@" "super" "super@" "throw" "try" "typealias" "val" "value"
   "var" "vararg" "when" "where" "while"
 ] @keyword
+
+(reification_modifier) @keyword
 
 ; `true`, `false`, and `null` aren't distinct literal node types in this
 ; grammar (unlike Java's `(true)`/`(false)`/`(null_literal)`) — they parse as

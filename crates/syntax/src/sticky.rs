@@ -27,7 +27,9 @@ pub fn enclosing_scope_starts(tree: &Tree, byte_offset: usize, language: Languag
     }
 
     let mut starts = Vec::new();
-    let mut node = tree.root_node().named_descendant_for_byte_range(byte_offset, byte_offset);
+    let mut node = tree
+        .root_node()
+        .named_descendant_for_byte_range(byte_offset, byte_offset);
     while let Some(current) = node {
         if kinds.contains(&current.kind()) {
             starts.push(current.start_byte());
@@ -89,7 +91,10 @@ mod tests {
         // line anyway; here we just confirm a top-of-file offset doesn't
         // report a phantom deeper scope.
         let starts = enclosing_scope_starts(&tree, 0, Language::Java);
-        assert!(starts.iter().all(|&s| s == 0), "only the class (starting at 0) may enclose byte 0");
+        assert!(
+            starts.iter().all(|&s| s == 0),
+            "only the class (starting at 0) may enclose byte 0"
+        );
     }
 
     #[test]

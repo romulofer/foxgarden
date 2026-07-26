@@ -16,11 +16,18 @@
 
 use std::ops::Range;
 
+mod cache;
 mod history;
 mod input;
 mod render;
 mod shell;
 
+#[expect(
+    unused_imports,
+    reason = "PLAN.md Phase 0 prerequisite; no widget.rs-side cache needs a hidden-ranges key yet"
+)]
+pub(super) use cache::hash_hidden;
+pub(super) use cache::hash_rope_content;
 pub(super) use input::Caret;
 pub(super) use render::{HighlightSpan, TextAreaOutput};
 pub(super) use shell::{char_offset_for_pos, peek_caret, set_caret, show as show_interactive};
@@ -30,12 +37,7 @@ pub(super) use shell::{char_offset_for_pos, peek_caret, set_caret, show as show_
 /// with each row `row_height` tall and `total_rows` rows total. Clamped to
 /// `0..total_rows`. This is the whole point of virtualization: only these rows
 /// get shaped and painted, no matter how big the buffer is.
-pub(super) fn visible_rows(
-    scroll_y: f32,
-    viewport_h: f32,
-    row_height: f32,
-    total_rows: usize,
-) -> Range<usize> {
+pub(super) fn visible_rows(scroll_y: f32, viewport_h: f32, row_height: f32, total_rows: usize) -> Range<usize> {
     if row_height <= 0.0 || total_rows == 0 {
         return 0..0;
     }
@@ -60,10 +62,7 @@ pub(super) fn content_height(total_rows: usize, row_height: f32) -> f32 {
 /// needs an index into the *already-visible* `row_galleys` slice instead, a
 /// different domain, so it doesn't reuse this); exercised directly by
 /// `text_area/tests.rs` today.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Phase 3 fold-gutter hit-testing API surface")
-)]
+#[cfg_attr(not(test), expect(dead_code, reason = "Phase 3 fold-gutter hit-testing API surface"))]
 pub(super) fn row_at_y(y: f32, content_top: f32, row_height: f32, total_rows: usize) -> usize {
     if row_height <= 0.0 || total_rows == 0 {
         return 0;
@@ -106,19 +105,13 @@ pub(super) fn prefix_rows(row_counts: &[usize]) -> Vec<usize> {
 /// its own, so it's naturally skipped without `FoldMap` needing a separate
 /// pass — it contributes no visible-row band for a viewport position to
 /// land in.
-pub(super) fn visible_lines(
-    scroll_y: f32,
-    viewport_h: f32,
-    row_height: f32,
-    prefix: &[usize],
-) -> Range<usize> {
+pub(super) fn visible_lines(scroll_y: f32, viewport_h: f32, row_height: f32, prefix: &[usize]) -> Range<usize> {
     if row_height <= 0.0 || prefix.len() < 2 {
         return 0..0;
     }
     let total_rows = *prefix.last().expect("checked len >= 2 above");
     let first_row = ((scroll_y / row_height).floor().max(0.0) as usize).min(total_rows);
-    let last_row =
-        (((scroll_y + viewport_h) / row_height).ceil().max(0.0) as usize).min(total_rows);
+    let last_row = (((scroll_y + viewport_h) / row_height).ceil().max(0.0) as usize).min(total_rows);
     // Scrolled at-or-past the end (or a degenerate zero/negative-height
     // viewport): nothing to show, same as `visible_rows`'s own `first.min(
     // total)..last.min(total)` collapsing to an empty range in that case.
@@ -129,9 +122,7 @@ pub(super) fn visible_lines(
     // Last line whose block *starts* at-or-before `first_row` — the line
     // `first_row` itself falls inside, since a real (non-folded) line's
     // block is never empty.
-    let start_line = prefix
-        .partition_point(|&r| r <= first_row)
-        .saturating_sub(1);
+    let start_line = prefix.partition_point(|&r| r <= first_row).saturating_sub(1);
     // First line whose block starts *at or after* `last_row` — everything
     // before that has at least a sliver inside `[first_row, last_row)`.
     let end_line = prefix.partition_point(|&r| r < last_row);

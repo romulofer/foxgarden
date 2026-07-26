@@ -145,7 +145,11 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut GoToFileState) ->
         }
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
             for (index, path) in candidates.iter().enumerate() {
-                let label = path.strip_prefix(&project.root).unwrap_or(path).to_string_lossy().into_owned();
+                let label = path
+                    .strip_prefix(&project.root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .into_owned();
                 let is_selected = index == switcher.selected;
                 let response = ui.selectable_label(is_selected, label);
                 if response.clicked() || (is_selected && enter_pressed) {
@@ -197,22 +201,38 @@ mod tests {
     fn fuzzy_score_ranks_a_contiguous_match_above_a_scattered_one() {
         let contiguous = fuzzy_score("User.java", "User").unwrap();
         let scattered = fuzzy_score("UnrelatedStuffEndingR.java", "User").unwrap();
-        assert!(contiguous > scattered, "contiguous ({contiguous}) should outscore scattered ({scattered})");
+        assert!(
+            contiguous > scattered,
+            "contiguous ({contiguous}) should outscore scattered ({scattered})"
+        );
     }
 
     #[test]
     fn fuzzy_score_ranks_an_earlier_match_above_a_later_one() {
         let earlier = fuzzy_score("UserController.java", "User").unwrap();
         let later = fuzzy_score("AbstractBaseUserController.java", "User").unwrap();
-        assert!(earlier > later, "earlier match ({earlier}) should outscore later match ({later})");
+        assert!(
+            earlier > later,
+            "earlier match ({earlier}) should outscore later match ({later})"
+        );
     }
 
     fn file(path: &str) -> FileNode {
-        FileNode { path: PathBuf::from(path), name: PathBuf::from(path).file_name().unwrap().to_string_lossy().into_owned(), kind: FileKind::File, children: Vec::new() }
+        FileNode {
+            path: PathBuf::from(path),
+            name: PathBuf::from(path).file_name().unwrap().to_string_lossy().into_owned(),
+            kind: FileKind::File,
+            children: Vec::new(),
+        }
     }
 
     fn dir(path: &str, children: Vec<FileNode>) -> FileNode {
-        FileNode { path: PathBuf::from(path), name: PathBuf::from(path).file_name().unwrap().to_string_lossy().into_owned(), kind: FileKind::Dir, children }
+        FileNode {
+            path: PathBuf::from(path),
+            name: PathBuf::from(path).file_name().unwrap().to_string_lossy().into_owned(),
+            kind: FileKind::Dir,
+            children,
+        }
     }
 
     #[test]
@@ -265,7 +285,11 @@ mod tests {
 
     #[test]
     fn toggle_opens_and_resets_query_and_selection() {
-        let mut switcher = GoToFileState { open: false, query: "leftover".to_string(), selected: 3 };
+        let mut switcher = GoToFileState {
+            open: false,
+            query: "leftover".to_string(),
+            selected: 3,
+        };
 
         switcher.toggle();
 

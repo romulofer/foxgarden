@@ -12,11 +12,11 @@ mod sticky;
 
 pub use brackets::bracket_match;
 pub use diagnostics::syntax_errors;
-pub use document_parser::{byte_to_point, diff_edit, IncrementalParser};
-pub use fields::{java_classes_with_fields, ClassFields, FieldInfo};
-pub use folding::{foldable_ranges, FoldRange};
-pub use highlight::{highlight_spans, Scope};
-pub use methods::{enclosing_class, methods_in_type, superclass_name, MethodSignature};
+pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
+pub use fields::{ClassFields, FieldInfo, java_classes_with_fields};
+pub use folding::{FoldRange, foldable_ranges};
+pub use highlight::{Scope, highlight_spans};
+pub use methods::{MethodSignature, enclosing_class, methods_in_type, superclass_name};
 pub use selection::expand_selection;
 pub use sticky::enclosing_scope_starts;
 pub use tree_sitter::{InputEdit, Point, Tree};

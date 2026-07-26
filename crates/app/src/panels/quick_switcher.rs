@@ -99,7 +99,10 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut QuickSwitcherStat
         }
         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
             for (index, path) in candidates.iter().enumerate() {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let is_selected = index == switcher.selected;
                 let response = ui.selectable_label(is_selected, name);
                 if response.clicked() || (is_selected && enter_pressed) {
@@ -135,7 +138,10 @@ mod tests {
 
         let files = recent_files(&state);
 
-        assert_eq!(files, vec![dir.path().join("Open.java"), dir.path().join("Closed.java")]);
+        assert_eq!(
+            files,
+            vec![dir.path().join("Open.java"), dir.path().join("Closed.java")]
+        );
     }
 
     #[test]
@@ -147,7 +153,10 @@ mod tests {
 
         let files = recent_files(&state);
 
-        assert_eq!(files, vec![dir.path().join("Second.java"), dir.path().join("First.java")]);
+        assert_eq!(
+            files,
+            vec![dir.path().join("Second.java"), dir.path().join("First.java")]
+        );
     }
 
     #[test]
@@ -177,7 +186,11 @@ mod tests {
 
     #[test]
     fn toggle_opens_and_resets_query_and_selection() {
-        let mut switcher = QuickSwitcherState { open: false, query: "leftover".to_string(), selected: 3 };
+        let mut switcher = QuickSwitcherState {
+            open: false,
+            query: "leftover".to_string(),
+            selected: 3,
+        };
 
         switcher.toggle();
 

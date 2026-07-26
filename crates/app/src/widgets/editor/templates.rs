@@ -19,15 +19,30 @@ pub struct Template {
 /// itself is what this covers; a user-editable template list is a
 /// follow-up, not blocked by this shape.
 pub const JAVA_TEMPLATES: &[Template] = &[
-    Template { trigger: "sout", body: "System.out.println(${cursor});" },
-    Template { trigger: "psvm", body: "public static void main(String[] args) {\n    ${cursor}\n}" },
-    Template { trigger: "fori", body: "for (int i = 0; i < ${cursor}; i++) {\n    \n}" },
+    Template {
+        trigger: "sout",
+        body: "System.out.println(${cursor});",
+    },
+    Template {
+        trigger: "psvm",
+        body: "public static void main(String[] args) {\n    ${cursor}\n}",
+    },
+    Template {
+        trigger: "fori",
+        body: "for (int i = 0; i < ${cursor}; i++) {\n    \n}",
+    },
 ];
 
 /// Built-in Kotlin live templates.
 pub const KOTLIN_TEMPLATES: &[Template] = &[
-    Template { trigger: "sout", body: "println(${cursor})" },
-    Template { trigger: "main", body: "fun main() {\n    ${cursor}\n}" },
+    Template {
+        trigger: "sout",
+        body: "println(${cursor})",
+    },
+    Template {
+        trigger: "main",
+        body: "fun main() {\n    ${cursor}\n}",
+    },
 ];
 
 /// The maximal run of identifier characters (letters, digits, underscore)
@@ -48,7 +63,10 @@ pub fn word_before_cursor(text: &str, cursor_char: usize) -> Range<usize> {
 /// deliberately memorable mnemonics, not a fuzzy-search target — returning
 /// its body if found.
 pub fn find_template(templates: &[Template], word: &str) -> Option<&'static str> {
-    templates.iter().find(|template| template.trigger == word).map(|template| template.body)
+    templates
+        .iter()
+        .find(|template| template.trigger == word)
+        .map(|template| template.body)
 }
 
 /// Replaces `text[word_range]` (the just-typed trigger) with `template_body`
@@ -61,7 +79,9 @@ pub fn expand(text: &str, word_range: Range<usize>, template_body: &str) -> (Str
 
     let cursor_offset = template_body
         .find(CURSOR_MARKER)
-        .map_or(template_body.chars().count(), |byte_pos| template_body[..byte_pos].chars().count());
+        .map_or(template_body.chars().count(), |byte_pos| {
+            template_body[..byte_pos].chars().count()
+        });
     let expansion = template_body.replace(CURSOR_MARKER, "");
 
     let new_text = format!("{}{expansion}{}", &text[..word_start_byte], &text[word_end_byte..]);
@@ -77,7 +97,10 @@ mod tests {
     fn word_before_cursor_finds_the_trailing_identifier() {
         let text = "System.out.println(sout";
         let expected_start = text.find("sout").unwrap();
-        assert_eq!(word_before_cursor(text, text.chars().count()), expected_start..text.chars().count());
+        assert_eq!(
+            word_before_cursor(text, text.chars().count()),
+            expected_start..text.chars().count()
+        );
     }
 
     #[test]
@@ -92,7 +115,10 @@ mod tests {
 
     #[test]
     fn find_template_matches_by_exact_trigger() {
-        assert_eq!(find_template(JAVA_TEMPLATES, "sout"), Some("System.out.println(${cursor});"));
+        assert_eq!(
+            find_template(JAVA_TEMPLATES, "sout"),
+            Some("System.out.println(${cursor});")
+        );
         assert_eq!(find_template(JAVA_TEMPLATES, "so"), None);
         assert_eq!(find_template(JAVA_TEMPLATES, ""), None);
     }
@@ -119,7 +145,11 @@ mod tests {
 
     #[test]
     fn expand_multiline_template_lands_cursor_on_the_indented_body_line() {
-        let (text, cursor) = expand("psvm", 0..4, "public static void main(String[] args) {\n    ${cursor}\n}");
+        let (text, cursor) = expand(
+            "psvm",
+            0..4,
+            "public static void main(String[] args) {\n    ${cursor}\n}",
+        );
         assert_eq!(text, "public static void main(String[] args) {\n    \n}");
         assert_eq!(&text[cursor..], "\n}");
     }

@@ -61,10 +61,7 @@ pub(super) fn paint_diagnostics(
         })
         .collect();
 
-    let mut queries: Vec<usize> = spans
-        .iter()
-        .flat_map(|&(_, start, end)| [start, end])
-        .collect();
+    let mut queries: Vec<usize> = spans.iter().flat_map(|&(_, start, end)| [start, end]).collect();
     queries.sort_unstable();
     queries.dedup();
     let char_offset_for = char_offsets_for(text, &queries);
@@ -184,10 +181,8 @@ pub(super) fn paint_occurrence_highlights(
     let fill = theme::occurrence_highlight(ui.visuals().dark_mode);
 
     for range in occurrences {
-        let (Some(start_rect), Some(end_rect)) = (
-            out.char_rect(buffer, range.start),
-            out.char_rect(buffer, range.end),
-        ) else {
+        let (Some(start_rect), Some(end_rect)) = (out.char_rect(buffer, range.start), out.char_rect(buffer, range.end))
+        else {
             continue;
         };
         let rect = egui::Rect::from_min_max(
@@ -217,10 +212,8 @@ pub(super) fn paint_bracket_match(
     for range in [pair.0, pair.1] {
         let char_start = buffer.byte_to_char(range.start.min(buffer.len_bytes()));
         let char_end = buffer.byte_to_char(range.end.min(buffer.len_bytes()));
-        let (Some(start_rect), Some(end_rect)) = (
-            out.char_rect(buffer, char_start),
-            out.char_rect(buffer, char_end),
-        ) else {
+        let (Some(start_rect), Some(end_rect)) = (out.char_rect(buffer, char_start), out.char_rect(buffer, char_end))
+        else {
             continue;
         };
         let rect = egui::Rect::from_min_max(
@@ -251,8 +244,7 @@ pub(super) fn paint_whitespace(ui: &egui::Ui, out: &TextAreaOutput, buffer: &Rop
             match c {
                 ' ' => {
                     let rect = galley.pos_from_cursor(CCursor::new(col));
-                    let center =
-                        egui::pos2(out.content_origin.x + rect.center().x, y + rect.center().y);
+                    let center = egui::pos2(out.content_origin.x + rect.center().x, y + rect.center().y);
                     painter.circle_filled(center, 1.5, color);
                 }
                 '\t' => {
@@ -262,10 +254,7 @@ pub(super) fn paint_whitespace(ui: &egui::Ui, out: &TextAreaOutput, buffer: &Rop
                     let x_start = out.content_origin.x + start.left() + 2.0;
                     let x_end = (out.content_origin.x + end.left() - 2.0).max(x_start + 2.0);
                     painter.line_segment(
-                        [
-                            egui::pos2(x_start, row_center_y),
-                            egui::pos2(x_end, row_center_y),
-                        ],
+                        [egui::pos2(x_start, row_center_y), egui::pos2(x_end, row_center_y)],
                         Stroke::new(1.0, color),
                     );
                     painter.line_segment(
@@ -297,12 +286,7 @@ pub(super) fn paint_whitespace(ui: &egui::Ui, out: &TextAreaOutput, buffer: &Rop
 /// directly from `buffer`) instead of walking `text` char-by-char to
 /// rediscover each row's line — a row **is** a logical line while word-wrap
 /// is off (Phase 2/2h's scope; Phase 4 revisits this for wrapped rows).
-pub(super) fn paint_indent_guides(
-    ui: &egui::Ui,
-    out: &TextAreaOutput,
-    buffer: &Rope,
-    indent_settings: IndentSettings,
-) {
+pub(super) fn paint_indent_guides(ui: &egui::Ui, out: &TextAreaOutput, buffer: &Rope, indent_settings: IndentSettings) {
     let painter = ui.painter();
     let color = theme::structure(ui.visuals().dark_mode);
     let unit_width = if indent_settings.use_tabs {
@@ -326,10 +310,7 @@ pub(super) fn paint_indent_guides(
             let level_char = level * unit_width;
             let pos = galley.pos_from_cursor(CCursor::new(level_char));
             let x = out.content_origin.x + pos.left();
-            painter.line_segment(
-                [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
-                Stroke::new(1.0, color),
-            );
+            painter.line_segment([egui::pos2(x, y_top), egui::pos2(x, y_bottom)], Stroke::new(1.0, color));
         }
     }
 }
@@ -389,10 +370,7 @@ pub(super) fn paint_sticky_scroll(
     // One separator line under the whole pinned stack.
     let divider_y = clip.top() + header_lines.len() as f32 * row_height;
     painter.line_segment(
-        [
-            egui::pos2(clip.left(), divider_y),
-            egui::pos2(clip.right(), divider_y),
-        ],
+        [egui::pos2(clip.left(), divider_y), egui::pos2(clip.right(), divider_y)],
         Stroke::new(1.0, theme::structure(dark_mode)),
     );
 }

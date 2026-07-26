@@ -62,9 +62,11 @@ mod tests {
     fn run_modal(guard: Option<()>, warm_up: bool, events: Vec<egui::Event>) -> Option<((), bool)> {
         let ctx = egui::Context::default();
         ctx.set_fonts(egui::FontDefinitions::empty());
-        let show = |ui: &mut egui::Ui| show_modal(ui, "test_modal", guard, |ui, ()| {
-            ui.label("hello");
-        });
+        let show = |ui: &mut egui::Ui| {
+            show_modal(ui, "test_modal", guard, |ui, ()| {
+                ui.label("hello");
+            })
+        };
 
         if warm_up {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -72,7 +74,10 @@ mod tests {
             });
         }
 
-        let raw_input = egui::RawInput { events, ..Default::default() };
+        let raw_input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
         let mut outcome = None;
         let _ = ctx.run_ui(raw_input, |ui| {
             outcome = show(ui);

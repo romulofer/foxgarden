@@ -69,7 +69,11 @@ impl Document {
             .extension()
             .and_then(|ext| ext.to_str())
             .and_then(Language::from_extension)
-            .or_else(|| path.file_name().and_then(|n| n.to_str()).and_then(Language::from_filename));
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(Language::from_filename)
+            });
 
         // The side panel lets any file in the tree be clicked — including
         // build artifacts (`target/*.class`, jars) and binary assets, since

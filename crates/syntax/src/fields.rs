@@ -120,8 +120,16 @@ mod tests {
         assert_eq!(
             classes[0].fields,
             vec![
-                FieldInfo { name: "x".to_string(), java_type: "int".to_string(), is_final: false },
-                FieldInfo { name: "y".to_string(), java_type: "int".to_string(), is_final: false },
+                FieldInfo {
+                    name: "x".to_string(),
+                    java_type: "int".to_string(),
+                    is_final: false
+                },
+                FieldInfo {
+                    name: "y".to_string(),
+                    java_type: "int".to_string(),
+                    is_final: false
+                },
             ]
         );
     }
@@ -133,7 +141,11 @@ mod tests {
 
         assert_eq!(
             classes[0].fields,
-            vec![FieldInfo { name: "name".to_string(), java_type: "String".to_string(), is_final: true }]
+            vec![FieldInfo {
+                name: "name".to_string(),
+                java_type: "String".to_string(),
+                is_final: true
+            }]
         );
     }
 
@@ -144,7 +156,11 @@ mod tests {
 
         assert_eq!(
             classes[0].fields,
-            vec![FieldInfo { name: "id".to_string(), java_type: "int".to_string(), is_final: false }]
+            vec![FieldInfo {
+                name: "id".to_string(),
+                java_type: "int".to_string(),
+                is_final: false
+            }]
         );
     }
 
@@ -156,8 +172,16 @@ mod tests {
         assert_eq!(
             classes[0].fields,
             vec![
-                FieldInfo { name: "x".to_string(), java_type: "int".to_string(), is_final: false },
-                FieldInfo { name: "y".to_string(), java_type: "int".to_string(), is_final: false },
+                FieldInfo {
+                    name: "x".to_string(),
+                    java_type: "int".to_string(),
+                    is_final: false
+                },
+                FieldInfo {
+                    name: "y".to_string(),
+                    java_type: "int".to_string(),
+                    is_final: false
+                },
             ]
         );
     }
@@ -191,9 +215,23 @@ mod tests {
 
         assert_eq!(classes.len(), 2);
         assert_eq!(classes[0].name, "Outer");
-        assert_eq!(classes[0].fields, vec![FieldInfo { name: "outerField".to_string(), java_type: "int".to_string(), is_final: false }]);
+        assert_eq!(
+            classes[0].fields,
+            vec![FieldInfo {
+                name: "outerField".to_string(),
+                java_type: "int".to_string(),
+                is_final: false
+            }]
+        );
         assert_eq!(classes[1].name, "Inner");
-        assert_eq!(classes[1].fields, vec![FieldInfo { name: "innerField".to_string(), java_type: "int".to_string(), is_final: false }]);
+        assert_eq!(
+            classes[1].fields,
+            vec![FieldInfo {
+                name: "innerField".to_string(),
+                java_type: "int".to_string(),
+                is_final: false
+            }]
+        );
     }
 
     #[test]

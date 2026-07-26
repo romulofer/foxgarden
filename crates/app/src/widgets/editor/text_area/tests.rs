@@ -176,16 +176,8 @@ fn foldmap_handles_multiple_ranges() {
 
     let expected_visible = [0, 1, 4, 5, 8, 9];
     for (visual, &logical) in expected_visible.iter().enumerate() {
-        assert_eq!(
-            map.to_logical(visual),
-            logical,
-            "visual {visual} -> logical"
-        );
-        assert_eq!(
-            map.to_visual(logical),
-            Some(visual),
-            "logical {logical} -> visual"
-        );
+        assert_eq!(map.to_logical(visual), logical, "visual {visual} -> logical");
+        assert_eq!(map.to_visual(logical), Some(visual), "logical {logical} -> visual");
     }
     // Every hidden line reports None.
     for hidden_line in [2, 3, 6, 7] {
@@ -216,24 +208,19 @@ fn readonly_render_shapes_only_visible_rows_not_the_whole_buffer() {
     let mut shaped = 0;
     let mut in_bounds = true;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                let out = super::render::show_readonly(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    egui::Color32::WHITE,
-                    &[],
-                );
-                shaped = out.row_galleys.len();
-                in_bounds = out
-                    .row_galleys
-                    .iter()
-                    .all(|(logical, _)| *logical < buffer.len_lines())
-                    && out.row_galleys.len() == out.visible_rows.len();
-            });
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            let out = super::render::show_readonly(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                egui::Color32::WHITE,
+                &[],
+            );
+            shaped = out.row_galleys.len();
+            in_bounds = out.row_galleys.iter().all(|(logical, _)| *logical < buffer.len_lines())
+                && out.row_galleys.len() == out.visible_rows.len();
+        });
     });
 
     assert!(
@@ -244,10 +231,7 @@ fn readonly_render_shapes_only_visible_rows_not_the_whole_buffer() {
     // The load-bearing invariant: a bounded viewport shapes strictly fewer
     // rows than the whole 500-line buffer. (Exact count depends on the test
     // harness's row height, so this stays a "not everything" bound.)
-    assert!(
-        shaped < 500,
-        "virtualization must not shape all 500 rows, got {shaped}"
-    );
+    assert!(shaped < 500, "virtualization must not shape all 500 rows, got {shaped}");
 }
 
 #[test]
@@ -264,25 +248,23 @@ fn highlight_spans_bake_their_color_and_leave_the_rest_placeholder() {
 
     let mut sections = Vec::new();
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                let out = super::render::layout_visible(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    &[],
-                    &spans,
-                );
-                let (_, galley) = &out.row_galleys[0];
-                sections = galley
-                    .job
-                    .sections
-                    .iter()
-                    .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
-                    .collect();
-            });
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            let out = super::render::layout_visible(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &spans,
+            );
+            let (_, galley) = &out.row_galleys[0];
+            sections = galley
+                .job
+                .sections
+                .iter()
+                .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
+                .collect();
+        });
     });
 
     assert_eq!(
@@ -307,25 +289,23 @@ fn a_line_with_no_matching_spans_still_shapes_a_single_placeholder_section() {
 
     let mut sections = Vec::new();
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                let out = super::render::layout_visible(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    &[],
-                    &spans,
-                );
-                let (_, galley) = &out.row_galleys[0];
-                sections = galley
-                    .job
-                    .sections
-                    .iter()
-                    .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
-                    .collect();
-            });
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            let out = super::render::layout_visible(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &spans,
+            );
+            let (_, galley) = &out.row_galleys[0];
+            sections = galley
+                .job
+                .sections
+                .iter()
+                .map(|s| (s.byte_range.start.0..s.byte_range.end.0, s.format.color))
+                .collect();
+        });
     });
 
     assert_eq!(sections, vec![(0..5, egui::Color32::PLACEHOLDER)]);
@@ -338,38 +318,44 @@ fn char_rect_locates_visible_chars_and_skips_offscreen_ones() {
     let ctx = egui::Context::default();
 
     let mut on_screen_has_rect = false;
+    let mut last_visible_has_rect = false;
     let mut off_screen_is_none = false;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                let out = super::render::show_readonly(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    egui::Color32::WHITE,
-                    &[],
-                );
-                // A char on the first shaped row resolves to a rect...
-                if let Some((first_line, _)) = out.row_galleys.first() {
-                    let char0 = buffer.line_to_char(*first_line);
-                    on_screen_has_rect = out.char_rect(&buffer, char0).is_some();
-                }
-                // ...while a char on a line far below the viewport does not.
-                let far = buffer.line_to_char(400);
-                off_screen_is_none = out.char_rect(&buffer, far).is_none();
-            });
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            let out = super::render::show_readonly(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                egui::Color32::WHITE,
+                &[],
+            );
+            // A char on the first shaped row resolves to a rect...
+            if let Some((first_line, _)) = out.row_galleys.first() {
+                let char0 = buffer.line_to_char(*first_line);
+                on_screen_has_rect = out.char_rect(&buffer, char0).is_some();
+            }
+            // ...and so does one on the *last* shaped row — `char_rect`'s
+            // binary search (SPEC.md §8) over `row_galleys` needs to
+            // resolve correctly at both ends of the visible range, not
+            // just index 0 (which a broken search could satisfy by
+            // accident).
+            if let Some((last_line, _)) = out.row_galleys.last() {
+                let char0 = buffer.line_to_char(*last_line);
+                last_visible_has_rect = out.char_rect(&buffer, char0).is_some();
+            }
+            // ...while a char on a line far below the viewport does not.
+            let far = buffer.line_to_char(400);
+            off_screen_is_none = out.char_rect(&buffer, far).is_none();
+        });
     });
 
+    assert!(on_screen_has_rect, "a visible char should resolve to a screen rect");
     assert!(
-        on_screen_has_rect,
-        "a visible char should resolve to a screen rect"
+        last_visible_has_rect,
+        "the last visible row's char should also resolve to a screen rect"
     );
-    assert!(
-        off_screen_is_none,
-        "an off-screen char should resolve to None"
-    );
+    assert!(off_screen_is_none, "an off-screen char should resolve to None");
 }
 
 #[test]
@@ -378,19 +364,17 @@ fn readonly_render_handles_an_empty_buffer() {
     let ctx = egui::Context::default();
     let mut rows = usize::MAX;
     let _ = ctx.run_ui(sized_input(), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(100.0)
-            .show(ui, |ui| {
-                let out = super::render::show_readonly(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    egui::Color32::WHITE,
-                    &[],
-                );
-                rows = out.row_galleys.len();
-            });
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            let out = super::render::show_readonly(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                egui::Color32::WHITE,
+                &[],
+            );
+            rows = out.row_galleys.len();
+        });
     });
     // An empty buffer is one (empty) logical line — never a panic, never a
     // negative/huge row count.

@@ -70,9 +70,7 @@ impl EditorState {
                 let _ = active;
                 None
             }
-            Some(active) if active == index => {
-                Some(index.min(self.open_tabs.len() - 1))
-            }
+            Some(active) if active == index => Some(index.min(self.open_tabs.len() - 1)),
             Some(active) if active > index => Some(active - 1),
             Some(active) => Some(active),
         };
@@ -233,7 +231,15 @@ mod tests {
                 .all(|doc| doc.path().file_name().unwrap() != "F0.java"),
             "the oldest closed tab should have been evicted to stay under the cap"
         );
-        let most_recent = state.closed_tabs.last().unwrap().path().file_name().unwrap().to_string_lossy().into_owned();
+        let most_recent = state
+            .closed_tabs
+            .last()
+            .unwrap()
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(most_recent, format!("F{MAX_CLOSED_TABS}.java"));
     }
 

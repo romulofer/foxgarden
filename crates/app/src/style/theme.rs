@@ -62,7 +62,11 @@ const DARK_STICKY_BACKGROUND: Color32 = Color32::from_rgb(45, 48, 56);
 const LIGHT_STICKY_BACKGROUND: Color32 = Color32::from_rgb(235, 235, 238);
 
 pub fn sticky_background(dark_mode: bool) -> Color32 {
-    if dark_mode { DARK_STICKY_BACKGROUND } else { LIGHT_STICKY_BACKGROUND }
+    if dark_mode {
+        DARK_STICKY_BACKGROUND
+    } else {
+        LIGHT_STICKY_BACKGROUND
+    }
 }
 
 /// The editor's default (non-highlighted) text color, adapted for legibility
@@ -85,11 +89,7 @@ pub fn error_squiggle(dark_mode: bool) -> Color32 {
 /// glance-able reference, not something that should compete with the code
 /// itself for attention.
 pub fn line_number(dark_mode: bool) -> Color32 {
-    if dark_mode {
-        DARK_LINE_NUMBER
-    } else {
-        LIGHT_LINE_NUMBER
-    }
+    if dark_mode { DARK_LINE_NUMBER } else { LIGHT_LINE_NUMBER }
 }
 
 pub fn occurrence_highlight(dark_mode: bool) -> Color32 {

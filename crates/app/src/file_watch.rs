@@ -76,12 +76,18 @@ mod tests {
 
     #[test]
     fn reconcile_reloads_transparently_when_not_dirty() {
-        assert_eq!(reconcile(false, "old", Some("new")), ReconcileOutcome::ReloadTransparently);
+        assert_eq!(
+            reconcile(false, "old", Some("new")),
+            ReconcileOutcome::ReloadTransparently
+        );
     }
 
     #[test]
     fn reconcile_flags_a_conflict_when_dirty() {
-        assert_eq!(reconcile(true, "my edits", Some("their edits")), ReconcileOutcome::Conflict);
+        assert_eq!(
+            reconcile(true, "my edits", Some("their edits")),
+            ReconcileOutcome::Conflict
+        );
     }
 
     #[test]
@@ -114,7 +120,10 @@ mod tests {
     fn watched_dirs_for_covers_every_distinct_parent() {
         let paths = [PathBuf::from("/proj/src/A.java"), PathBuf::from("/proj/test/B.java")];
         let dirs = watched_dirs_for(paths.iter().map(|p| p.as_path()));
-        assert_eq!(dirs, HashSet::from([PathBuf::from("/proj/src"), PathBuf::from("/proj/test")]));
+        assert_eq!(
+            dirs,
+            HashSet::from([PathBuf::from("/proj/src"), PathBuf::from("/proj/test")])
+        );
     }
 
     #[test]

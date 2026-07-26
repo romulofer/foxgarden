@@ -97,9 +97,10 @@ pub fn show(
                 dialog = dialog.set_directory(root);
             }
             if let Some(folder) = dialog.pick_folder()
-                && let Err(err) = state.open_project(folder) {
-                    outcome.error = Some(format!("failed to open project: {err}"));
-                }
+                && let Err(err) = state.open_project(folder)
+            {
+                outcome.error = Some(format!("failed to open project: {err}"));
+            }
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if ui.button("📄").on_hover_text("New File").clicked() {
@@ -118,11 +119,7 @@ pub fn show(
         // rather than a separate row or a menu entry buried away from the
         // other panel-level actions it sits beside.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button("◀")
-                .on_hover_text("Collapse Side Panel (Ctrl+B)")
-                .clicked()
-            {
+            if ui.button("◀").on_hover_text("Collapse Side Panel (Ctrl+B)").clicked() {
                 *side_panel_visible = false;
             }
         });
@@ -140,7 +137,14 @@ pub fn show(
         // into `panel` itself for it).
         let should_focus_rename = std::mem::take(&mut panel.focus_rename);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            render_node(ui, &project.tree, &mut panel.rename_draft, should_focus_rename, &panel.clipboard, &mut actions);
+            render_node(
+                ui,
+                &project.tree,
+                &mut panel.rename_draft,
+                should_focus_rename,
+                &panel.clipboard,
+                &mut actions,
+            );
         });
     } else {
         ui.weak("No folder open");
@@ -155,9 +159,10 @@ pub fn show(
     // would be a pointless full directory read on every single file click.
     if (created || pasted || outcome.renamed.is_some() || outcome.deleted.is_some())
         && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
-            && let Err(err) = state.open_project(root) {
-                outcome.error = Some(format!("failed to refresh project tree: {err}"));
-            }
+        && let Err(err) = state.open_project(root)
+    {
+        outcome.error = Some(format!("failed to refresh project tree: {err}"));
+    }
 
     outcome
 }
@@ -299,21 +304,22 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
         panel.rename_draft = None;
     }
     if let Some(new_name) = actions.confirm_rename
-        && let Some((old_path, _)) = panel.rename_draft.take() {
-            let new_name = new_name.trim();
-            let new_path = old_path.parent().map(|p| p.join(new_name));
-            match new_path {
-                _ if new_name.is_empty() => outcome.error = Some("rename failed: empty name".to_string()),
-                Some(new_path) if new_path.exists() => {
-                    outcome.error = Some(format!("rename failed: {} already exists", new_path.display()));
-                }
-                Some(new_path) => match std::fs::rename(&old_path, &new_path) {
-                    Ok(()) => outcome.renamed = Some((old_path, new_path)),
-                    Err(err) => outcome.error = Some(format!("failed to rename: {err}")),
-                },
-                None => outcome.error = Some("rename failed: no parent directory".to_string()),
+        && let Some((old_path, _)) = panel.rename_draft.take()
+    {
+        let new_name = new_name.trim();
+        let new_path = old_path.parent().map(|p| p.join(new_name));
+        match new_path {
+            _ if new_name.is_empty() => outcome.error = Some("rename failed: empty name".to_string()),
+            Some(new_path) if new_path.exists() => {
+                outcome.error = Some(format!("rename failed: {} already exists", new_path.display()));
             }
+            Some(new_path) => match std::fs::rename(&old_path, &new_path) {
+                Ok(()) => outcome.renamed = Some((old_path, new_path)),
+                Err(err) => outcome.error = Some(format!("failed to rename: {err}")),
+            },
+            None => outcome.error = Some("rename failed: no parent directory".to_string()),
         }
+    }
 
     if let Some(path) = actions.delete_request {
         panel.pending_delete = Some(path);
@@ -529,7 +535,10 @@ fn render_node(
                 // "onto" a file doesn't have an obvious destination the way
                 // pasting into a folder does, so `FileKind::File` below
                 // gets no Paste entry at all.
-                if ui.add_enabled(clipboard.is_some(), egui::Button::new("Paste")).clicked() {
+                if ui
+                    .add_enabled(clipboard.is_some(), egui::Button::new("Paste"))
+                    .clicked()
+                {
                     actions.paste_request = Some(node.path.clone());
                     ui.close();
                 }

@@ -69,8 +69,7 @@ pub(super) fn find_next_occurrence(
 
     let max_start = hn - nn;
     let after_char = after_char.min(max_start + 1);
-    let matches_at =
-        |start: usize| (0..nn).all(|i| chars_eq(haystack[start + i], needle_chars[i], case_sensitive));
+    let matches_at = |start: usize| (0..nn).all(|i| chars_eq(haystack[start + i], needle_chars[i], case_sensitive));
 
     (after_char..=max_start)
         .chain(0..after_char)
@@ -122,8 +121,7 @@ pub(super) fn find_all_occurrences(text: &str, needle: &str, case_sensitive: boo
     if nn == 0 || nn > hn {
         return Vec::new();
     }
-    let matches_at =
-        |start: usize| (0..nn).all(|i| chars_eq(haystack[start + i], needle_chars[i], case_sensitive));
+    let matches_at = |start: usize| (0..nn).all(|i| chars_eq(haystack[start + i], needle_chars[i], case_sensitive));
 
     let mut result = Vec::new();
     let mut start = 0;
@@ -279,7 +277,10 @@ mod tests {
     fn find_next_unclaimed_occurrence_all_claimed_returns_none_without_looping_forever() {
         #[allow(clippy::single_range_in_vec_init)] // a genuine one-entry Vec<Range<usize>>, not a range of a Vec
         let claimed = vec![0..3];
-        assert_eq!(find_next_unclaimed_occurrence("foo bar", "foo", 3, &claimed, true), None);
+        assert_eq!(
+            find_next_unclaimed_occurrence("foo bar", "foo", 3, &claimed, true),
+            None
+        );
     }
 
     #[test]
@@ -292,7 +293,10 @@ mod tests {
 
     #[test]
     fn find_all_occurrences_finds_every_match_in_order() {
-        assert_eq!(find_all_occurrences("foo bar foo baz foo", "foo", true), vec![0..3, 8..11, 16..19]);
+        assert_eq!(
+            find_all_occurrences("foo bar foo baz foo", "foo", true),
+            vec![0..3, 8..11, 16..19]
+        );
     }
 
     #[test]
@@ -302,7 +306,10 @@ mod tests {
 
     #[test]
     fn find_all_occurrences_case_insensitive_finds_every_casing() {
-        assert_eq!(find_all_occurrences("foo FOO Foo", "foo", false), vec![0..3, 4..7, 8..11]);
+        assert_eq!(
+            find_all_occurrences("foo FOO Foo", "foo", false),
+            vec![0..3, 4..7, 8..11]
+        );
     }
 
     #[test]
@@ -350,8 +357,7 @@ mod tests {
     #[test]
     fn apply_multi_edit_insert_replaces_two_non_empty_selections() {
         let selections = vec![0..3, 8..11];
-        let (text, positions) =
-            apply_multi_edit("aaa bbb ccc", &selections, &MultiEditOp::Insert("X".to_string()));
+        let (text, positions) = apply_multi_edit("aaa bbb ccc", &selections, &MultiEditOp::Insert("X".to_string()));
         assert_eq!(text, "X bbb X");
         assert_eq!(positions, vec![1, 7]);
     }

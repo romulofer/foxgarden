@@ -127,7 +127,11 @@ pub enum GenerateMethodKind {
 /// uses. Still valid Java with zero fields (an empty, parameterless
 /// constructor), so this doesn't special-case that.
 fn constructor_for(class_name: &str, fields: &[FieldInfo], indent_unit: &str) -> String {
-    let params = fields.iter().map(|f| format!("{} {}", f.java_type, f.name)).collect::<Vec<_>>().join(", ");
+    let params = fields
+        .iter()
+        .map(|f| format!("{} {}", f.java_type, f.name))
+        .collect::<Vec<_>>()
+        .join(", ");
     let assignments: String = fields
         .iter()
         .map(|f| format!("{indent_unit}{indent_unit}this.{name} = {name};\n", name = f.name))
@@ -232,7 +236,12 @@ impl GenerateMethodDialog {
     /// `GenerateAccessorsDialog::new`.
     pub fn new(classes: Vec<ClassFields>, kind: GenerateMethodKind) -> Self {
         let checked = vec![true; classes[0].fields.len()];
-        Self { kind, classes, selected_class: 0, checked }
+        Self {
+            kind,
+            classes,
+            selected_class: 0,
+            checked,
+        }
     }
 
     pub fn classes(&self) -> &[ClassFields] {
@@ -307,7 +316,10 @@ pub fn show_generate_method_dialog(
         if dialog.classes().len() > 1 {
             ui.label("Generate for:");
             for (index, class) in dialog.classes().iter().enumerate() {
-                if ui.radio(index == dialog.selected_class(), class.name.as_str()).clicked() {
+                if ui
+                    .radio(index == dialog.selected_class(), class.name.as_str())
+                    .clicked()
+                {
                     new_selection = Some(index);
                 }
             }
@@ -374,7 +386,12 @@ impl GenerateAccessorsDialog {
     /// gracefully.
     pub fn new(classes: Vec<ClassFields>, kind: AccessorKind) -> Self {
         let checked = vec![true; classes[0].fields.len()];
-        Self { kind, classes, selected_class: 0, checked }
+        Self {
+            kind,
+            classes,
+            selected_class: 0,
+            checked,
+        }
     }
 
     pub fn classes(&self) -> &[ClassFields] {
@@ -459,7 +476,10 @@ pub fn show_generate_accessors_dialog(
         if dialog.classes().len() > 1 {
             ui.label("Generate accessors for:");
             for (index, class) in dialog.classes().iter().enumerate() {
-                if ui.radio(index == dialog.selected_class(), class.name.as_str()).clicked() {
+                if ui
+                    .radio(index == dialog.selected_class(), class.name.as_str())
+                    .clicked()
+                {
                     new_selection = Some(index);
                 }
             }
@@ -524,7 +544,10 @@ pub fn find_java_file_by_stem(node: &FileNode, stem: &str) -> Option<std::path::
             let matches_stem = node.path.file_stem().and_then(|s| s.to_str()) == Some(stem);
             (is_java && matches_stem).then(|| node.path.clone())
         }
-        FileKind::Dir => node.children.iter().find_map(|child| find_java_file_by_stem(child, stem)),
+        FileKind::Dir => node
+            .children
+            .iter()
+            .find_map(|child| find_java_file_by_stem(child, stem)),
     }
 }
 
@@ -548,7 +571,12 @@ fn default_return_for(java_type: &str) -> Option<&'static str> {
 /// no `return` at all, for `void`) — one inherited method turned into a
 /// compilable override.
 fn override_stub_for(method: &MethodSignature, indent_unit: &str) -> String {
-    let params = method.params.iter().map(|(ty, name)| format!("{ty} {name}")).collect::<Vec<_>>().join(", ");
+    let params = method
+        .params
+        .iter()
+        .map(|(ty, name)| format!("{ty} {name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let body = match default_return_for(&method.return_type) {
         Some(value) => format!("{indent_unit}{indent_unit}return {value};\n"),
         None => String::new(),
@@ -575,7 +603,11 @@ impl OverrideMethodDialog {
     /// `GenerateAccessorsDialog`/`GenerateMethodDialog`'s field lists.
     pub fn new(methods: Vec<MethodSignature>, insertion_byte: usize) -> Self {
         let checked = vec![true; methods.len()];
-        Self { methods, checked, insertion_byte }
+        Self {
+            methods,
+            checked,
+            insertion_byte,
+        }
     }
 
     pub fn methods(&self) -> &[MethodSignature] {
@@ -599,12 +631,21 @@ impl OverrideMethodDialog {
 /// always valid Java even with zero fields), an override dialog with
 /// nothing checked really does have nothing to generate.
 pub fn apply_override_dialog(dialog: &OverrideMethodDialog, text: &str, indent_unit: &str) -> Option<(String, usize)> {
-    let selected: Vec<&MethodSignature> =
-        dialog.methods.iter().zip(dialog.checked.iter()).filter(|&(_, &checked)| checked).map(|(m, _)| m).collect();
+    let selected: Vec<&MethodSignature> = dialog
+        .methods
+        .iter()
+        .zip(dialog.checked.iter())
+        .filter(|&(_, &checked)| checked)
+        .map(|(m, _)| m)
+        .collect();
     if selected.is_empty() {
         return None;
     }
-    let generated = selected.iter().map(|m| override_stub_for(m, indent_unit)).collect::<Vec<_>>().join("\n");
+    let generated = selected
+        .iter()
+        .map(|m| override_stub_for(m, indent_unit))
+        .collect::<Vec<_>>()
+        .join("\n");
     Some(insert_at_class_end(text, dialog.insertion_byte, &generated))
 }
 
@@ -630,8 +671,12 @@ pub fn show_override_method_dialog(
 
         ui.label("Override:");
         for (index, method) in dialog.methods().iter().enumerate() {
-            let params =
-                method.params.iter().map(|(ty, name)| format!("{ty} {name}")).collect::<Vec<_>>().join(", ");
+            let params = method
+                .params
+                .iter()
+                .map(|(ty, name)| format!("{ty} {name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             let label = format!("{} {}({})", method.return_type, method.name, params);
             let mut checked = dialog.checked()[index];
             if ui.checkbox(&mut checked, label).changed() {
@@ -654,8 +699,8 @@ pub fn show_override_method_dialog(
     }
 
     if generate_clicked {
-        let result =
-            apply_override_dialog(dialog, text, indent_unit).ok_or_else(|| "Nothing to generate: no methods selected.".to_string());
+        let result = apply_override_dialog(dialog, text, indent_unit)
+            .ok_or_else(|| "Nothing to generate: no methods selected.".to_string());
         *override_method_dialog = None;
         Some(result)
     } else if cancel_clicked || escape_pressed {

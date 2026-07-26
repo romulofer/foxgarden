@@ -30,10 +30,7 @@ pub(super) const FOLD_GUTTER_WIDTH: f32 = 14.0;
 pub(super) fn hidden_line_range(buffer: &Rope, fold: &FoldRange) -> Range<usize> {
     let len_bytes = buffer.len_bytes();
     let start = buffer.byte_to_line(fold.start_byte.min(len_bytes));
-    let last_hidden_byte = fold
-        .end_byte
-        .saturating_sub(1)
-        .min(len_bytes.saturating_sub(1));
+    let last_hidden_byte = fold.end_byte.saturating_sub(1).min(len_bytes.saturating_sub(1));
     let end = (buffer.byte_to_line(last_hidden_byte) + 1).max(start);
     start..end
 }
@@ -43,11 +40,7 @@ pub(super) fn hidden_line_range(buffer: &Rope, fold: &FoldRange) -> Range<usize>
 /// non-overlapping) — collapsing both an outer fold (a class body) and one
 /// nested inside it (one of its methods) at once would otherwise hand
 /// `FoldMap` two overlapping ranges, violating its invariant.
-pub(super) fn hidden_ranges(
-    buffer: &Rope,
-    folds: &[FoldRange],
-    folded_lines: &HashSet<usize>,
-) -> Vec<Range<usize>> {
+pub(super) fn hidden_ranges(buffer: &Rope, folds: &[FoldRange], folded_lines: &HashSet<usize>) -> Vec<Range<usize>> {
     let mut ranges: Vec<Range<usize>> = folds
         .iter()
         .filter(|f| folded_lines.contains(&f.marker_line))
@@ -100,18 +93,24 @@ pub(super) fn show_fold_gutter(
     }
     let painter = ui.painter();
     let color = theme::line_number(dark_mode);
+    // Flattened from an O(folds) `iter().find` per visible row to a single
+    // O(folds) set build here plus O(1) per-row lookups below (SPEC.md §9)
+    // — folds is already recomputed fresh each frame (§5 caches that walk,
+    // but the per-row lookup inside a single frame was still worth
+    // flattening on its own).
+    let marker_lines: HashSet<usize> = folds.iter().map(|f| f.marker_line).collect();
 
     for (i, (logical, _)) in out.row_galleys.iter().enumerate() {
-        let Some(fold) = folds.iter().find(|f| f.marker_line == *logical) else {
+        if !marker_lines.contains(logical) {
             continue;
-        };
+        }
         let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
         let rect = egui::Rect::from_min_size(
             egui::pos2(gutter_left, y),
             egui::vec2(FOLD_GUTTER_WIDTH, out.row_height),
         );
 
-        let id = egui::Id::new(("fold_arrow", id_salt, fold.marker_line));
+        let id = egui::Id::new(("fold_arrow", id_salt, *logical));
         let response = ui.interact(rect, id, Sense::click());
         let collapsed = folded_lines.contains(logical);
         let fill = if response.hovered() {
@@ -182,9 +181,12 @@ pub(super) fn paint_collapsed_markers(
     let painter = ui.painter();
     let color = theme::structure(dark_mode);
     let marker_font = FontId::proportional((out.row_height * 0.8).max(8.0));
+    // Same O(folds)-per-row -> O(1)-per-row flattening as `show_fold_gutter`
+    // above (SPEC.md §9).
+    let marker_lines: HashSet<usize> = folds.iter().map(|f| f.marker_line).collect();
 
     for (i, (logical, galley)) in out.row_galleys.iter().enumerate() {
-        if !folded_lines.contains(logical) || !folds.iter().any(|f| f.marker_line == *logical) {
+        if !folded_lines.contains(logical) || !marker_lines.contains(logical) {
             continue;
         }
         let y_top = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;

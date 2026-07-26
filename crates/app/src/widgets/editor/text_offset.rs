@@ -10,10 +10,7 @@
 /// query and returns `text.len()`, matching how a cursor position can
 /// legitimately sit at the end of the buffer.
 pub(super) fn char_to_byte(text: &str, char_idx: usize) -> usize {
-    text.char_indices()
-        .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
+    text.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(text.len())
 }
 
 /// Inverse of `char_to_byte`: the char offset of whatever byte offset

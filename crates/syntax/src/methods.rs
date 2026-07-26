@@ -19,7 +19,9 @@ pub struct MethodSignature {
 /// which one contains `cursor_byte`) naturally finds the *innermost*
 /// enclosing class first for nested classes, with no extra bookkeeping.
 pub fn enclosing_class(tree: &Tree, source: &str, cursor_byte: usize) -> Option<(String, usize)> {
-    let mut node = tree.root_node().named_descendant_for_byte_range(cursor_byte, cursor_byte)?;
+    let mut node = tree
+        .root_node()
+        .named_descendant_for_byte_range(cursor_byte, cursor_byte)?;
     loop {
         if node.kind() == "class_declaration" {
             let name = node.child_by_field_name("name")?;
@@ -41,7 +43,9 @@ fn simple_name(raw: &str) -> String {
 
 fn find_class_node<'a>(node: Node<'a>, source: &str, class_name: &str) -> Option<Node<'a>> {
     if node.kind() == "class_declaration"
-        && node.child_by_field_name("name").is_some_and(|n| &source[n.byte_range()] == class_name)
+        && node
+            .child_by_field_name("name")
+            .is_some_and(|n| &source[n.byte_range()] == class_name)
     {
         return Some(node);
     }
@@ -101,9 +105,16 @@ fn method_signature(node: Node, source: &str) -> Option<MethodSignature> {
         if param.kind() != "formal_parameter" {
             continue;
         }
-        let Some(ptype) = param.child_by_field_name("type") else { continue };
-        let Some(pname) = param.child_by_field_name("name") else { continue };
-        params.push((source[ptype.byte_range()].to_string(), source[pname.byte_range()].to_string()));
+        let Some(ptype) = param.child_by_field_name("type") else {
+            continue;
+        };
+        let Some(pname) = param.child_by_field_name("name") else {
+            continue;
+        };
+        params.push((
+            source[ptype.byte_range()].to_string(),
+            source[pname.byte_range()].to_string(),
+        ));
     }
 
     Some(MethodSignature {
@@ -128,7 +139,9 @@ pub fn methods_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<Method
 
 fn collect_methods(node: Node, source: &str, type_name: &str, out: &mut Vec<MethodSignature>) {
     let is_target = matches!(node.kind(), "class_declaration" | "interface_declaration")
-        && node.child_by_field_name("name").is_some_and(|n| &source[n.byte_range()] == type_name);
+        && node
+            .child_by_field_name("name")
+            .is_some_and(|n| &source[n.byte_range()] == type_name);
 
     if is_target {
         if let Some(body) = node.child_by_field_name("body") {

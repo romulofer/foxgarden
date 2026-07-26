@@ -132,6 +132,79 @@ fn renders_highlighted_valid_file_without_panicking() {
 }
 
 #[test]
+fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
+    // SPEC.md §4/§5, PLAN.md Phase 3: a second frame with no edit in
+    // between must hit the cache, not recompute. `Arc::ptr_eq` is the
+    // direct proof — both caches' `if let Some(cached) = ... { return
+    // cached.spans/folds; }` hit path returns the *same allocation*
+    // without re-inserting into `ctx.data`, so a cache miss (a fresh
+    // `Arc::new(..)`) is the only way the second frame's pointer could
+    // differ from the first's.
+    let (_dir, mut doc) = open_fixture(
+        "public class Hello {\n    void greet() {\n        int x = 1;\n    }\n}\n",
+        "Hello.java",
+    );
+    let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+    let widget_id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+    let highlight_cache_id = egui::Id::new(("widget_highlight_spans", widget_id));
+    let fold_cache_id = egui::Id::new(("widget_foldable_ranges", widget_id));
+
+    let ctx = egui::Context::default();
+    ctx.set_fonts(egui::FontDefinitions::empty());
+    let run_frame = |doc: &mut Document, parser: &mut Option<IncrementalParser>| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show(
+                ui,
+                doc,
+                parser,
+                EditorFont::Default,
+                14.0,
+                IndentSettings::default(),
+                ViewSettings::default(),
+                None,
+                &mut None,
+                None,
+                &mut None,
+                None,
+                false,
+                &mut None,
+                None,
+                false,
+                false,
+                false,
+                false,
+                &mut None,
+                &mut Vec::new(),
+                &mut None,
+            );
+        });
+    };
+
+    run_frame(&mut doc, &mut parser);
+    let spans_after_first = ctx
+        .data(|d| d.get_temp::<CachedHighlightSpans>(highlight_cache_id))
+        .expect("highlight cache populated after first frame")
+        .spans;
+    let folds_after_first = ctx
+        .data(|d| d.get_temp::<CachedFolds>(fold_cache_id))
+        .expect("fold cache populated after first frame")
+        .folds;
+
+    run_frame(&mut doc, &mut parser); // idle: no edit, no theme change
+    let spans_after_second = ctx
+        .data(|d| d.get_temp::<CachedHighlightSpans>(highlight_cache_id))
+        .expect("highlight cache still populated after second frame")
+        .spans;
+    let folds_after_second = ctx
+        .data(|d| d.get_temp::<CachedFolds>(fold_cache_id))
+        .expect("fold cache still populated after second frame")
+        .folds;
+
+    assert!(Arc::ptr_eq(&spans_after_first, &spans_after_second));
+    assert!(Arc::ptr_eq(&folds_after_first, &folds_after_second));
+}
+
+#[test]
 fn bracket_pair_highlighting_renders_without_panicking_when_cursor_is_beside_a_brace() {
     let (_dir, mut doc) = open_fixture("class Foo {\n}\n", "Foo.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
@@ -225,6 +298,65 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
 }
 
 #[test]
+fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
+    // SPEC.md §6, PLAN.md Phase 4: same direct `Arc::ptr_eq` proof as
+    // `highlight_and_fold_caches_are_reused_across_an_idle_frame` — a
+    // second frame with the cursor resting on the same word, no edit in
+    // between, must hit the cache rather than re-scan the buffer for every
+    // occurrence.
+    let (_dir, mut doc) = open_fixture("abc def abc", "notes.txt");
+    let mut parser: Option<IncrementalParser> = None;
+    let widget_id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+    let cache_id = egui::Id::new(("widget_occurrence_highlights", widget_id));
+
+    let ctx = egui::Context::default();
+    ctx.set_fonts(egui::FontDefinitions::empty());
+    let run_frame = |doc: &mut Document, parser: &mut Option<IncrementalParser>| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|mem| mem.request_focus(widget_id));
+            show(
+                ui,
+                doc,
+                parser,
+                EditorFont::Default,
+                14.0,
+                IndentSettings::default(),
+                ViewSettings::default(),
+                None,
+                &mut None,
+                None,
+                &mut None,
+                None,
+                false,
+                &mut None,
+                None,
+                false,
+                false,
+                false,
+                false,
+                &mut None,
+                &mut Vec::new(),
+                &mut None,
+            );
+        });
+    };
+
+    run_frame(&mut doc, &mut parser);
+    let first = ctx
+        .data(|d| d.get_temp::<CachedOccurrenceHighlights>(cache_id))
+        .expect("occurrence cache populated after first frame")
+        .occurrences;
+
+    run_frame(&mut doc, &mut parser); // idle: cursor stays on "abc", no edit
+    let second = ctx
+        .data(|d| d.get_temp::<CachedOccurrenceHighlights>(cache_id))
+        .expect("occurrence cache still populated after second frame")
+        .occurrences;
+
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
 fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
     let (_dir, mut doc) = open_fixture("just some notes, no code here", "notes.txt");
     assert_eq!(doc.language, None);
@@ -265,11 +397,7 @@ fn auto_pair_still_works_for_a_plain_text_file_with_no_parser() {
     let (_dir, mut doc) = open_fixture("", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    focused_frame(
-        &mut doc,
-        &mut parser,
-        vec![egui::Event::Text("{".to_string())],
-    );
+    focused_frame(&mut doc, &mut parser, vec![egui::Event::Text("{".to_string())]);
 
     assert_eq!(doc.buffer.to_string(), "{}");
 }
@@ -372,11 +500,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
 // focus. `show`'s `.id_salt(doc.path...)` makes the widget's id
 // reproducible outside of `show` itself, so a test can request focus on
 // exactly that id before calling `show`.
-fn focused_frame(
-    doc: &mut Document,
-    parser: &mut Option<IncrementalParser>,
-    events: Vec<egui::Event>,
-) {
+fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalParser>, events: Vec<egui::Event>) {
     let ctx = egui::Context::default();
     ctx.set_fonts(egui::FontDefinitions::empty());
     // `RawInput::modifiers` ("which modifier keys are down at the start
@@ -925,12 +1049,7 @@ fn typing_a_bracket_over_a_selection_wraps_it_instead_of_replacing_it() {
     let mut parser: Option<IncrementalParser> = None;
 
     // "bar" is chars 4..7.
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        4..7,
-        vec![egui::Event::Text("(".to_string())],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 4..7, vec![egui::Event::Text("(".to_string())]);
 
     assert_eq!(doc.buffer.to_string(), "foo (bar) baz");
 }
@@ -941,12 +1060,7 @@ fn typing_an_angle_bracket_over_a_selection_wraps_it_too() {
     let mut parser: Option<IncrementalParser> = None;
 
     // "Item" is chars 5..9.
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        5..9,
-        vec![egui::Event::Text("<".to_string())],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 5..9, vec![egui::Event::Text("<".to_string())]);
 
     assert_eq!(doc.buffer.to_string(), "List <Item>");
 }
@@ -957,23 +1071,15 @@ fn home_from_mid_line_goes_to_first_non_whitespace() {
     let mut parser: Option<IncrementalParser> = None;
 
     // Collapsed cursor (6..6) mid "foo".
-    let range = focused_frame_with_selection_returning_cursor(
-        &mut doc,
-        &mut parser,
-        6..6,
-        vec![key_event(egui::Key::Home)],
-    );
+    let range =
+        focused_frame_with_selection_returning_cursor(&mut doc, &mut parser, 6..6, vec![key_event(egui::Key::Home)]);
 
     assert_eq!(range.primary, 4);
     assert!(
         range.is_collapsed(),
         "Home with no selection active must not create one"
     );
-    assert_eq!(
-        doc.buffer.to_string(),
-        "    foo",
-        "Home must never change the buffer"
-    );
+    assert_eq!(doc.buffer.to_string(), "    foo", "Home must never change the buffer");
 }
 
 #[test]
@@ -981,12 +1087,8 @@ fn home_from_first_non_whitespace_goes_to_column_zero() {
     let (_dir, mut doc) = open_fixture("    foo", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    let range = focused_frame_with_selection_returning_cursor(
-        &mut doc,
-        &mut parser,
-        4..4,
-        vec![key_event(egui::Key::Home)],
-    );
+    let range =
+        focused_frame_with_selection_returning_cursor(&mut doc, &mut parser, 4..4, vec![key_event(egui::Key::Home)]);
 
     assert_eq!(range.primary, 0);
 }
@@ -1054,12 +1156,7 @@ fn shift_tab_dedents_every_line_a_multi_line_selection_touches() {
 
     // Selects all of "foo" and all of "bar" (chars 4..15), leaving
     // "baz" untouched.
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        4..15,
-        vec![shift_key_event(egui::Key::Tab)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 4..15, vec![shift_key_event(egui::Key::Tab)]);
 
     assert_eq!(doc.buffer.to_string(), "foo\nbar\nbaz");
 }
@@ -1080,12 +1177,7 @@ fn shift_tab_over_a_selection_does_not_delete_the_selected_text() {
     // block-dedent — so both lines lose their 4-space indent, and none
     // of "foo"/"bar" is lost the way egui's own delete-then-dedent
     // default would lose it.
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        5..14,
-        vec![shift_key_event(egui::Key::Tab)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 5..14, vec![shift_key_event(egui::Key::Tab)]);
 
     assert_eq!(doc.buffer.to_string(), "foo\nbar");
 }
@@ -1114,12 +1206,7 @@ fn tab_with_no_selection_inserts_a_literal_tab_in_tabs_mode() {
         use_tabs: true,
         width: 4,
     };
-    focused_frame_with_indent_settings(
-        &mut doc,
-        &mut parser,
-        tabs_mode,
-        vec![key_event(egui::Key::Tab)],
-    );
+    focused_frame_with_indent_settings(&mut doc, &mut parser, tabs_mode, vec![key_event(egui::Key::Tab)]);
 
     assert_eq!(doc.buffer.to_string(), "\tabc");
 }
@@ -1136,12 +1223,7 @@ fn tab_with_no_selection_inserts_spaces_in_spaces_mode() {
         use_tabs: false,
         width: 4,
     };
-    focused_frame_with_indent_settings(
-        &mut doc,
-        &mut parser,
-        spaces_mode,
-        vec![key_event(egui::Key::Tab)],
-    );
+    focused_frame_with_indent_settings(&mut doc, &mut parser, spaces_mode, vec![key_event(egui::Key::Tab)]);
 
     assert_eq!(doc.buffer.to_string(), "    abc");
 }
@@ -1155,12 +1237,7 @@ fn tab_with_no_selection_respects_a_configured_width() {
         use_tabs: false,
         width: 2,
     };
-    focused_frame_with_indent_settings(
-        &mut doc,
-        &mut parser,
-        two_space_mode,
-        vec![key_event(egui::Key::Tab)],
-    );
+    focused_frame_with_indent_settings(&mut doc, &mut parser, two_space_mode, vec![key_event(egui::Key::Tab)]);
 
     assert_eq!(doc.buffer.to_string(), "  abc");
 }
@@ -1255,12 +1332,7 @@ fn alt_arrow_up_moves_the_current_line_up() {
     let mut parser: Option<IncrementalParser> = None;
 
     // Cursor at column 0 of "bbb" (char 4).
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        4..4,
-        vec![alt_key_event(egui::Key::ArrowUp)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 4..4, vec![alt_key_event(egui::Key::ArrowUp)]);
 
     assert_eq!(doc.buffer.to_string(), "bbb\naaa\nccc");
 }
@@ -1271,12 +1343,7 @@ fn alt_arrow_down_moves_the_current_line_down() {
     let mut parser: Option<IncrementalParser> = None;
 
     // Cursor at column 0 of "aaa" (char 0).
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        0..0,
-        vec![alt_key_event(egui::Key::ArrowDown)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_key_event(egui::Key::ArrowDown)]);
 
     assert_eq!(doc.buffer.to_string(), "bbb\naaa\nccc");
 }
@@ -1286,12 +1353,7 @@ fn alt_arrow_up_on_the_first_line_is_a_no_op() {
     let (_dir, mut doc) = open_fixture("aaa\nbbb", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        0..0,
-        vec![alt_key_event(egui::Key::ArrowUp)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![alt_key_event(egui::Key::ArrowUp)]);
 
     assert_eq!(doc.buffer.to_string(), "aaa\nbbb");
 }
@@ -1366,11 +1428,7 @@ fn read_only_doc_ignores_typed_text() {
     doc.read_only = true;
     let mut parser: Option<IncrementalParser> = None;
 
-    focused_frame(
-        &mut doc,
-        &mut parser,
-        vec![egui::Event::Text("x".to_string())],
-    );
+    focused_frame(&mut doc, &mut parser, vec![egui::Event::Text("x".to_string())]);
 
     assert_eq!(doc.buffer.to_string(), "foo");
 }
@@ -1404,13 +1462,7 @@ fn read_only_doc_ignores_generate_request() {
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let original = doc.buffer.to_string();
 
-    focused_frame_with_generate_request(
-        &mut doc,
-        &mut parser,
-        Some(AccessorKind::Both),
-        &mut None,
-        vec![],
-    );
+    focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Both), &mut None, vec![]);
 
     assert_eq!(doc.buffer.to_string(), original);
 }
@@ -1573,36 +1625,20 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
         },
     );
 
-    let after_first_expand = run_frame_reading_selection(
-        &ctx,
-        id,
-        &mut doc,
-        &mut parser,
-        command_key_event(egui::Key::W),
-    );
+    let after_first_expand =
+        run_frame_reading_selection(&ctx, id, &mut doc, &mut parser, command_key_event(egui::Key::W));
     assert_eq!(&source[after_first_expand.clone()], "foo()");
 
-    let after_second_expand = run_frame_reading_selection(
-        &ctx,
-        id,
-        &mut doc,
-        &mut parser,
-        command_key_event(egui::Key::W),
-    );
+    let after_second_expand =
+        run_frame_reading_selection(&ctx, id, &mut doc, &mut parser, command_key_event(egui::Key::W));
     assert!(
-        after_second_expand.start <= after_first_expand.start
-            && after_second_expand.end >= after_first_expand.end,
+        after_second_expand.start <= after_first_expand.start && after_second_expand.end >= after_first_expand.end,
         "each expand must grow the selection: {after_first_expand:?} -> {after_second_expand:?}"
     );
     assert_ne!(after_second_expand, after_first_expand);
 
-    let after_shrink = run_frame_reading_selection(
-        &ctx,
-        id,
-        &mut doc,
-        &mut parser,
-        command_shift_key_event(egui::Key::W),
-    );
+    let after_shrink =
+        run_frame_reading_selection(&ctx, id, &mut doc, &mut parser, command_shift_key_event(egui::Key::W));
     assert_eq!(
         after_shrink, after_first_expand,
         "shrink must restore exactly what the second expand grew out of"
@@ -1621,12 +1657,7 @@ fn ctrl_w_on_a_file_with_no_parsed_tree_is_a_no_op_that_still_consumes_the_keyst
     let (_dir, mut doc) = open_fixture("hello world", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        6..6,
-        vec![command_key_event(egui::Key::W)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 6..6, vec![command_key_event(egui::Key::W)]);
 
     assert_eq!(doc.buffer.to_string(), "hello world");
 }
@@ -1681,13 +1712,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
         },
     );
 
-    let expanded = run_frame_reading_selection(
-        &ctx,
-        id,
-        &mut doc,
-        &mut parser,
-        command_key_event(egui::Key::W),
-    );
+    let expanded = run_frame_reading_selection(&ctx, id, &mut doc, &mut parser, command_key_event(egui::Key::W));
 
     assert!(
         !expanded.is_empty(),
@@ -1762,14 +1787,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
         );
     });
-    text_area::set_caret(
-        &ctx,
-        id,
-        Caret {
-            primary: 6,
-            anchor: 6,
-        },
-    );
+    text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
     let widget_rect = ctx
         .read_response(id)
         .expect("TextEdit response cached after a frame")
@@ -1940,12 +1958,7 @@ fn ctrl_slash_comments_the_current_line() {
     // needs `focused_frame_with_selection`'s warm-up frame, not the
     // single dry frame `focused_frame` gives; a collapsed 0..0
     // selection is just "cursor at the start, nothing selected".
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        0..0,
-        vec![command_key_event(egui::Key::Slash)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![command_key_event(egui::Key::Slash)]);
 
     assert_eq!(doc.buffer.to_string(), "// foo();");
 }
@@ -1955,12 +1968,7 @@ fn ctrl_slash_uncomments_an_already_commented_line() {
     let (_dir, mut doc) = open_fixture("// foo();", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        0..0,
-        vec![command_key_event(egui::Key::Slash)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 0..0, vec![command_key_event(egui::Key::Slash)]);
 
     assert_eq!(doc.buffer.to_string(), "foo();");
 }
@@ -1971,12 +1979,7 @@ fn ctrl_slash_toggles_every_line_a_selection_touches() {
     let mut parser: Option<IncrementalParser> = None;
 
     // All of "foo" and all of "bar" (chars 0..7).
-    focused_frame_with_selection(
-        &mut doc,
-        &mut parser,
-        0..7,
-        vec![command_key_event(egui::Key::Slash)],
-    );
+    focused_frame_with_selection(&mut doc, &mut parser, 0..7, vec![command_key_event(egui::Key::Slash)]);
 
     assert_eq!(doc.buffer.to_string(), "// foo\n// bar");
 }
@@ -2004,11 +2007,7 @@ fn ctrl_shift_g_generates_getter_and_setter_at_the_cursor() {
     // "inside" the class_declaration spanning the whole file — see
     // `syntax::java_fields_in_enclosing_class`'s inclusive containment
     // check.
-    focused_frame(
-        &mut doc,
-        &mut parser,
-        vec![command_shift_key_event(egui::Key::G)],
-    );
+    focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
 
     let text = doc.buffer.to_string();
     assert!(text.contains("public int getX() {\n        return this.x;\n    }"));
@@ -2318,13 +2317,8 @@ fn ctrl_shift_u_uppercases_the_selection() {
     let mut parser: Option<IncrementalParser> = None;
 
     // "bar" is chars 4..7.
-    let last_error = focused_frame_with_selection_and_case_request(
-        &mut doc,
-        &mut parser,
-        4..7,
-        None,
-        vec![command_shift_u_event()],
-    );
+    let last_error =
+        focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..7, None, vec![command_shift_u_event()]);
 
     assert_eq!(last_error, None);
     assert_eq!(doc.buffer.to_string(), "foo BAR baz");
@@ -2335,13 +2329,8 @@ fn ctrl_shift_l_lowercases_the_selection() {
     let (_dir, mut doc) = open_fixture("foo BAR baz", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;
 
-    let last_error = focused_frame_with_selection_and_case_request(
-        &mut doc,
-        &mut parser,
-        4..7,
-        None,
-        vec![command_shift_l_event()],
-    );
+    let last_error =
+        focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..7, None, vec![command_shift_l_event()]);
 
     assert_eq!(last_error, None);
     assert_eq!(doc.buffer.to_string(), "foo bar baz");
@@ -2371,13 +2360,8 @@ fn case_conversion_with_no_selection_reports_why_instead_of_doing_nothing() {
     let before = doc.buffer.to_string();
 
     // Collapsed selection (4..4) — cursor positioned, nothing selected.
-    let last_error = focused_frame_with_selection_and_case_request(
-        &mut doc,
-        &mut parser,
-        4..4,
-        None,
-        vec![command_shift_u_event()],
-    );
+    let last_error =
+        focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..4, None, vec![command_shift_u_event()]);
 
     assert_eq!(doc.buffer.to_string(), before);
     assert!(last_error.is_some_and(|msg| msg.contains("Select")));
@@ -2429,13 +2413,8 @@ fn tools_menu_generate_getters_inserts_only_a_getter() {
     let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
-    let last_error = focused_frame_with_generate_request(
-        &mut doc,
-        &mut parser,
-        Some(AccessorKind::Getters),
-        &mut None,
-        vec![],
-    );
+    let last_error =
+        focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Getters), &mut None, vec![]);
 
     assert_eq!(last_error, None);
     let text = doc.buffer.to_string();
@@ -2448,13 +2427,8 @@ fn tools_menu_generate_setters_inserts_only_a_setter() {
     let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
-    let last_error = focused_frame_with_generate_request(
-        &mut doc,
-        &mut parser,
-        Some(AccessorKind::Setters),
-        &mut None,
-        vec![],
-    );
+    let last_error =
+        focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), &mut None, vec![]);
 
     assert_eq!(last_error, None);
     let text = doc.buffer.to_string();
@@ -2464,20 +2438,12 @@ fn tools_menu_generate_setters_inserts_only_a_setter() {
 
 #[test]
 fn tools_menu_generate_setters_on_an_all_final_class_reports_why() {
-    let (_dir, mut doc) = open_fixture(
-        "public class Foo {\n    private final int x;\n}\n",
-        "Foo.java",
-    );
+    let (_dir, mut doc) = open_fixture("public class Foo {\n    private final int x;\n}\n", "Foo.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let before = doc.buffer.to_string();
 
-    let last_error = focused_frame_with_generate_request(
-        &mut doc,
-        &mut parser,
-        Some(AccessorKind::Setters),
-        &mut None,
-        vec![],
-    );
+    let last_error =
+        focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), &mut None, vec![]);
 
     assert_eq!(doc.buffer.to_string(), before);
     assert!(last_error.is_some_and(|msg| msg.contains("final")));
@@ -2509,11 +2475,7 @@ fn tools_menu_generate_getters_on_a_multi_class_file_opens_the_picker_instead_of
     );
     let dialog = generate_dialog.expect("multiple eligible classes should open the picker");
     assert_eq!(
-        dialog
-            .classes()
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
+        dialog.classes().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
         vec!["Foo", "Bar"]
     );
 }
@@ -2654,11 +2616,7 @@ fn generate_method_request_on_a_multi_class_file_opens_the_picker_instead_of_gen
     );
     let dialog = generate_method_dialog.expect("multiple eligible classes should open the picker");
     assert_eq!(
-        dialog
-            .classes()
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
+        dialog.classes().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
         vec!["Foo", "Bar"]
     );
 }
@@ -2670,12 +2628,7 @@ fn read_only_doc_ignores_generate_method_request() {
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let before = doc.buffer.to_string();
 
-    focused_frame_with_generate_method_request(
-        &mut doc,
-        &mut parser,
-        Some(GenerateMethodKind::Constructor),
-        &mut None,
-    );
+    focused_frame_with_generate_method_request(&mut doc, &mut parser, Some(GenerateMethodKind::Constructor), &mut None);
 
     assert_eq!(doc.buffer.to_string(), before);
 }
@@ -2767,8 +2720,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
     });
 
     assert_eq!(last_error, None);
-    let dialog =
-        override_method_dialog.expect("Base.run() should be found as an overridable method");
+    let dialog = override_method_dialog.expect("Base.run() should be found as an overridable method");
     assert_eq!(dialog.methods().len(), 1);
     assert_eq!(dialog.methods()[0].name, "run");
 }
@@ -2985,8 +2937,7 @@ fn realistic_paste_reparses_and_highlights_correctly() {
     // tree a fresh parse would, the highlighting can't be stale.
     let mut full_parser = IncrementalParser::new(Language::Java);
     full_parser.parse(&new_text);
-    let full_spans =
-        syntax::highlight_spans(full_parser.tree().unwrap(), &new_text, Language::Java);
+    let full_spans = syntax::highlight_spans(full_parser.tree().unwrap(), &new_text, Language::Java);
     assert_eq!(spans, full_spans);
 }
 
@@ -3120,10 +3071,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
     let mut pending_input = vec![synthetic_shortcut(egui::Key::Z, false)];
     run_frame(&mut doc, &mut parser, 1.5, vec![], &mut pending_input);
 
-    assert!(
-        pending_input.is_empty(),
-        "the queue should be drained once used"
-    );
+    assert!(pending_input.is_empty(), "the queue should be drained once used");
     assert_eq!(
         doc.buffer.to_string(),
         "hello world",

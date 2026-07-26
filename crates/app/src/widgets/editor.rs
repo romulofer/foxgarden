@@ -21,7 +21,6 @@ mod widget;
 
 pub use auto_edit::CaseConversion;
 pub use codegen::{
-    AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
-    OverrideMethodDialog,
+    AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
 };
 pub use widget::show;

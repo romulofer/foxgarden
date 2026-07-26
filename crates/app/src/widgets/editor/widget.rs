@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::Arc;
 
 use egui::{Event, FontId, Key};
 use fg_core::{Document, Language, Project};
@@ -6,13 +7,13 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line,
-    indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up,
-    smart_home_target, sort_lines, toggle_line_comments, unique_lines, wrap_selection,
+    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line, indent_selected_lines,
+    is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, sort_lines, toggle_line_comments,
+    unique_lines, wrap_selection,
 };
 use super::codegen::{
-    self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
-    OverrideMethodDialog, generate_accessors, insert_at_class_end,
+    self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
+    generate_accessors, insert_at_class_end,
 };
 use super::context_menu;
 #[cfg(test)]
@@ -20,8 +21,8 @@ use super::context_menu::synthetic_shortcut;
 use super::folding;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
-    paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
-    paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
+    paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides, paint_line_numbers,
+    paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
 use super::templates::{self, expand, find_template, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
@@ -75,6 +76,59 @@ fn sticky_headers_to_pin(scope_lines: &[usize], top_line: usize, max_depth: usiz
         .collect()
 }
 
+#[derive(Clone, PartialEq)]
+struct HighlightSpansKey {
+    content_hash: u64,
+    dark_mode: bool,
+}
+
+#[derive(Clone)]
+struct CachedHighlightSpans {
+    key: HighlightSpansKey,
+    spans: Arc<Vec<HighlightSpan>>,
+}
+
+/// Cache-checking wrapper (PLAN.md Phase 3 / SPEC.md §4) around
+/// `compute_highlight_spans`, keyed on `(hash_rope_content(&doc.buffer),
+/// dark_mode)` — spans are theme-dependent, so a dark/light toggle with no
+/// text change still needs a recompute. Mirrors `text_area/render.rs`'s
+/// `cached_row_counts` exact key/store/invalidate shape: without this, the
+/// full tree-sitter query re-ran every single frame, idle cursor-blink
+/// frames included, even though the result only ever changes on an actual
+/// edit or theme switch.
+fn highlight_spans_for(
+    ui: &egui::Ui,
+    widget_id: egui::Id,
+    parser: Option<&IncrementalParser>,
+    buffer: &Rope,
+    source: &str,
+    dark_mode: bool,
+) -> Arc<Vec<HighlightSpan>> {
+    let cache_id = egui::Id::new(("widget_highlight_spans", widget_id));
+    let key = HighlightSpansKey {
+        content_hash: text_area::hash_rope_content(buffer),
+        dark_mode,
+    };
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedHighlightSpans>(cache_id))
+        && cached.key == key
+    {
+        return cached.spans;
+    }
+
+    let spans = Arc::new(compute_highlight_spans(parser, source, dark_mode));
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedHighlightSpans {
+                key,
+                spans: spans.clone(),
+            },
+        )
+    });
+    spans
+}
+
 /// Resolves the syntax-highlighting spans for the widget's shape pass —
 /// `syntax::highlight_spans` over the reparsed tree, each `Scope` resolved
 /// to a concrete `Color32` via `theme::color_for_scope` right here (rather
@@ -83,11 +137,7 @@ fn sticky_headers_to_pin(scope_lines: &[usize], top_line: usize, max_depth: usiz
 /// language-less file or one with no tree yet, which `text_area` already
 /// treats as "no highlighting, everything falls through to the plain text
 /// color."
-fn highlight_spans_for(
-    parser: Option<&IncrementalParser>,
-    source: &str,
-    dark_mode: bool,
-) -> Vec<HighlightSpan> {
+fn compute_highlight_spans(parser: Option<&IncrementalParser>, source: &str, dark_mode: bool) -> Vec<HighlightSpan> {
     let Some((tree, language)) = parser.and_then(|p| p.tree().map(|t| (t, p.language()))) else {
         return Vec::new();
     };
@@ -100,6 +150,105 @@ fn highlight_spans_for(
         .collect()
 }
 
+#[derive(Clone)]
+struct CachedFolds {
+    content_hash: u64,
+    folds: Arc<Vec<syntax::FoldRange>>,
+}
+
+/// Cache-checking wrapper (PLAN.md Phase 3 / SPEC.md §5) around
+/// `syntax::foldable_ranges`, keyed on `hash_rope_content(&doc.buffer)`
+/// alone — folding isn't theme-dependent, unlike `highlight_spans_for`'s
+/// cache. Sits *upstream* of `folding::hidden_ranges`, which further narrows
+/// this against the per-tab `folded_lines` set every frame — that narrowing
+/// stays uncached (small-set filtering, not a tree walk, so it was never the
+/// expensive part).
+fn foldable_ranges_for(
+    ui: &egui::Ui,
+    widget_id: egui::Id,
+    parser: Option<&IncrementalParser>,
+    buffer: &Rope,
+    source: &str,
+) -> Arc<Vec<syntax::FoldRange>> {
+    let cache_id = egui::Id::new(("widget_foldable_ranges", widget_id));
+    let content_hash = text_area::hash_rope_content(buffer);
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedFolds>(cache_id))
+        && cached.content_hash == content_hash
+    {
+        return cached.folds;
+    }
+
+    let folds = parser
+        .and_then(|p| p.tree().map(|tree| syntax::foldable_ranges(tree, source, p.language())))
+        .unwrap_or_default();
+    let folds = Arc::new(folds);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedFolds {
+                content_hash,
+                folds: folds.clone(),
+            },
+        )
+    });
+    folds
+}
+
+#[derive(Clone, PartialEq)]
+struct OccurrenceHighlightKey {
+    word: String,
+    content_hash: u64,
+}
+
+#[derive(Clone)]
+struct CachedOccurrenceHighlights {
+    key: OccurrenceHighlightKey,
+    occurrences: Arc<Vec<Range<usize>>>,
+}
+
+/// Cache-checking wrapper (PLAN.md Phase 4 / SPEC.md §6) around
+/// `multi_cursor::find_all_occurrences`, keyed on `(word, hash_rope_content(
+/// &doc.buffer))` — a tighter, per-word key rather than the whole-buffer
+/// cache shape §4/§5 use, since the occurrence set only ever needs
+/// recomputing when either the touched word or the buffer itself changes,
+/// not on every frame the cursor merely sits still on the same word (idle
+/// blink frames included). `word_range_at` still runs every frame to learn
+/// `word` in the first place — cheap relative to `find_all_occurrences`'
+/// whole-buffer multi-match scan, and unavoidable without already knowing
+/// whether the cursor moved, which is exactly what this cache is for.
+fn occurrences_for(
+    ui: &egui::Ui,
+    widget_id: egui::Id,
+    buffer: &Rope,
+    text: &str,
+    word: &str,
+) -> Arc<Vec<Range<usize>>> {
+    let cache_id = egui::Id::new(("widget_occurrence_highlights", widget_id));
+    let key = OccurrenceHighlightKey {
+        word: word.to_owned(),
+        content_hash: text_area::hash_rope_content(buffer),
+    };
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedOccurrenceHighlights>(cache_id))
+        && cached.key == key
+    {
+        return cached.occurrences;
+    }
+
+    let occurrences = Arc::new(multi_cursor::find_all_occurrences(text, word, true));
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedOccurrenceHighlights {
+                key,
+                occurrences: occurrences.clone(),
+            },
+        )
+    });
+    occurrences
+}
+
 /// Commits `new_text` as `doc`'s buffer and brings `parser` (if any) back in
 /// sync with it via the incremental diff-and-reparse path: compute the edit
 /// between `old_text` and `new_text`, reparse, refresh diagnostics from the
@@ -110,12 +259,7 @@ fn highlight_spans_for(
 /// could forget the reparse step and silently drift out of sync, the same
 /// bug `save_tab` in `panels::tabs` had before it started reusing this
 /// pattern too).
-pub(super) fn apply_edit(
-    doc: &mut Document,
-    parser: &mut Option<IncrementalParser>,
-    old_text: &str,
-    new_text: &str,
-) {
+pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
     doc.buffer = Rope::from_str(new_text);
     if let Some(parser) = parser.as_mut() {
         let edit = syntax::diff_edit(old_text, new_text);
@@ -154,9 +298,7 @@ fn is_mutating_event(event: &Event) -> bool {
             modifiers,
             ..
         } if modifiers.alt => true,
-        Event::Key {
-            key, pressed: true, ..
-        } => matches!(
+        Event::Key { key, pressed: true, .. } => matches!(
             key,
             Key::Backspace
                 | Key::Delete
@@ -250,31 +392,22 @@ pub fn show(
     if doc.read_only {
         strip_mutating_events(ui);
     }
-    let generate_request = if doc.read_only {
-        None
-    } else {
-        generate_request
-    };
-    let generate_method_request = if doc.read_only {
-        None
-    } else {
-        generate_method_request
-    };
+    let generate_request = if doc.read_only { None } else { generate_request };
+    let generate_method_request = if doc.read_only { None } else { generate_method_request };
     let override_method_request = !doc.read_only && override_method_request;
-    let case_conversion_request = if doc.read_only {
-        None
-    } else {
-        case_conversion_request
-    };
+    let case_conversion_request = if doc.read_only { None } else { case_conversion_request };
 
-    // Mutable: the wrap-selection interception below may replace both with
-    // an already-edited version *before* `TextEdit::show()` ever runs, so
+    // Mutable: the wrap-selection interception below may replace it with an
+    // already-edited version *before* `TextEdit::show()` ever runs, so
     // everything downstream (the layouter's highlighting, the
     // `response.changed()` diff) sees the post-wrap text as its baseline
     // rather than redoing (or fighting with) the edit egui would otherwise
-    // apply on its own.
+    // apply on its own. Every interception below that produces a new text
+    // reassigns this same binding (never a separate copy — SPEC.md §2 found
+    // two `String`s kept in permanent lockstep here, one of them dead
+    // weight), so it's always this frame's current buffer content by the
+    // time anything downstream reads it.
     let mut old_text = doc.buffer.to_string();
-    let mut text = old_text.clone();
     // A stable id (rather than the default position-based auto id) keeps
     // this widget's identity — and thus its cursor/selection state — tied
     // to the document, not to where `show` happens to be called from in the
@@ -320,12 +453,7 @@ pub fn show(
 
         if let Some(primary_range) = primary_range {
             let intercepted_events = ui.input_mut(|i| {
-                let matched: Vec<Event> = i
-                    .events
-                    .iter()
-                    .filter(|e| is_multi_edit_event(e))
-                    .cloned()
-                    .collect();
+                let matched: Vec<Event> = i.events.iter().filter(|e| is_multi_edit_event(e)).cloned().collect();
                 i.events.retain(|e| !is_multi_edit_event(e));
                 matched
             });
@@ -336,14 +464,12 @@ pub fn show(
                 selections.push(primary_range.start..primary_range.end);
                 selections.extend(doc.extra_selections.iter().cloned());
 
-                let (new_text, new_cursors) =
-                    multi_cursor::apply_multi_edit(&old_text, &selections, &op);
+                let (new_text, new_cursors) = multi_cursor::apply_multi_edit(&old_text, &selections, &op);
 
                 apply_edit(doc, parser, &old_text, &new_text);
                 manual_caret = Some(Caret::at(new_cursors[0]));
                 doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
-                old_text = new_text.clone();
-                text = new_text;
+                old_text = new_text;
             }
         }
     }
@@ -367,8 +493,7 @@ pub fn show(
         // mutex lock + hashmap probe + struct clone) on the frames where
         // there's actually a candidate keystroke queued — not on every
         // idle/mouse-only/arrow-key frame the editor is visible.
-        let has_candidate_keystroke =
-            ui.input(|i| i.events.iter().any(|e| single_pairable_char(e).is_some()));
+        let has_candidate_keystroke = ui.input(|i| i.events.iter().any(|e| single_pairable_char(e).is_some()));
 
         if has_candidate_keystroke {
             let prior_selection = text_area::peek_caret(ui.ctx(), widget_id)
@@ -388,8 +513,7 @@ pub fn show(
                         primary: sel_end,
                         anchor: sel_start,
                     });
-                    old_text = wrapped.clone();
-                    text = wrapped;
+                    old_text = wrapped;
                 }
             }
         }
@@ -449,20 +573,14 @@ pub fn show(
 
                     if removed.is_some() {
                         let dedent = ui.input(|i| i.modifiers.shift);
-                        let (indented, sel_start, sel_end) = indent_selected_lines(
-                            &old_text,
-                            range.start,
-                            range.end,
-                            dedent,
-                            indent_settings,
-                        );
+                        let (indented, sel_start, sel_end) =
+                            indent_selected_lines(&old_text, range.start, range.end, dedent, indent_settings);
                         apply_edit(doc, parser, &old_text, &indented);
                         manual_caret = Some(Caret {
                             primary: sel_end,
                             anchor: sel_start,
                         });
-                        old_text = indented.clone();
-                        text = indented;
+                        old_text = indented;
                     }
                 } else if !ui.input(|i| i.modifiers.shift) {
                     let word_range = word_before_cursor(&old_text, range.start);
@@ -473,8 +591,7 @@ pub fn show(
                         Some(Language::Kotlin) => templates::KOTLIN_TEMPLATES,
                         _ => &[],
                     };
-                    let template_body =
-                        find_template(templates, &old_text[word_start_byte..word_end_byte]);
+                    let template_body = find_template(templates, &old_text[word_start_byte..word_end_byte]);
 
                     if template_body.is_some() || !indent_settings.use_tabs {
                         let removed = take_event(ui, |e| {
@@ -494,14 +611,12 @@ pub fn show(
                             } else {
                                 let unit = indent_settings.unit();
                                 let byte = char_to_byte(&old_text, range.start);
-                                let inserted =
-                                    format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
+                                let inserted = format!("{}{unit}{}", &old_text[..byte], &old_text[byte..]);
                                 (inserted, range.start + unit.chars().count())
                             };
                             apply_edit(doc, parser, &old_text, &new_full_text);
                             manual_caret = Some(Caret::at(new_cursor));
-                            old_text = new_full_text.clone();
-                            text = new_full_text;
+                            old_text = new_full_text;
                         }
                     }
                 }
@@ -547,8 +662,7 @@ pub fn show(
                             Some((duplicated, cursor_char))
                         }
                         (Key::ArrowDown, true) => {
-                            let (duplicated, cursor_on_duplicate) =
-                                duplicate_line(&old_text, cursor_char);
+                            let (duplicated, cursor_on_duplicate) = duplicate_line(&old_text, cursor_char);
                             Some((duplicated, cursor_on_duplicate))
                         }
                         _ => None,
@@ -556,8 +670,7 @@ pub fn show(
                     if let Some((new_full_text, new_cursor)) = outcome {
                         apply_edit(doc, parser, &old_text, &new_full_text);
                         manual_caret = Some(Caret::at(new_cursor));
-                        old_text = new_full_text.clone();
-                        text = new_full_text;
+                        old_text = new_full_text;
                     }
                 }
             }
@@ -644,15 +757,13 @@ pub fn show(
                 );
 
                 if removed.is_some() {
-                    let (toggled, sel_start, sel_end) =
-                        toggle_line_comments(&old_text, range.start, range.end);
+                    let (toggled, sel_start, sel_end) = toggle_line_comments(&old_text, range.start, range.end);
                     apply_edit(doc, parser, &old_text, &toggled);
                     manual_caret = Some(Caret {
                         primary: sel_end,
                         anchor: sel_start,
                     });
-                    old_text = toggled.clone();
-                    text = toggled;
+                    old_text = toggled;
                 }
             }
         }
@@ -682,13 +793,9 @@ pub fn show(
 
             match prior_selection {
                 Some(range) if !range.is_empty() => {
-                    if let Some(key) = keyboard_case_request.map(|_| {
-                        if case == CaseConversion::Upper {
-                            Key::U
-                        } else {
-                            Key::L
-                        }
-                    }) {
+                    if let Some(key) =
+                        keyboard_case_request.map(|_| if case == CaseConversion::Upper { Key::U } else { Key::L })
+                    {
                         take_event(
                             ui,
                             |e| matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.command && modifiers.shift),
@@ -702,8 +809,7 @@ pub fn show(
                             primary: sel_end,
                             anchor: sel_start,
                         });
-                        old_text = converted.clone();
-                        text = converted;
+                        old_text = converted;
                     }
                 }
                 _ => {
@@ -724,10 +830,7 @@ pub fn show(
     // `doc.read_only` needs an explicit check here — the raw-event
     // stripping above only blocks *keyboard* paths, and these two are
     // plain `bool` parameters instead.
-    if !multi_cursor_active_at_start
-        && !doc.read_only
-        && (sort_lines_request || unique_lines_request)
-    {
+    if !multi_cursor_active_at_start && !doc.read_only && (sort_lines_request || unique_lines_request) {
         let prior_selection = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range());
 
         if let Some(range) = prior_selection {
@@ -741,8 +844,7 @@ pub fn show(
                 primary: sel_end,
                 anchor: sel_start,
             });
-            old_text = transformed.clone();
-            text = transformed;
+            old_text = transformed;
         }
     }
 
@@ -779,8 +881,7 @@ pub fn show(
             );
 
             if let Some(tree) = parser.as_ref().and_then(|p| p.tree())
-                && let Some(prior_range) =
-                    text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range())
+                && let Some(prior_range) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.range())
             {
                 let history_id = egui::Id::new(("selection_expand_history", id_salt.as_str()));
                 let mut expand_state = ui
@@ -804,11 +905,7 @@ pub fn show(
                     // "select the word here."
                     let probe = if current.is_empty() {
                         let word = multi_cursor::word_range_at(&old_text, current.start);
-                        if word.is_empty() {
-                            current.clone()
-                        } else {
-                            word
-                        }
+                        if word.is_empty() { current.clone() } else { word }
                     } else {
                         current.clone()
                     };
@@ -829,8 +926,7 @@ pub fn show(
                     });
                 }
 
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(history_id, expand_state));
+                ui.ctx().data_mut(|d| d.insert_temp(history_id, expand_state));
             }
         }
     }
@@ -840,13 +936,7 @@ pub fn show(
     // needs no separate reconciliation pass, see `Document::folded_lines`'s
     // doc comment — then narrowed to just the currently-collapsed ones as
     // the line-space hidden-range list `text_area`'s `FoldMap` skips.
-    let folds = parser
-        .as_ref()
-        .and_then(|p| {
-            p.tree()
-                .map(|tree| syntax::foldable_ranges(tree, &old_text, p.language()))
-        })
-        .unwrap_or_default();
+    let folds = foldable_ranges_for(ui, widget_id, parser.as_ref(), &doc.buffer, &old_text);
     if fold_all_request {
         folding::fold_all(&folds, &mut doc.folded_lines);
     }
@@ -869,9 +959,7 @@ pub fn show(
     } else {
         folding::FOLD_GUTTER_WIDTH
     };
-    let gutter_width = digit_width * line_count.to_string().len() as f32
-        + GUTTER_PADDING * 2.0
-        + fold_gutter_width;
+    let gutter_width = digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0 + fold_gutter_width;
 
     // `text_area` shapes with real per-token colors (`HighlightSpan`) instead
     // of egui's own `layouter` closure — resolved here (against `old_text`'s
@@ -880,7 +968,7 @@ pub fn show(
     // that any of this frame's own edits land in too) rather than inside
     // `text_area`, which stays decoupled from `syntax`/`theme` on purpose.
     let dark_mode = ui.visuals().dark_mode;
-    let spans = highlight_spans_for(parser.as_ref(), &old_text, dark_mode);
+    let spans = highlight_spans_for(ui, widget_id, parser.as_ref(), &doc.buffer, &old_text, dark_mode);
     let font_id = FontId::new(font_size, editor_font.family());
     let text_color = theme::default_text(dark_mode);
 
@@ -915,6 +1003,7 @@ pub fn show(
             ui,
             widget_id,
             &doc.buffer,
+            &old_text,
             font_id,
             text_color,
             doc.read_only,
@@ -952,14 +1041,13 @@ pub fn show(
             apply_auto_indent(&old_text, &raw_new_text, cursor_char, indent_settings);
         let corrected = if indent_cursor.is_some() {
             manual_caret = indent_cursor.map(Caret::at);
-            text_after_indent
+            text_after_indent.into_owned()
         } else {
             apply_auto_pair(&old_text, &raw_new_text, cursor_char)
         };
 
         apply_edit(doc, parser, &old_text, &corrected);
-        old_text = corrected.clone();
-        text = corrected;
+        old_text = corrected;
     }
 
     // Completes the Alt+Click interception begun above `shell_out`: place a
@@ -1014,8 +1102,8 @@ pub fn show(
         } else {
             let text_now = doc.buffer.to_string();
             let needle_range = primary_caret.range();
-            let needle = text_now[char_to_byte(&text_now, needle_range.start)
-                ..char_to_byte(&text_now, needle_range.end)]
+            let needle = text_now
+                [char_to_byte(&text_now, needle_range.start)..char_to_byte(&text_now, needle_range.end)]
                 .to_string();
 
             let mut claimed = doc.extra_selections.clone();
@@ -1060,8 +1148,7 @@ pub fn show(
     // picks which class (then which fields) — see
     // `codegen::GenerateAccessorsDialog`.
     let keyboard_requested_accessors =
-        (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift)
-            .then_some(AccessorKind::Both);
+        (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
         if doc.language != Some(Language::Java) {
             *last_error = Some("Generate getters/setters only works for Java files.".to_string());
@@ -1071,13 +1158,11 @@ pub fn show(
             match classes.len() {
                 0 => *last_error = Some("No class fields found in this file.".to_string()),
                 1 => {
-                    let generated =
-                        generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
+                    let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
-                        *last_error =
-                            Some("Nothing to generate: every field here is final.".to_string());
+                        *last_error = Some("Nothing to generate: every field here is final.".to_string());
                     } else {
                         let (inserted, new_cursor) =
                             insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
@@ -1088,8 +1173,7 @@ pub fn show(
                 _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
             }
         } else {
-            *last_error =
-                Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
+            *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
         }
     }
 
@@ -1101,12 +1185,9 @@ pub fn show(
     // immediately discover there was nothing to show.
     if generate_dialog.is_some() {
         let doc_text_for_dialog = doc.buffer.to_string();
-        if let Some(outcome) = codegen::show_generate_accessors_dialog(
-            ui,
-            generate_dialog,
-            &doc_text_for_dialog,
-            &indent_settings.unit(),
-        ) {
+        if let Some(outcome) =
+            codegen::show_generate_accessors_dialog(ui, generate_dialog, &doc_text_for_dialog, &indent_settings.unit())
+        {
             match outcome {
                 Ok((inserted, new_cursor)) => {
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
@@ -1126,23 +1207,16 @@ pub fn show(
     // templates are all valid Java even with zero fields selected).
     if let Some(kind) = generate_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some(
-                "Generate Constructor/toString/equals() only works for Java files.".to_string(),
-            );
+            *last_error = Some("Generate Constructor/toString/equals() only works for Java files.".to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
                 0 => *last_error = Some("No class fields found in this file.".to_string()),
                 1 => {
-                    let generated = codegen::generate_method(
-                        &classes[0].name,
-                        &classes[0].fields,
-                        &indent_settings.unit(),
-                        kind,
-                    );
-                    let (inserted, new_cursor) =
-                        insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
+                    let generated =
+                        codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
+                    let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                     apply_edit(doc, parser, &text_now, &inserted);
                     manual_caret = Some(Caret::at(new_cursor));
                 }
@@ -1187,77 +1261,55 @@ pub fn show(
             let enclosing = cursor_byte.and_then(|c| syntax::enclosing_class(tree, &text_now, c));
 
             match enclosing {
-                None => {
-                    *last_error =
-                        Some("Place the cursor inside a class to override a method.".to_string())
-                }
-                Some((class_name, insertion_byte)) => {
-                    match syntax::superclass_name(tree, &text_now, &class_name) {
-                        None => {
-                            *last_error = Some(format!(
-                                "{class_name} has no superclass or interface to override methods from."
-                            ));
-                        }
-                        Some(super_name) => {
-                            let super_path = project.and_then(|p| {
-                                codegen::find_java_file_by_stem(&p.tree, &super_name)
-                            });
-                            match super_path {
-                                None => {
-                                    *last_error = Some(format!(
-                                        "Override Method only looks up superclasses in this project (couldn't find {super_name}.java)."
-                                    ));
-                                }
-                                Some(super_path) => match std::fs::read_to_string(&super_path) {
-                                    Err(err) => {
-                                        *last_error = Some(format!(
-                                            "failed to read {}: {err}",
-                                            super_path.display()
-                                        ));
-                                    }
-                                    Ok(super_source) => {
-                                        let mut super_parser =
-                                            IncrementalParser::new(Language::Java);
-                                        let super_tree = super_parser.parse(&super_source);
-                                        let inherited = syntax::methods_in_type(
-                                            super_tree,
-                                            &super_source,
-                                            &super_name,
-                                        );
-                                        let already_here =
-                                            syntax::methods_in_type(tree, &text_now, &class_name);
-                                        let candidates: Vec<_> = inherited
-                                            .into_iter()
-                                            .filter(|m| {
-                                                !already_here.iter().any(|existing| {
-                                                    existing.name == m.name
-                                                        && existing.params.len() == m.params.len()
-                                                })
-                                            })
-                                            .collect();
-
-                                        if candidates.is_empty() {
-                                            *last_error = Some(format!(
-                                                "No overridable methods found on {super_name} (or they're all already overridden)."
-                                            ));
-                                        } else {
-                                            *override_method_dialog =
-                                                Some(OverrideMethodDialog::new(
-                                                    candidates,
-                                                    insertion_byte,
-                                                ));
-                                        }
-                                    }
-                                },
+                None => *last_error = Some("Place the cursor inside a class to override a method.".to_string()),
+                Some((class_name, insertion_byte)) => match syntax::superclass_name(tree, &text_now, &class_name) {
+                    None => {
+                        *last_error = Some(format!(
+                            "{class_name} has no superclass or interface to override methods from."
+                        ));
+                    }
+                    Some(super_name) => {
+                        let super_path = project.and_then(|p| codegen::find_java_file_by_stem(&p.tree, &super_name));
+                        match super_path {
+                            None => {
+                                *last_error = Some(format!(
+                                    "Override Method only looks up superclasses in this project (couldn't find {super_name}.java)."
+                                ));
                             }
+                            Some(super_path) => match std::fs::read_to_string(&super_path) {
+                                Err(err) => {
+                                    *last_error = Some(format!("failed to read {}: {err}", super_path.display()));
+                                }
+                                Ok(super_source) => {
+                                    let mut super_parser = IncrementalParser::new(Language::Java);
+                                    let super_tree = super_parser.parse(&super_source);
+                                    let inherited = syntax::methods_in_type(super_tree, &super_source, &super_name);
+                                    let already_here = syntax::methods_in_type(tree, &text_now, &class_name);
+                                    let candidates: Vec<_> = inherited
+                                        .into_iter()
+                                        .filter(|m| {
+                                            !already_here.iter().any(|existing| {
+                                                existing.name == m.name && existing.params.len() == m.params.len()
+                                            })
+                                        })
+                                        .collect();
+
+                                    if candidates.is_empty() {
+                                        *last_error = Some(format!(
+                                            "No overridable methods found on {super_name} (or they're all already overridden)."
+                                        ));
+                                    } else {
+                                        *override_method_dialog =
+                                            Some(OverrideMethodDialog::new(candidates, insertion_byte));
+                                    }
+                                }
+                            },
                         }
                     }
-                }
+                },
             }
         } else {
-            *last_error = Some(
-                "Couldn't find overridable methods: no syntax tree available yet.".to_string(),
-            );
+            *last_error = Some("Couldn't find overridable methods: no syntax tree available yet.".to_string());
         }
     }
 
@@ -1289,7 +1341,6 @@ pub fn show(
         doc,
         parser,
         shell_out.caret,
-        &mut text,
         &mut old_text,
         &mut manual_caret,
         pending_input,
@@ -1316,11 +1367,10 @@ pub fn show(
         && let Some(primary_caret) = shell_out.caret
         && primary_caret.is_collapsed()
     {
-        let word_range = multi_cursor::word_range_at(&text, primary_caret.primary);
+        let word_range = multi_cursor::word_range_at(&old_text, primary_caret.primary);
         if !word_range.is_empty() {
-            let word =
-                &text[char_to_byte(&text, word_range.start)..char_to_byte(&text, word_range.end)];
-            let occurrences = multi_cursor::find_all_occurrences(&text, word, true);
+            let word = &old_text[char_to_byte(&old_text, word_range.start)..char_to_byte(&old_text, word_range.end)];
+            let occurrences = occurrences_for(ui, widget_id, &doc.buffer, &old_text, word);
             paint_occurrence_highlights(ui, &shell_out.base, &doc.buffer, &occurrences);
         }
     }
@@ -1336,8 +1386,8 @@ pub fn show(
         && primary_caret.is_collapsed()
         && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
     {
-        let cursor_byte = char_to_byte(&text, primary_caret.primary);
-        if let Some(pair) = syntax::bracket_match(tree, &text, cursor_byte) {
+        let cursor_byte = char_to_byte(&old_text, primary_caret.primary);
+        if let Some(pair) = syntax::bracket_match(tree, &old_text, cursor_byte) {
             paint_bracket_match(ui, &shell_out.base, &doc.buffer, pair);
         }
     }
@@ -1349,7 +1399,7 @@ pub fn show(
         paint_whitespace(ui, &shell_out.base, &doc.buffer);
     }
 
-    paint_diagnostics(ui, &shell_out.base, &doc.buffer, &text, &doc.diagnostics);
+    paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &doc.diagnostics);
     paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);
     paint_line_numbers(
         ui,
@@ -1387,16 +1437,12 @@ pub fn show(
     // characters, never lines, so the two agree even if they differ by a few
     // whitespace bytes on the exact frame of such an edit).
     if view_settings.show_sticky_scroll
-        && let Some((tree, language)) = parser
-            .as_ref()
-            .and_then(|p| p.tree().map(|t| (t, p.language())))
+        && let Some((tree, language)) = parser.as_ref().and_then(|p| p.tree().map(|t| (t, p.language())))
     {
         let top_pos = egui::pos2(shell_out.base.content_origin.x, ui.clip_rect().top());
         let top_char = text_area::char_offset_for_pos(&shell_out.base, &doc.buffer, top_pos);
         let line_count = doc.buffer.len_lines();
-        let top_line = doc
-            .buffer
-            .char_to_line(top_char.min(doc.buffer.len_chars()));
+        let top_line = doc.buffer.char_to_line(top_char.min(doc.buffer.len_chars()));
         if top_line > 0 && line_count > 0 {
             let top_byte = doc.buffer.line_to_byte(top_line.min(line_count - 1));
             let scope_lines: Vec<usize> = syntax::enclosing_scope_starts(tree, top_byte, language)
@@ -1410,13 +1456,7 @@ pub fn show(
                     .map(|&line| doc.buffer.line(line).chars().collect())
                     .collect();
                 let sticky_font = FontId::new(font_size, editor_font.family());
-                paint_sticky_scroll(
-                    ui,
-                    &shell_out.base,
-                    &headers,
-                    sticky_font,
-                    ui.visuals().dark_mode,
-                );
+                paint_sticky_scroll(ui, &shell_out.base, &headers, sticky_font, ui.visuals().dark_mode);
             }
         }
     }
@@ -1505,16 +1545,11 @@ fn multi_edit_op_from_events(events: &[Event]) -> MultiEditOp {
         match event {
             Event::Text(s) => inserted.push_str(s),
             Event::Paste(s) => inserted.push_str(s),
+            Event::Key { key: Key::Enter, .. } => inserted.push('\n'),
             Event::Key {
-                key: Key::Enter, ..
-            } => inserted.push('\n'),
-            Event::Key {
-                key: Key::Backspace,
-                ..
+                key: Key::Backspace, ..
             } => return MultiEditOp::Backspace,
-            Event::Key {
-                key: Key::Delete, ..
-            } => return MultiEditOp::Delete,
+            Event::Key { key: Key::Delete, .. } => return MultiEditOp::Delete,
             _ => {}
         }
     }

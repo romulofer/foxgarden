@@ -9,10 +9,7 @@ use crate::language::Language;
 /// If the file doesn't sit under one of those, no `package` line is emitted
 /// — there's nothing sane to infer outside that convention.
 pub fn generate(language: Language, project_root: &Path, file_path: &Path) -> String {
-    let class_name = file_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Main");
+    let class_name = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("Main");
     let package = infer_package(project_root, file_path);
 
     match language {
@@ -42,14 +39,11 @@ pub fn generate(language: Language, project_root: &Path, file_path: &Path) -> St
 fn infer_package(project_root: &Path, file_path: &Path) -> Option<String> {
     let relative = file_path.strip_prefix(project_root).ok()?;
     let dir = relative.parent()?;
-    let components: Vec<&str> = dir
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
+    let components: Vec<&str> = dir.components().filter_map(|c| c.as_os_str().to_str()).collect();
 
-    let anchor = components.windows(3).position(|w| {
-        w[0] == "src" && (w[1] == "main" || w[1] == "test") && (w[2] == "java" || w[2] == "kotlin")
-    })?;
+    let anchor = components
+        .windows(3)
+        .position(|w| w[0] == "src" && (w[1] == "main" || w[1] == "test") && (w[2] == "java" || w[2] == "kotlin"))?;
     let package_components = &components[anchor + 3..];
 
     if package_components.is_empty() {

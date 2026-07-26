@@ -57,7 +57,9 @@ fn serialize_one(config: &RunConfig) -> String {
 fn parse_block(block: &str) -> RunConfig {
     let mut config = RunConfig::default();
     for line in block.lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         match key {
             "name" => config.name = value.to_string(),
             "main_class" => config.main_class = value.to_string(),
@@ -85,7 +87,12 @@ fn parse_block(block: &str) -> RunConfig {
 /// doc comment) — a config with an empty/missing `name` is still parsed
 /// (not skipped), it just renders as "(unnamed)" wherever a name is shown.
 pub fn parse_run_configs(input: &str) -> Vec<RunConfig> {
-    input.split("\n\n").map(str::trim).filter(|block| !block.is_empty()).map(parse_block).collect()
+    input
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .map(parse_block)
+        .collect()
 }
 
 /// Inverse of `parse_run_configs`.
@@ -101,7 +108,9 @@ fn run_configs_path(project_root: &Path) -> PathBuf {
 /// `Vec`, not an error, if none have been saved yet (the common case: most
 /// projects never get one).
 pub fn load_run_configs(project_root: &Path) -> Vec<RunConfig> {
-    std::fs::read_to_string(run_configs_path(project_root)).map(|s| parse_run_configs(&s)).unwrap_or_default()
+    std::fs::read_to_string(run_configs_path(project_root))
+        .map(|s| parse_run_configs(&s))
+        .unwrap_or_default()
 }
 
 /// Inverse of `load_run_configs`: writes `configs` to
@@ -125,7 +134,10 @@ mod tests {
             main_class: "com.example.Main".to_string(),
             vm_args: "-Xmx512m".to_string(),
             program_args: "--debug".to_string(),
-            env: vec![("DEBUG".to_string(), "true".to_string()), ("PORT".to_string(), "8080".to_string())],
+            env: vec![
+                ("DEBUG".to_string(), "true".to_string()),
+                ("PORT".to_string(), "8080".to_string()),
+            ],
             working_dir: Some(PathBuf::from("/home/user/project")),
         }
     }
@@ -152,7 +164,10 @@ mod tests {
     #[test]
     fn an_env_value_containing_equals_signs_round_trips() {
         let mut config = RunConfig::default();
-        config.env.push(("JDBC_URL".to_string(), "jdbc:postgresql://host/db?user=a&pass=b".to_string()));
+        config.env.push((
+            "JDBC_URL".to_string(),
+            "jdbc:postgresql://host/db?user=a&pass=b".to_string(),
+        ));
 
         let serialized = serialize_run_configs(&[config.clone()]);
         assert_eq!(parse_run_configs(&serialized), vec![config]);

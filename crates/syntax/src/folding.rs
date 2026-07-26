@@ -80,7 +80,11 @@ fn fold_range_for(node: Node, source: &str) -> Option<FoldRange> {
     if hidden_start >= end {
         return None;
     }
-    Some(FoldRange { marker_line: node.start_position().row, start_byte: hidden_start, end_byte: end })
+    Some(FoldRange {
+        marker_line: node.start_position().row,
+        start_byte: hidden_start,
+        end_byte: end,
+    })
 }
 
 #[cfg(test)]

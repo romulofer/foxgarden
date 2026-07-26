@@ -8,7 +8,6 @@
 //! syntax highlighting slots in with the overlay/`char_rect` work (2c), where
 //! the visible-range span slicing lives.
 
-use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -16,6 +15,7 @@ use egui::text::LayoutJob;
 use egui::{Color32, FontId, Galley, Sense, TextFormat};
 use ropey::Rope;
 
+use super::cache::{hash_hidden, hash_rope_content};
 use super::{FoldMap, content_height, prefix_rows, visible_lines, visible_rows};
 
 /// One already-resolved syntax-highlighting span: a **byte** range into the
@@ -81,7 +81,13 @@ impl TextAreaOutput {
         let clamped = char_offset.min(buffer.len_chars());
         let line = buffer.char_to_line(clamped);
         let col = clamped - buffer.line_to_char(line);
-        let idx = self.row_galleys.iter().position(|(l, _)| *l == line)?;
+        // `row_galleys` is always kept in ascending-line order (see its own
+        // doc comment), so a binary search (SPEC.md §8) finds the same entry
+        // a linear `position` scan would, in O(log rows) instead of O(rows)
+        // — called several times per frame (diagnostics, occurrence/bracket
+        // highlights, caret, IME range), each over however many rows are
+        // currently visible.
+        let idx = self.row_galleys.binary_search_by_key(&line, |(l, _)| *l).ok()?;
         let galley = &self.row_galleys[idx].1;
         let block_top = self.content_origin.y + self.row_offsets[idx] as f32 * self.row_height;
         let local = galley.pos_from_cursor(egui::text::CCursor::new(col));
@@ -102,10 +108,7 @@ impl TextAreaOutput {
 /// exercised directly by `text_area/tests.rs` today, hence the `cfg_attr`
 /// rather than a plain `#[expect]` (which would misfire as "unfulfilled" in
 /// test builds, where this genuinely is used).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "future read-only-viewer API surface")
-)]
+#[cfg_attr(not(test), expect(dead_code, reason = "future read-only-viewer API surface"))]
 pub fn show_readonly(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -197,10 +200,7 @@ pub(super) fn shape_range(
     let map = FoldMap::new(hidden);
     rows.map(|visual_row| {
         let logical = map.to_logical(visual_row);
-        (
-            logical,
-            shape_line(ui, buffer, logical, font_id, spans, f32::INFINITY),
-        )
+        (logical, shape_line(ui, buffer, logical, font_id, spans, f32::INFINITY))
     })
     .collect()
 }
@@ -221,12 +221,7 @@ pub(super) fn shape_line_range(
 ) -> Vec<(usize, Arc<Galley>)> {
     lines
         .filter(|line| !hidden.iter().any(|h| h.contains(line)))
-        .map(|line| {
-            (
-                line,
-                shape_line(ui, buffer, line, font_id, spans, wrap_width),
-            )
-        })
+        .map(|line| (line, shape_line(ui, buffer, line, font_id, spans, wrap_width)))
         .collect()
 }
 
@@ -292,23 +287,12 @@ fn shape_line(
             .start
             .saturating_sub(line_start_byte)
             .clamp(cursor, line_len_bytes);
-        let local_end = span
-            .range
-            .end
-            .saturating_sub(line_start_byte)
-            .min(line_len_bytes);
-        if local_start >= local_end
-            || !text.is_char_boundary(local_start)
-            || !text.is_char_boundary(local_end)
-        {
+        let local_end = span.range.end.saturating_sub(line_start_byte).min(line_len_bytes);
+        if local_start >= local_end || !text.is_char_boundary(local_start) || !text.is_char_boundary(local_end) {
             continue;
         }
         if local_start > cursor {
-            job.append(
-                &text[cursor..local_start],
-                0.0,
-                format(Color32::PLACEHOLDER),
-            );
+            job.append(&text[cursor..local_start], 0.0, format(Color32::PLACEHOLDER));
         }
         job.append(&text[local_start..local_end], 0.0, format(span.color));
         cursor = local_end;
@@ -339,9 +323,7 @@ pub(super) fn layout_visible_wrapped(
 
     let counts = cached_row_counts(ui, id, buffer, &font_id, width, hidden, total_lines);
     let prefix = prefix_rows(&counts);
-    let total_rows = *prefix
-        .last()
-        .expect("prefix_rows always returns at least one entry");
+    let total_rows = *prefix.last().expect("prefix_rows always returns at least one entry");
 
     // Same stable-`id` reasoning as `layout_visible`'s own allocate/interact
     // split (see its doc comment).
@@ -357,8 +339,8 @@ pub(super) fn layout_visible_wrapped(
     // `lines`) so the two can never drift out of index-alignment with each
     // other — every entry's offset is just its own line's prefix-sum value.
     let row_offsets: Vec<usize> = row_galleys.iter().map(|(line, _)| prefix[*line]).collect();
-    let visible_rows = prefix.get(lines.start).copied().unwrap_or(0)
-        ..prefix.get(lines.end).copied().unwrap_or(total_rows);
+    let visible_rows =
+        prefix.get(lines.start).copied().unwrap_or(0)..prefix.get(lines.end).copied().unwrap_or(total_rows);
 
     TextAreaOutput {
         response,
@@ -426,9 +408,7 @@ fn cached_row_counts(
             if hidden.iter().any(|h| h.contains(&line)) {
                 0
             } else {
-                shape_line(ui, buffer, line, font_id, &[], wrap_width)
-                    .rows
-                    .len()
+                shape_line(ui, buffer, line, font_id, &[], wrap_width).rows.len()
             }
         })
         .collect();
@@ -443,25 +423,4 @@ fn cached_row_counts(
         )
     });
     counts
-}
-
-fn hash_rope_content(buffer: &Rope) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    // Hashes each chunk of the rope's own internal representation rather
-    // than `buffer.to_string()` first, so cache-checking (the common,
-    // nothing-changed case too) never pays for a whole-buffer string
-    // allocation just to throw it away.
-    for chunk in buffer.chunks() {
-        chunk.hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-fn hash_hidden(hidden: &[Range<usize>]) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for range in hidden {
-        range.start.hash(&mut hasher);
-        range.end.hash(&mut hasher);
-    }
-    hasher.finish()
 }

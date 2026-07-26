@@ -17,3 +17,5 @@ class Hello {
 enum class Level {
     LOW, MEDIUM, HIGH
 }
+
+inline fun <reified T> isInstance(value: Any): Boolean = value is T

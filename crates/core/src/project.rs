@@ -12,8 +12,17 @@ pub enum FileKind {
 /// tens of thousands of loose objects or a populated `node_modules` doesn't
 /// turn opening the project into a multi-second walk of files nobody wants
 /// to see in the tree anyway.
-const SKIPPED_DIR_NAMES: &[&str] =
-    &[".git", "target", "node_modules", "build", ".idea", "dist", "out", ".svn", ".hg"];
+const SKIPPED_DIR_NAMES: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    "build",
+    ".idea",
+    "dist",
+    "out",
+    ".svn",
+    ".hg",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileNode {

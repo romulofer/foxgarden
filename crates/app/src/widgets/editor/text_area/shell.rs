@@ -18,8 +18,8 @@ use ropey::Rope;
 
 use super::history::{EditKind, History, Snapshot};
 use super::input::{
-    Caret, backspace, clamp_out_of_hidden, column_of, delete_forward, move_down, move_end,
-    move_home, move_left, move_right, move_up, replace_selection,
+    Caret, LineIndex, backspace, clamp_out_of_hidden, column_of, delete_forward, move_down, move_end, move_home,
+    move_left, move_right, move_up, replace_selection,
 };
 use super::render::{
     HighlightSpan, TextAreaOutput, layout_visible, layout_visible_wrapped, paint_rows, shape_line_range, shape_range,
@@ -144,7 +144,11 @@ pub fn char_offset_for_pos(out: &TextAreaOutput, buffer: &Rope, pos: egui::Pos2)
     // already have the per-entry values rather than a line-indexed table.
     // In the no-wrap case this always resolves to `raw_row - visible_rows.
     // start`, same as before word-wrap existed.
-    let idx = out.row_offsets.partition_point(|&r| r <= raw_row).saturating_sub(1).min(out.row_galleys.len() - 1);
+    let idx = out
+        .row_offsets
+        .partition_point(|&r| r <= raw_row)
+        .saturating_sub(1)
+        .min(out.row_galleys.len() - 1);
     let (logical, galley) = &out.row_galleys[idx];
     // How far into *this entry's own* (possibly multi-row, once wrapped)
     // galley the click landed — `galley.cursor_from_pos` needs a position
@@ -156,18 +160,22 @@ pub fn char_offset_for_pos(out: &TextAreaOutput, buffer: &Rope, pos: egui::Pos2)
 }
 
 /// Interactive `show`: renders `buffer` and, when focused, edits it in
-/// response to this frame's input. `read_only` mirrors `doc.read_only`
-/// (strips every mutating event, same policy `widget.rs::strip_mutating_
-/// events` enforces for the `TextEdit` path today — navigation/selection/
-/// copy stay live). `spans` are this frame's syntax-highlighting spans
-/// (computed by the caller against `buffer`'s *pre*-edit contents — see
-/// `render::HighlightSpan`'s doc comment); on an edit frame they're reused
-/// as best-effort for the immediate post-edit re-shape below rather than
-/// left stale for a whole extra frame, matching the same "highlighted
-/// against the not-yet-reparsed tree for one frame" behavior `widget.rs`'s
-/// `egui::TextEdit` path already has today (its layouter runs inside the
-/// same `show()` call that produces the post-edit text, using whatever
-/// `parser` state existed before that edit's own `apply_edit` call).
+/// response to this frame's input. `text` is `buffer.to_string()` — the
+/// caller (`widget.rs`) already has this from its own pre-frame
+/// stringification, so it's threaded through here rather than re-derived
+/// (SPEC.md §2: avoids a second full-buffer allocation every frame). `read_
+/// only` mirrors `doc.read_only` (strips every mutating event, same policy
+/// `widget.rs::strip_mutating_events` enforces for the `TextEdit` path today
+/// — navigation/selection/copy stay live). `spans` are this frame's syntax-
+/// highlighting spans (computed by the caller against `buffer`'s *pre*-edit
+/// contents — see `render::HighlightSpan`'s doc comment); on an edit frame
+/// they're reused as best-effort for the immediate post-edit re-shape below
+/// rather than left stale for a whole extra frame, matching the same
+/// "highlighted against the not-yet-reparsed tree for one frame" behavior
+/// `widget.rs`'s `egui::TextEdit` path already has today (its layouter runs
+/// inside the same `show()` call that produces the post-edit text, using
+/// whatever `parser` state existed before that edit's own `apply_edit`
+/// call).
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is independently threaded per-frame state, not a bundle waiting to be a struct — see widget::show's own too-many-arguments allowance for the same shape"
@@ -176,6 +184,7 @@ pub fn show(
     ui: &mut egui::Ui,
     id: Id,
     buffer: &Rope,
+    text: &str,
     font_id: FontId,
     text_color: Color32,
     read_only: bool,
@@ -223,6 +232,15 @@ pub fn show(
         });
     }
 
+    // Captured *before* `pre`'s own `ui.allocate_space` runs (inside
+    // `layout_visible_wrapped`) and reused below for the post-edit reshape,
+    // rather than each querying `ui.available_width()` independently: once
+    // `pre` allocates its row space, the horizontal layout's cursor has
+    // already advanced by that width, so a second query on the same `ui`
+    // moments later would see almost nothing left — collapsing every
+    // character onto its own wrapped row for that one frame.
+    let wrap_width = ui.available_width();
+
     // Shape (never paint yet) against the pre-edit buffer: this is what's
     // actually on screen right now, so pointer clicks below resolve against
     // it rather than against text that doesn't exist on screen until this
@@ -236,10 +254,17 @@ pub fn show(
     if pre.response.clicked() || pre.response.drag_started() {
         ui.memory_mut(|m| m.request_focus(id));
     }
-    let has_focus =
-        had_focus_at_frame_start || pre.response.clicked() || pre.response.drag_started();
+    let has_focus = had_focus_at_frame_start || pre.response.clicked() || pre.response.drag_started();
 
-    let text = buffer.to_string();
+    // PLAN.md Phase 5 / SPEC.md §7: built once here (from `text`, this
+    // frame's starting content) and kept in sync through `process_events`
+    // below — rebuilt only when an event actually edits `current`, not on
+    // every motion — so every `line_col`/`line_col_to_char`/`char_to_byte`
+    // lookup this frame (click resolution here, every `move_*` call in
+    // `process_events`, the `clamp_out_of_hidden` call after it returns)
+    // binary-searches this instead of each independently rescanning the
+    // whole buffer from char/byte 0.
+    let mut index = LineIndex::build(text);
 
     if let Some(pos) = pre.response.interact_pointer_pos() {
         let extend = ui.input(|i| i.modifiers.shift);
@@ -254,19 +279,15 @@ pub fn show(
             let keep_anchor = extend || pre.response.dragged();
             state.caret = Caret {
                 primary: offset,
-                anchor: if keep_anchor {
-                    state.caret.anchor
-                } else {
-                    offset
-                },
+                anchor: if keep_anchor { state.caret.anchor } else { offset },
             };
         }
-        state.preferred_col = column_of(&text, state.caret.primary);
+        state.preferred_col = column_of(&index, state.caret.primary);
     }
 
     let mut new_text = None;
     if has_focus {
-        new_text = process_events(ui, &text, &mut state, read_only);
+        new_text = process_events(ui, text, &mut index, &mut state, read_only);
     }
 
     // Whichever buffer is actually going on screen this frame — the edited
@@ -281,9 +302,10 @@ pub fn show(
             // rather than `pre.visible_rows` — with word-wrap on that field
             // is a *visual*-row range, not directly a line range, and one
             // entry can now cover more than one of those rows.
-            let lines = pre.row_galleys.first().map_or(0, |(l, _)| *l)..pre.row_galleys.last().map_or(0, |(l, _)| *l + 1);
+            let lines =
+                pre.row_galleys.first().map_or(0, |(l, _)| *l)..pre.row_galleys.last().map_or(0, |(l, _)| *l + 1);
             let row_galleys = if word_wrap {
-                shape_line_range(ui, post_buffer, lines, hidden, &font_id, spans, ui.available_width())
+                shape_line_range(ui, post_buffer, lines, hidden, &font_id, spans, wrap_width)
             } else {
                 shape_range(ui, post_buffer, pre.visible_rows.clone(), hidden, &font_id, spans)
             };
@@ -301,7 +323,14 @@ pub fn show(
                     this
                 })
                 .collect();
-            (TextAreaOutput { row_galleys, row_offsets, ..pre.clone() }, post_buffer)
+            (
+                TextAreaOutput {
+                    row_galleys,
+                    row_offsets,
+                    ..pre.clone()
+                },
+                post_buffer,
+            )
         }
         None => (pre.clone(), buffer),
     };
@@ -313,8 +342,13 @@ pub fn show(
     // visible` actually shaped, which `hidden` already excluded), so this
     // only needs to run after keyboard-driven motion, i.e. whenever focused.
     if has_focus && !hidden.is_empty() {
-        let final_text = final_buffer.to_string();
-        state.caret.primary = clamp_out_of_hidden(&final_text, state.caret.primary, hidden);
+        // `index` already reflects `final_buffer`'s exact content: `process_
+        // events` (above) rebuilds it in lockstep with `current` on every
+        // edit, and `final_buffer` is that same post-edit `current` (or,
+        // absent an edit, still the original `text` `index` started from)
+        // — so no separate `final_buffer.to_string()` is needed just to
+        // re-derive what `index` already has.
+        state.caret.primary = clamp_out_of_hidden(&index, state.caret.primary, hidden);
     }
 
     // Resets the blink cycle to solid-visible on anything that should make
@@ -325,10 +359,7 @@ pub fn show(
     // case). Without this a click would leave the caret starting mid-blink
     // (possibly invisible) instead of visible right where the user just
     // looked.
-    if (!had_focus_at_frame_start && has_focus)
-        || state.caret != caret_at_frame_start
-        || new_text.is_some()
-    {
+    if (!had_focus_at_frame_start && has_focus) || state.caret != caret_at_frame_start || new_text.is_some() {
         state.last_interaction = ui.input(|i| i.time);
     }
 
@@ -340,9 +371,7 @@ pub fn show(
         // window — without this, an IME popup (e.g. composing Japanese/
         // Chinese input) would appear wherever it last was instead of
         // tracking the caret, since nothing else in this frame reports it.
-        if !read_only
-            && let Some(cursor_rect) = final_out.char_rect(final_buffer, state.caret.primary)
-        {
+        if !read_only && let Some(cursor_rect) = final_out.char_rect(final_buffer, state.caret.primary) {
             ui.output_mut(|o| {
                 o.ime = Some(egui::output::IMEOutput {
                     rect: pre.response.rect,
@@ -395,20 +424,11 @@ fn paint_caret(
             let Some(row_galley) = out.row_galleys.get(i).map(|(_, g)| g) else {
                 continue;
             };
-            let x0 = out.content_origin.x
-                + row_galley
-                    .pos_from_cursor(egui::text::CCursor::new(start_col))
-                    .left();
-            let x1 = out.content_origin.x
-                + row_galley
-                    .pos_from_cursor(egui::text::CCursor::new(end_col))
-                    .left();
+            let x0 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(start_col)).left();
+            let x1 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(end_col)).left();
             let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
             painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x0, y),
-                    egui::pos2(x1.max(x0), y + out.row_height),
-                ),
+                egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0), y + out.row_height)),
                 0.0,
                 selection_color,
             );
@@ -417,16 +437,10 @@ fn paint_caret(
 
     if let Some(rect) = out.char_rect(buffer, state.caret.primary) {
         if caret_visible(ui, state.last_interaction, cursor_blink) {
-            painter.line_segment(
-                [rect.left_top(), rect.left_bottom()],
-                Stroke::new(1.5, caret_color),
-            );
+            painter.line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(1.5, caret_color));
         }
         if let Some(ime) = &state.ime_range
-            && let (Some(start), Some(end)) = (
-                out.char_rect(buffer, ime.start),
-                out.char_rect(buffer, ime.end),
-            )
+            && let (Some(start), Some(end)) = (out.char_rect(buffer, ime.start), out.char_rect(buffer, ime.end))
         {
             let y = start.bottom();
             painter.line_segment(
@@ -479,10 +493,15 @@ fn caret_visible(ui: &egui::Ui, last_interaction: f64, cursor_blink: bool) -> bo
 /// order (a fast typist can deliver more than one `Event::Text` in a single
 /// frame), returning the final text if anything changed. Mirrors
 /// `egui::TextEdit`'s own `events()` loop in shape, re-expressed over the
-/// `input.rs` pure functions instead of a private `CCursorRange`.
+/// `input.rs` pure functions instead of a private `CCursorRange`. `index`
+/// must reflect `text` on entry (the caller's own `LineIndex::build(text)`);
+/// every branch below that reassigns `current` also rebuilds `*index` in the
+/// same statement, so it's left reflecting `current`'s final value on return
+/// — the caller reuses it as-is afterward rather than rebuilding again.
 fn process_events(
     ui: &egui::Ui,
     text: &str,
+    index: &mut LineIndex,
     state: &mut ShellState,
     read_only: bool,
 ) -> Option<String> {
@@ -498,8 +517,8 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_left(&current, state.caret, modifiers.shift);
-                state.preferred_col = column_of(&current, state.caret.primary);
+                state.caret = move_left(state.caret, modifiers.shift);
+                state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }
             Event::Key {
@@ -508,8 +527,8 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_right(&current, state.caret, modifiers.shift);
-                state.preferred_col = column_of(&current, state.caret.primary);
+                state.caret = move_right(index, state.caret, modifiers.shift);
+                state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }
             Event::Key {
@@ -518,8 +537,7 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                let (caret, col) =
-                    move_up(&current, state.caret, modifiers.shift, state.preferred_col);
+                let (caret, col) = move_up(index, state.caret, modifiers.shift, state.preferred_col);
                 state.caret = caret;
                 state.preferred_col = col;
                 state.history.break_run();
@@ -530,8 +548,7 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                let (caret, col) =
-                    move_down(&current, state.caret, modifiers.shift, state.preferred_col);
+                let (caret, col) = move_down(index, state.caret, modifiers.shift, state.preferred_col);
                 state.caret = caret;
                 state.preferred_col = col;
                 state.history.break_run();
@@ -542,8 +559,8 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_home(&current, state.caret, modifiers.shift);
-                state.preferred_col = column_of(&current, state.caret.primary);
+                state.caret = move_home(index, state.caret, modifiers.shift);
+                state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }
             Event::Key {
@@ -552,8 +569,8 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_end(&current, state.caret, modifiers.shift);
-                state.preferred_col = column_of(&current, state.caret.primary);
+                state.caret = move_end(index, state.caret, modifiers.shift);
+                state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }
             Event::Key {
@@ -563,7 +580,7 @@ fn process_events(
                 ..
             } if modifiers.command => {
                 state.caret = Caret {
-                    primary: current.chars().count(),
+                    primary: index.char_len(),
                     anchor: 0,
                 };
                 state.history.break_run();
@@ -580,6 +597,7 @@ fn process_events(
                     caret: state.caret,
                 }) {
                     current = restored.text;
+                    *index = LineIndex::build(&current);
                     state.caret = restored.caret;
                     changed = true;
                 }
@@ -589,15 +607,13 @@ fn process_events(
                 pressed: true,
                 modifiers,
                 ..
-            } if modifiers.command
-                && ((modifiers.shift && *key == Key::Z)
-                    || (!modifiers.shift && *key == Key::Y)) =>
-            {
+            } if modifiers.command && ((modifiers.shift && *key == Key::Z) || (!modifiers.shift && *key == Key::Y)) => {
                 if let Some(restored) = state.history.redo(Snapshot {
                     text: current.clone(),
                     caret: state.caret,
                 }) {
                     current = restored.text;
+                    *index = LineIndex::build(&current);
                     state.caret = restored.caret;
                     changed = true;
                 }
@@ -614,10 +630,11 @@ fn process_events(
                         },
                         EditKind::Typing,
                     );
-                    let (out, caret) = replace_selection(&current, state.caret, insert);
+                    let (out, caret) = replace_selection(&current, index, state.caret, insert);
                     current = out;
+                    *index = LineIndex::build(&current);
                     state.caret = caret;
-                    state.preferred_col = column_of(&current, caret.primary);
+                    state.preferred_col = column_of(index, caret.primary);
                     changed = true;
                 }
             }
@@ -633,10 +650,11 @@ fn process_events(
                     },
                     EditKind::Deleting,
                 );
-                if let Some((out, caret)) = backspace(&current, state.caret) {
+                if let Some((out, caret)) = backspace(&current, index, state.caret) {
                     current = out;
+                    *index = LineIndex::build(&current);
                     state.caret = caret;
-                    state.preferred_col = column_of(&current, caret.primary);
+                    state.preferred_col = column_of(index, caret.primary);
                     changed = true;
                 }
             }
@@ -652,10 +670,11 @@ fn process_events(
                     },
                     EditKind::Deleting,
                 );
-                if let Some((out, caret)) = delete_forward(&current, state.caret) {
+                if let Some((out, caret)) = delete_forward(&current, index, state.caret) {
                     current = out;
+                    *index = LineIndex::build(&current);
                     state.caret = caret;
-                    state.preferred_col = column_of(&current, caret.primary);
+                    state.preferred_col = column_of(index, caret.primary);
                     changed = true;
                 }
             }
@@ -671,8 +690,9 @@ fn process_events(
                     },
                     EditKind::Other,
                 );
-                let (out, caret) = replace_selection(&current, state.caret, "\n");
+                let (out, caret) = replace_selection(&current, index, state.caret, "\n");
                 current = out;
+                *index = LineIndex::build(&current);
                 state.caret = caret;
                 state.preferred_col = 0;
                 changed = true;
@@ -690,10 +710,11 @@ fn process_events(
                     },
                     EditKind::Other,
                 );
-                let (out, caret) = replace_selection(&current, state.caret, "\t");
+                let (out, caret) = replace_selection(&current, index, state.caret, "\t");
                 current = out;
+                *index = LineIndex::build(&current);
                 state.caret = caret;
-                state.preferred_col = column_of(&current, caret.primary);
+                state.preferred_col = column_of(index, caret.primary);
                 changed = true;
             }
 
@@ -722,10 +743,11 @@ fn process_events(
                         },
                         EditKind::Other,
                     );
-                    let (out, caret) = replace_selection(&current, state.caret, "");
+                    let (out, caret) = replace_selection(&current, index, state.caret, "");
                     current = out;
+                    *index = LineIndex::build(&current);
                     state.caret = caret;
-                    state.preferred_col = column_of(&current, caret.primary);
+                    state.preferred_col = column_of(index, caret.primary);
                     changed = true;
                 }
             }
@@ -738,16 +760,17 @@ fn process_events(
                         },
                         EditKind::Other,
                     );
-                    let (out, caret) = replace_selection(&current, state.caret, pasted);
+                    let (out, caret) = replace_selection(&current, index, state.caret, pasted);
                     current = out;
+                    *index = LineIndex::build(&current);
                     state.caret = caret;
-                    state.preferred_col = column_of(&current, caret.primary);
+                    state.preferred_col = column_of(index, caret.primary);
                     changed = true;
                 }
             }
 
             Event::Ime(ime_event) => {
-                changed |= apply_ime_event(ime_event, &mut current, state);
+                changed |= apply_ime_event(ime_event, &mut current, index, state);
             }
 
             _ => {}
@@ -763,17 +786,23 @@ fn process_events(
 /// replaces it with the final, real text and ends composition. Mirrors
 /// `egui::TextEdit`'s `events()` handling of `ImeEvent`, minus the
 /// deprecated `Enabled`/`Disabled` variants egui itself no longer emits.
-fn apply_ime_event(event: &egui::ImeEvent, current: &mut String, state: &mut ShellState) -> bool {
+fn apply_ime_event(
+    event: &egui::ImeEvent,
+    current: &mut String,
+    index: &mut LineIndex,
+    state: &mut ShellState,
+) -> bool {
     use egui::ImeEvent;
 
-    let clear_preedit = |current: &mut String, state: &mut ShellState| -> usize {
+    let clear_preedit = |current: &mut String, index: &mut LineIndex, state: &mut ShellState| -> usize {
         if let Some(range) = state.ime_range.take() {
             let caret = Caret {
                 primary: range.end,
                 anchor: range.start,
             };
-            let (out, caret) = replace_selection(current, caret, "");
+            let (out, caret) = replace_selection(current, index, caret, "");
             *current = out;
+            *index = LineIndex::build(current);
             caret.primary
         } else {
             state.caret.range().start
@@ -787,10 +816,11 @@ fn apply_ime_event(event: &egui::ImeEvent, current: &mut String, state: &mut She
             if preedit.is_empty() && state.ime_range.is_none() {
                 return false;
             }
-            let start = clear_preedit(current, state);
+            let start = clear_preedit(current, index, state);
             let caret_at_start = Caret::at(start);
-            let (out, caret) = replace_selection(current, caret_at_start, preedit);
+            let (out, caret) = replace_selection(current, index, caret_at_start, preedit);
             *current = out;
+            *index = LineIndex::build(current);
             state.ime_range = Some(start..caret.primary);
             state.caret = Caret {
                 primary: caret.primary,
@@ -799,15 +829,16 @@ fn apply_ime_event(event: &egui::ImeEvent, current: &mut String, state: &mut She
             true
         }
         ImeEvent::Commit(commit) => {
-            let start = clear_preedit(current, state);
+            let start = clear_preedit(current, index, state);
             if commit.is_empty() {
                 state.caret = Caret::at(start);
                 return true;
             }
-            let (out, caret) = replace_selection(current, Caret::at(start), commit);
+            let (out, caret) = replace_selection(current, index, Caret::at(start), commit);
             *current = out;
+            *index = LineIndex::build(current);
             state.caret = caret;
-            state.preferred_col = column_of(current, caret.primary);
+            state.preferred_col = column_of(index, caret.primary);
             true
         }
     }

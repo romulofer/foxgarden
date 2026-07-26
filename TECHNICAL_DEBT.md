@@ -31,11 +31,11 @@ Resolved) it currently lives in.
 `../references/kotlin/languages/kotlin/highlights.scm`.
 
 **Status:** Partially addressed. The whole-file incompatibility below is
-still real — a direct line-by-line port remains off the table — but one
-concrete construct (enum-entry-as-constant) has now been ported by
-following this entry's own proposed methodology, now that `Scope::Constant`
-exists (added alongside TECHNICAL_DEBT.md #2) to route it into. Recorded
-below as a worked example for whichever construct gets picked up next.
+still real — a direct line-by-line port remains off the table — but two
+concrete constructs (enum-entry-as-constant, richer modifier-keyword
+coverage) have now been ported by following this entry's own proposed
+methodology. Recorded below as worked examples for whichever construct gets
+picked up next.
 
 ### What was found
 
@@ -94,9 +94,27 @@ Verified via `cargo test -p syntax`: an `enum class Level { LOW, MEDIUM,
 HIGH }` fixture in `valid.kt` plus `has_scope_over("LOW"/"MEDIUM"/"HIGH",
 Scope::Constant)` assertions in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
 
-Remaining candidates from Zed's file (richer modifier-keyword coverage,
-regex-literal detection, `@variable.builtin` for `it`/`field`) are each
-still their own future pass, following the same three-step process.
+Also ported richer modifier-keyword coverage (PLAN.md Track K), the second
+item on this entry's own example list. Every modifier keyword Zed's file
+covers via grouped `fwcd`-grammar node types (`class_modifier`,
+`function_modifier`, `visibility_modifier`, etc.) turned out to already be
+present in `highlights_kotlin.scm`'s flat `@keyword` literal list here — one
+exception: `"reified"`, which this file's own header comment had
+deliberately excluded (it doesn't compile as a bare literal, same as
+`"break"`/`"continue"`). Checked `tree-sitter-kotlin-ng`'s `grammar.js`:
+unlike `"break"`/`"continue"`, `"reified"` isn't a bare string in the
+grammar — it's wrapped in its own `reification_modifier` rule
+(`reification_modifier: _ => 'reified'`), and `(reification_modifier)`
+*does* compile (bisected via `tree_sitter::Query::new`, same methodology as
+this entry's own). Added `(reification_modifier) @keyword` to
+`highlights_kotlin.scm`. Verified via `cargo test -p syntax`: an
+`inline fun <reified T> isInstance(value: Any): Boolean = value is T`
+fixture in `valid.kt` plus a `has_scope_over("reified", Scope::Keyword)`
+assertion in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
+
+Remaining candidates from Zed's file (regex-literal detection,
+`@variable.builtin` for `it`/`field`) are each still their own future pass,
+following the same three-step process.
 
 ### Trigger condition
 
@@ -216,7 +234,7 @@ this test module — not worth a dedicated pass on its own.
 
 ---
 
-## 8. A `cargo fmt` run (no project `rustfmt.toml`) reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults
+## 8. ~~A `cargo fmt` run (no project `rustfmt.toml`) reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults~~ — Resolved
 
 **Where:** Every file touched while landing PLAN.md Phase 2 (the
 `egui::TextEdit` → `text_area` swap), Phase 3 (code folding), and Phase 4
@@ -224,8 +242,10 @@ this test module — not worth a dedicated pass on its own.
 `context_menu.rs`, `folding.rs`, everything under `text_area/`,
 `menu_bar.rs`, `tabs.rs`, `app.rs`, `widgets/editor.rs`.
 
-**Status:** Open, left as-is on purpose for this session (see "Why it
-wasn't fixed immediately") rather than fixed on the spot.
+**Status:** Resolved (PLAN.md Phase 7 / SPEC.md §12) — see "What was done"
+below. The rest of this entry (through "Proposed fix") is kept as the
+historical record of why the partial reformatting happened in the first
+place.
 
 ### What was found
 
@@ -278,6 +298,35 @@ Whenever there's appetite for a dedicated formatting-normalization pass —
 not urgent (no functional impact), but the longer it's deferred the bigger
 that one-time diff gets as more files accumulate hand-formatting drift from
 whatever rustfmt's defaults would produce.
+
+### What was done
+
+Added a workspace-root `rustfmt.toml` with `max_width = 120`, chosen
+empirically rather than guessed: ran `cargo fmt --all` at a few candidate
+widths on this codebase and compared the diffs. 100 (the default) is exactly
+the problem this entry describes. 120 fixed the over-wrapping while staying
+readable. 150 went too far the other way — several `use` blocks and match
+arms landed at 145-149 columns, hard to scan even in a wide editor pane.
+
+No `imports_granularity`/import-sorting override, contrary to this entry's
+own "Proposed fix" above: `imports_granularity` and `group_imports` turned
+out to be nightly-only options on this project's rustfmt version (stable
+1.9.0) — setting either just prints a warning and is ignored. Turns out
+none was needed anyway: stable rustfmt's *default* behavior already leaves
+each `use { ... }` block's item order exactly as written, only rewrapping
+line breaks to fit `max_width` — verified by running the real `cargo fmt
+--all` and diffing every touched `use` block for reordering, not just
+inspecting a few by eye. This entry's original "doesn't alphabetize within a
+`use` brace" framing was itself imprecise: the hand-written blocks that
+looked alphabetized were coincidentally so (short lists a human would
+naturally write in a sensible order), not evidence rustfmt would reorder
+them — there was never actually a setting to fix here.
+
+Ran `cargo fmt --all` once, as the only change alongside `rustfmt.toml`
+itself — no logic mixed in. Verified functionally inert the same way the
+original stray run was: `cargo build --workspace`, `cargo test --workspace`
+(same pass count before and after), and `cargo clippy --workspace
+--all-targets` all stayed green across the formatting-only diff.
 
 ---
 

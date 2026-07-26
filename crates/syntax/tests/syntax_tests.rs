@@ -1,5 +1,5 @@
 use fg_core::Language;
-use syntax::{byte_to_point, highlight_spans, syntax_errors, IncrementalParser, InputEdit, Scope};
+use syntax::{IncrementalParser, InputEdit, Scope, byte_to_point, highlight_spans, syntax_errors};
 
 const VALID_JAVA: &str = include_str!("fixtures/valid.java");
 const VALID_KOTLIN: &str = include_str!("fixtures/valid.kt");
@@ -34,9 +34,11 @@ fn unclosed_brace_reports_diagnostic_at_expected_span() {
     // The parser recovers by inserting a zero-width MISSING `}` right before
     // the file's trailing newline.
     let expected_pos = UNCLOSED_BRACE_JAVA.len() - 1;
-    assert!(diagnostics
-        .iter()
-        .any(|d| d.range.start == expected_pos && d.range.end == expected_pos));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.range.start == expected_pos && d.range.end == expected_pos)
+    );
 }
 
 #[test]
@@ -50,9 +52,11 @@ fn malformed_class_decl_reports_diagnostic_at_expected_span() {
     // an ERROR node spanning the `class` keyword itself.
     let class_start = MALFORMED_CLASS_KOTLIN.find("class").unwrap();
     let class_end = class_start + "class".len();
-    assert!(diagnostics
-        .iter()
-        .any(|d| d.range.start == class_start && d.range.end == class_end));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.range.start == class_start && d.range.end == class_end)
+    );
 }
 
 #[test]
@@ -84,8 +88,7 @@ fn incremental_reparse_matches_full_reparse() {
         new_end_position: byte_to_point(&edited, new_end_byte),
     };
     let incremental_tree_errors = syntax_errors(incremental_parser.reparse(&edited, edit));
-    let incremental_tree_highlights =
-        highlight_spans(incremental_parser.tree().unwrap(), &edited, Language::Java);
+    let incremental_tree_highlights = highlight_spans(incremental_parser.tree().unwrap(), &edited, Language::Java);
 
     assert_eq!(full_tree_errors, incremental_tree_errors);
     assert_eq!(full_tree_highlights, incremental_tree_highlights);
@@ -138,8 +141,14 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     // `Scope::Property` (both at their declaration site and at an
     // `object.field`-style access), distinct from a local variable or
     // parameter, which stay plain `@variable`/`Scope`-less.
-    assert!(has_scope_over("mask", Scope::Property), "a field's own declaration site should be Scope::Property");
-    assert!(has_scope_over("loud", Scope::Property), "`this.loud`'s field access should be Scope::Property");
+    assert!(
+        has_scope_over("mask", Scope::Property),
+        "a field's own declaration site should be Scope::Property"
+    );
+    assert!(
+        has_scope_over("loud", Scope::Property),
+        "`this.loud`'s field access should be Scope::Property"
+    );
     // `MAX_LENGTH` is *also* a field declarator, but it must still resolve
     // to Constant, not Property — Constants is the later (and so, per
     // `highlight_spans`' own same-range-conflict rule, winning) pattern in
@@ -157,13 +166,15 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
 
 #[test]
 fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
-    // Regression test: the Kotlin highlight query previously listed "break",
-    // "continue", and "reified" as literal keyword tokens, which panicked at
-    // `Query::new` time (they don't survive as matchable node types in this
-    // grammar crate's compiled parser, despite appearing in its grammar.js
-    // source). This test exercises the exact call path the editor widget
-    // uses on every Kotlin file, so a bad query fails a test instead of
-    // panicking the first time a user opens a .kt file.
+    // Regression test: the Kotlin highlight query previously listed "break"
+    // and "continue" (still excluded today) and "reified" (now covered via
+    // `(reification_modifier)` instead — see `highlights_kotlin.scm`) as
+    // literal keyword tokens, which panicked at `Query::new` time (they
+    // don't survive as matchable node types in this grammar crate's
+    // compiled parser, despite appearing in its grammar.js source). This
+    // test exercises the exact call path the editor widget uses on every
+    // Kotlin file, so a bad query fails a test instead of panicking the
+    // first time a user opens a .kt file.
     let mut parser = IncrementalParser::new(Language::Kotlin);
     let tree = parser.parse(VALID_KOTLIN);
     let spans = highlight_spans(tree, VALID_KOTLIN, Language::Kotlin);
@@ -196,6 +207,13 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     assert!(has_scope_over("LOW", Scope::Constant));
     assert!(has_scope_over("MEDIUM", Scope::Constant));
     assert!(has_scope_over("HIGH", Scope::Constant));
+
+    // Regression coverage for TECHNICAL_DEBT.md #3's "richer modifier-keyword
+    // coverage" candidate: `"reified" @keyword` as a bare literal doesn't
+    // compile (see this test's own opening comment for why), but
+    // `(reification_modifier)` — the node grammar.js wraps it in — does, and
+    // covers the same token.
+    assert!(has_scope_over("reified", Scope::Keyword));
 }
 
 #[test]
@@ -337,6 +355,9 @@ fn xml_highlight_query_covers_tag_names_and_comment() {
     // now-resolved entry on this conflation).
     assert!(has_scope_over("greeting", Scope::Tag));
     assert!(has_scope_over("message", Scope::Tag));
-    assert!(!has_scope_over("greeting", Scope::Property), "an XML tag name must not carry Scope::Property");
+    assert!(
+        !has_scope_over("greeting", Scope::Property),
+        "an XML tag name must not carry Scope::Property"
+    );
     assert!(has_scope_over("A friendly note", Scope::Comment));
 }

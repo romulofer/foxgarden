@@ -9,6 +9,8 @@
 //! letter. Any other edit kind, a caret move, or a switch between typing and
 //! deleting starts a fresh step.
 
+use std::sync::Arc;
+
 use super::input::Caret;
 
 /// A restorable editor state — the buffer text plus where the caret was.
@@ -31,8 +33,18 @@ pub enum EditKind {
 
 #[derive(Clone)]
 pub struct History {
-    past: Vec<Snapshot>,
-    future: Vec<Snapshot>,
+    // `Arc`-wrapped (PLAN.md Phase 1 / SPEC.md §1 — `Arc` rather than `Rc`
+    // since `egui`'s `ctx.data` temp storage requires `Send + Sync`, even
+    // though a single egui frame never actually crosses a thread) so the
+    // per-frame `ShellState::clone()` every focused/idle frame pays for —
+    // most of which touch no history at all — copies a pointer instead of
+    // deep-cloning every buffered `Snapshot::text`. Only an actual mutation
+    // (`checkpoint`/`undo`/`redo`) pays a real clone, via `Arc::make_mut`'s
+    // copy-on-write, and only when the frame's own clone is still shared
+    // with what's stored in `ctx.data` (the common case, since `load`
+    // always clones before mutating).
+    past: Arc<Vec<Snapshot>>,
+    future: Arc<Vec<Snapshot>>,
     /// Kind of the most recent checkpoint's run, for the coalescing decision;
     /// cleared by undo/redo so the next edit always starts a fresh step.
     last_kind: Option<EditKind>,
@@ -42,8 +54,8 @@ pub struct History {
 impl Default for History {
     fn default() -> Self {
         Self {
-            past: Vec::new(),
-            future: Vec::new(),
+            past: Arc::new(Vec::new()),
+            future: Arc::new(Vec::new()),
             last_kind: None,
             cap: 500,
         }
@@ -58,20 +70,21 @@ impl History {
     pub fn checkpoint(&mut self, before: Snapshot, kind: EditKind) {
         let coalesce = kind != EditKind::Other && self.last_kind == Some(kind);
         if !coalesce {
-            self.past.push(before);
-            if self.past.len() > self.cap {
-                self.past.remove(0);
+            let past = Arc::make_mut(&mut self.past);
+            past.push(before);
+            if past.len() > self.cap {
+                past.remove(0);
             }
         }
-        self.future.clear();
+        Arc::make_mut(&mut self.future).clear();
         self.last_kind = Some(kind);
     }
 
     /// Undoes one step: returns the state to restore to, and stashes `current`
     /// for redo. `None` when there's nothing to undo.
     pub fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
-        let restored = self.past.pop()?;
-        self.future.push(current);
+        let restored = Arc::make_mut(&mut self.past).pop()?;
+        Arc::make_mut(&mut self.future).push(current);
         self.last_kind = None; // next edit starts a fresh run
         Some(restored)
     }
@@ -79,8 +92,8 @@ impl History {
     /// Redoes one step: returns the state to restore to, and stashes `current`
     /// back onto the undo stack. `None` when there's nothing to redo.
     pub fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
-        let restored = self.future.pop()?;
-        self.past.push(current);
+        let restored = Arc::make_mut(&mut self.future).pop()?;
+        Arc::make_mut(&mut self.past).push(current);
         self.last_kind = None;
         Some(restored)
     }

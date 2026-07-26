@@ -220,11 +220,7 @@ fn open_path(
 /// just the case where the only tab that can match is `path` itself.
 /// Iterates back-to-front so removing an index never shifts the position
 /// of one still to be checked.
-fn close_tabs_under(
-    state: &mut EditorState,
-    parsers: &mut Vec<Option<IncrementalParser>>,
-    path: &Path,
-) {
+fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>, path: &Path) {
     for index in (0..state.open_tabs.len()).rev() {
         if state.open_tabs[index].path().starts_with(path) {
             state.close_tab(index);
@@ -246,12 +242,7 @@ fn close_tabs_under(
 /// trailing separator tells the OS the path must resolve to one. So the
 /// empty-suffix case is handled separately, without going through `join` at
 /// all.
-fn handle_rename(
-    state: &mut EditorState,
-    parsers: &mut [Option<IncrementalParser>],
-    old: &Path,
-    new: &Path,
-) {
+fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
     for (index, doc) in state.open_tabs.iter_mut().enumerate() {
         let Ok(suffix) = doc.path().strip_prefix(old) else {
             continue;
@@ -336,9 +327,7 @@ fn process_file_events(
         let Ok(event) = event_result else { continue };
         if !matches!(
             event.kind,
-            notify::EventKind::Modify(_)
-                | notify::EventKind::Create(_)
-                | notify::EventKind::Remove(_)
+            notify::EventKind::Modify(_) | notify::EventKind::Create(_) | notify::EventKind::Remove(_)
         ) {
             continue;
         }
@@ -348,11 +337,7 @@ fn process_file_events(
             };
             let disk_content = std::fs::read_to_string(path).ok();
             let doc = &state.open_tabs[index];
-            let outcome = file_watch::reconcile(
-                doc.is_dirty(),
-                &doc.buffer.to_string(),
-                disk_content.as_deref(),
-            );
+            let outcome = file_watch::reconcile(doc.is_dirty(), &doc.buffer.to_string(), disk_content.as_deref());
 
             match outcome {
                 ReconcileOutcome::Unchanged => {
@@ -482,10 +467,7 @@ fn restore_session(
 /// reconstruct the same session.
 fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
     if let Some(project) = &state.project {
-        storage.set_string(
-            LAST_PROJECT_KEY,
-            project.root.to_string_lossy().into_owned(),
-        );
+        storage.set_string(LAST_PROJECT_KEY, project.root.to_string_lossy().into_owned());
     }
 
     let open_tabs = state
@@ -530,10 +512,7 @@ fn restore_settings(
     {
         *editor_font = font;
     }
-    if let Some(size) = storage
-        .get_string(FONT_SIZE_KEY)
-        .and_then(|s| s.parse::<f32>().ok())
-    {
+    if let Some(size) = storage.get_string(FONT_SIZE_KEY).and_then(|s| s.parse::<f32>().ok()) {
         *font_size = size;
     }
     if let Some(dark) = storage.get_string(DARK_MODE_KEY) {
@@ -598,23 +577,11 @@ fn persist_settings(
     storage.set_string(INDENT_USE_TABS_KEY, indent_settings.use_tabs.to_string());
     storage.set_string(INDENT_WIDTH_KEY, indent_settings.width.to_string());
     storage.set_string(WORD_WRAP_KEY, view_settings.word_wrap.to_string());
-    storage.set_string(
-        SHOW_WHITESPACE_KEY,
-        view_settings.show_whitespace.to_string(),
-    );
-    storage.set_string(
-        SHOW_INDENT_GUIDES_KEY,
-        view_settings.show_indent_guides.to_string(),
-    );
-    storage.set_string(
-        SHOW_STICKY_SCROLL_KEY,
-        view_settings.show_sticky_scroll.to_string(),
-    );
+    storage.set_string(SHOW_WHITESPACE_KEY, view_settings.show_whitespace.to_string());
+    storage.set_string(SHOW_INDENT_GUIDES_KEY, view_settings.show_indent_guides.to_string());
+    storage.set_string(SHOW_STICKY_SCROLL_KEY, view_settings.show_sticky_scroll.to_string());
     storage.set_string(CURSOR_BLINK_KEY, view_settings.cursor_blink.to_string());
-    storage.set_string(
-        SHOW_EDITOR_OUTLINE_KEY,
-        view_settings.show_editor_outline.to_string(),
-    );
+    storage.set_string(SHOW_EDITOR_OUTLINE_KEY, view_settings.show_editor_outline.to_string());
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
 }
@@ -762,12 +729,7 @@ impl eframe::App for FoxGardenApp {
                 let panel_response = egui::Panel::left("project_panel")
                     .default_size(self.side_panel_width)
                     .show(ui, |ui| {
-                        side_panel::show(
-                            ui,
-                            &mut self.state,
-                            &mut self.side_panel,
-                            &mut self.side_panel_visible,
-                        )
+                        side_panel::show(ui, &mut self.state, &mut self.side_panel, &mut self.side_panel_visible)
                     });
                 // Tracks a live drag, not just the size at the frame the
                 // resize handle is released — so `self.side_panel_width`
@@ -779,12 +741,7 @@ impl eframe::App for FoxGardenApp {
         }
 
         if let Some(path) = outcome.open {
-            open_path(
-                &mut self.state,
-                &mut self.parsers,
-                &mut self.last_error,
-                path,
-            );
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some((old, new)) = outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, &old, &new);
@@ -837,28 +794,13 @@ impl eframe::App for FoxGardenApp {
         });
 
         if let Some(path) = quick_switcher::show(ui, &self.state, &mut self.quick_switcher) {
-            open_path(
-                &mut self.state,
-                &mut self.parsers,
-                &mut self.last_error,
-                path,
-            );
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
-            open_path(
-                &mut self.state,
-                &mut self.parsers,
-                &mut self.last_error,
-                path,
-            );
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {
-            run_configs::show(
-                ui,
-                &root,
-                &mut self.run_configs_dialog,
-                &mut self.last_error,
-            );
+            run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);
         }
 
         show_error_modal(ui, &mut self.last_error);

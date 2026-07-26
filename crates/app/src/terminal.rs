@@ -136,7 +136,10 @@ mod tests {
         assert_eq!(programs, LINUX_TERMINAL_CANDIDATES);
         for command in &commands {
             assert_eq!(command.get_current_dir(), Some(dir));
-            assert!(command.get_args().next().is_none(), "cwd, not a flag, is what carries the directory");
+            assert!(
+                command.get_args().next().is_none(),
+                "cwd, not a flag, is what carries the directory"
+            );
         }
     }
 }

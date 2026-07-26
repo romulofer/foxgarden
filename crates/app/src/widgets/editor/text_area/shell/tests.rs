@@ -59,32 +59,26 @@ fn sized_raw_input(events: Vec<Event>) -> egui::RawInput {
 /// queued — on `ctx`, so the caller controls whether persisted `ShellState`
 /// (caret/history/IME) carries over from a prior call (same `ctx`, same
 /// `id`) or starts fresh (a new `ctx` each time).
-fn frame(
-    ctx: &egui::Context,
-    id: egui::Id,
-    buffer: &Rope,
-    events: Vec<Event>,
-    read_only: bool,
-) -> ShellOutput {
+fn frame(ctx: &egui::Context, id: egui::Id, buffer: &Rope, events: Vec<Event>, read_only: bool) -> ShellOutput {
     let mut result = None;
+    let text = buffer.to_string();
     let _ = ctx.run_ui(sized_raw_input(events), |ui| {
         ui.memory_mut(|m| m.request_focus(id));
-        egui::ScrollArea::vertical()
-            .max_height(400.0)
-            .show(ui, |ui| {
-                result = Some(show(
-                    ui,
-                    id,
-                    buffer,
-                    egui::FontId::monospace(14.0),
-                    egui::Color32::WHITE,
-                    read_only,
-                    &[],
-                    &[],
-                    false,
-                    true,
-                ));
-            });
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            result = Some(show(
+                ui,
+                id,
+                buffer,
+                &text,
+                egui::FontId::monospace(14.0),
+                egui::Color32::WHITE,
+                read_only,
+                &[],
+                &[],
+                false,
+                true,
+            ));
+        });
     });
     result.expect("show ran inside the scroll area closure")
 }
@@ -130,11 +124,7 @@ fn enter_splits_the_line_at_the_caret() {
         &ctx,
         id,
         &buffer,
-        vec![
-            key_event(Key::Home),
-            key_event(Key::ArrowRight),
-            key_event(Key::Enter),
-        ],
+        vec![key_event(Key::Home), key_event(Key::ArrowRight), key_event(Key::Enter)],
         false,
     );
     assert_eq!(out.new_text.as_deref(), Some("a\nb"));
@@ -154,11 +144,7 @@ fn read_only_blocks_typing_but_not_navigation() {
         true,
     );
     assert_eq!(out.new_text, None, "read-only must not mutate the buffer");
-    assert_eq!(
-        out.caret,
-        Some(Caret::at(2)),
-        "navigation stays live in read-only mode"
-    );
+    assert_eq!(out.caret, Some(Caret::at(2)), "navigation stays live in read-only mode");
 }
 
 #[test]
@@ -167,13 +153,7 @@ fn select_all_then_typing_replaces_the_whole_buffer() {
     let id = egui::Id::new("select_all");
     let buffer = Rope::from_str("hello");
     let select_all = command_key_event(Key::A, Modifiers::COMMAND);
-    let out = frame(
-        &ctx,
-        id,
-        &buffer,
-        vec![select_all, Event::Text("x".into())],
-        false,
-    );
+    let out = frame(&ctx, id, &buffer, vec![select_all, Event::Text("x".into())], false);
     assert_eq!(out.new_text.as_deref(), Some("x"));
 }
 
@@ -228,13 +208,7 @@ fn paste_replaces_a_selection() {
     let id = egui::Id::new("paste");
     let buffer = Rope::from_str("hello");
     let select_all = command_key_event(Key::A, Modifiers::COMMAND);
-    let out = frame(
-        &ctx,
-        id,
-        &buffer,
-        vec![select_all, Event::Paste("bye".into())],
-        false,
-    );
+    let out = frame(&ctx, id, &buffer, vec![select_all, Event::Paste("bye".into())], false);
     assert_eq!(out.new_text.as_deref(), Some("bye"));
 }
 
@@ -267,11 +241,7 @@ fn ime_preedit_previews_text_then_commit_finalizes_it() {
 fn peek_caret_reads_what_a_prior_frame_left_persisted() {
     let ctx = egui::Context::default();
     let id = egui::Id::new("peek");
-    assert_eq!(
-        peek_caret(&ctx, id),
-        None,
-        "nothing persisted before the first frame"
-    );
+    assert_eq!(peek_caret(&ctx, id), None, "nothing persisted before the first frame");
 
     let buffer = Rope::from_str("");
     let out = frame(&ctx, id, &buffer, vec![Event::Text("a".into())], false);
@@ -309,18 +279,16 @@ fn char_offset_for_pos_resolves_a_point_on_the_first_row_to_its_column() {
     let buffer = Rope::from_str("hello\nworld");
     let mut out = None;
     let _ = ctx.run_ui(sized_raw_input(vec![]), |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(400.0)
-            .show(ui, |ui| {
-                out = Some(layout_visible(
-                    ui,
-                    egui::Id::new("test"),
-                    &buffer,
-                    egui::FontId::monospace(14.0),
-                    &[],
-                    &[],
-                ));
-            });
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            out = Some(layout_visible(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            ));
+        });
     });
     let out = out.expect("layout_visible ran inside the scroll area closure");
     // Clicking at the content origin should resolve to char 0.

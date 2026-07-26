@@ -70,7 +70,11 @@ fn show_config_list(ui: &mut egui::Ui, state: &mut RunConfigsDialogState) {
         ui.set_width(160.0);
         egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
             for (index, config) in state.configs.iter().enumerate() {
-                let label = if config.name.is_empty() { "(unnamed)" } else { config.name.as_str() };
+                let label = if config.name.is_empty() {
+                    "(unnamed)"
+                } else {
+                    config.name.as_str()
+                };
                 if ui.selectable_label(index == state.selected, label).clicked() {
                     state.selected = index;
                 }
@@ -123,7 +127,11 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
 
             ui.label("Working Dir");
             ui.horizontal(|ui| {
-                let mut dir_text = config.working_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+                let mut dir_text = config
+                    .working_dir
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
                 if ui.text_edit_singleline(&mut dir_text).changed() {
                     config.working_dir = (!dir_text.is_empty()).then(|| PathBuf::from(&dir_text));
                 }

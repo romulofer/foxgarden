@@ -5,8 +5,8 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog,
-    GenerateMethodKind, OverrideMethodDialog,
+    self, AccessorKind, CaseConversion, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind,
+    OverrideMethodDialog,
 };
 use crate::widgets::modal::show_modal;
 
@@ -156,11 +156,7 @@ pub fn show(
                     close_request = Some(index);
                 }
                 label_response.context_menu(|ui| {
-                    let toggle_label = if doc.read_only {
-                        "Allow Editing"
-                    } else {
-                        "Read-Only"
-                    };
+                    let toggle_label = if doc.read_only { "Allow Editing" } else { "Read-Only" };
                     if ui.button(toggle_label).clicked() {
                         toggle_read_only_request = Some(index);
                         ui.close();
@@ -281,10 +277,7 @@ pub fn request_close_tab(
 /// opened file gets its parser in `app.rs`. A no-op if there's nothing left
 /// to reopen, or if that tab is already open (in which case `EditorState`
 /// just focuses it, so `parsers` needs no change).
-pub fn reopen_last_closed_tab(
-    state: &mut EditorState,
-    parsers: &mut Vec<Option<IncrementalParser>>,
-) {
+pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<Option<IncrementalParser>>) {
     let Some(index) = state.reopen_last_closed_tab() else {
         return;
     };
@@ -361,11 +354,7 @@ mod tests {
         // first put the trimmed whitespace *after* all the highlighted
         // tokens: nothing downstream of the trim to shift meant a stale
         // tree and a fresh one produced identical spans by accident).
-        std::fs::write(
-            &path,
-            "public class Hello {   \n    private String name;\n}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "public class Hello {   \n    private String name;\n}\n").unwrap();
 
         let mut state = EditorState::new();
         state.open_tab(path).unwrap();
@@ -380,10 +369,7 @@ mod tests {
             doc.buffer.to_string(),
             "public class Hello {\n    private String name;\n}\n"
         );
-        assert!(
-            !doc.is_dirty(),
-            "buffer and saved_buffer must agree right after save"
-        );
+        assert!(!doc.is_dirty(), "buffer and saved_buffer must agree right after save");
 
         let tree = parsers[0].as_ref().unwrap().tree().unwrap();
         let text = doc.buffer.to_string();
@@ -396,8 +382,7 @@ mod tests {
         // with `text` at all past the trimmed line.
         let mut fresh_parser = IncrementalParser::new(Language::Java);
         fresh_parser.parse(&text);
-        let fresh_spans =
-            syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
+        let fresh_spans = syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
         assert_eq!(spans, fresh_spans);
     }
 }

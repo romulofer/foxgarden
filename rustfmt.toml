@@ -1,0 +1,18 @@
+# TECHNICAL_DEBT.md #8 / SPEC.md §12 / PLAN.md Phase 7: this project hand-
+# formats noticeably wider than rustfmt's 100-column default (single-line
+# function signatures and `use` blocks well past 100 columns are the norm
+# throughout, e.g. widget.rs's `show`). Chosen empirically by comparing
+# `cargo fmt --all` output at a few candidate widths on this codebase: 120
+# fixes the over-wrapping a bare `cargo fmt` produces at the 100 default
+# (see TECHNICAL_DEBT.md #8's own history) while staying comfortably
+# readable; 150 started producing lines that were genuinely hard to scan
+# (several `use` blocks and match arms crowding 145-149 columns).
+#
+# No import-reordering/granularity settings: `imports_granularity` and
+# `group_imports` are nightly-only in this rustfmt version, and stable
+# rustfmt's own default already leaves each `use` block's item order exactly
+# as written (verified empirically — a full-workspace `cargo fmt --all` at
+# this width only ever re-wrapped existing `use { ... }` lists to the new
+# width, never reordered items within one), which already matches this
+# project's existing hand-ordering. Nothing to override.
+max_width = 120

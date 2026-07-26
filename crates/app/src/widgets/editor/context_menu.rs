@@ -34,15 +34,15 @@ pub(super) fn synthetic_shortcut(key: Key, shift: bool) -> Event {
 }
 
 /// Attaches the context menu to `response` (the editor widget's own
-/// response) and handles every item's click. `text`/`old_text`/
-/// `manual_caret` are the same locals `widget::show` threads through every
-/// other edit path, so an edit made here flows through the identical
-/// apply-cursor-at-the-end machinery; `pending_input` is drained back into
-/// real input at the top of the *next* frame (see `widget::show`) for the
-/// three items the editor's own key handling has to process itself (undo/
-/// redo/select-all are events `text_area::shell`'s `process_events` reads
-/// from the same input queue `egui::TextEdit` used to, so replaying a
-/// synthetic keypress into it next frame still works unchanged).
+/// response) and handles every item's click. `text`/`manual_caret` are the
+/// same locals `widget::show` threads through every other edit path, so an
+/// edit made here flows through the identical apply-cursor-at-the-end
+/// machinery; `pending_input` is drained back into real input at the top of
+/// the *next* frame (see `widget::show`) for the three items the editor's
+/// own key handling has to process itself (undo/redo/select-all are events
+/// `text_area::shell`'s `process_events` reads from the same input queue
+/// `egui::TextEdit` used to, so replaying a synthetic keypress into it next
+/// frame still works unchanged).
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is independently threaded editor-frame state, not a bundle waiting to be a struct — see widget::show's own too-many-arguments allowance for the same shape"
@@ -54,7 +54,6 @@ pub(super) fn show_context_menu(
     parser: &mut Option<IncrementalParser>,
     primary_caret: Option<Caret>,
     text: &mut String,
-    old_text: &mut String,
     manual_caret: &mut Option<Caret>,
     pending_input: &mut Vec<Event>,
     last_error: &mut Option<String>,
@@ -92,10 +91,7 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui
-            .add_enabled(has_selection, egui::Button::new("Cut"))
-            .clicked()
-        {
+        if ui.add_enabled(has_selection, egui::Button::new("Cut")).clicked() {
             if let Some(range) = primary_caret.map(|c| c.range()) {
                 let start = char_to_byte(text, range.start);
                 let end = char_to_byte(text, range.end);
@@ -103,15 +99,11 @@ pub(super) fn show_context_menu(
                 let new_text = format!("{}{}", &text[..start], &text[end..]);
                 apply_edit(doc, parser, text, &new_text);
                 *manual_caret = Some(Caret::at(range.start));
-                *old_text = new_text.clone();
                 *text = new_text;
             }
             ui.close();
         }
-        if ui
-            .add_enabled(has_selection, egui::Button::new("Copy"))
-            .clicked()
-        {
+        if ui.add_enabled(has_selection, egui::Button::new("Copy")).clicked() {
             if let Some(range) = primary_caret.map(|c| c.range()) {
                 let start = char_to_byte(text, range.start);
                 let end = char_to_byte(text, range.end);
@@ -127,17 +119,13 @@ pub(super) fn show_context_menu(
             .add_enabled(cached_clipboard_text.is_some(), egui::Button::new("Paste"))
             .clicked()
         {
-            if let (Some(pasted), Some(range)) = (
-                cached_clipboard_text.as_ref(),
-                primary_caret.map(|c| c.range()),
-            ) {
+            if let (Some(pasted), Some(range)) = (cached_clipboard_text.as_ref(), primary_caret.map(|c| c.range())) {
                 let start = char_to_byte(text, range.start);
                 let end = char_to_byte(text, range.end);
                 let new_text = format!("{}{pasted}{}", &text[..start], &text[end..]);
                 let new_cursor = range.start + pasted.chars().count();
                 apply_edit(doc, parser, text, &new_text);
                 *manual_caret = Some(Caret::at(new_cursor));
-                *old_text = new_text.clone();
                 *text = new_text;
             }
             ui.close();
@@ -152,14 +140,12 @@ pub(super) fn show_context_menu(
 
         if ui.button("Toggle Line Comment").clicked() {
             if let Some(range) = primary_caret.map(|c| c.range()) {
-                let (commented, new_start, new_end) =
-                    toggle_line_comments(text, range.start, range.end);
+                let (commented, new_start, new_end) = toggle_line_comments(text, range.start, range.end);
                 apply_edit(doc, parser, text, &commented);
                 *manual_caret = Some(Caret {
                     primary: new_end,
                     anchor: new_start,
                 });
-                *old_text = commented.clone();
                 *text = commented;
             }
             ui.close();
@@ -169,7 +155,6 @@ pub(super) fn show_context_menu(
                 let (duplicated, new_cursor) = duplicate_line(text, cursor_char);
                 apply_edit(doc, parser, text, &duplicated);
                 *manual_caret = Some(Caret::at(new_cursor));
-                *old_text = duplicated.clone();
                 *text = duplicated;
             }
             ui.close();
@@ -177,21 +162,16 @@ pub(super) fn show_context_menu(
 
         ui.separator();
 
-        if ui
-            .add_enabled(doc.is_dirty(), egui::Button::new("Save"))
-            .clicked()
-        {
+        if ui.add_enabled(doc.is_dirty(), egui::Button::new("Save")).clicked() {
             crate::panels::tabs::save_document(doc, parser, last_error);
             // `Document::save` trims trailing whitespace, which can change
-            // `doc.buffer` out from under `text`/`old_text` — every other
-            // branch in `widget::show` refreshes both right after an edit
-            // for exactly this reason (see `apply_edit`'s doc comment);
-            // Save needs the same treatment, or the rest of *this* frame
-            // (the trailing `manual_cursor_range` apply) would keep working
-            // off pre-trim content while `doc.buffer` has already moved on.
-            let saved_text = doc.buffer.to_string();
-            *old_text = saved_text.clone();
-            *text = saved_text;
+            // `doc.buffer` out from under `text` — every other branch in
+            // `widget::show` refreshes it right after an edit for exactly
+            // this reason (see `apply_edit`'s doc comment); Save needs the
+            // same treatment, or the rest of *this* frame (the trailing
+            // `manual_cursor_range` apply) would keep working off pre-trim
+            // content while `doc.buffer` has already moved on.
+            *text = doc.buffer.to_string();
             ui.close();
         }
     });

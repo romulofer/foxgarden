@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::text_offset::char_to_byte;
 use crate::style::indent::IndentSettings;
 
@@ -5,21 +7,38 @@ use crate::style::indent::IndentSettings;
 /// just ended, plus one extra level (per `indent_settings`) if that line
 /// ends in `{`. Only fires on a pure single-character insertion of `\n`
 /// (same guard as `apply_auto_pair`, for the same reasons — pastes/IME/
-/// selection-replace are left alone). Returns `(text, None)` unchanged if
-/// it doesn't apply.
-pub(super) fn apply_auto_indent(
+/// selection-replace are left alone). Returns `(Cow::Borrowed(text), None)`
+/// unchanged if it doesn't apply — called on every text-changing keystroke
+/// (`widget.rs`'s call site), not just Enter, so the overwhelmingly common
+/// case is this exact no-op, and it used to pay for an unconditional
+/// `text.to_string()` clone (SPEC.md §3) that the caller then immediately
+/// discarded whenever indentation wasn't actually inserted.
+pub(super) fn apply_auto_indent<'t>(
     old_text: &str,
-    text: &str,
+    text: &'t str,
     cursor_char: Option<usize>,
     indent_settings: IndentSettings,
-) -> (String, Option<usize>) {
+) -> (Cow<'t, str>, Option<usize>) {
+    // A single inserted char is 1-4 UTF-8 bytes, so a byte-length delta
+    // outside that range can't be a single-char insertion — this rules out
+    // deletes, pastes, and multi-char IME commits with one O(1) length
+    // comparison, before paying for the O(n) `.chars()` counts below. A
+    // delta *inside* 1..=4 still needs those counts: e.g. replacing a
+    // 2-byte/1-char selection with a 3-byte/3-char one nets the same +1
+    // byte delta as typing a single ASCII character would, so the byte
+    // delta alone only ever rules cases *out*, never confirms one in.
+    let byte_delta = text.len() as isize - old_text.len() as isize;
+    if !(1..=4).contains(&byte_delta) {
+        return (Cow::Borrowed(text), None);
+    }
+
     let old_chars = old_text.chars().count();
     let new_chars = text.chars().count();
     if new_chars != old_chars + 1 {
-        return (text.to_string(), None);
+        return (Cow::Borrowed(text), None);
     }
     let Some(cursor_char) = cursor_char.filter(|&c| c > 0 && c <= new_chars) else {
-        return (text.to_string(), None);
+        return (Cow::Borrowed(text), None);
     };
 
     let inserted_start = char_to_byte(text, cursor_char - 1);
@@ -29,7 +48,7 @@ pub(super) fn apply_auto_indent(
         .next()
         .expect("cursor_char > 0 guarantees a preceding char");
     if inserted != '\n' {
-        return (text.to_string(), None);
+        return (Cow::Borrowed(text), None);
     }
 
     // The old cursor position (before Enter) is where the line being ended
@@ -50,12 +69,12 @@ pub(super) fn apply_auto_indent(
     };
     let new_indent = format!("{leading_ws}{extra_indent}");
     if new_indent.is_empty() {
-        return (text.to_string(), None);
+        return (Cow::Borrowed(text), None);
     }
 
     let corrected = format!("{}{new_indent}{}", &text[..inserted_end], &text[inserted_end..]);
     let new_cursor_char = cursor_char + new_indent.chars().count();
-    (corrected, Some(new_cursor_char))
+    (Cow::Owned(corrected), Some(new_cursor_char))
 }
 
 /// Merges the line below `cursor_char` onto the current line — `Ctrl+J`'s
@@ -78,8 +97,9 @@ pub(super) fn join_lines(text: &str, cursor_char: usize) -> Option<(String, usiz
     let next_line_start = nl_byte + 1 + ws_len;
     let next_line_first_char = text[next_line_start..].chars().next();
 
-    let needs_space =
-        !current_line.is_empty() && !current_line.ends_with([' ', '\t']) && !matches!(next_line_first_char, None | Some('\n'));
+    let needs_space = !current_line.is_empty()
+        && !current_line.ends_with([' ', '\t'])
+        && !matches!(next_line_first_char, None | Some('\n'));
     let separator = if needs_space { " " } else { "" };
 
     let joined = format!("{}{separator}{}", &text[..nl_byte], &text[next_line_start..]);
@@ -129,10 +149,19 @@ pub(super) fn indent_selected_lines(
     let start_char = start_char.min(n);
     let end_char = end_char.min(n);
 
-    let first_line_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let first_line_start = chars[..start_char]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |i| i + 1);
 
     let mut touched: Vec<usize> = std::iter::once(0)
-        .chain(chars.iter().enumerate().filter(|&(_, &c)| c == '\n').map(|(i, _)| i + 1))
+        .chain(
+            chars
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| c == '\n')
+                .map(|(i, _)| i + 1),
+        )
         .filter(|&s| s >= first_line_start && s < end_char)
         .collect();
     if touched.is_empty() {
@@ -154,7 +183,11 @@ pub(super) fn indent_selected_lines(
                 let removable = if chars.get(pos) == Some(&'\t') {
                     1
                 } else {
-                    chars[pos..line_end].iter().take_while(|&&c| c == ' ').count().min(unit_len)
+                    chars[pos..line_end]
+                        .iter()
+                        .take_while(|&&c| c == ' ')
+                        .count()
+                        .min(unit_len)
                 };
                 result.extend_from_slice(&chars[pos + removable..line_end]);
                 line_deltas.push((pos, -(removable as i64)));
@@ -219,8 +252,14 @@ pub(super) fn indent_selected_lines(
 fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
     let n = chars.len();
     let cursor_char = cursor_char.min(n);
-    let start = chars[..cursor_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
-    let end = chars[cursor_char..].iter().position(|&c| c == '\n').map_or(n, |off| cursor_char + off);
+    let start = chars[..cursor_char]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |i| i + 1);
+    let end = chars[cursor_char..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map_or(n, |off| cursor_char + off);
     (start, end)
 }
 
@@ -235,7 +274,10 @@ fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
 pub(super) fn smart_home_target(text: &str, cursor_char: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let (line_start, line_end) = current_line_range(&chars, cursor_char);
-    let first_non_ws = chars[line_start..line_end].iter().position(|&c| c != ' ' && c != '\t').map(|off| line_start + off);
+    let first_non_ws = chars[line_start..line_end]
+        .iter()
+        .position(|&c| c != ' ' && c != '\t')
+        .map(|off| line_start + off);
 
     match first_non_ws {
         Some(pos) if cursor_char.min(chars.len()) != pos => pos,
@@ -279,7 +321,10 @@ pub(super) fn move_line_up(text: &str, cursor_char: usize) -> Option<(String, us
         return None;
     }
     let column = cursor_char.min(chars.len()) - line_start;
-    let prev_line_start = chars[..line_start - 1].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let prev_line_start = chars[..line_start - 1]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |i| i + 1);
 
     let mut result: Vec<char> = Vec::with_capacity(chars.len());
     result.extend_from_slice(&chars[..prev_line_start]);
@@ -343,9 +388,18 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
     let start_char = start_char.min(n);
     let end_char = end_char.min(n);
 
-    let first_line_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    let first_line_start = chars[..start_char]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |i| i + 1);
     let mut touched: Vec<usize> = std::iter::once(0)
-        .chain(chars.iter().enumerate().filter(|&(_, &c)| c == '\n').map(|(i, _)| i + 1))
+        .chain(
+            chars
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| c == '\n')
+                .map(|(i, _)| i + 1),
+        )
         .filter(|&s| s >= first_line_start && s < end_char)
         .collect();
     if touched.is_empty() {
@@ -446,9 +500,19 @@ fn line_block_range(chars: &[char], start_char: usize, end_char: usize) -> (usiz
     let n = chars.len();
     let start_char = start_char.min(n);
     let end_char = end_char.min(n);
-    let block_start = chars[..start_char].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
-    let last_touched = if end_char > start_char { end_char - 1 } else { start_char };
-    let block_end = chars[last_touched..].iter().position(|&c| c == '\n').map_or(n, |off| last_touched + off);
+    let block_start = chars[..start_char]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |i| i + 1);
+    let last_touched = if end_char > start_char {
+        end_char - 1
+    } else {
+        start_char
+    };
+    let block_end = chars[last_touched..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map_or(n, |off| last_touched + off);
     (block_start, block_end)
 }
 
@@ -536,7 +600,12 @@ fn title_case(s: &str) -> String {
 /// `None` for an empty range: case conversion has nothing to do without an
 /// actual selection, unlike the line-based transforms above, which fall
 /// back to "the cursor's line".
-pub(super) fn convert_selection_case(text: &str, start_char: usize, end_char: usize, case: CaseConversion) -> Option<(String, usize, usize)> {
+pub(super) fn convert_selection_case(
+    text: &str,
+    start_char: usize,
+    end_char: usize,
+    case: CaseConversion,
+) -> Option<(String, usize, usize)> {
     if start_char == end_char {
         return None;
     }
@@ -652,7 +721,12 @@ pub(super) fn apply_auto_pair(old_text: &str, text: &str, cursor_char: Option<us
 /// a just-wrapped selection selected rather than collapsing the cursor, so
 /// wrapping it again (to nest) or moving on with an arrow key both stay one
 /// step away. `None` if `opener` isn't a character this editor auto-pairs.
-pub(super) fn wrap_selection(old_text: &str, start_char: usize, end_char: usize, opener: char) -> Option<(String, usize, usize)> {
+pub(super) fn wrap_selection(
+    old_text: &str,
+    start_char: usize,
+    end_char: usize,
+    opener: char,
+) -> Option<(String, usize, usize)> {
     let closer = closing_char(opener)?;
     let start_byte = char_to_byte(old_text, start_char);
     let end_byte = char_to_byte(old_text, end_char);
