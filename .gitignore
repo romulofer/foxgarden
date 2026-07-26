@@ -3,9 +3,8 @@
 **/*.rs.bk
 *.pdb
 
-# Checkpoint planning docs (local only, not tracked)
-PLAN.md
-SPEC.md
+# Checkpoint planning docs (local only, not tracked on main — PLAN.md/
+# SPEC.md are tracked on the ide-henshin branch for the IDE pivot)
 FEATURES.md
 IMPLEMENTED_FEATURES.md
 
