@@ -1,6 +1,6 @@
 [package]
 name = "foxgarden"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A light, native code editor for Java and Kotlin, built in Rust."
 repository = "https://github.com/romulofer/foxgarden"
