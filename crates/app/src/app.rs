@@ -106,9 +106,8 @@ pub struct FoxGardenApp {
     /// Settings choice already does, rather than resetting to `egui::Panel`'s
     /// built-in default on every relaunch.
     side_panel_width: f32,
-    /// Whether the project tree panel is shown at all — toggled by its own
-    /// "◀ Collapse" button (`panels::side_panel::show`), the View menu's
-    /// "Side Panel" checkbox, or `Ctrl+B`, all three of which just flip this
+    /// Whether the project tree panel is shown at all — toggled by the View
+    /// menu's "Side Panel" checkbox or `Ctrl+B`, both of which just flip this
     /// one flag. Independent of `zen_mode`, which hides this *and* the menu
     /// bar together; this hides only the project panel, leaving the menu bar
     /// (and so a way back via the View menu) in place.
@@ -766,7 +765,7 @@ impl eframe::App for FoxGardenApp {
                 let panel_response = egui::Panel::left("project_panel")
                     .default_size(self.side_panel_width)
                     .show(ui, |ui| {
-                        side_panel::show(ui, &mut self.state, &mut self.side_panel, &mut self.side_panel_visible)
+                        side_panel::show(ui, &mut self.state, &mut self.side_panel)
                     });
                 // Tracks a live drag, not just the size at the frame the
                 // resize handle is released — so `self.side_panel_width`
