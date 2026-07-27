@@ -15,7 +15,7 @@ use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
     generate_accessors, insert_at_class_end,
 };
-use super::completion::{CompletionItem, CompletionKind, CompletionState};
+use super::completion::{CompletionItem, CompletionKind, CompletionState, insert_completion};
 use super::context_menu;
 #[cfg(test)]
 use super::context_menu::synthetic_shortcut;
@@ -440,36 +440,23 @@ pub fn show(
     // to force.
     let mut manual_caret: Option<Caret> = None;
 
-    // Debug-only "always populate with 3 dummy candidates on Ctrl+Space"
-    // hook (`PLAN.md` Phase 0 checkpoint) — proves the popup's open/filter/
-    // navigate/accept/dismiss lifecycle works live before Phase 1 wires a
-    // real candidate source (`identifiers_in`) into `CompletionState::
-    // open`. Delete this `if` once Phase 1's real trigger takes over
-    // opening the popup; the interception block below it is permanent.
+    // `Ctrl+Space` force-opens word-completion regardless of how many
+    // identifier characters are already typed (`SPEC.md` §1) — for
+    // suggestions after just one character, or after moving the cursor back
+    // into an existing word. Anchored at `word_before_cursor`'s *start*,
+    // not the raw cursor position, so whatever's already been typed of the
+    // current word still acts as the initial filter prefix instead of every
+    // candidate showing unfiltered.
     if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() {
         let ctrl_space_pressed = ui.input(|i| i.key_pressed(Key::Space) && i.modifiers.command);
         if ctrl_space_pressed
             && let Some(cursor_char) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary)
         {
-            let anchor_byte = char_to_byte(&old_text, cursor_char);
-            let dummy_candidates = vec![
-                CompletionItem {
-                    label: "alpha".to_string(),
-                    kind: CompletionKind::Word,
-                    detail: None,
-                },
-                CompletionItem {
-                    label: "beta".to_string(),
-                    kind: CompletionKind::Word,
-                    detail: None,
-                },
-                CompletionItem {
-                    label: "gamma".to_string(),
-                    kind: CompletionKind::Word,
-                    detail: None,
-                },
-            ];
-            *completion = Some(CompletionState::open(anchor_byte, dummy_candidates));
+            let word_range = word_before_cursor(&old_text, cursor_char);
+            let anchor_byte = char_to_byte(&old_text, word_range.start);
+            let current_run = &old_text[anchor_byte..char_to_byte(&old_text, word_range.end)];
+            let candidates = word_completion_candidates(&old_text, current_run, doc.language, custom_templates);
+            *completion = Some(CompletionState::open(anchor_byte, candidates));
         }
     }
 
@@ -536,20 +523,45 @@ pub fn show(
 
                 if let Some(key) = accept_key {
                     let anchor_byte = state.anchor_byte();
-                    let selected_label = state
+                    let selected_item = state
                         .visible(&old_text, cursor_byte)
                         .get(state.selected())
-                        .map(|item| item.label.clone());
+                        .map(|item| (*item).clone());
 
-                    if let Some(label) = selected_label {
+                    if let Some(item) = selected_item {
                         take_event(ui, |e| {
                             matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none())
                         });
-                        let new_text = format!("{}{}{}", &old_text[..anchor_byte], label, &old_text[cursor_byte..]);
-                        let new_cursor_char = byte_to_char(&old_text, anchor_byte) + label.chars().count();
-                        apply_edit(doc, parser, &old_text, &new_text);
-                        manual_caret = Some(Caret::at(new_cursor_char));
-                        old_text = new_text;
+                        let anchor_char = byte_to_char(&old_text, anchor_byte);
+                        let cursor_char = byte_to_char(&old_text, cursor_byte);
+
+                        // `Template` candidates don't go through
+                        // `insert_completion` at all — they call
+                        // `templates::expand` directly, exactly like the
+                        // Tab-trigger path below, since that function
+                        // already handles multi-line bodies and the
+                        // `${cursor}` marker (`SPEC.md` §1/§5). A trigger
+                        // whose body has since disappeared (a custom
+                        // template edited away mid-session) is a silent
+                        // no-op rather than an error.
+                        let expansion = if item.kind == CompletionKind::Template {
+                            let (language_templates, language_custom) =
+                                language_template_tables(doc.language, custom_templates);
+                            find_expansion(
+                                &[language_custom, &custom_templates.global],
+                                &[language_templates, templates::GLOBAL_TEMPLATES],
+                                &item.label,
+                            )
+                            .map(|body| expand(&old_text, anchor_char..cursor_char, body))
+                        } else {
+                            Some(insert_completion(&old_text, anchor_char, cursor_char, &item))
+                        };
+
+                        if let Some((new_text, new_cursor_char)) = expansion {
+                            apply_edit(doc, parser, &old_text, &new_text);
+                            manual_caret = Some(Caret::at(new_cursor_char));
+                            old_text = new_text;
+                        }
                     }
                     // Either way — accepted, or nothing left to accept
                     // (the filtered list emptied out since the last
@@ -713,12 +725,7 @@ pub fn show(
                     let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
-                    let (language_templates, language_custom): (&[templates::Template], &[templates::UserTemplate]) =
-                        match doc.language {
-                            Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
-                            Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
-                            _ => (&[], &[]),
-                        };
+                    let (language_templates, language_custom) = language_template_tables(doc.language, custom_templates);
                     // `templates::GLOBAL_TEMPLATES`/`custom_templates.global` are
                     // included unconditionally, even for a file with no
                     // recognized language at all — a global trigger like `pipe`
@@ -1160,6 +1167,7 @@ pub fn show(
     let editor_rect = horizontal_response.response.rect;
     let (mut shell_out, gutter_left) = horizontal_response.inner;
 
+    let text_changed_this_frame = shell_out.new_text.is_some();
     if let Some(raw_new_text) = shell_out.new_text.take() {
         if multi_cursor_active_at_start {
             // A mutating event that wasn't applied by the multi-cursor block
@@ -1185,6 +1193,40 @@ pub fn show(
 
         apply_edit(doc, parser, &old_text, &corrected);
         old_text = corrected;
+    }
+
+    // Word-completion's own trigger (`SPEC.md` §1b): once a just-typed
+    // identifier character extends the run ending at the cursor to 2+
+    // characters, open the popup with the real candidate source
+    // (`word_completion_candidates`) — `Ctrl+Space` above covers the
+    // shorter-run/force-open case; this is the always-on fallback. Checked
+    // here, after the edit above lands, so `old_text`/`shell_out.caret`
+    // reflect this frame's actual insertion rather than last frame's (a
+    // multi-cursor edit's own trigger isn't handled — same "single-cursor
+    // only" scope every other post-typing feature in this file already
+    // has). `text_changed_this_frame` (captured before `.take()` above)
+    // rules out a frame with no edit at all — e.g. the popup already open,
+    // consuming its own Enter/Tab this same frame — that wouldn't have a
+    // real character to react to here regardless.
+    if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
+        let typed_identifier_char = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, Event::Text(s) if s.chars().count() == 1
+                    && s.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_'))
+            })
+        });
+
+        if typed_identifier_char
+            && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
+        {
+            let word_range = word_before_cursor(&old_text, cursor_char);
+            if word_range.len() >= 2 {
+                let anchor_byte = char_to_byte(&old_text, word_range.start);
+                let current_run = &old_text[anchor_byte..char_to_byte(&old_text, word_range.end)];
+                let candidates = word_completion_candidates(&old_text, current_run, doc.language, custom_templates);
+                *completion = Some(CompletionState::open(anchor_byte, candidates));
+            }
+        }
     }
 
     // Completes the Alt+Click interception begun above `shell_out`: place a
@@ -1651,6 +1693,74 @@ pub fn show(
     if let Some(caret) = manual_caret {
         text_area::set_caret(ui.ctx(), widget_id, caret);
     }
+}
+
+/// The active language's built-in live-template table and any user-defined
+/// overrides for it (`custom_templates.java`/`.kotlin`) — the pairing both
+/// the Tab-trigger interception and the completion popup's `Template`
+/// candidate sourcing/acceptance need, factored out once a second and third
+/// call site wanted the identical `match language { ... }` this used to be
+/// inlined just once for.
+fn language_template_tables(
+    language: Option<Language>,
+    custom_templates: &UserTemplates,
+) -> (&'static [templates::Template], &[templates::UserTemplate]) {
+    match language {
+        Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
+        Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
+        _ => (&[], &[]),
+    }
+}
+
+/// Word-completion's real candidate source (`SPEC.md` §1b/§1c), fed into
+/// `CompletionState::open` by both the `Ctrl+Space` and just-typed-character
+/// triggers above: every distinct identifier-shaped token already in `text`
+/// (`templates::identifiers_in`, excluding `current_run` — the word
+/// currently being typed itself), the active language's live-template
+/// triggers (built-in + user-defined, plus the always-on global group) as
+/// `Template` candidates, and — Java/Kotlin only — the language's own
+/// keyword list as `Keyword` candidates.
+fn word_completion_candidates(
+    text: &str,
+    current_run: &str,
+    language: Option<Language>,
+    custom_templates: &UserTemplates,
+) -> Vec<CompletionItem> {
+    let mut candidates: Vec<CompletionItem> = templates::identifiers_in(text)
+        .into_iter()
+        .filter(|word| word != current_run)
+        .map(|label| CompletionItem {
+            label,
+            kind: CompletionKind::Word,
+            detail: None,
+        })
+        .collect();
+
+    let (language_templates, language_custom) = language_template_tables(language, custom_templates);
+    let template_labels = language_templates
+        .iter()
+        .map(|t| t.trigger.to_string())
+        .chain(language_custom.iter().map(|t| t.trigger.clone()))
+        .chain(templates::GLOBAL_TEMPLATES.iter().map(|t| t.trigger.to_string()))
+        .chain(custom_templates.global.iter().map(|t| t.trigger.clone()));
+    candidates.extend(template_labels.map(|label| CompletionItem {
+        label,
+        kind: CompletionKind::Template,
+        detail: None,
+    }));
+
+    let keywords: &[&str] = match language {
+        Some(Language::Java) => templates::JAVA_KEYWORDS,
+        Some(Language::Kotlin) => templates::KOTLIN_KEYWORDS,
+        _ => &[],
+    };
+    candidates.extend(keywords.iter().map(|&label| CompletionItem {
+        label: label.to_string(),
+        kind: CompletionKind::Keyword,
+        detail: None,
+    }));
+
+    candidates
 }
 
 /// Removes and returns the first event in this frame's input queue matching

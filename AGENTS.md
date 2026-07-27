@@ -537,21 +537,26 @@ recurring.
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
   `crates/app/src/widgets/editor/widget/tests.rs` for the pattern.
-- Click-automation tooling (`xdotool`) is not installed by default in a
-  fresh environment, but isn't ruled out either — it's been used
-  successfully in this project (launch `cargo run -p foxgarden` in the
-  background against a real `$DISPLAY`, `wmctrl` to find/activate the
-  window, `xdotool mousemove --window <id> x y click 1` / `type` / `key`
-  to drive it, `import -window <name> out.png` to screenshot and read the
-  result). Check whether it's present (`which xdotool`) before assuming
-  either way; if it's missing, ask before installing it rather than
-  silently skipping GUI verification or silently adding a system package.
+- **Do not drive the running app with `xdotool`/`wmctrl`/`import` (or any
+  other click-automation tooling) — that approach has repeatedly produced
+  false reads** (a screenshot racing the app's own redraw and showing stale
+  pixels, a click landing on the wrong window/tab because focus wasn't what
+  it looked like, timing that "worked" on one pass and silently didn't on
+  the next). It cost real turns chasing phantom failures caused by the
+  automation itself, not the feature under test. Instead: build the change,
+  run `cargo build`/`cargo test`/`cargo clippy`, then hand the live
+  click-through back to the user as **explicit, numbered steps** — exactly
+  what to run (`cargo run -p foxgarden`, plus any fixture file/project to
+  open), exactly what to click/type in what order, and exactly what result
+  confirms the feature works vs. what would indicate it's broken — and wait
+  for them to report back what actually happened before claiming the
+  checkpoint passed. This is slower per checkpoint but the result is
+  trustworthy, which a flaky automated click never reliably was here.
   A native file-picker dialog (`rfd`, "Open Folder…") is a separate OS
   dialog outside egui's own event loop and likely needs different handling
-  than in-app widgets — don't assume the same click recipe reaches it
-  without checking. Either way, don't claim a mouse-driven flow was
-  verified without actually driving it or clearly disclosing that it
-  wasn't.
+  than in-app widgets — worth flagging to the user in the steps if the
+  scenario touches one. Either way, don't claim a mouse-driven flow was
+  verified without the user actually having driven it and reported back.
 - Anything that needs `eframe::Storage` (session persistence) or
   `egui::Context`'s persistent temp data (the layout cache) is testable
   without a real window: implement `eframe::Storage` yourself over a plain

@@ -111,6 +111,45 @@ pub const KOTLIN_TEMPLATES: &[Template] = &[
     },
 ];
 
+/// Java's reserved words (`CompletionKind::Keyword` candidates, `SPEC.md`
+/// §1's "Also includes") — not exhaustive of every contextual/restricted
+/// identifier the JLS defines (`sealed`, `permits`, `yield` etc. are
+/// context-sensitive, not reserved everywhere), just the always-reserved
+/// set a word-completion popup is worth offering.
+pub const JAVA_KEYWORDS: &[&str] = &[
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
+    "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
+    "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
+    "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+    "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null", "var",
+];
+
+/// Kotlin's hard keywords — always reserved, unlike its soft/modifier
+/// keywords (`data`, `sealed`, `internal`, etc.), which are valid
+/// identifiers elsewhere and so are a worse fit for an unconditional
+/// candidate list.
+pub const KOTLIN_KEYWORDS: &[&str] = &[
+    "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is", "null",
+    "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof", "val", "var",
+    "when", "while",
+];
+
+/// Every distinct identifier-shaped token in `text` (`SPEC.md` §1) — the
+/// word-completion candidate source, first-seen order, deduplicated. Same
+/// character class `word_before_cursor` already uses (letters, digits,
+/// underscore), so a candidate here is always something that run could
+/// actually match.
+pub fn identifiers_in(text: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for word in text.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        if !word.is_empty() && seen.insert(word) {
+            result.push(word.to_string());
+        }
+    }
+    result
+}
+
 /// Built-in templates that expand the same way regardless of the active
 /// file's language — checked *in addition to* `JAVA_TEMPLATES`/
 /// `KOTLIN_TEMPLATES` (see `find_expansion`'s call site in `widget::show`),
@@ -276,6 +315,34 @@ mod tests {
     #[test]
     fn word_before_cursor_at_start_of_buffer_is_empty() {
         assert_eq!(word_before_cursor("", 0), 0..0);
+    }
+
+    #[test]
+    fn identifiers_in_empty_buffer_is_empty() {
+        assert_eq!(identifiers_in(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn identifiers_in_single_word() {
+        assert_eq!(identifiers_in("foo"), vec!["foo"]);
+    }
+
+    #[test]
+    fn identifiers_in_splits_on_punctuation() {
+        assert_eq!(
+            identifiers_in("foo.bar(baz, 1);"),
+            vec!["foo", "bar", "baz", "1"]
+        );
+    }
+
+    #[test]
+    fn identifiers_in_deduplicates_in_first_seen_order() {
+        assert_eq!(identifiers_in("foo bar foo baz bar"), vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn identifiers_in_keeps_underscores_as_part_of_a_word() {
+        assert_eq!(identifiers_in("my_var another"), vec!["my_var", "another"]);
     }
 
     #[test]
