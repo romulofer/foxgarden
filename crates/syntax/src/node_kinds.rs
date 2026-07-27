@@ -52,3 +52,19 @@ pub(crate) fn foldable_kinds(language: Language) -> &'static [&'static str] {
         _ => &[],
     }
 }
+
+/// The node kind a single `import` statement is — unlike `scope_kinds`/
+/// `foldable_kinds` above, verified fresh for *both* languages (not just
+/// Java) against each grammar's real parse output, since import-block
+/// folding (`folding.rs`'s `collect_import_blocks`) is a fresh addition
+/// rather than an extension of Java-only work already in place:
+/// `import_declaration` for Java, `import` for Kotlin — both always direct
+/// children of the file's root node (`program`/`source_file`), never
+/// nested. `None` for a language with no import-block folding.
+pub(crate) fn import_kind(language: Language) -> Option<&'static str> {
+    match language {
+        Language::Java => Some("import_declaration"),
+        Language::Kotlin => Some("import"),
+        _ => None,
+    }
+}

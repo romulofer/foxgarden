@@ -1,7 +1,7 @@
 use fg_core::Language;
 use tree_sitter::{Node, Tree};
 
-use crate::node_kinds::foldable_kinds;
+use crate::node_kinds::{foldable_kinds, import_kind};
 
 /// A collapsible region of the buffer. When folded, `marker_line` stays
 /// visible (with a fold marker on it) and the bytes `start_byte..end_byte`
@@ -20,10 +20,13 @@ pub struct FoldRange {
 }
 
 /// Every foldable region in `source`, in source order, outermost-first for any
-/// given marker line. Foldable nodes are the brace/comment-delimited bodies in
-/// `node_kinds::foldable_kinds` that span **more than one line** — a one-line
-/// `{ ... }` body gets no marker, since there's nothing below its opening line
-/// to hide.
+/// given marker line. Two kinds of region: the brace/comment-delimited bodies
+/// in `node_kinds::foldable_kinds` that span **more than one line** (a
+/// one-line `{ ... }` body gets no marker, since there's nothing below its
+/// opening line to hide), and consecutive-import blocks (`collect_import_blocks`
+/// below) — a run of two or more `import` statements with no blank line
+/// between any of them. A lone import, like a one-line body, gets no marker:
+/// there's nothing meaningfully separate to hide.
 ///
 /// Pure and independent of any folding UI: this is the same structural
 /// "where are the collapsible regions" data a minimap or a collapse-all
@@ -35,18 +38,22 @@ pub struct FoldRange {
 /// collapse to a single range — the outermost — since one marker line can only
 /// carry one fold.
 pub fn foldable_ranges(tree: &Tree, source: &str, language: Language) -> Vec<FoldRange> {
+    let mut ranges = Vec::new();
+
     let kinds = foldable_kinds(language);
-    if kinds.is_empty() {
-        return Vec::new();
+    if !kinds.is_empty() {
+        collect(tree.root_node(), source, kinds, &mut ranges);
+    }
+    if let Some(import_kind) = import_kind(language) {
+        collect_import_blocks(tree.root_node(), source, import_kind, &mut ranges);
     }
 
-    let mut ranges = Vec::new();
-    collect(tree.root_node(), source, kinds, &mut ranges);
-
-    // Pre-order DFS visits a parent before its children, so for two nodes
-    // sharing a marker line the outer one is pushed first — keep it, drop the
-    // rest. `ranges` is already in source (marker-line-ascending) order, so a
-    // single adjacent-dedup on `marker_line` suffices.
+    // Stable sort: for two ranges already pushed in outer-first order and
+    // sharing a marker line (the pre-order DFS `collect` guarantees this for
+    // nested node-kind folds; import blocks never share a marker line with
+    // anything else), the outer one stays first — keep it, drop the rest via
+    // the adjacent-dedup below.
+    ranges.sort_by_key(|r| r.marker_line);
     ranges.dedup_by_key(|r| r.marker_line);
     ranges
 }
@@ -65,26 +72,81 @@ fn collect(node: Node, source: &str, kinds: &[&str], out: &mut Vec<FoldRange>) {
     }
 }
 
-/// Turns a multi-line foldable node into its `FoldRange`: the marker sits on
-/// the node's opening line, and the hidden span runs from the start of the
-/// next line to the node's end. `None` if the opening line has no newline
-/// after the node start (can't happen for a genuinely multi-line node, but
-/// guarded rather than assumed) or if that would hide an empty range.
-fn fold_range_for(node: Node, source: &str) -> Option<FoldRange> {
-    let start = node.start_byte();
-    let end = node.end_byte();
-    // First newline at or after the node's start ends the marker line; the
-    // hidden region begins one byte past it.
+/// Turns a `marker_line..end_byte` span (starting at `start_byte`) into its
+/// `FoldRange`: the hidden region runs from the start of the line just below
+/// `marker_line` to `end_byte`. `None` if there's no newline between `start`
+/// and `end` (can't happen for a genuinely multi-line span, but guarded
+/// rather than assumed) or if that would hide an empty range. Shared by
+/// `fold_range_for` (a single multi-line node) and `flush_import_run` (a run
+/// of import statements, which isn't one AST node at all).
+fn fold_range_from_span(marker_line: usize, start: usize, end: usize, source: &str) -> Option<FoldRange> {
     let newline = source.get(start..end)?.find('\n')? + start;
     let hidden_start = newline + 1;
     if hidden_start >= end {
         return None;
     }
     Some(FoldRange {
-        marker_line: node.start_position().row,
+        marker_line,
         start_byte: hidden_start,
         end_byte: end,
     })
+}
+
+/// Turns a multi-line foldable node into its `FoldRange` — the marker sits on
+/// the node's opening line.
+fn fold_range_for(node: Node, source: &str) -> Option<FoldRange> {
+    fold_range_from_span(node.start_position().row, node.start_byte(), node.end_byte(), source)
+}
+
+/// Whether `prev` and `next` (adjacent import statements) have a blank line
+/// between them — two or more newlines in the gap between them, as opposed
+/// to the single newline that just ends `prev`'s own line.
+fn blank_line_between(prev: Node, next: Node, source: &str) -> bool {
+    source
+        .get(prev.end_byte()..next.start_byte())
+        .is_some_and(|gap| gap.matches('\n').count() > 1)
+}
+
+/// Pushes one `FoldRange` for `run` — a maximal sequence of consecutive
+/// import statements — if it has at least two entries; a lone import has
+/// nothing meaningfully separate to hide, same "no marker" treatment a
+/// one-line brace body gets.
+fn flush_import_run(run: &[Node], source: &str, out: &mut Vec<FoldRange>) {
+    if run.len() < 2 {
+        return;
+    }
+    let first = run[0];
+    let last = run[run.len() - 1];
+    if let Some(range) = fold_range_from_span(first.start_position().row, first.start_byte(), last.end_byte(), source) {
+        out.push(range);
+    }
+}
+
+/// Groups `root`'s direct `import_kind` children into blocks: a maximal run
+/// of imports with no blank line between any two of them is one block.
+/// Import statements are always direct children of the file's root node in
+/// both grammars (`node_kinds::import_kind`'s own doc comment), never
+/// nested, so this only ever needs to look at `root`'s immediate children,
+/// not a full recursive walk like `collect` above. A blank line between two
+/// imports, or any other intervening node (a comment, a declaration), ends
+/// the current run.
+fn collect_import_blocks<'a>(root: Node<'a>, source: &str, import_kind: &str, out: &mut Vec<FoldRange>) {
+    let mut cursor = root.walk();
+    let mut run: Vec<Node<'a>> = Vec::new();
+
+    for child in root.named_children(&mut cursor) {
+        let is_import = child.kind() == import_kind;
+        let breaks_run = !is_import || run.last().is_some_and(|&prev| blank_line_between(prev, child, source));
+
+        if breaks_run {
+            flush_import_run(&run, source, out);
+            run.clear();
+        }
+        if is_import {
+            run.push(child);
+        }
+    }
+    flush_import_run(&run, source, out);
 }
 
 #[cfg(test)]
@@ -176,5 +238,99 @@ class Foo {}
         let source = "class Foo {\n    void a() {\n        step();\n    }\n}\n";
         let tree = parsed(source);
         assert!(foldable_ranges(&tree, source, Language::Yaml).is_empty());
+    }
+
+    #[test]
+    fn folds_a_run_of_two_or_more_consecutive_imports_but_not_a_lone_one() {
+        // Mirrors the real-world shape reported: one lone import, a blank
+        // line, then two separate multi-import blocks separated by another
+        // blank line.
+        let source = "\
+package com.example;
+
+import static org.springframework.http.MediaType.APPLICATION_PDF;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+import br.ufsc.bridge.pec.backend.app.config.security.UserPrincipal;
+import br.ufsc.bridge.pec.backend.module.Resources;
+
+class Foo {}
+";
+        let tree = parsed(source);
+        let ranges = foldable_ranges(&tree, source, Language::Java);
+
+        // Only the two multi-import blocks fold — the lone
+        // `import static ...` line gets no marker.
+        assert_eq!(ranges.len(), 2);
+
+        assert!(hidden(source, &ranges[0]).contains("HttpStatus"));
+        assert!(hidden(source, &ranges[0]).contains("RestController"));
+        assert!(!hidden(source, &ranges[0]).contains("Autowired"), "marker line itself stays visible");
+        assert!(!hidden(source, &ranges[0]).contains("UserPrincipal"), "must not swallow the next block");
+
+        assert!(hidden(source, &ranges[1]).contains("Resources"));
+        assert!(!hidden(source, &ranges[1]).contains("UserPrincipal"), "marker line itself stays visible");
+    }
+
+    #[test]
+    fn a_single_import_with_no_neighbors_is_not_foldable() {
+        let source = "import java.util.List;\n\nclass Foo {}\n";
+        let tree = parsed(source);
+        assert!(foldable_ranges(&tree, source, Language::Java).is_empty());
+    }
+
+    #[test]
+    fn exactly_two_consecutive_imports_is_the_minimum_foldable_block() {
+        let source = "import java.util.List;\nimport java.util.Map;\n\nclass Foo {}\n";
+        let tree = parsed(source);
+        let ranges = foldable_ranges(&tree, source, Language::Java);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].marker_line, 0);
+        assert!(hidden(source, &ranges[0]).contains("Map"));
+    }
+
+    #[test]
+    fn a_comment_between_two_imports_breaks_the_run() {
+        let source = "\
+import java.util.List;
+// why this next one exists
+import java.util.Map;
+
+class Foo {}
+";
+        let tree = parsed(source);
+        // Neither import has an unbroken run of 2+ with the comment between
+        // them, so nothing folds.
+        assert!(foldable_ranges(&tree, source, Language::Java).is_empty());
+    }
+
+    #[test]
+    fn kotlin_folds_a_run_of_consecutive_imports() {
+        let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        let source = "\
+package com.example
+
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PostMapping
+
+class Foo {
+}
+";
+        let tree = parser.parse(source).clone();
+        let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].marker_line, 2);
+        assert!(hidden(source, &ranges[0]).contains("PostMapping"));
+    }
+
+    #[test]
+    fn kotlin_a_lone_import_is_not_foldable() {
+        let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        let source = "import org.springframework.web.bind.annotation.GetMapping\n\nclass Foo {\n}\n";
+        let tree = parser.parse(source).clone();
+        assert!(foldable_ranges(&tree, source, fg_core::Language::Kotlin).is_empty());
     }
 }
