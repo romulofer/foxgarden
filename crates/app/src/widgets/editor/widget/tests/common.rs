@@ -95,6 +95,85 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
     });
 }
 
+/// Drives `show` across a sequence of frames on one shared, focused
+/// `egui::Context` — needed to reproduce a real multi-keystroke typing
+/// session, where `completion`'s `is_none()` gate and `text_area`'s own
+/// caret-position memory only make sense measured across successive frames
+/// of the *same* widget instance, unlike `focused_frame`'s normal one-shot
+/// use. A warm-up frame (no events) establishes focus and lets the caret be
+/// placed via `text_area::set_caret` before typing starts, same "warm-up
+/// frame first" shape `focused_frame_with_selection` above already
+/// establishes for injecting a pre-existing selection; `frames_events` then
+/// each get their own real frame, in order, so `completion`'s state from
+/// one frame is what the next frame's trigger checks actually see — the
+/// same timing a real keystroke-by-keystroke typing session has, which a
+/// single batched-events frame can't reproduce.
+pub(super) fn typing_session(
+    doc: &mut Document,
+    parser: &mut Option<IncrementalParser>,
+    project: Option<&fg_core::Project>,
+    completion: &mut Option<CompletionState>,
+    initial_caret: usize,
+    frames_events: Vec<Vec<egui::Event>>,
+) {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(egui::FontDefinitions::empty());
+    let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+    let mut run_frame = |ctx: &egui::Context, raw_input: egui::RawInput| {
+        let _ = ctx.run_ui(raw_input, |ui| {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            show(
+                ui,
+                doc,
+                parser,
+                EditorFont::Default,
+                14.0,
+                IndentSettings::default(),
+                ViewSettings::default(),
+                None,
+                &mut None,
+                None,
+                &mut None,
+                project,
+                false,
+                &mut None,
+                completion,
+                None,
+                false,
+                false,
+                false,
+                false,
+                &mut None,
+                &mut Vec::new(),
+                &mut None,
+                &UserTemplates::default(),
+            );
+        });
+    };
+
+    run_frame(&ctx, egui::RawInput::default());
+    text_area::set_caret(&ctx, id, Caret::at(initial_caret));
+
+    for events in frames_events {
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        run_frame(
+            &ctx,
+            egui::RawInput {
+                events,
+                modifiers,
+                ..Default::default()
+            },
+        );
+    }
+}
+
 pub(super) fn key_event(key: egui::Key) -> egui::Event {
     egui::Event::Key {
         key,

@@ -688,8 +688,14 @@ pub fn show(
     // only the *indentation* half of this is skipped once `use_tabs` is
     // set (a literal tab already *is* that setting's unit, so egui's
     // default is exactly right there and needs no interception). Shift+Tab
-    // is left to egui's own no-selection handling either way, same as
-    // before either feature existed.
+    // with no selection dedents just the current line (below) — the
+    // collapsed-cursor case `indent_selected_lines` is already built to
+    // handle, called with `range.start` as both endpoints. This used to be
+    // left to "egui's own no-selection handling," on the assumption
+    // something downstream implemented it; nothing did (egui's own
+    // `TextEdit` has no built-in dedent behavior for a bare Shift+Tab
+    // outside its `lock_focus` literal-tab-insert path), so it was
+    // silently a no-op until fixed here.
     if !multi_cursor_active_at_start {
         let tab_pressed = ui.input(|i| {
             i.events.iter().any(|e| {
@@ -731,7 +737,26 @@ pub fn show(
                         });
                         old_text = indented;
                     }
-                } else if !ui.input(|i| i.modifiers.shift) {
+                } else if ui.input(|i| i.modifiers.shift) {
+                    let removed = take_event(ui, |e| {
+                        matches!(
+                            e,
+                            Event::Key {
+                                key: Key::Tab,
+                                pressed: true,
+                                ..
+                            }
+                        )
+                    });
+
+                    if removed.is_some() {
+                        let (dedented, _, new_cursor) =
+                            indent_selected_lines(&old_text, range.start, range.start, true, indent_settings);
+                        apply_edit(doc, parser, &old_text, &dedented);
+                        manual_caret = Some(Caret::at(new_cursor));
+                        old_text = dedented;
+                    }
+                } else {
                     let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
@@ -1204,6 +1229,25 @@ pub fn show(
 
         apply_edit(doc, parser, &old_text, &corrected);
         old_text = corrected;
+    }
+
+    // Close a completion popup whose filtered candidate list has just gone
+    // empty, *before* the word-/dot-completion triggers below run — not only
+    // in the paint step further down, which used to be the only place this
+    // was checked. Otherwise a still-open-but-now-irrelevant popup makes the
+    // triggers below see `completion` as `Some` on the very keystroke that
+    // invalidated it: e.g. finishing "super" (word-completion open, offering
+    // the `super` keyword) then typing `.` both empties that popup's filter
+    // (no candidate starts with "super.") *and* should open dot-completion
+    // immediately — but with the close check running only at paint time,
+    // dot-completion's own trigger sees a stale `Some` this frame and skips,
+    // silently requiring an erase-and-retype to get one clean frame where
+    // `completion.is_none()` is actually true when the `.` lands.
+    if let Some(state) = completion.as_ref() {
+        let cursor_byte = shell_out.caret.map(|c| char_to_byte(&old_text, c.primary));
+        if !cursor_byte.is_some_and(|b| !state.visible(&old_text, b).is_empty()) {
+            *completion = None;
+        }
     }
 
     // Word-completion's own trigger (`SPEC.md` §1b): once a just-typed

@@ -48,6 +48,8 @@ rewritten or removed, not blindly executed.
 | 4 | `[RESOLVED]` | Context menu's Paste item created a new OS clipboard connection every frame the menu was open |
 | 7 | `[RESOLVED]` | `widget::show`/`tabs::show`/`menu_bar::show` were missing a `too_many_arguments` allowance a sibling function's comment already claimed they had |
 | 8 | `[RESOLVED]` | A stray `cargo fmt` run reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults |
+| 13 | `[RESOLVED]` | A still-open word-completion popup blocked dot-completion's own trigger on the exact keystroke that should have opened it |
+| 14 | `[RESOLVED]` | Shift+Tab with no selection was a silent no-op — "left to egui's own no-selection handling," which egui never actually implemented |
 
 ---
 
@@ -891,3 +893,153 @@ itself — no logic mixed in. Verified functionally inert the same way the
 original stray run was: `cargo build --workspace`, `cargo test --workspace`
 (same pass count before and after), and `cargo clippy --workspace
 --all-targets` all stayed green across the formatting-only diff.
+
+---
+
+## 13. [RESOLVED] ~~A still-open word-completion popup blocked dot-completion's own trigger on the exact keystroke that should have opened it~~
+
+**Where:** `crates/app/src/widgets/editor/widget.rs` (`show`) — the
+word-completion trigger (`SPEC.md` §1b) and dot-completion trigger
+(`SPEC.md` §3), both gated on `completion.is_none()`, and the popup's
+post-frame "close if the filtered list is now empty" check.
+
+**Status:** Fixed. Reported live: finishing "super" character by character
+(word-completion open the whole time, offering the `super` keyword/
+identifier) and then typing `.` didn't open dot-completion at all — only
+erasing and retyping the `.` did. A parallel report ("Kotlin `b.` doesn't
+work") turned out to be the same bug wearing a different receiver, not a
+second one — see "What was done" below for how that was confirmed rather
+than assumed.
+
+### What was found
+
+Both triggers require `completion.is_none()` before even checking whether
+this frame's keystroke should open something — correct in isolation (don't
+clobber an already-open popup), but the "is this popup now stale" check
+that would clear it back to `None` only ran once, at the very end of
+`show()`, right before painting. Sequence for "finish typing `super` then
+type `.`":
+
+1. Typing `s`/`u` opens word-completion (2+ identifier chars) — anchored
+   at `s`, candidates include whatever's already in the file plus
+   keywords/templates.
+2. `p`/`e`/`r` extend the run; `completion` stays exactly the `Some` from
+   step 1 the whole time (neither trigger re-runs once something's
+   already open).
+3. Typing `.`: `completion` is still `Some` at the top of this frame, so
+   the dot-completion trigger's own `completion.is_none()` guard skips it
+   entirely — no dot-completion resolution even attempted this frame. The
+   `.` character itself still lands in the buffer normally (typing isn't
+   blocked, only the *trigger check* is skipped). Only *after* that, at
+   the very end of the same frame, the post-frame close check finally
+   notices `"super."` matches no candidate and sets `completion = None`
+   — one step too late to help the trigger that already ran.
+4. Next frame, `completion` is `None`, but the `.` event from step 3 is
+   gone (each frame's `ui.input().events` only holds *that* frame's
+   input) — the window where both "no completion open" and "a `.` just
+   arrived" hold at once has already passed. Erasing the `.` (Backspace)
+   and retyping it works purely because it manufactures a fresh `.` event
+   in a frame where step 3's late close has already landed.
+
+### Why it wasn't caught by existing tests
+
+`widget/tests/completion.rs`'s own header said so explicitly: it tests
+`dot_completion_candidates`/`java_dot_completion_candidates`/
+`kotlin_dot_completion_candidates` directly, "rather than through the full
+`show` harness... The actual in-editor trigger (typing `.`) is verified
+live in `cargo run -p foxgarden`, not here." That direct-call style proves
+the *resolution* logic correct but is structurally blind to a bug that
+lives entirely in *when* `show` decides to call it — exactly this bug.
+
+### What was done
+
+Moved the "close if the filtered list is now empty" check to run right
+after this frame's edit lands, *before* either trigger block, instead of
+only at the end near painting. A keystroke that both empties the current
+popup's filter and should open a new one (typing `.` right after a
+completed identifier) now sees `completion.is_none()` as true in time for
+the dot-trigger to actually fire, in the same frame. The original
+end-of-frame check was left in place too (harmless, and still the right
+place to close a popup that goes stale from something between the early
+check and painting, e.g. a context-menu paste).
+
+Added `typing_session` (`widget/tests/common.rs`) — a small extension of
+the existing `focused_frame`/`focused_frame_with_selection` pattern that
+reuses *one* `egui::Context` across a whole sequence of frames (with
+`completion`/`project` threaded through, which the existing helpers
+didn't expose), since this bug only reproduces across successive frames
+of the same widget, not a single one-shot call. Three regression tests in
+`widget/tests/completion.rs`:
+- `java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediately`
+  and its Kotlin counterpart — both reproduce the reported "super." bug
+  directly (typing "super." one character per frame) and fail without the
+  fix (verified by temporarily disabling the early check and re-running:
+  both failed with the fix removed, confirming they weren't
+  accidentally-passing tests).
+- `kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion` — a
+  minimal `b.` case (single-character receiver, so word-completion's own
+  2+-char trigger never opens while typing it) isolated specifically to
+  check whether the reported Kotlin `b.` failure was a *separate* bug.
+  This one passes with or without the fix — confirming the Kotlin report
+  was the same root cause via some other adjacent typing (e.g. finishing
+  `Bar()`'s constructor call, or `super.` itself, moments earlier in the
+  same session), not a second, `b.`-specific bug worth chasing separately.
+
+### Trigger condition
+
+N/A — already fixed and covered by regression tests.
+
+---
+
+## 14. [RESOLVED] ~~Shift+Tab with no selection was a silent no-op — "left to egui's own no-selection handling," which egui never actually implemented~~
+
+**Where:** `crates/app/src/widgets/editor/widget.rs` (`show`, the Tab/
+Shift+Tab interception block) and `crates/app/src/widgets/editor/
+auto_edit.rs` (`indent_selected_lines`, already collapsed-range-capable
+and unchanged by this fix).
+
+**Status:** Fixed. Reported live as "Shift+Tab to de-indent is not
+working."
+
+### What was found
+
+The Tab/Shift+Tab interception block explicitly branched on
+`range.is_empty()`: a real selection got full indent/dedent handling
+(`indent_selected_lines`), but the no-selection branch only ever fired for
+plain Tab (`!ui.input(|i| i.modifiers.shift)`) — live-template expansion or
+a spaces-mode indent insert. Shift+Tab with a collapsed cursor matched
+neither arm and fell through to `TextEdit::show_interactive` untouched.
+The block's own comment claimed this was deliberate: "Shift+Tab is left to
+egui's own no-selection handling either way, same as before either feature
+existed" — but egui's `TextEdit` has no such handling to fall back to
+outside its `lock_focus` literal-tab-insert path (that's Tab's default
+behavior, not Shift+Tab's), so the fallback was actually a silent no-op,
+not a deferral to real functionality. There was even a test asserting this
+non-behavior as correct:
+`shift_tab_with_no_selection_is_left_to_egui_regardless_of_indent_mode`
+only checked that the buffer hadn't *grown* — it never checked Shift+Tab
+actually did anything, because it didn't.
+
+### Why it wasn't caught earlier
+
+The comment reads confidently ("is (and remains) egui's own... handling"),
+and the one test guarding this path was written to match that assumption
+rather than to verify real dedent behavior — a case of a plausible-sounding
+inline claim never actually being checked against egui's source.
+
+### What was done
+
+Added a third arm — `ui.input(|i| i.modifiers.shift)` with an empty
+range — that dedents just the current line via
+`indent_selected_lines(&old_text, range.start, range.start, true,
+indent_settings)`, the exact collapsed-range case that function was
+already built to handle (its own doc comment already covers a
+degenerate/single-line touched-range; no changes needed there). Replaced
+the old test with `shift_tab_with_no_selection_dedents_the_current_line`
+(spaces mode) and `shift_tab_with_no_selection_respects_tabs_mode` (tabs
+mode), both asserting the buffer actually loses its leading indentation,
+not just that it didn't grow.
+
+### Trigger condition
+
+N/A — already fixed and covered by regression tests.

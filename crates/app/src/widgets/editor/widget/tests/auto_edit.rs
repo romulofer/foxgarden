@@ -167,10 +167,12 @@ fn tab_with_no_selection_respects_a_configured_width() {
 }
 
 #[test]
-fn shift_tab_with_no_selection_is_left_to_egui_regardless_of_indent_mode() {
-    // The new spaces-mode interception only ever fires for plain Tab —
-    // Shift+Tab with no selection is (and remains) egui's own no-
-    // selection dedent handling, untouched by `indent_settings`.
+fn shift_tab_with_no_selection_dedents_the_current_line() {
+    // Regression test: Shift+Tab with a collapsed cursor (no selection)
+    // used to be a silent no-op — left to "egui's own no-selection
+    // handling," which turned out not to exist at all (egui's `TextEdit`
+    // has no built-in dedent behavior for a bare Shift+Tab outside its
+    // `lock_focus` literal-tab-insert path).
     let (_dir, mut doc) = open_fixture("    abc", "Hello.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
@@ -178,17 +180,36 @@ fn shift_tab_with_no_selection_is_left_to_egui_regardless_of_indent_mode() {
         use_tabs: false,
         width: 4,
     };
-    focused_frame_with_indent_settings(
+    // Collapsed cursor mid-line (char 6, inside "abc").
+    focused_frame_with_indent_settings_and_selection(
         &mut doc,
         &mut parser,
         spaces_mode,
+        6..6,
         vec![shift_key_event(egui::Key::Tab)],
     );
 
-    // Whatever egui's own no-selection Shift+Tab does, the buffer must
-    // not have grown by a spaces-mode insertion — the interception must
-    // not have fired.
-    assert!(doc.buffer.to_string().len() <= "    abc".len());
+    assert_eq!(doc.buffer.to_string(), "abc");
+}
+
+#[test]
+fn shift_tab_with_no_selection_respects_tabs_mode() {
+    let (_dir, mut doc) = open_fixture("\tabc", "Hello.java");
+    let mut parser = parsed(Language::Java, &doc.buffer.to_string());
+
+    let tabs_mode = IndentSettings {
+        use_tabs: true,
+        width: 4,
+    };
+    focused_frame_with_indent_settings_and_selection(
+        &mut doc,
+        &mut parser,
+        tabs_mode,
+        2..2,
+        vec![shift_key_event(egui::Key::Tab)],
+    );
+
+    assert_eq!(doc.buffer.to_string(), "abc");
 }
 
 #[test]

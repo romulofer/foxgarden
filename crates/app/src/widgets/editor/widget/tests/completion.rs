@@ -8,6 +8,7 @@
 //! here.
 
 use super::super::*;
+use super::common::*;
 use fg_core::Language;
 
 fn tree_of(source: &str) -> Tree {
@@ -288,4 +289,101 @@ fn dispatcher_routes_kotlin_to_kotlin_dot_completion_candidates() {
     let items = dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None)
         .expect("Kotlin should dispatch to kotlin_dot_completion_candidates");
     assert_eq!(labels(&items), vec!["helper", "run"]);
+}
+
+// The tests above drive candidate resolution directly, deliberately
+// bypassing `show`'s own event-handling — real enough for the resolution
+// logic itself, but blind to a bug that only exists in how `show` decides
+// *when* to call that resolution at all. The tests below drive `show`
+// through `typing_session` (a real, focused, multi-frame `egui::Context`)
+// to close that gap: a user reported that finishing "super" character by
+// character and then typing `.` didn't open dot-completion at all — only
+// erasing and retyping the `.` did. `visible_labels` below assumes ASCII
+// fixture text throughout, so a char offset doubles as a byte offset
+// without needing `char_to_byte`.
+
+fn visible_labels(state: &CompletionState, text: &str, cursor_byte: usize) -> Vec<String> {
+    let mut labels: Vec<String> = state.visible(text, cursor_byte).iter().map(|i| i.label.clone()).collect();
+    labels.sort_unstable();
+    labels
+}
+
+#[test]
+fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediately() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Base.java"),
+        "public class Base {\n    public void run() {\n    }\n}\n",
+    )
+    .unwrap();
+    let before = "public class Foo extends Base {\n    void go() {\n        ";
+    let after = "\n    }\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir2, mut doc) = open_fixture(&source, "Foo.java");
+    let mut parser = parsed(Language::Java, &source);
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+    let mut completion = None;
+
+    let initial_caret = before.len();
+    let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+
+    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+
+    let state = completion
+        .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
+    let text = doc.buffer.to_string();
+    let cursor_byte = initial_caret + "super.".len();
+    assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["run"]);
+}
+
+#[test]
+fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediately() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Base.kt"), "open class Base {\n    fun run() {\n    }\n}\n").unwrap();
+    let before = "class Foo : Base() {\n    fun go() {\n        ";
+    let after = "\n    }\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir2, mut doc) = open_fixture(&source, "Foo.kt");
+    let mut parser = parsed(Language::Kotlin, &source);
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+    let mut completion = None;
+
+    let initial_caret = before.len();
+    let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+
+    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+
+    let state = completion
+        .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
+    let text = doc.buffer.to_string();
+    let cursor_byte = initial_caret + "super.".len();
+    assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["run"]);
+}
+
+#[test]
+fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
+    // The minimal case reported alongside the "super." bug above: `b` is
+    // a single character, so word-completion never opens while it's
+    // typed (its own trigger requires a 2+ character run) — this isolates
+    // whether a bare `b.` needs the same fix or fails for an unrelated
+    // reason.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Bar.kt"), "class Bar {\n    fun baz() {\n    }\n}\n").unwrap();
+    let before = "class Foo {\n    fun go() {\n        val b: Bar = Bar()\n        b";
+    let after = "\n    }\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir2, mut doc) = open_fixture(&source, "Foo.kt");
+    let mut parser = parsed(Language::Kotlin, &source);
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+    let mut completion = None;
+
+    let initial_caret = before.len();
+    let frames = vec![vec![egui::Event::Text(".".to_string())]];
+
+    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+
+    let state = completion.expect("typing \".\" right after an already-present \"b\" should open dot-completion");
+    let text = doc.buffer.to_string();
+    let cursor_byte = initial_caret + 1;
+    assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["baz"]);
 }
