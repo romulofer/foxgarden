@@ -12,6 +12,7 @@ use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
+use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::tabs;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
@@ -125,6 +126,8 @@ pub struct FoxGardenApp {
     quick_switcher: QuickSwitcherState,
     /// `Ctrl+P`'s fuzzy-file-open popup.
     go_to_file: GoToFileState,
+    /// `Ctrl+Shift+E`'s Spring endpoint map popup.
+    spring_endpoints: SpringEndpointsState,
     /// Run > Edit Configurations… — see `panels::run_configs`.
     run_configs_dialog: RunConfigsDialogState,
     editor_font: EditorFont,
@@ -675,6 +678,7 @@ impl FoxGardenApp {
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
+            spring_endpoints: SpringEndpointsState::default(),
             run_configs_dialog: RunConfigsDialogState::default(),
             editor_font,
             font_size,
@@ -720,11 +724,14 @@ impl eframe::App for FoxGardenApp {
         if ui.input(|i| i.key_pressed(egui::Key::F11)) {
             self.zen_mode = !self.zen_mode;
         }
-        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command) {
+        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
             self.quick_switcher.toggle();
         }
         if ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
             self.go_to_file.toggle();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift) {
+            self.spring_endpoints.toggle(self.state.project.as_ref().map(|p| &p.tree));
         }
         if ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
@@ -844,6 +851,12 @@ impl eframe::App for FoxGardenApp {
             open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+        }
+        // `(path, handler_byte)` is captured but not acted on yet — Phase 4
+        // (`PLAN.md`) wires the byte offset into a cross-tab-switch jump;
+        // for now this only opens the file, same as every other popup here.
+        if let Some((path, _handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
             open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {

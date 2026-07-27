@@ -620,6 +620,7 @@ fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
         ui.label("Ctrl+B — toggle the side panel");
         ui.label("Ctrl+J — join the current line with the next one");
         ui.label("Ctrl+E — go to a recent file");
+        ui.label("Ctrl+Shift+E — search Spring endpoints");
         ui.label("Ctrl+/ — toggle line comments");
         ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
         ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");

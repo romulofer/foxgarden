@@ -6,4 +6,5 @@ pub mod menu_bar;
 pub mod quick_switcher;
 pub mod run_configs;
 pub mod side_panel;
+pub mod spring_endpoints;
 pub mod tabs;

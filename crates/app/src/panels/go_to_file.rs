@@ -54,7 +54,7 @@ fn all_files(node: &FileNode, out: &mut Vec<PathBuf>) {
 /// matching starting earlier in the candidate scores more than starting
 /// later — both read as "a closer, more deliberate match" rather than an
 /// incidental one. An empty query matches everything with a score of `0`.
-fn fuzzy_score(candidate: &str, query: &str) -> Option<i32> {
+pub(crate) fn fuzzy_score(candidate: &str, query: &str) -> Option<i32> {
     if query.is_empty() {
         return Some(0);
     }
