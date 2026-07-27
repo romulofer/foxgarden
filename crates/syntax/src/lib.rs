@@ -26,6 +26,6 @@ pub use kotlin_members::{
 };
 pub use methods::{MethodSignature, all_methods_in_type, enclosing_class, methods_in_type, superclass_name};
 pub use selection::expand_selection;
-pub use spring_endpoints::{EndpointInfo, java_endpoints_in_file};
+pub use spring_endpoints::{EndpointInfo, endpoints_in_file, java_endpoints_in_file, kotlin_endpoints_in_file};
 pub use sticky::enclosing_scope_starts;
 pub use tree_sitter::{InputEdit, Point, Tree};

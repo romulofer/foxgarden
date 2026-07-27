@@ -417,7 +417,7 @@ out the terminal-tab track.
 ## Build status (live)
 
 - [x] Phase 0 — Java endpoint extraction
-- [ ] Phase 1 — Kotlin endpoint extraction
+- [x] Phase 1 — Kotlin endpoint extraction
 - [ ] Phase 2 — whole-project scan
 - [ ] Phase 3 — popup UI shell
 - [ ] Phase 4 — jump-to-handler
