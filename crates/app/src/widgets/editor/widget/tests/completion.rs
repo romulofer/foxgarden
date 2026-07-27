@@ -1,11 +1,8 @@
-//! Dot-completion's candidate resolution (`SPEC.md` §4, `PLAN.md` Phases
-//! 3b/3c): `dot_completion_candidates`/`java_dot_completion_candidates`/
-//! `kotlin_dot_completion_candidates` directly, rather than through the
-//! full `show` harness — same "pure function first, widget wiring proven
-//! live separately" split `word_completion_candidates` itself already has
-//! no direct test of its own, for the same reason. The actual in-editor
-//! trigger (typing `.`) is verified live in `cargo run -p foxgarden`, not
-//! here.
+//! Dot-completion tests: candidate resolution (`dot_completion_candidates`/
+//! `java_dot_completion_candidates`/`kotlin_dot_completion_candidates`)
+//! called directly, plus (below) real multi-frame trigger tests via
+//! `typing_session` that catch bugs in *when* `show` decides to call that
+//! resolution, which direct calls can't.
 
 use super::super::*;
 use super::common::*;
@@ -291,16 +288,8 @@ fn dispatcher_routes_kotlin_to_kotlin_dot_completion_candidates() {
     assert_eq!(labels(&items), vec!["helper", "run"]);
 }
 
-// The tests above drive candidate resolution directly, deliberately
-// bypassing `show`'s own event-handling — real enough for the resolution
-// logic itself, but blind to a bug that only exists in how `show` decides
-// *when* to call that resolution at all. The tests below drive `show`
-// through `typing_session` (a real, focused, multi-frame `egui::Context`)
-// to close that gap: a user reported that finishing "super" character by
-// character and then typing `.` didn't open dot-completion at all — only
-// erasing and retyping the `.` did. `visible_labels` below assumes ASCII
-// fixture text throughout, so a char offset doubles as a byte offset
-// without needing `char_to_byte`.
+// `visible_labels` assumes ASCII fixture text, so a char offset doubles
+// as a byte offset without needing `char_to_byte`.
 
 fn visible_labels(state: &CompletionState, text: &str, cursor_byte: usize) -> Vec<String> {
     let mut labels: Vec<String> = state.visible(text, cursor_byte).iter().map(|i| i.label.clone()).collect();
@@ -362,11 +351,9 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
 
 #[test]
 fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
-    // The minimal case reported alongside the "super." bug above: `b` is
-    // a single character, so word-completion never opens while it's
-    // typed (its own trigger requires a 2+ character run) — this isolates
-    // whether a bare `b.` needs the same fix or fails for an unrelated
-    // reason.
+    // `b` is one character, so word-completion's own 2+-char trigger
+    // never opens while typing it — isolates whether a bare `b.` needs
+    // the same fix as `super.` above, or fails for an unrelated reason.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("Bar.kt"), "class Bar {\n    fun baz() {\n    }\n}\n").unwrap();
     let before = "class Foo {\n    fun go() {\n        val b: Bar = Bar()\n        b";
@@ -390,8 +377,7 @@ fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
 
 #[test]
 fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
-    // Java counterpart of the Kotlin test above — reported broken too
-    // ("b. does nothing on java as well").
+    // Java counterpart of the Kotlin test above.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("Bar.java"),

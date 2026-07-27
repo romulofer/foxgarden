@@ -1,16 +1,7 @@
-//! Kotlin member extraction for dot-completion's cross-project lookup
-//! (`SPEC.md` §4, `PLAN.md` Phase 3c) — the Kotlin-side counterpart to
-//! `fields.rs`/`methods.rs`, combined into one file since both draw from
-//! the same `class_body` traversal rather than two separate concerns, and
-//! Kotlin has no existing equivalent to build on the way Java's Override
-//! Method already proved `fields_in_class_body`/`methods_in_type` out.
-//!
-//! `FieldInfo`/`MethodSignature` (from `fields.rs`/`methods.rs`) are reused
-//! as-is rather than forked: `FieldInfo::java_type` reads oddly named for a
-//! Kotlin property, and `is_final` maps to Kotlin's `val` (immutable, true)
-//! vs. `var` (mutable, false) rather than Java's `final` keyword — same
-//! "can't be reassigned" meaning, just spelled differently in the source
-//! language.
+//! Kotlin member extraction for dot-completion's cross-project lookup —
+//! the Kotlin counterpart to `fields.rs`/`methods.rs`. Reuses `FieldInfo`/
+//! `MethodSignature` as-is rather than forking them: `is_final` maps to
+//! `val`/`var`, `java_type` to Kotlin's declared type.
 
 use tree_sitter::{Node, Tree};
 
@@ -35,11 +26,8 @@ fn find_class_node<'a>(node: Node<'a>, source: &str, class_name: &str) -> Option
     None
 }
 
-/// The class the cursor sits in, by name only — completion's callers
-/// re-look-up members by name afterward (mirroring
-/// `java_dot_completion_candidates`'s own shape) rather than reusing the
-/// `Node` this walk already has, so `this.`/`super.`/a local variable's
-/// resolved type all funnel through the same by-name lookup path.
+/// Name of the class the cursor sits in — callers re-look-up members by
+/// name afterward, mirroring `java_dot_completion_candidates`.
 pub fn kotlin_enclosing_class(tree: &Tree, source: &str, cursor_byte: usize) -> Option<String> {
     let start = tree.root_node().named_descendant_for_byte_range(cursor_byte, cursor_byte)?;
     let class_node = enclosing_class_kotlin(start)?;
@@ -47,13 +35,10 @@ pub fn kotlin_enclosing_class(tree: &Tree, source: &str, cursor_byte: usize) -> 
     Some(source[name.byte_range()].to_string())
 }
 
-/// The simple name of the first type `class_name` delegates to — its
-/// superclass if it extends one with a constructor call, or its first
-/// implemented interface otherwise (`delegation_specifiers`' first entry,
-/// `SPEC.md` §3b) — Kotlin doesn't distinguish `extends`/`implements` in
-/// its grammar the way Java does, so "don't try to distinguish, just take
-/// the first one" is the same scope limit Java's `superclass_name` already
-/// accepts, not a new one this introduces.
+/// Simple name of the first type `class_name` delegates to (superclass or
+/// first interface — `delegation_specifiers`' first entry; Kotlin's
+/// grammar doesn't distinguish `extends`/`implements`). Only the first
+/// entry, same scope limit Java's `superclass_name` already accepts.
 pub fn kotlin_superclass_name(tree: &Tree, source: &str, class_name: &str) -> Option<String> {
     let class_node = find_class_node(tree.root_node(), source, class_name)?;
     let delegation_specifiers = child_by_kind(class_node, "delegation_specifiers")?;
@@ -66,13 +51,10 @@ pub fn kotlin_superclass_name(tree: &Tree, source: &str, class_name: &str) -> Op
     Some(simple_name(&source[type_node.byte_range()]))
 }
 
-/// `FieldInfo` for every `property_declaration` directly in `body` (a
-/// `class_body` node) — a class's own properties, in source order. A
-/// property whose type can't be resolved (no explicit type, and an
-/// initializer that doesn't fit `property_declaration_type`'s
-/// constructor-call heuristic) is skipped rather than guessed at, same
-/// "resolve or say nothing" discipline `type_of_identifier_kotlin` already
-/// follows.
+/// `FieldInfo` for every `property_declaration` directly in `body`, in
+/// source order. Skips a property whose type can't be resolved (no
+/// explicit type, and an initializer that isn't a constructor call)
+/// rather than guessing.
 pub fn kotlin_properties_in_class_body(body: Node, source: &str) -> Vec<FieldInfo> {
     let mut out = Vec::new();
     let mut cursor = body.walk();
@@ -98,11 +80,9 @@ pub fn kotlin_properties_in_class_body(body: Node, source: &str) -> Vec<FieldInf
     out
 }
 
-/// Constructor-promoted `val`/`var` primary-constructor parameters of
-/// `class_node` — `class Foo(val x: Int)`'s `x` is a class member,
-/// callable via `.` the same as a `class_body` property would be
-/// (`SPEC.md` §4); a parameter with neither modifier is a constructor-only
-/// argument, not a member, and is excluded.
+/// Constructor-promoted `val`/`var` parameters of `class_node`'s primary
+/// constructor — `class Foo(val x: Int)`'s `x` is a member. A parameter
+/// with neither modifier is constructor-only, not a member, and excluded.
 fn kotlin_constructor_properties(class_node: Node, source: &str) -> Vec<FieldInfo> {
     let mut out = Vec::new();
     let Some(primary_constructor) = child_by_kind(class_node, "primary_constructor") else {
@@ -136,9 +116,9 @@ fn kotlin_constructor_properties(class_node: Node, source: &str) -> Vec<FieldInf
     out
 }
 
-/// Every property `type_name` has, by name — `class_body` properties plus
-/// constructor-promoted `val`/`var` parameters, completion's actual entry
-/// point (analogous to `fields::fields_in_type`).
+/// Every property `type_name` has: `class_body` properties plus
+/// constructor-promoted parameters. Completion's actual entry point
+/// (analogous to `fields::fields_in_type`).
 pub fn kotlin_properties_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<FieldInfo> {
     let Some(class_node) = find_class_node(tree.root_node(), source, type_name) else {
         return Vec::new();
@@ -150,10 +130,9 @@ pub fn kotlin_properties_in_type(tree: &Tree, source: &str, type_name: &str) -> 
     out
 }
 
-/// The return type of a `function_declaration` — its one child that isn't
-/// a modifier, name, parameter list, or body; `None` (mapped to `"Unit"`
-/// by the caller) for a function with no explicit return type, same as
-/// Kotlin's own implicit-`Unit` convention.
+/// A function's return type: its one child that isn't a modifier, name,
+/// parameter list, or body. `None` maps to `"Unit"` (Kotlin's default)
+/// when there's no explicit return type.
 fn return_type_node(node: Node) -> Option<Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).find(|c| {
@@ -164,13 +143,11 @@ fn return_type_node(node: Node) -> Option<Node> {
     })
 }
 
-/// One method's signature, if `node` is a `function_declaration` — filtered
-/// down to exclude `private` functions unless `unfiltered` is set, same
-/// `this.`/`super.`-sees-everything vs. external-caller-sees-less split
-/// `methods.rs`'s `method_signature` already settled on for Java
-/// (`SPEC.md` §4). Kotlin's modifiers are anonymous inside a `modifiers`
-/// node here too (verified against `node-types.json`), so a text search
-/// over that node's own span is the reliable way to detect `private`.
+/// One function's signature, if `node` is a `function_declaration` —
+/// excludes `private` functions unless `unfiltered` (`this.`/`super.`
+/// sees everything; an external receiver doesn't, mirroring Java's
+/// `method_signature`). Modifiers are anonymous tokens in a `modifiers`
+/// node, so a text search over its span is how `private` is detected.
 fn kotlin_function_signature(node: Node, source: &str, unfiltered: bool) -> Option<MethodSignature> {
     if node.kind() != "function_declaration" {
         return None;
@@ -224,17 +201,14 @@ fn collect_kotlin_functions(tree: &Tree, source: &str, type_name: &str, unfilter
     out
 }
 
-/// Every function declared directly in `type_name`'s class body, excluding
-/// `private` ones — a local-variable receiver's external-visibility view,
-/// mirroring `methods_in_type`'s existing filtering for the same case
-/// (`SPEC.md` §4).
+/// Every function in `type_name`'s body, excluding `private` — an
+/// external receiver's view, mirroring `methods_in_type`.
 pub fn kotlin_functions_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<MethodSignature> {
     collect_kotlin_functions(tree, source, type_name, false)
 }
 
-/// Every function declared directly in `type_name`'s class body,
-/// regardless of visibility — completion's `this.`/`super.` listing,
-/// mirroring `all_methods_in_type` (`SPEC.md` §4).
+/// Every function in `type_name`'s body, regardless of visibility —
+/// `this.`/`super.`'s listing, mirroring `all_methods_in_type`.
 pub fn all_kotlin_functions_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<MethodSignature> {
     collect_kotlin_functions(tree, source, type_name, true)
 }

@@ -1,9 +1,6 @@
-//! The floating completion popup's core state and rendering (`SPEC.md` §0)
-//! — shared by every trigger path (word-completion, dot-completion) so they
-//! end at one popup instead of drifting into subtly different UIs. The
-//! lifecycle (open/filter/close/accept, key interception) and real
-//! candidate sources land in later steps of this same phase; this module
-//! so far only proves the popup itself renders in the right place.
+//! The completion popup's state, filtering, rendering, and insertion —
+//! shared by every trigger path (word-completion, dot-completion) so they
+//! end at one popup instead of drifting into subtly different UIs.
 
 use ropey::Rope;
 
@@ -30,10 +27,9 @@ pub struct CompletionItem {
     pub kind: CompletionKind,
     /// e.g. `"int"` for a field, `"(String) -> void"` for a method.
     pub detail: Option<String>,
-    /// `Method` candidates only (`SPEC.md` §5, `PLAN.md` Phase 4): whether
-    /// the method takes at least one parameter — `insert_completion` places
-    /// the cursor between `()` when true, right after when false. Ignored
-    /// for every other `CompletionKind`.
+    /// `Method` only: whether it takes at least one parameter —
+    /// `insert_completion` places the cursor between `()` if so, right
+    /// after otherwise. Ignored for every other kind.
     pub has_params: bool,
 }
 
@@ -199,18 +195,14 @@ pub(super) fn filter_and_rank<'a>(candidates: &'a [CompletionItem], prefix: &str
     matched
 }
 
-/// Applies `item` at the popup's current position (`SPEC.md` §5): replaces
-/// `text[anchor_char..cursor_char]` — whatever's been typed since the popup
-/// opened — with `item.label`, plain prefix-replace for `Word`/`Keyword`/
-/// `Field` candidates. For `Method` candidates (`PLAN.md` Phase 4), appends
-/// `()` and places the cursor between the parens if `item.has_params`, or
-/// right after the closing paren otherwise — built via the same
-/// `${cursor}`-marker convention `templates::expand` already uses (a
-/// has-params insertion is literally `"{label}(${cursor})"` run through the
-/// identical marker-strip-and-locate step) rather than a second
-/// cursor-placement mechanism. `Template` never reaches this function at
-/// all — its caller in `widget.rs` calls `templates::expand` directly
-/// instead, same as the existing Tab-trigger path.
+/// Applies `item` at the popup's position: replaces
+/// `text[anchor_char..cursor_char]` with `item.label`, plain prefix-replace
+/// for `Word`/`Keyword`/`Field`. For `Method`, appends `()` and places the
+/// cursor between the parens (`has_params`) or right after — built as
+/// `"{label}(${cursor})"` run through `templates::expand`'s own
+/// marker-strip-and-locate step, rather than a second cursor mechanism.
+/// `Template` never reaches this function — its caller calls
+/// `templates::expand` directly instead.
 pub(super) fn insert_completion(
     text: &str,
     anchor_char: usize,

@@ -168,11 +168,9 @@ fn tab_with_no_selection_respects_a_configured_width() {
 
 #[test]
 fn shift_tab_with_no_selection_dedents_the_current_line() {
-    // Regression test: Shift+Tab with a collapsed cursor (no selection)
-    // used to be a silent no-op — left to "egui's own no-selection
-    // handling," which turned out not to exist at all (egui's `TextEdit`
-    // has no built-in dedent behavior for a bare Shift+Tab outside its
-    // `lock_focus` literal-tab-insert path).
+    // Regression test: Shift+Tab with no selection used to be a silent
+    // no-op — egui's `TextEdit` has no built-in dedent for a bare
+    // Shift+Tab outside its `lock_focus` literal-tab-insert path.
     let (_dir, mut doc) = open_fixture("    abc", "Hello.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 

@@ -97,17 +97,11 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
 
 /// Drives `show` across a sequence of frames on one shared, focused
 /// `egui::Context` — needed to reproduce a real multi-keystroke typing
-/// session, where `completion`'s `is_none()` gate and `text_area`'s own
-/// caret-position memory only make sense measured across successive frames
-/// of the *same* widget instance, unlike `focused_frame`'s normal one-shot
-/// use. A warm-up frame (no events) establishes focus and lets the caret be
-/// placed via `text_area::set_caret` before typing starts, same "warm-up
-/// frame first" shape `focused_frame_with_selection` above already
-/// establishes for injecting a pre-existing selection; `frames_events` then
-/// each get their own real frame, in order, so `completion`'s state from
-/// one frame is what the next frame's trigger checks actually see — the
-/// same timing a real keystroke-by-keystroke typing session has, which a
-/// single batched-events frame can't reproduce.
+/// session, where `completion`'s state from one frame affects the next
+/// frame's triggers, unlike `focused_frame`'s one-shot use. A warm-up
+/// frame establishes focus and lets the caret be placed via
+/// `text_area::set_caret` (same shape `focused_frame_with_selection`
+/// above uses); each of `frames_events` then gets its own real frame.
 pub(super) fn typing_session(
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,

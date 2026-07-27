@@ -688,14 +688,10 @@ pub fn show(
     // only the *indentation* half of this is skipped once `use_tabs` is
     // set (a literal tab already *is* that setting's unit, so egui's
     // default is exactly right there and needs no interception). Shift+Tab
-    // with no selection dedents just the current line (below) — the
-    // collapsed-cursor case `indent_selected_lines` is already built to
-    // handle, called with `range.start` as both endpoints. This used to be
-    // left to "egui's own no-selection handling," on the assumption
-    // something downstream implemented it; nothing did (egui's own
-    // `TextEdit` has no built-in dedent behavior for a bare Shift+Tab
-    // outside its `lock_focus` literal-tab-insert path), so it was
-    // silently a no-op until fixed here.
+    // with no selection dedents just the current line (below), via
+    // `indent_selected_lines`'s existing collapsed-range support — this
+    // used to be left to "egui's own no-selection handling," but egui has
+    // none, so it was silently a no-op until fixed here.
     if !multi_cursor_active_at_start {
         let tab_pressed = ui.input(|i| {
             i.events.iter().any(|e| {
@@ -1231,18 +1227,13 @@ pub fn show(
         old_text = corrected;
     }
 
-    // Close a completion popup whose filtered candidate list has just gone
-    // empty, *before* the word-/dot-completion triggers below run — not only
-    // in the paint step further down, which used to be the only place this
-    // was checked. Otherwise a still-open-but-now-irrelevant popup makes the
-    // triggers below see `completion` as `Some` on the very keystroke that
-    // invalidated it: e.g. finishing "super" (word-completion open, offering
-    // the `super` keyword) then typing `.` both empties that popup's filter
-    // (no candidate starts with "super.") *and* should open dot-completion
-    // immediately — but with the close check running only at paint time,
-    // dot-completion's own trigger sees a stale `Some` this frame and skips,
-    // silently requiring an erase-and-retype to get one clean frame where
-    // `completion.is_none()` is actually true when the `.` lands.
+    // Close a completion popup whose filtered list has just gone empty,
+    // *before* the word-/dot-completion triggers below (not only at paint
+    // time, the old timing) — otherwise a stale-but-not-yet-closed popup
+    // blocks the very trigger that should fire on the same keystroke: e.g.
+    // finishing "super" then typing "." both empties the old popup and
+    // should open dot-completion; the old timing missed that, requiring an
+    // erase-and-retype to get a clean frame.
     if let Some(state) = completion.as_ref() {
         let cursor_byte = shell_out.caret.map(|c| char_to_byte(&old_text, c.primary));
         if !cursor_byte.is_some_and(|b| !state.visible(&old_text, b).is_empty()) {
@@ -1901,11 +1892,8 @@ fn word_completion_candidates(
     candidates
 }
 
-/// Dot-completion's real candidate source (`SPEC.md` §4), dispatched by
-/// language — the one entry point the trigger above calls, mirroring
-/// `syntax::type_of_identifier`'s own dispatcher shape. Every other
-/// language has no dot-completion at all, same as they have no
-/// `type_of_identifier` resolution to begin with.
+/// Dot-completion's candidate source, dispatched by language — the one
+/// entry point the trigger above calls. Every other language has none.
 fn dot_completion_candidates(
     language: Language,
     tree: &Tree,
@@ -1921,21 +1909,14 @@ fn dot_completion_candidates(
     }
 }
 
-/// Java's dot-completion candidates (`SPEC.md` §4): `this.`/`super.` route
-/// directly through `syntax::enclosing_class`/`superclass_name` (no new
-/// resolution logic, per §3's own note) to an *unfiltered* member listing
-/// — every field/method regardless of visibility, since code inside the
-/// same class sees all of its own members. A bare identifier routes
-/// through `syntax::type_of_identifier_java`; if it resolves to a type
-/// with a source file elsewhere in the project, its members are offered
-/// through `methods_in_type`'s existing external-visibility filtering,
-/// plus one level of inherited members via the same
-/// `superclass_name`/`find_source_file_by_stem` chain "Override Method"
-/// already uses. Anything unresolvable at any step (no enclosing class, no
-/// superclass, a JDK/stdlib type with no project file, a chained/call-
-/// expression receiver `type_of_identifier_java` doesn't resolve at all)
-/// is `None` — the caller treats that as "don't open the popup," not an
-/// error.
+/// Java's dot-completion candidates: `this.`/`super.` go through
+/// `syntax::enclosing_class`/`superclass_name` to an *unfiltered* member
+/// listing (own class sees everything). A bare identifier resolves via
+/// `type_of_identifier_java`; if it has a project source file, its members
+/// come from `methods_in_type`'s external-visibility filtering, plus one
+/// level of inherited members via the same file-finder chain "Override
+/// Method" uses. Anything unresolvable is `None` — don't open the popup,
+/// not an error.
 fn java_dot_completion_candidates(
     tree: &Tree,
     source: &str,
@@ -1978,10 +1959,9 @@ fn java_dot_completion_candidates(
     Some(items)
 }
 
-/// `type_name`'s own fields and methods as `CompletionItem`s — `unfiltered`
+/// `type_name`'s own fields and methods as `CompletionItem`s. `unfiltered`
 /// selects `fields_in_type`'s `include_static` and `all_methods_in_type`
-/// over `methods_in_type`'s overridable-only filtering, for the `this.`/
-/// `super.` case.
+/// over `methods_in_type`, for the `this.`/`super.` case.
 fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = syntax::fields_in_type(tree, source, type_name, unfiltered)
         .into_iter()
@@ -2008,15 +1988,10 @@ fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered:
     items
 }
 
-/// Kotlin's dot-completion candidates (`SPEC.md` §4, `PLAN.md` Phase 3c) —
-/// same shape as `java_dot_completion_candidates`: `this.`/`super.` route
-/// through `syntax::kotlin_enclosing_class`/`kotlin_superclass_name` to an
-/// unfiltered member listing; a bare identifier routes through
-/// `syntax::type_of_identifier_kotlin`, and a resolved type with an
-/// in-project `.kt` file gets its externally-visible members plus one
-/// level of inherited members via the same `kotlin_superclass_name`/
-/// `find_source_file_by_stem` chain. Anything unresolvable at any step is
-/// `None`, same "don't open the popup" contract as the Java side.
+/// Kotlin's dot-completion candidates — same shape as
+/// `java_dot_completion_candidates`, just `kotlin_enclosing_class`/
+/// `kotlin_superclass_name`/`type_of_identifier_kotlin` in place of the
+/// Java equivalents.
 fn kotlin_dot_completion_candidates(
     tree: &Tree,
     source: &str,
@@ -2059,12 +2034,10 @@ fn kotlin_dot_completion_candidates(
     Some(items)
 }
 
-/// `type_name`'s own properties and functions as `CompletionItem`s —
+/// `type_name`'s own properties and functions as `CompletionItem`s.
 /// `unfiltered` selects `all_kotlin_functions_in_type` over
-/// `kotlin_functions_in_type`'s private-excluding filtering, for the
-/// `this.`/`super.` case; properties aren't visibility-filtered at all,
-/// mirroring Java's `fields_in_type` (visibility filtering there is only
-/// ever about `static`, never `private`).
+/// `kotlin_functions_in_type`, for `this.`/`super.`; properties aren't
+/// visibility-filtered at all, mirroring Java's `fields_in_type`.
 fn kotlin_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = syntax::kotlin_properties_in_type(tree, source, type_name)
         .into_iter()

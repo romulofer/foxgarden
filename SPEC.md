@@ -342,3 +342,174 @@ established:
   servlet context-path or a reverse-proxy prefix isn't known to this tool
   at all (needs real build-file awareness, still `[SKIP]`); paths shown
   are exactly what the `@...Mapping` annotations say, nothing more.
+
+---
+
+# 8. Terminal window tabs
+
+A second, independent feature added to this same design pass — an
+in-app, PTY-backed terminal that opens as its **own tab in the existing
+tab strip**, alongside file tabs, rather than a docked panel or a modal.
+Unrelated to §0-§7 above (no shared code, no shared dependency in either
+direction); `PLAN.md`'s phases for it are a separate track for the same
+reason. Reuses the tab bar UI users already understand instead of
+inventing a new one — the same "reuse an existing interaction rather than
+invent a new one" call §0 already made for the endpoint map's own popup.
+
+Genuinely bigger and riskier than the endpoint map: real process
+management, a byte-level terminal protocol, and a restructuring of a tab
+model that's been file-only (`Vec<Document>`) since this app's first
+checkpoint. `FEATURES.md` previously listed "Integrated terminal panel"
+as Substantial-tier, below the Major-tier undertakings — treat that as
+optimistic once the tab-model rework (§8.2) and full keyboard-protocol
+translation (§8.5) are actually accounted for; this is closer to Major
+tier in practice, just without a second external process/protocol server
+the way LSP integration would need.
+
+**Non-goals:** no terminal multiplexing (splits/panes within the tab —
+one shell process per tab, full stop); no terminal-specific color
+scheme or font distinct from the editor's own settings; no session
+persistence across restarts (a dead shell process has no scrollback/state
+worth resuming — `restore_session`/`persist_session` keep covering file
+tabs only, unchanged); no SSH/remote shell — a local process only, via
+whatever shell is installed.
+
+## 8.1 Dependencies
+
+- **`portable-pty`** — spawns a shell with a real pseudo-terminal. A
+  plain pipe isn't enough: line editing, job control, and a colored
+  prompt all expect a *real* pty (the shell checks `isatty()` and behaves
+  differently otherwise), not just captured stdout/stdin.
+- **`vt100`** — parses the raw byte stream into a `Screen` (a grid of
+  cells, each with its own foreground/background/bold/etc.), which
+  FoxGarden then paints itself via egui, rather than embedding a full
+  terminal emulator's own rendering (e.g. `alacritty_terminal`, much
+  heavier). Matches `AGENTS.md`'s "lightweight AND functional" design
+  principle: hand-rolling VT100 *parsing* from scratch is not worth
+  doing (the real escape-sequence surface a shell/editor/`htop` actually
+  emits is large), but *rendering* an already-parsed grid is squarely the
+  same kind of custom-painting work this app already does for the
+  editor's own text/squiggles/brackets — no reason to pull in a second
+  renderer for that half.
+
+## 8.2 Tab model — the real architectural fork this feature needs
+
+`EditorState.open_tabs: Vec<Document>` / `active_tab: Option<usize>` is
+used everywhere in this app as if every tab is a file — `app.rs`'s own
+`parsers: Vec<Option<IncrementalParser>>` is kept *index-aligned* with
+`open_tabs` (an already-documented `AGENTS.md` gotcha), and every
+tab-bar/save/close/reopen code path indexes `open_tabs` directly. A
+terminal tab isn't a `Document` at all: no path, nothing to save, no
+diagnostics.
+
+Proposed shape (resolve the exact fields with the real code in hand
+during Phase 5, not locked in here — same "verify against the actual
+current shape before writing the two call sites" discipline the
+completion feature's own Phase 3b already modeled for a comparable real
+design point):
+- Leave `open_tabs`/`parsers` exactly as they are today — file tabs only,
+  no change to their own type or indexing.
+- Add `terminal_tabs: Vec<TerminalTab>` (new struct — the pty child
+  handle, its writer half, the shared `vt100::Parser`/`Screen`, a
+  display title) alongside `open_tabs` on `EditorState`.
+- Add one ordered `Vec<TabKind>` (`TabKind::File(usize)` /
+  `TabKind::Terminal(usize)`) that *is* the tab order the strip renders
+  left-to-right, replacing `open_tabs`'s own implicit ordering as the
+  single source of truth for tab position — a file tab and a terminal tab
+  can end up interleaved in whatever order the user created them, and the
+  strip needs one list to walk, not two.
+- `active_tab` becomes "which `TabKind`," not a bare file index — every
+  existing call site that reads `state.active_tab` needs auditing, not
+  assumed unaffected.
+- Closing/reordering/middle-click-close reuse whatever mechanism file
+  tabs already have (`EditorState::close_tab`'s push-onto-`closed_tabs`
+  shape), dispatched by `TabKind` instead of assumed to always be a
+  `Document` — a closed terminal tab does *not* get pushed onto
+  `closed_tabs`/get a `Ctrl+Shift+T` reopen (§8's own non-goal: nothing
+  to meaningfully reopen).
+
+## 8.3 Spawning and lifecycle
+
+- **"New Terminal Tab"** — a new toolbar button/menu item/shortcut,
+  additive alongside the existing external "Open Terminal" button
+  (`terminal.rs`), not a replacement. Some users want their own terminal
+  emulator's own ergonomics (copy/paste, tmux, saved profiles); this is a
+  second, complementary option.
+- Spawns the user's default shell via `portable-pty`: `$SHELL` on Unix
+  (falling back to `/bin/sh` if unset), `%COMSPEC%` on Windows (falling
+  back to `cmd.exe`) — verify the exact fallback `terminal.rs`'s own
+  external-terminal spawn already uses for "no project open" before
+  assuming this feature should match it, rather than inventing a second,
+  possibly-inconsistent default.
+- A background thread does a blocking read of the pty's output
+  continuously (fine off the UI thread) and feeds bytes into the
+  `vt100::Parser` behind a `Mutex`/channel the UI thread drains once per
+  frame; calls `egui::Context::request_repaint()` whenever new output
+  arrives, since a long-running command's own output (unlike the user's
+  own typing) has no other event to trigger a repaint on.
+- Closing a terminal tab kills its child process — no "still running,
+  are you sure" confirmation for a first pass (a dirty *file* tab's
+  close-confirmation modal doesn't translate; a terminal has no "unsaved"
+  concept). Matches most terminal-tab UIs' own default.
+
+## 8.4 Rendering
+
+New `crates/app/src/widgets/terminal.rs`. Reads the current `vt100::
+Screen`'s cells once per frame — only while the tab is actually the
+active one (same "don't do per-frame work for a tab that isn't shown"
+discipline the editor's own tab rendering already follows) — and paints
+each cell as a monospace glyph using the *editor's own* configured font/
+size (`EditorFont`, `font_size`) rather than a second, separate terminal
+font setting. `vt100`'s own cell attributes (foreground/background/
+bold/etc.) map onto the current theme's own color table (`theme.rs`),
+not the raw ANSI 16-color palette verbatim — a terminal tab that ignores
+light/dark mode would visually clash with the rest of the app. Cursor
+renders as a blinking block/bar; reuse the editor's own blink-timing
+logic if it's factored generically enough to share rather than a second
+timer.
+
+## 8.5 Input
+
+While a terminal tab is focused, keyboard `Event`s translate to the byte
+sequences a real terminal sends and get written to the pty's writer
+half: printable characters as UTF-8 bytes, Enter → `\r`, Backspace/Tab
+→ their own single control bytes, arrow keys/Home/End/Page Up/Down/
+function keys → their standard ANSI escape sequences, Ctrl+letter → the
+matching control byte (Ctrl+C → `0x03`, Ctrl+D → `0x04`, …). This is a
+real, nontrivial translation table — a full terminal keyboard protocol,
+not a one-line `match` — budget a dedicated phase for it and table-test
+the byte sequences for at least arrows/Enter/Tab/Backspace/Ctrl+C/Ctrl+D
+against known-correct values, not asserted correct by inspection alone.
+Paste writes the clipboard text's raw bytes the same way, no different
+handling from typing it.
+
+## 8.6 Resizing
+
+On a size change (font-size setting, side-panel width drag, window
+resize), compute the new rows/cols from the available rect and the
+font's own glyph metrics (the same measurement the editor's own layout
+already needs — reuse it rather than re-deriving) and call the pty's
+`resize()`, so the shell's own `$LINES`/`$COLUMNS` — and any full-screen
+program running inside it (`vim`, `htop`, `less`) — redraw correctly.
+Getting this wrong doesn't crash anything, but a TUI program in an
+unresized pty renders garbled; treat a resize as a real, testable event
+(construct a known rect, assert the computed rows/cols), not an
+afterthought discovered only by eyeballing a live resize.
+
+## 8.7 Known gaps
+
+- No multiplexing, no terminal-specific theming, no session persistence,
+  no remote/SSH shells — §8's own stated non-goals, repeated here for the
+  same "don't let partial scope read as a bug" reason §7 gives for the
+  endpoint map.
+- **Windows support is the one real platform risk** — `portable-pty`'s
+  ConPTY backend is a different code path from its Unix pty
+  implementation; verify it actually works end-to-end in this app's own
+  build during Phase 6/7 rather than assuming parity with the Unix path,
+  mirroring `terminal.rs`'s own existing per-OS branching for the
+  external-terminal case (proof that this app already can't assume one
+  code path covers every platform for anything terminal-adjacent).
+- No attempt at terminal-inside-terminal edge cases (a shell running
+  another shell, `screen`/`tmux` launched from inside this tab) beyond
+  whatever `vt100` itself already handles — not a scenario this feature
+  tests for deliberately.
