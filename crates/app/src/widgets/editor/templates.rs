@@ -296,8 +296,9 @@ fn escape_body(body: &str) -> String {
 /// Inverse of `escape_body`. An unrecognized escape (a lone trailing `\`,
 /// or `\` followed by anything other than `n`/`\`) is passed through
 /// literally rather than treated as a parse error — forward-compatible
-/// with hand-edited or future-format input the same way `run_config::
-/// parse_block`'s unrecognized-key handling is.
+/// with hand-edited or future-format input, same spirit as
+/// `run_config::parse_run_configs`'s own tolerance for an unrecognized or
+/// missing JSON field.
 fn unescape_body(escaped: &str) -> String {
     let mut result = String::with_capacity(escaped.len());
     let mut chars = escaped.chars();

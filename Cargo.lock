@@ -1095,6 +1095,8 @@ name = "fg-core"
 version = "0.2.0"
 dependencies = [
  "ropey",
+ "serde",
+ "serde_json",
  "tempfile",
  "test-support",
 ]

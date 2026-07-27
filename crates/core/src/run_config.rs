@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// A named "how to run this project" configuration — main class, VM/
 /// program args, environment variables, working directory. Stored
-/// per-project (`.foxgarden/run_configs.txt` under the project root, see
+/// per-project (`.foxgarden/run_configs.json` under the project root, see
 /// `load_run_configs`/`save_run_configs`), not in this app's own
 /// `eframe::Storage` settings: a teammate opening the same project
 /// benefits from the same "run Main" config already existing, the way
@@ -14,7 +16,8 @@ use std::path::{Path, PathBuf};
 /// Storage/editing only for now — actually *running* one needs process
 /// management this project doesn't have yet (see `FEATURES.md`'s "Build/
 /// run/test integration").
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RunConfig {
     pub name: String,
     pub main_class: String,
@@ -24,84 +27,58 @@ pub struct RunConfig {
     pub env: Vec<(String, String)>,
     /// `None` means "the project root" — the sensible default a run
     /// config doesn't need to state explicitly.
+    #[serde(with = "working_dir_as_string")]
     pub working_dir: Option<PathBuf>,
 }
 
-const ENV_KEY: &str = "env";
-const WORKING_DIR_KEY: &str = "working_dir";
+/// `PathBuf`'s own `serde` impl rejects a non-UTF-8 path (real, if rare, on
+/// Unix) rather than losing information — the wrong tradeoff here, since it
+/// would turn one odd `working_dir` into a hard failure that loses every
+/// *other* config in the same save. `.display().to_string()` on the way out
+/// (lossy for non-UTF-8 bytes, same as the previous hand-rolled format
+/// already was) and a plain `PathBuf::from` on the way back keep
+/// `serialize_run_configs` genuinely infallible.
+mod working_dir_as_string {
+    use std::path::PathBuf;
 
-/// Serializes one `RunConfig` as `key=value` lines — `env` repeats once
-/// per variable (`env=KEY=VALUE`), matching how a real environment
-/// variable's own value can itself contain `=` (only the *first* `=` on
-/// an `env` line is the key/value separator, same as `line.split_once('=')`
-/// already assumes for every other key). No line ending up containing a
-/// literal `\n` is relied on throughout — same "a value can't itself
-/// contain the separator" contract `app.rs`'s `OPEN_TABS_KEY` encoding
-/// already leans on for newline-joined paths.
-fn serialize_one(config: &RunConfig) -> String {
-    let mut lines = vec![
-        format!("name={}", config.name),
-        format!("main_class={}", config.main_class),
-        format!("vm_args={}", config.vm_args),
-        format!("program_args={}", config.program_args),
-    ];
-    if let Some(dir) = &config.working_dir {
-        lines.push(format!("{WORKING_DIR_KEY}={}", dir.display()));
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(path: &Option<PathBuf>, serializer: S) -> Result<S::Ok, S::Error> {
+        // Delegates to `Option<String>`'s own `Serialize` impl rather than
+        // hand-writing the `Some`/`None` match.
+        path.as_ref().map(|p| p.display().to_string()).serialize(serializer)
     }
-    for (key, value) in &config.env {
-        lines.push(format!("{ENV_KEY}={key}={value}"));
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PathBuf>, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?.map(PathBuf::from))
     }
-    lines.join("\n")
 }
 
-fn parse_block(block: &str) -> RunConfig {
-    let mut config = RunConfig::default();
-    for line in block.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        match key {
-            "name" => config.name = value.to_string(),
-            "main_class" => config.main_class = value.to_string(),
-            "vm_args" => config.vm_args = value.to_string(),
-            "program_args" => config.program_args = value.to_string(),
-            WORKING_DIR_KEY => config.working_dir = (!value.is_empty()).then(|| PathBuf::from(value)),
-            ENV_KEY => {
-                if let Some((env_key, env_value)) = value.split_once('=') {
-                    config.env.push((env_key.to_string(), env_value.to_string()));
-                }
-            }
-            // Forward-compatible: an unrecognized key (a newer FoxGarden
-            // version's field, or hand-edited noise) is skipped rather
-            // than treated as a parse error, so this format can grow
-            // without a version marker or breaking older readers.
-            _ => {}
-        }
-    }
-    config
-}
-
-/// Parses the hand-rolled format `save_run_configs` writes: one config per
-/// blank-line-separated block, `key=value` lines within it. No `serde`/
-/// `toml` dependency needed for something this small (see `save_run_configs`'
-/// doc comment) — a config with an empty/missing `name` is still parsed
-/// (not skipped), it just renders as "(unnamed)" wherever a name is shown.
+/// Parses whatever `save_run_configs` last wrote. Forward-compatible the
+/// same way the previous hand-rolled format was: an unrecognized JSON key
+/// is ignored by `serde_json` without any extra configuration, and
+/// `#[serde(default)]` on `RunConfig` means a field missing entirely (an
+/// older FoxGarden version's save, or hand-edited JSON) fills in from
+/// `RunConfig::default()` instead of failing the whole parse. Malformed
+/// JSON (or no file at all, via `load_run_configs`) yields an empty `Vec`
+/// rather than an error — same "most projects never have one yet, and
+/// that's not a failure" reasoning `load_run_configs` already documents.
 pub fn parse_run_configs(input: &str) -> Vec<RunConfig> {
-    input
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|block| !block.is_empty())
-        .map(parse_block)
-        .collect()
+    serde_json::from_str(input).unwrap_or_default()
 }
 
-/// Inverse of `parse_run_configs`.
+/// Inverse of `parse_run_configs`. Pretty-printed, since this file is meant
+/// to be human-readable/editable alongside the project (see `RunConfig`'s
+/// own doc comment) — genuinely infallible for this struct once
+/// `working_dir`'s own serialization can't fail (see `working_dir_as_string`
+/// above): every other field is a `String`/`Vec<(String, String)>`, neither
+/// of which `serde_json` can fail to encode.
 pub fn serialize_run_configs(configs: &[RunConfig]) -> String {
-    configs.iter().map(serialize_one).collect::<Vec<_>>().join("\n\n")
+    serde_json::to_string_pretty(configs).expect("RunConfig serialization is infallible")
 }
 
 fn run_configs_path(project_root: &Path) -> PathBuf {
-    project_root.join(".foxgarden").join("run_configs.txt")
+    project_root.join(".foxgarden").join("run_configs.json")
 }
 
 /// Every run config saved for the project at `project_root` — an empty
@@ -114,7 +91,7 @@ pub fn load_run_configs(project_root: &Path) -> Vec<RunConfig> {
 }
 
 /// Inverse of `load_run_configs`: writes `configs` to
-/// `.foxgarden/run_configs.txt` under `project_root`, creating the
+/// `.foxgarden/run_configs.json` under `project_root`, creating the
 /// `.foxgarden` directory first if it doesn't exist yet.
 pub fn save_run_configs(project_root: &Path, configs: &[RunConfig]) -> std::io::Result<()> {
     let path = run_configs_path(project_root);
@@ -190,7 +167,7 @@ mod tests {
 
     #[test]
     fn unrecognized_keys_are_skipped_rather_than_erroring() {
-        let input = "name=Foo\nfuture_field=something new\nmain_class=Foo";
+        let input = r#"[{"name": "Foo", "future_field": "something new", "main_class": "Foo"}]"#;
         let configs = parse_run_configs(input);
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name, "Foo");
@@ -198,8 +175,27 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_field_defaults_rather_than_failing_the_whole_parse() {
+        let input = r#"[{"name": "Foo"}]"#;
+        let configs = parse_run_configs(input);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "Foo");
+        assert_eq!(configs[0].main_class, "");
+        assert_eq!(configs[0].env, vec![]);
+        assert_eq!(configs[0].working_dir, None);
+    }
+
+    #[test]
     fn load_run_configs_with_no_saved_file_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_run_configs(dir.path()), vec![]);
+    }
+
+    #[test]
+    fn load_run_configs_with_malformed_json_returns_empty_rather_than_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".foxgarden")).unwrap();
+        std::fs::write(dir.path().join(".foxgarden").join("run_configs.json"), "not json").unwrap();
         assert_eq!(load_run_configs(dir.path()), vec![]);
     }
 
@@ -212,6 +208,6 @@ mod tests {
         let loaded = load_run_configs(dir.path());
 
         assert_eq!(loaded, configs);
-        assert!(dir.path().join(".foxgarden").join("run_configs.txt").exists());
+        assert!(dir.path().join(".foxgarden").join("run_configs.json").exists());
     }
 }
