@@ -10,6 +10,18 @@ use crate::project::Project;
 /// life of the process every time a tab is closed.
 const MAX_CLOSED_TABS: usize = 20;
 
+/// One terminal session in the terminal panel (`PLAN.md`'s terminal-panel
+/// track, Phase 5) — for this phase, a placeholder (a display title,
+/// nothing pty-related yet). `PLAN.md` Phase 6 adds the actual child
+/// process/writer/`vt100::Parser`. Deliberately **not** part of
+/// `open_tabs`/`active_tab` at all: `SPEC.md` §8.2 puts the terminal in its
+/// own dockable bottom panel (the VSCode shape), not the file tab strip, so
+/// a session never shares a namespace or an index with a file tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalTab {
+    pub title: String,
+}
+
 #[derive(Default)]
 pub struct EditorState {
     pub project: Option<Project>,
@@ -19,6 +31,12 @@ pub struct EditorState {
     /// onto this (capped at `MAX_CLOSED_TABS`, dropping the oldest);
     /// `reopen_last_closed_tab` pops off it.
     pub closed_tabs: Vec<Document>,
+    /// The terminal panel's own sessions — entirely independent of
+    /// `open_tabs`/`active_tab` (see `TerminalTab`'s own doc comment).
+    pub terminal_tabs: Vec<TerminalTab>,
+    /// Which `terminal_tabs` entry the panel's own small tab strip has
+    /// focused, if any.
+    pub active_terminal: Option<usize>,
 }
 
 impl EditorState {
@@ -98,6 +116,37 @@ impl EditorState {
         let index = self.open_tabs.len() - 1;
         self.active_tab = Some(index);
         Some(index)
+    }
+
+    /// Pushes a new placeholder terminal session (`PLAN.md` Phase 5 — no
+    /// pty until Phase 6) and focuses it in the panel's own tab strip.
+    /// Returns its `terminal_tabs` index.
+    pub fn new_terminal_tab(&mut self) -> usize {
+        let index = self.terminal_tabs.len();
+        self.terminal_tabs.push(TerminalTab {
+            title: format!("Terminal {}", index + 1),
+        });
+        self.active_terminal = Some(index);
+        index
+    }
+
+    /// Removes the terminal session at `index` and moves `active_terminal`
+    /// to a sensible neighbor if it was active — same "next, or the
+    /// previous one if it was last" shape `close_tab` already uses for file
+    /// tabs. Still a no-op beyond that for now: no process to kill until
+    /// Phase 6 wires one up. Never touches `closed_tabs`: a closed terminal
+    /// session has nothing meaningful to reopen (`SPEC.md` §8's own
+    /// non-goal).
+    pub fn close_terminal_tab(&mut self, index: usize) {
+        self.terminal_tabs.remove(index);
+
+        self.active_terminal = match self.active_terminal {
+            None => None,
+            Some(_) if self.terminal_tabs.is_empty() => None,
+            Some(active) if active == index => Some(index.min(self.terminal_tabs.len() - 1)),
+            Some(active) if active > index => Some(active - 1),
+            Some(active) => Some(active),
+        };
     }
 }
 
@@ -257,5 +306,52 @@ mod tests {
         state.open_project(other_project_dir.path().to_path_buf()).unwrap();
 
         assert!(state.closed_tabs.is_empty());
+    }
+
+    #[test]
+    fn new_terminal_tab_appends_and_focuses_it_independently_of_file_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let mut state = EditorState::new();
+
+        state.open_tab(a).unwrap();
+        let index = state.new_terminal_tab();
+
+        assert_eq!(state.terminal_tabs.len(), 1);
+        assert_eq!(state.terminal_tabs[index].title, "Terminal 1");
+        assert_eq!(state.active_terminal, Some(0));
+        // A terminal session never touches the file-tab fields at all.
+        assert_eq!(state.active_tab, Some(0));
+        assert_eq!(state.open_tabs.len(), 1);
+    }
+
+    #[test]
+    fn close_terminal_tab_selects_sensible_neighbor() {
+        let mut state = EditorState::new();
+        state.new_terminal_tab(); // 0
+        state.new_terminal_tab(); // 1
+        state.new_terminal_tab(); // 2, active
+
+        state.close_terminal_tab(1); // close the middle one, not the active one
+        assert_eq!(state.active_terminal, Some(1), "index 2 shifted down to 1");
+
+        state.close_terminal_tab(1); // now closes the (shifted) active one
+        assert_eq!(state.active_terminal, Some(0));
+
+        state.close_terminal_tab(0);
+        assert_eq!(state.active_terminal, None);
+        assert!(state.terminal_tabs.is_empty());
+    }
+
+    #[test]
+    fn closing_a_terminal_tab_never_pushes_onto_closed_tabs() {
+        let mut state = EditorState::new();
+        state.new_terminal_tab();
+        state.close_terminal_tab(0);
+
+        assert!(
+            state.closed_tabs.is_empty(),
+            "a closed terminal session has nothing to reopen, unlike a file tab"
+        );
     }
 }

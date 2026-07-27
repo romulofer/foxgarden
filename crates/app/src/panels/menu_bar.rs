@@ -74,6 +74,7 @@ pub fn show(
     view_settings: &mut ViewSettings,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
+    terminal_panel_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
 ) -> MenuBarOutcome {
@@ -286,6 +287,9 @@ pub fn show(
                 ui.close();
             }
             if checkbox_with_shortcut(ui, side_panel_visible, "Side Panel", "Ctrl+B").changed() {
+                ui.close();
+            }
+            if checkbox_with_shortcut(ui, terminal_panel_visible, "Terminal Panel", "Ctrl+`").changed() {
                 ui.close();
             }
             ui.separator();

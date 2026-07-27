@@ -249,27 +249,34 @@ different code paths through `open_path`.
 
 ---
 
-# Terminal window tabs
+# Terminal panel
 
 A second, independent feature track added to this same plan (`SPEC.md`
-§8) — an in-app, PTY-backed terminal that opens as its own tab in the
-existing tab strip. No dependency in either direction on Phases 0-4
-above; this track's own Phase 5 is its hard starting point, the same way
-Phase 0 is for the endpoint map.
+§8) — an in-app, PTY-backed terminal in a **dockable bottom panel** (the
+VSCode shape, toggled via `Ctrl+\``), not a tab in the file tab strip.
+Revised from this track's own first draft (a tab-strip-integrated
+terminal via `TabKind`/`tab_order`) after a live look at that build read
+as unfamiliar next to the bottom-panel terminal most users already
+expect — reversed before Phase 6+ built anything on top of the
+tab-strip shape, so only Phase 5 needed redoing. No dependency in either
+direction on Phases 0-4 above; this track's own Phase 5 is its hard
+starting point, the same way Phase 0 is for the endpoint map.
 
 Dependency graph:
 
 ```
-Phase 5  Tab model restructuring (TabKind, "New Terminal Tab" creates an
-         empty tab, close-kills-process wiring) — foundational; nothing
-         below is visible in the running app without this first.
+Phase 5  Panel model (terminal_tabs/active_terminal on EditorState,
+         terminal_panel_visible + Ctrl+` toggle on FoxGardenApp, a
+         bottom-docked panel with its own small tab strip) —
+         foundational; nothing below is visible in the running app
+         without this first.
    │
    └─► Phase 6  PTY spawn/read/write (portable-pty), raw byte dump into
-           the new tab's content area — no vt100 yet, proves the process
+           the panel's content area — no vt100 yet, proves the process
            + threading model works before investing in real rendering.
                │
                └─► Phase 7  vt100 parsing + real cell-grid rendering
-                       (crates/app/src/widgets/terminal.rs)
+                       (crates/app/src/widgets/terminal_widget.rs)
                            │
                            └─► Phase 8  Full keyboard input translation
                                    table (arrows/control chars/function
@@ -284,78 +291,90 @@ Same checkpoint discipline as Phases 0-4: `cargo build/test/clippy`
 green, then a live click-through per `AGENTS.md`'s testing conventions
 (exact numbered steps handed to the user, wait for them to report back —
 not a click-automation tool). **No safe-to-ship-partial point before
-Phase 8** — a terminal tab that renders output but can't take more than
-raw/printable input (no arrow keys, no Ctrl+C) isn't usable for anything
-beyond the most trivial commands; Phase 7 (rendering proven, input still
-crude) is the most defensible pause point, the same role Phase 2 plays
-for the endpoint map.
+Phase 8** — a terminal session that renders output but can't take more
+than raw/printable input (no arrow keys, no Ctrl+C) isn't usable for
+anything beyond the most trivial commands; Phase 7 (rendering proven,
+input still crude) is the most defensible pause point, the same role
+Phase 2 plays for the endpoint map.
 
 ---
 
-## Phase 5 — Tab model restructuring
+## Phase 5 — Panel model
 
 `crates/core/src/editor_state.rs` (`SPEC.md` §8.2) — the real design
-question to resolve here, not before: exact shape of `TabKind`/
-`terminal_tabs`/how `active_tab` changes, read against the current code
-fresh rather than assumed from this doc alone.
+question to resolve here, not before: exact shape of `terminal_tabs`/
+`active_terminal`, read against the current code fresh rather than
+assumed from this doc alone. **No change to `open_tabs`/`active_tab`/
+`parsers` at all** — the whole point of the panel-not-tab shape is that a
+terminal session never shares a namespace or an index with a file tab.
 
-- `TabKind::File(usize)` / `TabKind::Terminal(usize)`, one ordered
-  `Vec<TabKind>` as the tab strip's single source of truth for position,
-  replacing `open_tabs`'s own implicit ordering.
-- `terminal_tabs: Vec<TerminalTab>` — for this phase, a placeholder
-  struct (a title, nothing pty-related yet — that's Phase 6). "New
-  Terminal Tab" pushes one, focuses it, and the tab strip renders it
-  alongside file tabs.
-- Audit every existing `state.active_tab`/`state.open_tabs[...]` call
-  site this change touches (tab strip rendering, close/reopen, session
-  persistence, save) — `persist_session`/`restore_session` must keep
-  covering file tabs only (`SPEC.md` §8's own non-goal), so this phase
-  also confirms they don't accidentally start trying to persist
-  `terminal_tabs`.
-- Closing a terminal tab (still a no-op placeholder — no process to kill
-  yet) removes it from `terminal_tabs` and the order `Vec`, does *not*
-  push onto `closed_tabs`.
+- `EditorState` gains `terminal_tabs: Vec<TerminalTab>` (placeholder
+  struct for this phase — a title, nothing pty-related yet, that's Phase
+  6) and `active_terminal: Option<usize>`, both independent of
+  `open_tabs`/`active_tab`.
+- `FoxGardenApp` gains `terminal_panel_visible: bool` (mirrors
+  `side_panel_visible`'s role) and a `Ctrl+\`` shortcut (verify free
+  against `menu_bar.rs`'s current shortcuts first, same "verify, don't
+  trust an older note" discipline every other new shortcut in this plan
+  already applies) toggling it; opening the panel with no sessions yet
+  creates the first one automatically.
+- New `crates/app/src/panels/terminal_panel.rs`: renders via
+  `egui::TopBottomPanel::bottom`, only while `terminal_panel_visible` —
+  its own small tab strip over `terminal_tabs` (not `TabKind`/`tab_order`;
+  a terminal session's position is just its own `Vec` index, since
+  nothing ever interleaves it with a file tab), a "+" to add another
+  session, closing one removes it from `terminal_tabs` and reassigns
+  `active_terminal` to a neighbor if it was focused — never pushed onto
+  `closed_tabs` (§8's own non-goal: nothing meaningful to reopen).
+- Confirm `persist_session`/`restore_session` need no change at all
+  (they only ever touched `open_tabs`/`active_tab`, both untouched by
+  this feature) rather than assuming — the panel-not-tab shape should
+  make this a non-issue, but verify against the real code rather than
+  taking that on faith.
 
-**Checkpoint 5:** full suite green; live-verify "New Terminal Tab" adds a
-tab that renders (empty content is fine — Phase 6's job), sits correctly
-among file tabs in whatever order it was created, closes cleanly, and
-every existing file-tab behavior (open/close/reopen/save/session
-persistence) is provably unaffected.
+**Checkpoint 5:** full suite green; live-verify `Ctrl+\`` opens the
+bottom panel with one session already running (empty/placeholder content
+is fine — Phase 6's job), a "+" adds another session with its own small
+tab, closing a session's tab closes just that one, toggling the panel
+closed and back open preserves whatever sessions existed, and every
+existing file-tab behavior (open/close/reopen/save/session persistence)
+is provably unaffected — the panel model shouldn't touch any of it.
 
 ---
 
 ## Phase 6 — PTY spawn/read/write
 
-`Cargo.toml` gains `portable-pty`. A terminal tab's content area (still
-no `vt100` involved) shows the *raw* byte stream from its shell, decoded
-lossily as text for this phase only — proves the process lifecycle and
-the background-reader-thread-into-UI-thread plumbing (`SPEC.md` §8.3)
-works before investing in real VT100 parsing.
+`Cargo.toml` gains `portable-pty`. A terminal session's content area
+(still no `vt100` involved) shows the *raw* byte stream from its shell,
+decoded lossily as text for this phase only — proves the process
+lifecycle and the background-reader-thread-into-UI-thread plumbing
+(`SPEC.md` §8.3) works before investing in real VT100 parsing.
 
 - Spawn the shell (`$SHELL`/`%COMSPEC%` fallback per `SPEC.md` §8.3,
-  verified against `terminal.rs`'s own current fallback first) on "New
-  Terminal Tab," store the child + writer half on the `TerminalTab`.
+  verified against `terminal.rs`'s own current fallback first) whenever a
+  new session starts (the panel's first auto-created one, or a "+"
+  click), store the child + writer half on the `TerminalTab`.
 - Background thread: blocking read loop into a channel; UI thread drains
   it once per frame, appends to a simple `String`/`Vec<u8>` buffer,
   calls `request_repaint()` on new data.
 - Typed characters (plain `Event::Text` only — no special-key translation
   yet, that's Phase 8) get written to the writer half.
-- Closing the tab now kills the real child process.
+- Closing a session's tab now kills the real child process.
 
 **Checkpoint 6:** full suite green; live-verify a spawned shell's prompt
 appears (however garbled/un-color-coded — raw bytes, expected), typing a
 simple command + Enter and seeing *some* response confirms read/write
-both work, closing the tab actually ends the process (check via the OS's
-own process list, not just that the tab disappeared).
+both work, closing a session's tab actually ends the process (check via
+the OS's own process list, not just that the tab disappeared).
 
 ---
 
 ## Phase 7 — vt100 parsing + real rendering
 
-`Cargo.toml` gains `vt100`. New `crates/app/src/widgets/terminal.rs`
+`Cargo.toml` gains `vt100`. New `crates/app/src/widgets/terminal_widget.rs`
 (`SPEC.md` §8.4): the background reader feeds bytes into a
 `vt100::Parser` instead of a raw buffer; the widget reads the parser's
-`Screen` once per frame (active tab only) and paints each cell as a
+`Screen` once per frame (the active session only) and paints each cell as a
 monospace glyph via the editor's own `EditorFont`/`font_size`, `vt100`
 attributes mapped onto the current theme's color table, a blinking
 cursor.
@@ -377,7 +396,7 @@ characters only, no arrows/Ctrl+C yet).
 
 ## Phase 8 — Full keyboard input translation
 
-`terminal.rs` (`SPEC.md` §8.5) — the dedicated phase that table-`SPEC.md`
+`terminal_widget.rs` (`SPEC.md` §8.5) — the dedicated phase that table-`SPEC.md`
 §8.5 itself flags as needing its own budget, not a one-line `match`.
 
 - Byte-sequence table for arrows, Home/End/Page Up/Down, function keys,
@@ -398,19 +417,19 @@ navigable, not just displayed.
 
 ## Phase 9 — Resizing
 
-`terminal.rs` (`SPEC.md` §8.6): on a font-size change, side-panel drag,
+`terminal_widget.rs` (`SPEC.md` §8.6): on a font-size change, side-panel drag,
 or window resize while a terminal tab is visible, recompute rows/cols
 from the available rect + glyph metrics and call the pty's `resize()`.
 
 - Table tests: a given rect + font metrics produces the expected rows/
   cols (pure arithmetic, headless).
 - Live click-through: resize the window (or change font size) with a
-  full-screen program running inside the terminal tab (`htop`/`vim`) and
+  full-screen program running inside the terminal session (`htop`/`vim`) and
   confirm it redraws to fit rather than rendering garbled at the old
   dimensions.
 
 **Checkpoint 9:** full suite green; live-verify per above — this closes
-out the terminal-tab track.
+out the terminal-panel track.
 
 ---
 
@@ -421,8 +440,8 @@ out the terminal-tab track.
 - [x] Phase 2 — whole-project scan
 - [x] Phase 3 — popup UI shell
 - [x] Phase 4 — jump-to-handler (known issue: cursor doesn't land correctly, `TECHNICAL_DEBT.md` #15)
-- [ ] Phase 5 — terminal tabs: tab model restructuring
-- [ ] Phase 6 — terminal tabs: PTY spawn/read/write
-- [ ] Phase 7 — terminal tabs: vt100 parsing + rendering
-- [ ] Phase 8 — terminal tabs: full keyboard input translation
-- [ ] Phase 9 — terminal tabs: resizing
+- [ ] Phase 5 — terminal panel: panel model
+- [ ] Phase 6 — terminal panel: PTY spawn/read/write
+- [ ] Phase 7 — terminal panel: vt100 parsing + rendering
+- [ ] Phase 8 — terminal panel: full keyboard input translation
+- [ ] Phase 9 — terminal panel: resizing

@@ -345,34 +345,41 @@ established:
 
 ---
 
-# 8. Terminal window tabs
+# 8. Terminal panel
 
 A second, independent feature added to this same design pass — an
-in-app, PTY-backed terminal that opens as its **own tab in the existing
-tab strip**, alongside file tabs, rather than a docked panel or a modal.
-Unrelated to §0-§7 above (no shared code, no shared dependency in either
-direction); `PLAN.md`'s phases for it are a separate track for the same
-reason. Reuses the tab bar UI users already understand instead of
-inventing a new one — the same "reuse an existing interaction rather than
-invent a new one" call §0 already made for the endpoint map's own popup.
+in-app, PTY-backed terminal that opens as a **dockable bottom panel**
+(the VSCode shape: toggled open/closed below the editor content, its own
+small tab strip *inside* the panel for multiple terminal sessions),
+**not** a tab in the file tab strip. Revised from this entry's own first
+draft, which called for a tab-strip-integrated terminal — reversed after
+a live look at the Phase 5 tab-strip-integrated build (`TabKind::
+Terminal` interleaved with file tabs in one `tab_order`) read as
+unfamiliar next to the VSCode-style bottom-panel terminal most users
+already expect; recorded here rather than silently overwritten, since
+`PLAN.md`'s own Phase 5 entry and the code it already produced needed a
+matching revision, not just this doc. Still unrelated to §0-§7 above (no
+shared code, no shared dependency in either direction); `PLAN.md`'s
+phases for it remain a separate track for the same reason.
 
 Genuinely bigger and riskier than the endpoint map: real process
-management, a byte-level terminal protocol, and a restructuring of a tab
-model that's been file-only (`Vec<Document>`) since this app's first
-checkpoint. `FEATURES.md` previously listed "Integrated terminal panel"
-as Substantial-tier, below the Major-tier undertakings — treat that as
-optimistic once the tab-model rework (§8.2) and full keyboard-protocol
-translation (§8.5) are actually accounted for; this is closer to Major
-tier in practice, just without a second external process/protocol server
-the way LSP integration would need.
+management and a byte-level terminal protocol, though the panel-not-tab
+shape removes the tab-model rework §8.2 originally called for — `open_tabs`/
+`active_tab` stay exactly file-only, untouched by this feature entirely.
+`FEATURES.md` previously listed "Integrated terminal panel" as
+Substantial-tier, below the Major-tier undertakings; full keyboard-protocol
+translation (§8.5) alone still argues for treating that as optimistic,
+even without a tab-model rework alongside it.
 
-**Non-goals:** no terminal multiplexing (splits/panes within the tab —
-one shell process per tab, full stop); no terminal-specific color
-scheme or font distinct from the editor's own settings; no session
-persistence across restarts (a dead shell process has no scrollback/state
-worth resuming — `restore_session`/`persist_session` keep covering file
-tabs only, unchanged); no SSH/remote shell — a local process only, via
-whatever shell is installed.
+**Non-goals:** no terminal multiplexing *within one session* (splits/panes
+inside a single terminal — one shell process per session, full stop; the
+panel's own tab strip already covers "more than one terminal at once" via
+multiple sessions, so this isn't the same as forbidding concurrency); no
+terminal-specific color scheme or font distinct from the editor's own
+settings; no session persistence across restarts (a dead shell process has
+no scrollback/state worth resuming — `restore_session`/`persist_session`
+keep covering file tabs only, unaffected by this feature either way); no
+SSH/remote shell — a local process only, via whatever shell is installed.
 
 ## 8.1 Dependencies
 
@@ -392,49 +399,49 @@ whatever shell is installed.
   editor's own text/squiggles/brackets — no reason to pull in a second
   renderer for that half.
 
-## 8.2 Tab model — the real architectural fork this feature needs
+## 8.2 Panel model — deliberately independent of the file tab model
 
-`EditorState.open_tabs: Vec<Document>` / `active_tab: Option<usize>` is
-used everywhere in this app as if every tab is a file — `app.rs`'s own
-`parsers: Vec<Option<IncrementalParser>>` is kept *index-aligned* with
-`open_tabs` (an already-documented `AGENTS.md` gotcha), and every
-tab-bar/save/close/reopen code path indexes `open_tabs` directly. A
-terminal tab isn't a `Document` at all: no path, nothing to save, no
-diagnostics.
+Unlike this entry's original draft, `EditorState.open_tabs: Vec<Document>`/
+`active_tab: Option<usize>` need **no change at all** for this feature —
+the panel-not-tab shape means a terminal session is never interleaved with
+file tabs, never indexed by the same field, never touches `parsers`
+(kept *index-aligned* with `open_tabs`, an already-documented `AGENTS.md`
+gotcha that a terminal session simply never participates in).
 
-Proposed shape (resolve the exact fields with the real code in hand
-during Phase 5, not locked in here — same "verify against the actual
-current shape before writing the two call sites" discipline the
-completion feature's own Phase 3b already modeled for a comparable real
-design point):
-- Leave `open_tabs`/`parsers` exactly as they are today — file tabs only,
-  no change to their own type or indexing.
-- Add `terminal_tabs: Vec<TerminalTab>` (new struct — the pty child
-  handle, its writer half, the shared `vt100::Parser`/`Screen`, a
-  display title) alongside `open_tabs` on `EditorState`.
-- Add one ordered `Vec<TabKind>` (`TabKind::File(usize)` /
-  `TabKind::Terminal(usize)`) that *is* the tab order the strip renders
-  left-to-right, replacing `open_tabs`'s own implicit ordering as the
-  single source of truth for tab position — a file tab and a terminal tab
-  can end up interleaved in whatever order the user created them, and the
-  strip needs one list to walk, not two.
-- `active_tab` becomes "which `TabKind`," not a bare file index — every
-  existing call site that reads `state.active_tab` needs auditing, not
-  assumed unaffected.
-- Closing/reordering/middle-click-close reuse whatever mechanism file
-  tabs already have (`EditorState::close_tab`'s push-onto-`closed_tabs`
-  shape), dispatched by `TabKind` instead of assumed to always be a
-  `Document` — a closed terminal tab does *not* get pushed onto
-  `closed_tabs`/get a `Ctrl+Shift+T` reopen (§8's own non-goal: nothing
-  to meaningfully reopen).
+Shape (mirrors `side_panel`'s own "a dockable area with its own visibility
+flag" precedent, `PLAN.md` Phase 5):
+- `EditorState` gains `terminal_tabs: Vec<TerminalTab>` (new struct — the
+  pty child handle, its writer half, the shared `vt100::Parser`/`Screen`,
+  a display title) and `active_terminal: Option<usize>` (which session,
+  if any, the panel's own small tab strip has focused) — both entirely
+  separate from `open_tabs`/`active_tab`.
+- `FoxGardenApp` gains `terminal_panel_visible: bool`, mirroring
+  `side_panel_visible`'s own role for the project tree — toggled by
+  `Ctrl+\`` (backtick, matching VSCode's own terminal-toggle shortcut) or
+  a View menu item, independent of which file tab (if any) is active.
+- The panel itself renders via `egui::TopBottomPanel::bottom` (the
+  bottom-dock counterpart to `side_panel`'s `egui::SidePanel::left`),
+  shown only while `terminal_panel_visible` — its own tab strip lists
+  `terminal_tabs`, a "+" adds another session, closing one removes it from
+  `terminal_tabs` and reassigns `active_terminal` to a neighbor if it was
+  focused. No `TabKind`/shared-ordering type is needed at all: a terminal
+  session's position is just its own index in `terminal_tabs`, since nothing
+  ever interleaves it with a file tab's position.
+- Closing a terminal session has nothing to push onto `closed_tabs`
+  (§8's own non-goal: nothing meaningful to reopen) — `closed_tabs`
+  stays exactly the file-tab-only mechanism it already was.
 
 ## 8.3 Spawning and lifecycle
 
-- **"New Terminal Tab"** — a new toolbar button/menu item/shortcut,
-  additive alongside the existing external "Open Terminal" button
-  (`terminal.rs`), not a replacement. Some users want their own terminal
-  emulator's own ergonomics (copy/paste, tmux, saved profiles); this is a
-  second, complementary option.
+- **Opening the panel** — `Ctrl+\``/View menu toggles
+  `terminal_panel_visible`; if the panel has no sessions yet the first
+  time it's shown, one is created automatically (matching VSCode's own
+  "opening the terminal for the first time starts a shell" behavior), a
+  new toolbar/panel "+" button starts another one alongside it. Additive
+  next to the existing *external* "Open Terminal" button (`terminal.rs`,
+  spawns the OS's own terminal emulator window) — some users want their
+  own terminal emulator's ergonomics (copy/paste, tmux, saved profiles);
+  this in-app panel is a second, complementary option, not a replacement.
 - Spawns the user's default shell via `portable-pty`: `$SHELL` on Unix
   (falling back to `/bin/sh` if unset), `%COMSPEC%` on Windows (falling
   back to `cmd.exe`) — verify the exact fallback `terminal.rs`'s own
@@ -447,30 +454,31 @@ design point):
   frame; calls `egui::Context::request_repaint()` whenever new output
   arrives, since a long-running command's own output (unlike the user's
   own typing) has no other event to trigger a repaint on.
-- Closing a terminal tab kills its child process — no "still running,
-  are you sure" confirmation for a first pass (a dirty *file* tab's
-  close-confirmation modal doesn't translate; a terminal has no "unsaved"
-  concept). Matches most terminal-tab UIs' own default.
+- Closing a terminal session kills its child process — no "still
+  running, are you sure" confirmation for a first pass (a dirty *file*
+  tab's close-confirmation modal doesn't translate; a terminal has no
+  "unsaved" concept). Matches most terminal-panel UIs' own default.
 
 ## 8.4 Rendering
 
-New `crates/app/src/widgets/terminal.rs`. Reads the current `vt100::
-Screen`'s cells once per frame — only while the tab is actually the
-active one (same "don't do per-frame work for a tab that isn't shown"
-discipline the editor's own tab rendering already follows) — and paints
-each cell as a monospace glyph using the *editor's own* configured font/
-size (`EditorFont`, `font_size`) rather than a second, separate terminal
-font setting. `vt100`'s own cell attributes (foreground/background/
-bold/etc.) map onto the current theme's own color table (`theme.rs`),
-not the raw ANSI 16-color palette verbatim — a terminal tab that ignores
-light/dark mode would visually clash with the rest of the app. Cursor
-renders as a blinking block/bar; reuse the editor's own blink-timing
-logic if it's factored generically enough to share rather than a second
-timer.
+New `crates/app/src/widgets/terminal_widget.rs` (not `terminal.rs` — already
+taken by the existing external-terminal-launcher module). Reads the current
+`vt100::Screen`'s cells once per frame — only for whichever session is
+`active_terminal` and only while the panel itself is visible (same "don't
+do per-frame work for something that isn't shown" discipline the editor's
+own tab rendering already follows) — and paints each cell as a monospace
+glyph using the *editor's own* configured font/size (`EditorFont`,
+`font_size`) rather than a second, separate terminal font setting. `vt100`'s
+own cell attributes (foreground/background/bold/etc.) map onto the current
+theme's own color table (`theme.rs`), not the raw ANSI 16-color palette
+verbatim — a terminal panel that ignores light/dark mode would visually
+clash with the rest of the app. Cursor renders as a blinking block/bar;
+reuse the editor's own blink-timing logic if it's factored generically
+enough to share rather than a second timer.
 
 ## 8.5 Input
 
-While a terminal tab is focused, keyboard `Event`s translate to the byte
+While the terminal panel is focused, keyboard `Event`s translate to the byte
 sequences a real terminal sends and get written to the pty's writer
 half: printable characters as UTF-8 bytes, Enter → `\r`, Backspace/Tab
 → their own single control bytes, arrow keys/Home/End/Page Up/Down/
@@ -510,6 +518,6 @@ afterthought discovered only by eyeballing a live resize.
   external-terminal case (proof that this app already can't assume one
   code path covers every platform for anything terminal-adjacent).
 - No attempt at terminal-inside-terminal edge cases (a shell running
-  another shell, `screen`/`tmux` launched from inside this tab) beyond
+  another shell, `screen`/`tmux` launched from inside a session) beyond
   whatever `vt100` itself already handles — not a scenario this feature
   tests for deliberately.

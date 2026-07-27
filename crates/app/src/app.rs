@@ -14,6 +14,7 @@ use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::tabs;
+use crate::panels::terminal_panel;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -127,6 +128,14 @@ pub struct FoxGardenApp {
     /// bar together; this hides only the project panel, leaving the menu bar
     /// (and so a way back via the View menu) in place.
     side_panel_visible: bool,
+    /// Whether the terminal panel is docked open at the bottom — toggled by
+    /// the View menu's "Terminal Panel" checkbox or `Ctrl+\``, same
+    /// "one flag, two triggers" shape as `side_panel_visible`. Not
+    /// persisted across restarts (unlike `side_panel_visible`): a dead
+    /// shell process has no scrollback/state worth resuming (`SPEC.md`
+    /// §8's own non-goal), so there's nothing left to show the panel
+    /// open *for* on a fresh launch.
+    terminal_panel_visible: bool,
     menu_bar: MenuBarState,
     /// `Ctrl+E`'s recent-files popup.
     quick_switcher: QuickSwitcherState,
@@ -701,6 +710,7 @@ impl FoxGardenApp {
             side_panel: SidePanelState::default(),
             side_panel_width,
             side_panel_visible,
+            terminal_panel_visible: false,
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
@@ -767,6 +777,16 @@ impl eframe::App for FoxGardenApp {
         if ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
             self.side_panel_visible = !self.side_panel_visible;
         }
+        if ui.input(|i| i.key_pressed(egui::Key::Backtick) && i.modifiers.command) {
+            self.terminal_panel_visible = !self.terminal_panel_visible;
+            // Matches VSCode's own "opening the terminal for the first
+            // time starts a shell" behavior, rather than toggling open to
+            // an empty panel with nothing in it and a second click needed
+            // just to get a session going.
+            if self.terminal_panel_visible && self.state.terminal_tabs.is_empty() {
+                self.state.new_terminal_tab();
+            }
+        }
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
         process_file_events(
@@ -806,6 +826,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.view_settings,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
+                        &mut self.terminal_panel_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
                     )
@@ -824,6 +845,15 @@ impl eframe::App for FoxGardenApp {
                 // screen.
                 self.side_panel_width = panel_response.response.rect.width();
                 outcome = panel_response.inner;
+            }
+
+            if self.terminal_panel_visible {
+                egui::Panel::bottom("terminal_panel")
+                    .resizable(true)
+                    .default_size(220.0)
+                    .show(ui, |ui| {
+                        terminal_panel::show(ui, &mut self.state);
+                    });
             }
         }
 
