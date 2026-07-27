@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
@@ -19,7 +20,11 @@ pub struct SidePanelState {
     /// (target directory, typed name so far).
     new_file_draft: Option<(PathBuf, String)>,
     rename_draft: Option<(PathBuf, String)>,
-    pending_delete: Option<PathBuf>,
+    /// The path(s) awaiting delete confirmation — more than one whenever the
+    /// triggering Delete was invoked over an active multi-selection
+    /// (`PLAN.md` Track 1 Phase 2), so the confirm dialog can ask once
+    /// ("Delete 4 items?") instead of once per file.
+    pending_delete: Option<Vec<PathBuf>>,
     /// Set whenever `new_file_draft`/`rename_draft` is freshly opened,
     /// consumed (cleared) by the very next frame that draws the
     /// corresponding text field — so a freshly opened "New File"/rename
@@ -27,12 +32,27 @@ pub struct SidePanelState {
     /// extra click before the user can type.
     focus_new_file: bool,
     focus_rename: bool,
-    /// The file/directory a Copy or Cut is waiting to be pasted somewhere —
-    /// set by a tree node's "Copy"/"Cut" context-menu entry, read (and, for
-    /// `Cut`, cleared) by a directory's "Paste" entry. `Copy` stays here
-    /// across a paste (so it can be pasted again elsewhere, same as an OS
-    /// file manager); `Cut` is one-shot.
-    clipboard: Option<(PathBuf, ClipboardOp)>,
+    /// The file(s)/directory(-ies) a Copy or Cut is waiting to be pasted
+    /// somewhere — set by a tree node's "Copy"/"Cut" context-menu entry
+    /// (more than one path whenever that node was part of an active multi-
+    /// selection, `PLAN.md` Track 1 Phase 2), read (and, for `Cut`, cleared)
+    /// by a directory's "Paste" entry. `Copy` stays here across a paste (so
+    /// it can be pasted again elsewhere, same as an OS file manager); `Cut`
+    /// is one-shot.
+    clipboard: Option<(Vec<PathBuf>, ClipboardOp)>,
+    /// Multi-selected tree nodes (`PLAN.md` Track 1) — Cmd/Ctrl+Click
+    /// toggles a node in/out, Shift+Click selects the contiguous visible
+    /// range from `last_selected`, a plain click collapses the set back to
+    /// just that one node. Deliberately independent of any "currently open
+    /// tab" concept: a file's tab being open and its tree node being
+    /// selected are unrelated states.
+    selected: HashSet<PathBuf>,
+    /// The anchor a Shift+Click extends a range from — set by the last
+    /// plain or Cmd/Ctrl+Click, left untouched by a Shift+Click itself so
+    /// repeated Shift+Clicks from the same starting point keep recomputing
+    /// a fresh range rather than drifting from wherever the previous one
+    /// ended.
+    last_selected: Option<PathBuf>,
 }
 
 impl SidePanelState {
@@ -50,11 +70,15 @@ impl SidePanelState {
 pub struct SidePanelOutcome {
     /// A file (newly created or clicked in the tree) that should be opened.
     pub open: Option<PathBuf>,
-    /// A file was renamed on disk; any tab pointing at `old` should be
-    /// repointed to `new`.
-    pub renamed: Option<(PathBuf, PathBuf)>,
-    /// A file was deleted from disk; any tab pointing at it should close.
-    pub deleted: Option<PathBuf>,
+    /// One entry per file/directory renamed or moved on disk this frame
+    /// (more than one after a multi-selected Cut+Paste, `PLAN.md` Track 1
+    /// Phase 2); any tab pointing at an `old` should be repointed to its
+    /// matching `new`.
+    pub renamed: Vec<(PathBuf, PathBuf)>,
+    /// One entry per file/directory deleted from disk this frame (more than
+    /// one after a multi-selected batch delete); any tab pointing at one
+    /// should close.
+    pub deleted: Vec<PathBuf>,
     /// A user-facing message for a failure this frame (open project,
     /// create/rename/delete file, refresh tree, ...), for the caller to
     /// surface through the app's shared error modal. `Some` overwrites
@@ -75,6 +99,12 @@ struct TreeActions {
     cut_request: Option<PathBuf>,
     /// The directory a "Paste" click targets.
     paste_request: Option<PathBuf>,
+    /// A node's label was clicked (file or directory) — the path plus
+    /// whatever modifiers were held, for `apply_selection_click` to resolve
+    /// against this frame's own `visible_order` once the whole tree has been
+    /// walked (a Shift+Click's range can extend either direction, so it
+    /// can't be resolved mid-walk before every node's position is known).
+    select_click: Option<(PathBuf, egui::Modifiers)>,
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelState) -> SidePanelOutcome {
@@ -114,6 +144,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     ui.separator();
 
     let mut actions = TreeActions::default();
+    // This frame's flattened, currently-visible node order (depth-first,
+    // skipping a collapsed directory's children) — built alongside the walk
+    // itself so a Shift+Click's range can be resolved against it afterward,
+    // regardless of whether the anchor is above or below the clicked node.
+    let mut visible_order = Vec::new();
     if let Some(project) = &state.project {
         // Taken before the tree walk (which only ever visits *one* node
         // matching `rename_draft`, so a plain `bool` threaded through the
@@ -127,11 +162,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
                 &mut panel.rename_draft,
                 should_focus_rename,
                 &panel.clipboard,
+                &panel.selected,
+                &mut visible_order,
                 &mut actions,
             );
         });
     } else {
         ui.weak("No folder open");
+    }
+
+    if let Some((path, modifiers)) = actions.select_click.take() {
+        apply_selection_click(panel, &path, modifiers, &visible_order);
     }
 
     let pasted = apply_tree_actions(panel, actions, &mut outcome);
@@ -141,7 +182,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     // *existing* file (also carried on `outcome.open`, via a tree click)
     // doesn't touch the filesystem, so re-walking the whole project for it
     // would be a pointless full directory read on every single file click.
-    if (created || pasted || outcome.renamed.is_some() || outcome.deleted.is_some())
+    if (created || pasted || !outcome.renamed.is_empty() || !outcome.deleted.is_empty())
         && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
         && let Err(err) = state.open_project(root)
     {
@@ -260,6 +301,54 @@ fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }
 
+/// Applies one tree-node click's selection effect — the "anchor + shift-
+/// extends" model most tree/list widgets use (`SPEC.md` §1, `PLAN.md`
+/// Track 1). `visible_order` is this frame's own flattened, currently-
+/// visible node order, needed to resolve what falls "between" `panel.
+/// last_selected` and `clicked` for a Shift+Click. `Modifiers::command`
+/// (this codebase's existing cross-platform "primary modifier" — Ctrl on
+/// Windows/Linux, Cmd on Mac, the same flag `app.rs`'s own shortcuts key
+/// off) toggles `clicked` in/out of the set; Shift selects the contiguous
+/// range from `last_selected` (left untouched here, so repeated Shift+
+/// Clicks keep recomputing from the same anchor); anything else (a plain
+/// click) collapses the selection down to just `clicked`.
+fn apply_selection_click(panel: &mut SidePanelState, clicked: &Path, modifiers: egui::Modifiers, visible_order: &[PathBuf]) {
+    if modifiers.shift
+        && let Some(anchor) = panel.last_selected.clone()
+        && let Some(start) = visible_order.iter().position(|p| p == &anchor)
+        && let Some(end) = visible_order.iter().position(|p| p == clicked)
+    {
+        let (lo, hi) = (start.min(end), start.max(end));
+        panel.selected = visible_order[lo..=hi].iter().cloned().collect();
+    } else if modifiers.command {
+        if !panel.selected.remove(clicked) {
+            panel.selected.insert(clicked.to_path_buf());
+        }
+        panel.last_selected = Some(clicked.to_path_buf());
+    } else {
+        panel.selected.clear();
+        panel.selected.insert(clicked.to_path_buf());
+        panel.last_selected = Some(clicked.to_path_buf());
+    }
+}
+
+/// The real target set for a Delete/Copy/Cut invoked from `path`'s own
+/// context menu (`PLAN.md` Track 1 Phase 2): the *whole* current
+/// multi-selection whenever one is active (more than one node selected),
+/// regardless of which specific node's menu was actually opened — matching
+/// `SPEC.md` §1's plain wording ("Delete... over a set"), not a narrower
+/// "only if `path` itself is one of the selected nodes" rule. Falls back to
+/// just `path` alone the rest of the time (nothing selected, or only `path`
+/// itself), so every single-node context-menu action keeps working exactly
+/// as it did before multi-select existed.
+fn action_targets(panel: &SidePanelState, path: &Path) -> Vec<PathBuf> {
+    if panel.selected.len() > 1 {
+        panel.selected.iter().cloned().collect()
+    } else {
+        vec![path.to_path_buf()]
+    }
+}
+
 /// Returns `true` if a paste actually changed the filesystem tree — needed
 /// alongside `outcome.renamed`/`outcome.deleted` (which a `Cut` paste also
 /// sets, and which `show`'s refresh condition already watches) because a
@@ -298,7 +387,7 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
                 outcome.error = Some(format!("rename failed: {} already exists", new_path.display()));
             }
             Some(new_path) => match std::fs::rename(&old_path, &new_path) {
-                Ok(()) => outcome.renamed = Some((old_path, new_path)),
+                Ok(()) => outcome.renamed.push((old_path, new_path)),
                 Err(err) => outcome.error = Some(format!("failed to rename: {err}")),
             },
             None => outcome.error = Some("rename failed: no parent directory".to_string()),
@@ -306,42 +395,58 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
     }
 
     if let Some(path) = actions.delete_request {
-        panel.pending_delete = Some(path);
+        panel.pending_delete = Some(action_targets(panel, &path));
     }
 
     if let Some(path) = actions.copy_request {
-        panel.clipboard = Some((path, ClipboardOp::Copy));
+        panel.clipboard = Some((action_targets(panel, &path), ClipboardOp::Copy));
     }
     if let Some(path) = actions.cut_request {
-        panel.clipboard = Some((path, ClipboardOp::Cut));
+        panel.clipboard = Some((action_targets(panel, &path), ClipboardOp::Cut));
     }
 
     let mut tree_changed = false;
     if let Some(target_dir) = actions.paste_request
-        && let Some((source, op)) = panel.clipboard.clone()
+        && let Some((sources, op)) = panel.clipboard.clone()
     {
-        if is_invalid_paste_target(&source, &target_dir) {
-            outcome.error = Some(format!(
-                "can't paste {} into itself or one of its own subdirectories",
-                source.display()
-            ));
-        } else {
-            match paste_into(&source, &target_dir, op) {
+        // One bad source (a paste-into-itself, a name collision) doesn't
+        // abort the rest of the batch — same "don't fail the whole
+        // operation over one bad entry" reasoning `TECHNICAL_DEBT.md` #11
+        // already established — but every failure is collected so the user
+        // still hears about it, not just whichever succeeded silently.
+        let mut failures = Vec::new();
+        for source in &sources {
+            if is_invalid_paste_target(source, &target_dir) {
+                failures.push(format!(
+                    "{}: can't paste into itself or one of its own subdirectories",
+                    source.display()
+                ));
+                continue;
+            }
+            match paste_into(source, &target_dir, op) {
                 Ok(dest) => {
                     tree_changed = true;
                     if op == ClipboardOp::Cut {
-                        outcome.renamed = Some((source, dest));
-                        // One-shot: a cut-and-pasted file is gone from
-                        // where it was, so pasting the same clipboard
-                        // entry again would just fail with "source not
-                        // found" — clearing it here is what makes a
-                        // second Paste with nothing newly copied/cut a
-                        // silent no-op instead of that confusing error.
-                        panel.clipboard = None;
+                        outcome.renamed.push((source.clone(), dest));
                     }
                 }
-                Err(err) => outcome.error = Some(format!("failed to paste: {err}")),
+                Err(err) => failures.push(format!("{}: {err}", source.display())),
             }
+        }
+        if op == ClipboardOp::Cut {
+            // One-shot: every cut-and-pasted file is gone from where it
+            // was, so pasting the same clipboard entries again would just
+            // fail with "source not found" for each — clearing it here is
+            // what makes a second Paste with nothing newly copied/cut a
+            // silent no-op instead of that confusing error. A source that
+            // itself failed to paste (still in `failures`) is dropped from
+            // the clipboard too, same as a successful one — retrying a
+            // paste that failed once (e.g. onto itself) isn't a "one-shot"
+            // exception worth special-casing here.
+            panel.clipboard = None;
+        }
+        if !failures.is_empty() {
+            outcome.error = Some(format!("failed to paste:\n{}", failures.join("\n")));
         }
     }
 
@@ -417,26 +522,41 @@ fn paste_into(source: &Path, target_dir: &Path, op: ClipboardOp) -> std::io::Res
 }
 
 fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &mut SidePanelOutcome) {
-    let Some(path) = panel.pending_delete.clone() else {
+    let Some(paths) = panel.pending_delete.clone() else {
         return;
     };
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let message = if path.is_dir() {
-        format!("Delete directory {name} and everything inside it? This cannot be undone.")
-    } else {
-        format!("Delete {name}? This cannot be undone.")
+    // Confirms once for the whole batch (`PLAN.md` Track 1 Phase 2:
+    // "Delete confirms once for the whole set"), not once per file — a
+    // single-item delete (the common, pre-multi-select case) is just the
+    // `paths.len() == 1` case of the same message.
+    let message = match paths.as_slice() {
+        [path] => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if path.is_dir() {
+                format!("Delete directory {name} and everything inside it? This cannot be undone.")
+            } else {
+                format!("Delete {name}? This cannot be undone.")
+            }
+        }
+        _ => format!("Delete {} items? This cannot be undone.", paths.len()),
     };
 
-    let modal_outcome = show_modal(ui, "delete_confirm", Some(path), |ui, path| {
+    let modal_outcome = show_modal(ui, "delete_confirm", Some(paths), |ui, paths| {
         ui.label(message);
         ui.horizontal(|ui| {
             if ui.button("Delete").clicked() {
-                match delete_path(path) {
-                    Ok(()) => outcome.deleted = Some(path.clone()),
-                    Err(err) => outcome.error = Some(format!("failed to delete: {err}")),
+                let mut failures = Vec::new();
+                for path in paths {
+                    match delete_path(path) {
+                        Ok(()) => outcome.deleted.push(path.clone()),
+                        Err(err) => failures.push(format!("{}: {err}", path.display())),
+                    }
+                }
+                if !failures.is_empty() {
+                    outcome.error = Some(format!("failed to delete:\n{}", failures.join("\n")));
                 }
                 panel.pending_delete = None;
             }
@@ -468,14 +588,19 @@ fn show_rename_field(ui: &mut egui::Ui, name: &mut String, should_focus: bool, a
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_node(
     ui: &mut egui::Ui,
     node: &FileNode,
     rename_draft: &mut Option<(PathBuf, String)>,
     should_focus_rename: bool,
-    clipboard: &Option<(PathBuf, ClipboardOp)>,
+    clipboard: &Option<(Vec<PathBuf>, ClipboardOp)>,
+    selected: &HashSet<PathBuf>,
+    visible_order: &mut Vec<PathBuf>,
     actions: &mut TreeActions,
 ) {
+    visible_order.push(node.path.clone());
+
     let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == &node.path);
     if is_being_renamed {
         let (_, name) = rename_draft.as_mut().expect("checked above");
@@ -483,22 +608,57 @@ fn render_node(
         return;
     }
 
+    let is_selected = selected.contains(&node.path);
+
     match node.kind {
         FileKind::Dir => {
-            let header = egui::CollapsingHeader::new(format!("📁 {}", node.name))
-                .id_salt(&node.path)
-                .default_open(false)
-                .show(ui, |ui| {
-                    for child in &node.children {
-                        render_node(ui, child, rename_draft, should_focus_rename, clipboard, actions);
-                    }
-                });
-            header.header_response.context_menu(|ui| {
-                if ui.button("New File").clicked() {
+            // Split into the disclosure-triangle icon (toggles expand/
+            // collapse, entirely on its own) and a custom label rendered as
+            // a `selectable_label` (this node's own Cmd/Ctrl/Shift-click
+            // handling, below) — `CollapsingHeader`'s own higher-level
+            // `.show()` bundles both into one whole-row click, which would
+            // mean Ctrl/Shift-clicking a folder to multi-select it also
+            // toggled it open/closed every time. A plain click on the
+            // label *also* toggles expand (preserving today's "click
+            // anywhere on the row" ergonomics for the common case) — only
+            // a Cmd/Ctrl/Shift-click is select-only.
+            let collapsing_id = ui.make_persistent_id(&node.path);
+            let collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
+            let header = collapsing.show_header(ui, |ui| ui.selectable_label(is_selected, format!("📁 {}", node.name)));
+            let (_, header_response, _) = header.body(|ui| {
+                for child in &node.children {
+                    render_node(ui, child, rename_draft, should_focus_rename, clipboard, selected, visible_order, actions);
+                }
+            });
+            let label_response = header_response.inner;
+
+            if label_response.clicked() {
+                let modifiers = ui.input(|i| i.modifiers);
+                actions.select_click = Some((node.path.clone(), modifiers));
+                if !modifiers.command && !modifiers.shift {
+                    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
+                    collapsing.toggle(ui);
+                    collapsing.store(ui.ctx());
+                }
+            }
+
+            // New File/Rename are inherently single-target operations
+            // (`SPEC.md` §1) — disabled, not hidden, whenever a multi-
+            // selection is active, so they read as "not applicable right
+            // now" rather than silently disappearing.
+            let single_target = selected.len() <= 1;
+            label_response.context_menu(|ui| {
+                if ui
+                    .add_enabled(single_target, egui::Button::new("New File"))
+                    .clicked()
+                {
                     actions.start_new_file = Some(node.path.clone());
                     ui.close();
                 }
-                if ui.button("Rename").clicked() {
+                if ui
+                    .add_enabled(single_target, egui::Button::new("Rename"))
+                    .clicked()
+                {
                     actions.start_rename = Some(node.path.clone());
                     ui.close();
                 }
@@ -557,18 +717,34 @@ fn render_node(
             // that aren't valid UTF-8 text (binaries, etc), and that failure
             // is reported when the open is actually attempted, not guessed
             // at here from the extension alone.
-            let response = ui.selectable_label(false, label_text);
+            let response = ui.selectable_label(is_selected, label_text);
             if response.clicked() {
-                actions.open = Some(node.path.clone());
+                let modifiers = ui.input(|i| i.modifiers);
+                actions.select_click = Some((node.path.clone(), modifiers));
+                // A plain click still opens the file, unchanged from before
+                // this feature existed — Cmd/Ctrl/Shift-click are the new,
+                // explicit multi-select gestures layered on top (`SPEC.md`
+                // §1: "multi-select is an explicit gesture, never the
+                // default"), so they select without also opening.
+                if !modifiers.command && !modifiers.shift {
+                    actions.open = Some(node.path.clone());
+                }
             }
 
+            let single_target = selected.len() <= 1;
             response.context_menu(|ui| {
-                if ui.button("New File").clicked() {
+                if ui
+                    .add_enabled(single_target, egui::Button::new("New File"))
+                    .clicked()
+                {
                     let dir = node.path.parent().map_or_else(|| node.path.clone(), PathBuf::from);
                     actions.start_new_file = Some(dir);
                     ui.close();
                 }
-                if ui.button("Rename").clicked() {
+                if ui
+                    .add_enabled(single_target, egui::Button::new("Rename"))
+                    .clicked()
+                {
                     actions.start_rename = Some(node.path.clone());
                     ui.close();
                 }

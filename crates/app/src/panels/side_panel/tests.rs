@@ -170,3 +170,175 @@ fn paste_into_fails_on_a_name_collision_at_the_destination() {
     );
     assert!(source.exists());
 }
+
+fn command_click() -> egui::Modifiers {
+    egui::Modifiers {
+        command: true,
+        ..Default::default()
+    }
+}
+
+fn shift_click() -> egui::Modifiers {
+    egui::Modifiers {
+        shift: true,
+        ..Default::default()
+    }
+}
+
+fn visible_order() -> Vec<PathBuf> {
+    ["a", "b", "c", "d", "e"].iter().map(PathBuf::from).collect()
+}
+
+#[test]
+fn a_plain_click_collapses_the_selection_to_just_the_clicked_node() {
+    let mut panel = SidePanelState {
+        selected: [PathBuf::from("a"), PathBuf::from("b")].into_iter().collect(),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("c"), egui::Modifiers::NONE, &visible_order());
+
+    assert_eq!(panel.selected, [PathBuf::from("c")].into_iter().collect());
+    assert_eq!(panel.last_selected, Some(PathBuf::from("c")));
+}
+
+#[test]
+fn command_click_adds_a_node_to_the_selection() {
+    let mut panel = SidePanelState {
+        selected: [PathBuf::from("a")].into_iter().collect(),
+        last_selected: Some(PathBuf::from("a")),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("c"), command_click(), &visible_order());
+
+    assert_eq!(
+        panel.selected,
+        [PathBuf::from("a"), PathBuf::from("c")].into_iter().collect()
+    );
+    assert_eq!(panel.last_selected, Some(PathBuf::from("c")));
+}
+
+#[test]
+fn command_click_on_an_already_selected_node_removes_it() {
+    let mut panel = SidePanelState {
+        selected: [PathBuf::from("a"), PathBuf::from("c")].into_iter().collect(),
+        last_selected: Some(PathBuf::from("c")),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("c"), command_click(), &visible_order());
+
+    assert_eq!(panel.selected, [PathBuf::from("a")].into_iter().collect());
+}
+
+#[test]
+fn shift_click_selects_the_contiguous_range_from_the_anchor_forward() {
+    let mut panel = SidePanelState {
+        last_selected: Some(PathBuf::from("b")),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("d"), shift_click(), &visible_order());
+
+    assert_eq!(
+        panel.selected,
+        [PathBuf::from("b"), PathBuf::from("c"), PathBuf::from("d")]
+            .into_iter()
+            .collect()
+    );
+    // The anchor itself doesn't move on a Shift+Click.
+    assert_eq!(panel.last_selected, Some(PathBuf::from("b")));
+}
+
+#[test]
+fn shift_click_selects_the_contiguous_range_from_the_anchor_backward() {
+    let mut panel = SidePanelState {
+        last_selected: Some(PathBuf::from("d")),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("b"), shift_click(), &visible_order());
+
+    assert_eq!(
+        panel.selected,
+        [PathBuf::from("b"), PathBuf::from("c"), PathBuf::from("d")]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(panel.last_selected, Some(PathBuf::from("d")));
+}
+
+#[test]
+fn repeated_shift_clicks_recompute_from_the_same_anchor_rather_than_drifting() {
+    let mut panel = SidePanelState {
+        last_selected: Some(PathBuf::from("b")),
+        ..Default::default()
+    };
+
+    apply_selection_click(&mut panel, Path::new("e"), shift_click(), &visible_order());
+    assert_eq!(panel.last_selected, Some(PathBuf::from("b")));
+
+    apply_selection_click(&mut panel, Path::new("c"), shift_click(), &visible_order());
+
+    assert_eq!(
+        panel.selected,
+        [PathBuf::from("b"), PathBuf::from("c")].into_iter().collect()
+    );
+    assert_eq!(panel.last_selected, Some(PathBuf::from("b")));
+}
+
+#[test]
+fn shift_click_with_no_prior_anchor_falls_back_to_a_plain_click() {
+    let mut panel = SidePanelState::default();
+
+    apply_selection_click(&mut panel, Path::new("c"), shift_click(), &visible_order());
+
+    assert_eq!(panel.selected, [PathBuf::from("c")].into_iter().collect());
+    assert_eq!(panel.last_selected, Some(PathBuf::from("c")));
+}
+
+#[test]
+fn action_targets_is_just_the_clicked_path_with_no_multi_selection() {
+    let panel = SidePanelState::default();
+
+    assert_eq!(action_targets(&panel, Path::new("a")), vec![PathBuf::from("a")]);
+}
+
+#[test]
+fn action_targets_is_just_the_clicked_path_when_only_it_is_selected() {
+    let panel = SidePanelState {
+        selected: [PathBuf::from("a")].into_iter().collect(),
+        ..Default::default()
+    };
+
+    assert_eq!(action_targets(&panel, Path::new("a")), vec![PathBuf::from("a")]);
+}
+
+#[test]
+fn action_targets_is_the_whole_selection_once_more_than_one_node_is_selected() {
+    let panel = SidePanelState {
+        selected: [PathBuf::from("a"), PathBuf::from("b")].into_iter().collect(),
+        ..Default::default()
+    };
+
+    let mut targets = action_targets(&panel, Path::new("a"));
+    targets.sort();
+
+    assert_eq!(targets, vec![PathBuf::from("a"), PathBuf::from("b")]);
+}
+
+#[test]
+fn action_targets_uses_the_whole_selection_even_if_a_different_node_was_right_clicked() {
+    // Matches `SPEC.md` §1's plain wording ("Delete... over a set"): the
+    // right-clicked node needn't itself be one of the selected ones.
+    let panel = SidePanelState {
+        selected: [PathBuf::from("a"), PathBuf::from("b")].into_iter().collect(),
+        ..Default::default()
+    };
+
+    let mut targets = action_targets(&panel, Path::new("c"));
+    targets.sort();
+
+    assert_eq!(targets, vec![PathBuf::from("a"), PathBuf::from("b")]);
+}

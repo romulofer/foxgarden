@@ -625,7 +625,8 @@ to the right file/line.
 
 ### Moderate tier
 
-- [ ] Track 1 — Multi-select in the tree
+- [x] Track 1 — Multi-select in the tree (code green; live click-through
+      per Checkpoint 2 not yet performed)
 - [ ] Track 2 — Richer Java/Kotlin syntax highlighting
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration

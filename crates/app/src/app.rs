@@ -928,11 +928,11 @@ impl eframe::App for FoxGardenApp {
         if let Some(path) = outcome.open {
             open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
-        if let Some((old, new)) = outcome.renamed {
-            handle_rename(&mut self.state, &mut self.parsers, &old, &new);
+        for (old, new) in &outcome.renamed {
+            handle_rename(&mut self.state, &mut self.parsers, old, new);
         }
-        if let Some(path) = outcome.deleted {
-            close_tabs_under(&mut self.state, &mut self.parsers, &path);
+        for path in &outcome.deleted {
+            close_tabs_under(&mut self.state, &mut self.parsers, path);
         }
         if let Some(err) = outcome.error {
             self.last_error = Some(err);
