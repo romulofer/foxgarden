@@ -1,523 +1,1226 @@
 # SPEC.md
 
-Design spec for the **Spring endpoint map**: a searchable popup listing
-every Spring MVC endpoint (`@GetMapping`/`@PostMapping`/`@RequestMapping`/…)
-found across the currently open project's Java *and* Kotlin controllers,
-jump-to-handler on pick. Fully replaces whatever this file covered before
-(the previous code-completion pass — see git history/`TECHNICAL_DEBT.md`
-if any of its items need to survive; nothing here continues that work).
-Local-only planning doc (gitignored on `main`, tracked on `ide-henshin` for
-the IDE pivot, same as `PLAN.md`) — a design record, not a commitment to
-exact code.
+Design spec for **every feature `FEATURES.md` lists as not yet fully
+shipped** — its `[TODO]`/`[SKIP]` entries, plus the full remaining-scope
+detail for its `[WIP]` ones — grouped into the same three effort tiers
+`FEATURES.md` itself uses (Moderate, Substantial, Major), in the same
+easiest-to-hardest order. Local-only planning doc (gitignored on `main`,
+tracked on `ide-henshin`, same as `PLAN.md`) — a design record, not a
+commitment to exact code. Replaces this file's previous single-feature
+scope (the Spring endpoint map + terminal panel pass); both of those are
+now shipped — see `PLAN.md`'s own build-status history and
+`FEATURES.md`'s Shipped section — and this doc's job is what's left, not
+what already landed.
 
-`FEATURES.md` listed this feature as `[SKIP]`, "layered on top of Maven/
-Gradle awareness (Major tier)" — that framing is deliberately dropped here.
-Every cross-file feature this codebase already ships (Override Method,
-dot-completion's cross-project lookup) works by walking the *currently
-open project's file tree* and parsing whatever `.java`/`.kt` it finds,
-with no real classpath or build-file awareness at all — a Maven multi-
-module layout, a Gradle subproject, and a single flat folder all look
-identical to that walk. This spec holds the endpoint map to the same
-honest, already-proven-sufficient bar rather than waiting on Maven/Gradle
-awareness (still unimplemented, still `[SKIP]`) to exist first.
+**`[SKIP]` is deliberately included, not dropped.** `FEATURES.md`'s own
+schema treats `[SKIP]` as "deliberately deprioritized, not impossible" —
+this pass writes a real design for those too, at the same depth as the
+`[TODO]` ones, so a future session that decides to pick one up isn't
+starting from nothing. Deprioritization is a scheduling decision, not a
+design decision; nothing here overrides `FEATURES.md`'s own priority
+ordering, and picking any one of these up for real implementation should
+still start with a fresh look at whether it's still deprioritized for the
+same reasons.
 
----
-
-## 0. Shape and scope
-
-**Where:** a new `Ctrl+Shift+E`-triggered popup (verify that chord is
-still free before wiring it — `menu_bar.rs`'s existing shortcuts are
-`Ctrl+B/E/J/N/S`, `Ctrl+Shift+G/L/T/U`, `Ctrl+/`, none of which collide,
-but re-check at Phase 3 rather than trusting this list to still be
-current), modeled directly on `go_to_file.rs`'s existing shape: type to
-fuzzy-filter, arrow keys + Enter or a click to pick, Escape to dismiss.
-Deliberately *not* a persistent docked panel — this app has no panel-
-docking infrastructure at all today (the side panel is the file tree,
-full stop), and inventing one is a much bigger, riskier undertaking than
-this feature needs. A searchable popup is how users already navigate a
-large list here (`Ctrl+P` file search, `Ctrl+E` recent files); this is a
-third instance of the same interaction, not a new one.
-
-**Non-goals**, named up front so partial coverage reads as an honest
-smaller feature rather than a broken bigger one (`SPEC.md`'s own
-established convention — see §7 for the full list, mirrored on the
-completion feature's own §6/§7):
-- No real classpath/meta-annotation resolution — a class's own custom
-  `@GetMapping`-named annotation (unrelated to Spring) would false-
-  positive; simple-name matching only, same limitation `superclass_name`/
-  `type_of_identifier_java` already accept for type names.
-- No query-param/`consumes`/`produces` detail, no multi-value `method =
-  {GET, POST}` (first value only, same "don't try to distinguish, just
-  take the first one" scope limit `kotlin_superclass_name` already
-  established for `delegation_specifiers`).
-- No WebFlux functional routing (`RouterFunction`/`route { }`), no JAX-RS
-  (`@GET`/`@Path`) — annotation-based Spring MVC only.
-- No live re-scan on every keystroke — this is a whole-project walk, not
-  a per-keystroke operation like completion; re-scanned when the popup
-  opens (§4).
+**How to read a section below:** each names its `FEATURES.md` tag and
+one-line description verbatim, then works through shape/scope, data
+model, the concrete files/modules it touches, its own non-goals, and
+(where a section leans on unfamiliar territory — an external protocol, a
+new crate, a build-tool file format) what needs verifying against real
+data before implementation starts, mirroring the "check the actual parser
+output/API surface yourself, don't trust this doc's own guess" discipline
+`TECHNICAL_DEBT.md` #3 established and every section of this doc's
+previous pass (Spring endpoint map, terminal panel) already applied.
+Cross-feature dependencies are named explicitly where one exists (e.g.
+Spring config autocomplete needs Maven/Gradle awareness first) — those
+orderings also drive `PLAN.md`'s own track sequencing.
 
 ---
 
-## 1. Data model
+## Contents
 
-**Where:** new `crates/syntax/src/spring_endpoints.rs`.
+**Moderate tier** (§1-§7) — contained to a subsystem or two:
+1. Multi-select in the tree
+2. Richer Java/Kotlin syntax highlighting (remaining scope)
+3. Command palette
+4. Local (non-git) file history
+5. Static analysis integration
+6. Auto-save
+7. Rectangular (block) paste
+
+**Substantial tier** (§8-§18) — real new subsystems, several files touched:
+8. Customizable keybindings
+9. Git diff gutter, inline blame, commit/stage/push UI
+10. Code folding
+11. Multi-window / split-pane editing
+12. Spring config property autocomplete
+13. Code coverage overlay
+14. Docker/container run integration
+15. Quick-fix intention actions
+16. Minimap
+17. Peek definition
+18. Inline diff viewer widget
+
+**Major tier** (§19-§27) — architecture-level, external processes, or a
+rewrite of a core piece:
+19. Large file handling — full viewport virtualization
+20. LSP integration
+21. Maven/Gradle awareness
+22. Build/run/test integration
+23. Debugger
+24. Plugin/extension model
+25. Extension marketplace
+26. Profiler integration
+27. Dependency-injection / bean graph visualizer
+
+---
+
+# Moderate tier
+
+## 1. Multi-select in the tree
+
+`FEATURES.md`: `[SKIP]` — "extends the side panel's existing selection/
+action patterns (new file, rename, delete) rather than a new interaction
+model." Batch delete is the only action multi-select unlocks that
+single-select can't already do one file at a time; cut/copy/paste
+(single-node) already shipped.
+
+**Shape:** `side_panel.rs`'s `SidePanelState` gains `selected: HashSet<PathBuf>`
+alongside whatever single-focus field it already tracks. Ctrl+Click toggles
+a node in/out of the set; Shift+Click selects the contiguous visual range
+between the last-clicked node and the new one (same "anchor + shift-extends"
+model most tree/list widgets use, not a new invention). A plain click clears
+the set back to a single selection — multi-select is an explicit gesture,
+never the default.
+
+**Actions on a multi-selection:** Delete (confirm once, "Delete 4 items?",
+not once per file) and the existing Cut/Copy (extended to serialize every
+selected path, not just one) are the only two that make sense over a set;
+Rename and "New File" stay single-node-only (both are inherently
+one-target operations) and are disabled (or simply not shown) in the
+context menu when more than one node is selected.
+
+**Non-goals:** no drag-multi-select (a click-drag gesture across rows) —
+Ctrl/Shift-click covers the real use case (batch delete) without a second
+pointer-gesture to build and test; no cross-directory paste-of-many beyond
+what single-node Paste already does per path.
+
+---
+
+## 2. Richer Java/Kotlin syntax highlighting (remaining scope)
+
+`FEATURES.md`: `[WIP]` — shipped: `Scope::Constant` (Java ALL-CAPS +
+`enum_constant`, Kotlin enum-entry-as-constant, `TECHNICAL_DEBT.md` #2/#3),
+`Scope::Property` for Java fields. Ongoing "one distinction at a time by
+design" — this section specs the next distinctions, not a single big
+rewrite.
+
+**Remaining for Java** (per a diff against Zed's own Java extension,
+`../references/java`, same `tree-sitter-java` grammar this codebase already
+vendors):
+- **Parameters vs. local variables** — a new `Scope::Parameter` (or reusing
+  `Scope::Property` if the two should render identically; a real design
+  call to make at implementation time, not assumed here) for
+  `formal_parameter`'s own `identifier` child, distinct from a
+  `local_variable_declaration`'s.
+- **Operators/punctuation** — a `Scope::Operator` for `+`/`-`/`==`/etc.
+  token nodes; currently unhighlighted (falls through to `default_text`).
+- **Labels** — `labeled_statement`'s own label identifier (rare in
+  practice, but distinct enough visually in other editors to be worth the
+  one `Scope` variant).
+- **Doc comments distinct from regular ones** — `/** */` (`block_comment`
+  whose text starts `/**`) vs. a plain `/* */`; needs a text-prefix check
+  alongside the existing `block_comment`/`line_comment` node-kind match,
+  not a new grammar node (tree-sitter-java doesn't distinguish these as
+  separate node kinds).
+
+**Remaining for Kotlin** — hasn't had a further pass at all since the
+initial `Scope::Constant` work; `TECHNICAL_DEBT.md` #3's own worked example
+is the starting point:
+- Richer modifier-keyword coverage (`suspend`, `inline`, `reified`, ...)
+  beyond whatever subset already renders.
+- Regex-literal detection (Kotlin's `Regex("...")` string-call convention
+  has no dedicated grammar node — likely a semantic, not syntactic, call
+  and probably out of scope for a tree-sitter-only pass; flag rather than
+  attempt if the grammar confirms this).
+- `@variable.builtin`-equivalent treatment for `it` (implicit lambda
+  parameter) and `field` (property-accessor backing-field reference) — both
+  need their own `Scope` (or reuse an existing one) plus a check that they
+  only get it in the position where they're actually the implicit binding,
+  not an unrelated identifier that happens to be named `it`.
+
+**Every new `Scope` variant needs a color in both of `theme.rs`'s light and
+dark tables** (`color_for_scope`) — a real design decision each time (see
+`theme.rs`'s own accumulated palette for the established visual vocabulary:
+keywords purple/magenta, strings green, types/constants amber, ...), not
+just a query change. **Grammar shapes for every item above must be verified
+against real `tree-sitter-java`/`tree-sitter-kotlin-ng` parse output before
+writing the query** (`TECHNICAL_DEBT.md` #3's own established discipline)
+— this section names what's missing, not the exact node shapes, since
+those haven't been checked yet.
+
+---
+
+## 3. Command palette
+
+`FEATURES.md`: `[SKIP]` — "needs a registry of actions to search over
+(most don't exist as decoupled, nameable actions yet) plus the search UI
+itself."
+
+**The real prerequisite, not the UI:** every current shortcut (`Ctrl+S`,
+`Ctrl+E`, `Ctrl+P`, `Ctrl+Shift+E`, `Ctrl+B`, `Ctrl+\``, `F11`, the Tools
+menu's codegen actions, ...) is implemented as an ad hoc `if ui.input(...)`
+check or an inline menu-item closure — not a callable, named, list-able
+unit. A command palette needs those decoupled into:
 
 ```rust
-/// One discovered Spring MVC endpoint — enough to render a popup row and
-/// jump to its handler.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EndpointInfo {
-    /// `"GET"`/`"POST"`/`"PUT"`/`"DELETE"`/`"PATCH"`, or `"ANY"` for a bare
-    /// `@RequestMapping` with no `method =` element (Spring's own default:
-    /// matches every HTTP method).
-    pub http_method: String,
-    /// Class-level base path + method-level path, joined (§2's rule) —
-    /// e.g. `"/api/users/{id}"`. Never empty; a mapping with no path
-    /// anywhere resolves to `"/"`.
-    pub path: String,
-    pub controller_name: String,
-    pub handler_name: String,
-    /// Byte offset of the handler method/function's own name — where a
-    /// jump should land the cursor (§6), not the annotation or the
-    /// enclosing method's start.
-    pub handler_byte: usize,
+/// One nameable, invokable action — the unit both the command palette and
+/// (already-existing) menu items/shortcuts resolve to, so a command isn't
+/// defined twice in two different shapes.
+struct Command {
+    id: &'static str,       // stable key, e.g. "file.save"
+    label: &'static str,    // "Save File" — what the palette searches/shows
+    shortcut: Option<&'static str>,   // "Ctrl+S", shown as a hint, not parsed
 }
 ```
 
-Reused as-is by both languages, same "one output struct, two producers"
-shape `FieldInfo`/`MethodSignature` already established for Java/Kotlin
-member extraction — no separate Java/Kotlin variant needed.
+with a single `Vec<Command>` (or a build-time-const table) as the registry,
+and a `fn run_command(app: &mut FoxGardenApp, id: &str)` dispatcher that
+every existing shortcut/menu-item call site is migrated to call *through*,
+rather than continuing to invoke its own logic directly. This is real,
+cross-cutting refactor work touching `app.rs`'s shortcut block and every
+menu item in `menu_bar.rs` — the palette UI itself (a `Ctrl+Shift+P`-
+triggered popup, structurally another `go_to_file.rs`-shaped fuzzy list) is
+comparatively small once the registry exists.
+
+**Non-goals:** no user-configurable command *rebinding* through the palette
+(that's `Customizable keybindings`, §8, a separate and larger feature) —
+this just searches and invokes already-fixed shortcuts by name.
 
 ---
 
-## 2. Extraction — Java
+## 4. Local (non-git) file history
 
-**Where:** `spring_endpoints.rs`, `java_endpoints_in_file(tree, source) ->
-Vec<EndpointInfo>`.
+`FEATURES.md`: `[SKIP]` — "snapshot a file's content into a hidden
+per-project history folder on every save, with a simple diff/revert UI.
+Useful independent of whether the project uses git."
 
-**Grammar shapes** (verified fresh against `tree-sitter-java-0.23.5`'s
-actual parse output, not assumed — same discipline
-`TECHNICAL_DEBT.md` #3 established for Kotlin, applied here to Java too
-since this is new grammar territory this codebase hasn't walked before):
-a `class_declaration`'s (and, per the existing `fields.rs`/`methods.rs`
-precedent of not missing nested classes, any nested `class_declaration`'s)
-`modifiers` child holds zero or more `annotation`/`marker_annotation`
-nodes alongside the `public`/etc. keyword tokens — both shapes appear as
-direct children of `modifiers`, not wrapped further. Likewise a
-`method_declaration`'s own `modifiers` child. An `annotation`'s `name`
-field is the simple identifier (`"GetMapping"`) — ignore the rarer
-`scoped_identifier` case (a fully-qualified `@org.springframework....
-GetMapping`), same "match the simple name, not the qualified path"
-limitation §0 already accepts. Its `arguments` field
-(`annotation_argument_list`) holds either one bare value (a `string_literal`
-for `@RequestMapping("/x")`) or `element_value_pair`s (`key = value`, e.g.
-`value = "/x"`, `method = RequestMethod.GET`). A `string_literal`'s actual
-text lives in its `string_fragment` child, not its own span (which
-includes the quotes).
+**Shape:** on every successful `Document::save`, additionally write the
+pre-save buffer content into `<project_root>/.foxgarden/history/<relative
+path>/<timestamp>.snapshot` (mirroring the existing `.foxgarden/
+run_configs.json` precedent of "project-local state lives under
+`.foxgarden/`, travels with the project" — not `eframe::Storage`, which is
+this-machine-only). A cap per file (e.g. the most recent 50 snapshots,
+oldest pruned) keeps this from growing unbounded across a long-lived
+project, mirroring `closed_tabs`'s own `MAX_CLOSED_TABS` precedent for "a
+convenience history, not a full audit log."
 
-**Recognized annotations** and what each contributes:
-- `@GetMapping`/`@PostMapping`/`@PutMapping`/`@DeleteMapping`/
-  `@PatchMapping` — `http_method` fixed by name (`GET`/`POST`/…); `path`
-  from the bare value or a `value =`/`path =` pair (Spring accepts either
-  key as a synonym), or `""` if the annotation is a bare
-  `marker_annotation` (no `()` at all).
-- `@RequestMapping` — `path` the same way; `http_method` from a `method =`
-  pair's value (a `field_access` — `RequestMethod` `.` `GET`; take the
-  identifier after the dot) if present, else `"ANY"`.
-- Anything else on the same `modifiers` node (`@Override`,
-  `@Transactional`, …) is ignored — not an error, just not one of the
-  recognized names.
+**UI:** a tab context-menu item ("File History…") opens a simple list of
+past snapshots (timestamp + a one-line diff-stat, "+12 -3"), selecting one
+shows a read-only diff against the current buffer (needs `Inline diff
+viewer widget`, §18 — this feature is blocked on that one existing first,
+or duplicates its own diff-rendering logic, which isn't worth doing twice)
+with a "Revert to this version" action that replaces the live buffer
+content (through the normal edit path, so it's undoable and dirty-tracked
+like any other edit, not a special-cased file-replace).
 
-**Path joining:** class-level base path (from the *class's own*
-`@RequestMapping`, if any — `@RestController`/`@Controller` alone
-contribute no path) plus the method-level path: strip a trailing `/` off
-the base, ensure a leading `/` on the method path (add one if it's
-non-empty and missing), concatenate; an empty result (both sides empty)
-is `"/"`.
-
-**A method only becomes an `EndpointInfo` if it carries one of the five
-recognized method-level annotations** — independent of whether the
-enclosing class carries `@Controller`/`@RestController` at all. Simpler,
-and avoids missing an endpoint whose class annotation was written via a
-custom composed/meta-annotation this syntactic pass can't see through
-anyway (§0).
-
-**Tests:** table tests per case above — positional-string path, `value =`,
-`path =`, `method =` combined with a class-level base path, a bare marker
-annotation with no args, a class with no base path at all, a nested class,
-multiple unrelated annotations on one method (only the recognized one
-counts), and a class/method with no recognized annotation at all
-(contributes nothing, not an error).
+**Non-goals:** no diff *between two arbitrary snapshots* — only "this
+snapshot vs. the live buffer," the one comparison the revert flow actually
+needs. No cross-machine sync of history (it's a local folder, like the rest
+of `.foxgarden/`).
 
 ---
 
-## 3. Extraction — Kotlin
+## 5. Static analysis integration
 
-**Where:** `spring_endpoints.rs`, `kotlin_endpoints_in_file(tree, source)
--> Vec<EndpointInfo>`.
+`FEATURES.md`: `[SKIP]` — "shell out to the tool, parse its report format,
+surface through the existing `Diagnostic`/squiggle pipeline rather than
+inventing a new one."
 
-**Grammar shapes** (verified fresh against `tree-sitter-kotlin-ng` 1.1.0's
-actual parse output — mandatory per `TECHNICAL_DEBT.md` #3's own
-established discipline, re-verify rather than trusting this spec):
-Kotlin's `class_body`'s `modifiers` child wraps an `annotation` node whose
-own child is a `constructor_invocation` (`@GetMapping("/x")`) or a bare
-`user_type` (a marker annotation with no args — verify this bare shape
-directly too, the same "don't assume, check" rule, since it wasn't
-exercised in this pass's own grammar dump). Either way the annotation's
-*name* is the `user_type`'s own `identifier` child. A `constructor_
-invocation`'s `value_arguments` holds `value_argument` nodes: a bare one
-(`string_literal`, positional) or a named one (`identifier "=" value`).
-Array-valued elements (Kotlin's own `method = [RequestMethod.DELETE]`,
-`path = ["/x"]` — Kotlin requires an array literal where Java accepts a
-bare value for a single-element case) wrap a `collection_literal`; take
-its first element, same one-value scope limit §2 already accepts for
-Java's own `method =`. A `string_literal`'s text lives in its
-`string_content` child (Kotlin's own name for what Java calls
-`string_fragment` — different node kind, same role, verify before
-assuming the name transfers). A `navigation_expression` (Kotlin's
-`RequestMethod.DELETE`) is Java's `field_access` equivalent — same "take
-the identifier after the dot" extraction.
+**Shape:** a new Tools > "Run Checkstyle"/"Run PMD"/"Run SpotBugs" menu
+item (each tool a separate, explicit action — no auto-detection of which
+tool a project uses, since that needs real build-file awareness this
+codebase doesn't have, `Maven/Gradle awareness`, §21) shells out to the
+configured tool binary (a Settings > External Tools text field for its
+path, since none of these ship bundled — a real external dependency the
+user must already have installed, unlike `portable-pty`/`vt100`, which are
+linked into the binary itself) against the project root, parses its
+report (Checkstyle/PMD: XML; SpotBugs: XML with its own schema — each
+needs its own parser, not a shared one, the formats aren't related), and
+converts each finding into the existing `Diagnostic` shape (file + byte
+range + message + severity) already powering the live syntax-error
+squiggle — same pipeline, a second *source* of diagnostics feeding it,
+not a new rendering path.
 
-**Everything else — recognized annotation list, path-joining rule,
-"method-level annotation is what makes it an endpoint" rule, ignoring
-other annotations — is identical to §2**, just walking `class_body`'s
-`function_declaration` children (mirroring `kotlin_members.rs`'s own
-`class_body` traversal) instead of Java's `class_body`'s
-`method_declaration` children.
-
-**Tests:** the same table as §2, translated to Kotlin syntax, plus the
-Kotlin-specific array-literal-unwrapping case for `method =`/`path =`
-explicitly.
-
-**Shared entry point:** `pub fn endpoints_in_file(language: fg_core::
-Language, tree: &Tree, source: &str) -> Vec<EndpointInfo>` dispatches to
-whichever of the two functions above matches `language`, empty `Vec` for
-every other language — the one function callers outside this module
-actually call, mirroring `type_of_identifier`'s own dispatcher shape.
+**Non-goals:** no live/on-type analysis — these tools run as a whole-
+project batch job on demand (Tools menu), not per-keystroke; no
+auto-fix application (that's `Quick-fix intention actions`, §15, which
+itself depends on `LSP integration`, §20, for a different diagnostic
+source — this feature's own findings are read-only surfaces, no
+`CodeAction` equivalent from these tools' report formats).
 
 ---
 
-## 4. Whole-project scan
+## 6. Auto-save
 
-**Where:** new `crates/app/src/widgets/editor/codegen.rs` function (or a
-sibling module, if `codegen.rs` is already large enough that adding this
-would blur its own "getter/setter/constructor/toString generation, plus
-the shared file-finder" focus — check its current size before deciding),
-`pub fn scan_project_endpoints(root: &FileNode) -> Vec<(PathBuf,
-EndpointInfo)>` (the file path travels alongside each entry — §6's jump
-needs to know which file to open, and `EndpointInfo` itself has no
-per-file identity of its own).
+`FEATURES.md`: `[SKIP]` — "explicitly out of scope for checkpoint 1
+(`README.md`'s non-goals), but a real gap once this sees daily use. Reuses
+`Document::save`."
 
-Walks every `.java`/`.kt` `FileNode` in the tree (same recursive-walk
-shape `find_source_file_by_stem`/`all_files` in `go_to_file.rs` already
-use), reads + throwaway-parses each with a fresh `IncrementalParser` (the
-same "read + throwaway-parse" sequence Override Method/dot-completion's
-cross-project lookup already do for a *single* file, just looped over
-every file here instead of one resolved-by-name target), and calls
-`endpoints_in_file` on each. A file that fails to read (permission error,
-race with a delete — `TECHNICAL_DEBT.md` #11's own open concern) is
-skipped silently, same "don't fail the whole operation over one bad
-entry" reasoning that entry already argues for, not a new decision this
-spec invents.
+**Shape:** a new Settings > Auto-save toggle (off by default, preserving
+today's explicit-save-only behavior for anyone who doesn't want it) with a
+mode choice — "on focus loss" (save whenever the editor widget/window loses
+focus while a tab is dirty) or "after N seconds idle" (a debounce timer
+reset on every keystroke, firing `Document::save` once it elapses with no
+further edits) — both call the *existing* `Document::save` path unchanged,
+so trailing-whitespace-stripping/dirty-clearing/file-watcher-suppression
+all keep working exactly as they do for an explicit `Ctrl+S` today. No new
+save logic, only a new *trigger* for the one that exists.
 
-**Cost:** a whole-project walk + parse of every source file — not free,
-but only run when the popup opens (§0's own scope decision), not on a
-timer or on every keystroke, so it doesn't compete with the actual typing/
-completion hot path `AGENTS.md`'s performance principle is concerned with.
-No caching across popup opens in this first pass — simpler, and correct
-by construction (nothing can go stale between a project's file changing
-and the next time the popup is opened, since it always re-scans fresh).
-Revisit only if a real large-project open feels slow *and is actually
-measured*, per `AGENTS.md`'s own "measure before fixing" testing
-convention — not preemptively.
+**Interaction with the "changed on disk" conflict banner:** auto-save
+firing while an external-change conflict banner is already showing for
+that tab must not silently overwrite the disk version out from under the
+user — auto-save is suppressed (falls back to "stays dirty, no save yet")
+for any tab currently showing that banner, same as if the user just hadn't
+pressed `Ctrl+S` yet; the banner's own Reload/Keep Mine resolution is what
+re-enables auto-save for that tab again.
 
-**Tests:** a small two/three-file project fixture (mirroring dot-
-completion's own cross-project test shape) asserting the aggregated list
-contains exactly the expected `EndpointInfo`s with the right paths; a file
-that isn't `.java`/`.kt` is ignored; an empty project returns `[]`.
+**Non-goals:** no auto-save *interval* configurability beyond the one
+idle-timeout number — this isn't meant to grow a full scheduling UI.
 
 ---
 
-## 5. UI — the popup
+## 7. Rectangular (block) paste
 
-**Where:** new `crates/app/src/panels/spring_endpoints.rs`, structurally a
-near-twin of `go_to_file.rs`: `SpringEndpointsState { open: bool, query:
-String, selected: usize }` with the same `toggle()`; `show(ui, state:
-&EditorState, popup: &mut SpringEndpointsState) -> Option<(PathBuf,
-usize)>` (path + the picked entry's `handler_byte`, for §6 to act on).
+`FEATURES.md`: `[TODO]` — "pastes clipboard text into an existing block/
+column selection, one line per row. Blocked on column/block selection
+existing first, which itself has no spec yet."
 
-Re-scans via §4's `scan_project_endpoints` once per `toggle()` into
-`open` (not on every frame the popup is shown — same "recomputed on
-open" reasoning `CompletionState::open` already uses for its own
-candidate list), then filters/ranks rows against `query` using
-`go_to_file.rs`'s own `fuzzy_score` (reused directly if it's `pub(crate)`-
-reachable from a sibling `panels` module already, or promoted from
-private to `pub(crate)` if not — a one-line visibility change, not a
-duplicate implementation) matched against a row's rendered text (`"GET
-/api/users/{id} — UserController#getUser"`), so typing either a path
-fragment or a method/controller name narrows the list.
+**The real prerequisite this section has to spec first: column/block
+selection itself doesn't exist yet.** Today's selection model
+(`ShellState`'s caret/anchor) is a single linear range — no notion of "a
+rectangular region spanning columns 4-10 across lines 12-18." Before block
+*paste* can mean anything, block *selection* needs:
+- A new selection mode, likely `Alt+drag` (common convention — VS Code,
+  IntelliJ, Sublime all use it) producing a `BlockSelection { start_line,
+  end_line, start_col, end_col }` instead of (or alongside) the existing
+  linear `Range<usize>` — `text_area`'s painting/hit-testing both need a
+  second code path for "highlight a rectangle of columns across several
+  rows" distinct from "highlight a contiguous byte range."
+- Typing/Backspace/Delete over an active block selection needs its own
+  per-row-edit semantics (delete the same column range on every row the
+  block spans) — a real, separate editing mode from today's single-range
+  edit path, not a thin wrapper over it.
 
-**Tests:** since this mirrors `go_to_file.rs`, which itself has no direct
-render-level test (its own popup interaction is exercised live, not
-headlessly, going by this crate's existing test coverage), match that
-same split rather than inventing a new testing shape for this one popup:
-`scan_project_endpoints`/`endpoints_in_file` get real unit tests (§2-§4);
-the popup's own open/filter/pick wiring is verified live, per `AGENTS.md`'s
-testing-conventions section on GUI click-through (`cargo build`/`test`/
-`clippy` green, then hand the user exact numbered steps and wait for them
-to report back — not a click-automation tool, which that same section
-documents as unreliable here).
+**Block paste itself**, once selection exists: clipboard text split on
+`\n`, row *i* of the split inserted at `(start_line + i, start_col)` for
+each row the block selection spans — if the clipboard has fewer lines than
+the selection, remaining rows get nothing inserted (not repeated, not
+cleared); if it has more, the surplus lines are dropped (a block paste
+this codebase can be honest about not handling gracefully beyond the exact
+same row-count case rather than inventing wrap-around behavior no one
+asked for).
 
----
-
-## 6. Jump-to-handler
-
-**Where:** `app.rs`, alongside `open_path`.
-
-**The real gap this phase closes:** nothing in this app today opens a
-file *at a specific position* — `go_to_file`/`quick_switcher` both return
-a bare `PathBuf`, and `open_path` just opens/focuses the tab. `text_area::
-set_caret(ctx, id, caret)` already exists and is exactly the primitive
-needed (its own doc comment even names "a generated getter/setter jumping
-to it" as a precedent use, though checking that precedent's real call
-site shows the *only* current caller is `widget.rs`'s own end-of-`show`
-`manual_caret` application, all within one already-focused frame — not
-actually a cross-tab-switch jump yet, despite what the comment implies;
-verify this before assuming a ready-made cross-tab pattern exists) — the
-new work is wiring it across a tab switch, which nothing does yet.
-
-**Design:** a new `pending_navigation: Option<(PathBuf, usize)>` (byte
-offset) field on `FoxGardenApp`, alongside `pending_editor_input`/
-`cached_clipboard_text`. When §5's popup returns `Some((path, byte))`:
-call `open_path` as today, then set `pending_navigation`. On the *next*
-frame (or the same frame, if `set_caret` genuinely can be called ahead of
-a widget's first `show` the way its doc comment claims — **verify this
-directly** rather than assuming an extra frame of delay is needed, same
-"check, don't guess" discipline this whole spec already applies to every
-grammar claim): convert the byte offset to a char offset via the now-
-open `Document`'s buffer, call `text_area::set_caret(ctx, egui::Id::new
-(path.to_string_lossy()...), Caret::at(char_offset))` (the exact same id
-computation `widget.rs`'s own `show` and every test helper already use),
-then clear `pending_navigation`.
-
-**Open question, to resolve in this phase, not before:** does setting the
-shell's persisted caret alone cause the surrounding `egui::ScrollArea`
-(if the editor is scrollable — check `text_area.rs`/`painting.rs` for
-how/whether one wraps the text widget) to actually scroll the new
-position into view, or does this need an explicit `ui.scroll_to_rect`/
-equivalent call alongside it? A jump that moves the cursor to the right
-byte but leaves the viewport scrolled somewhere else entirely would be a
-half-working feature — check the real behavior live before calling this
-phase done, not just via the automated test suite.
-
-**Tests:** a `pending_navigation` round-trip test (mirroring
-`app/tests.rs`'s existing `FakeStorage`-based shape) confirming the byte-
-to-char conversion and that `set_caret` is called with the right `Id`/
-`Caret` once the target document exists; the actual visible-scroll
-behavior is a live-verification item per the open question above.
+**Non-goals:** no block *copy* generalized beyond what block *selection*
+naturally provides (copying a block selection's own text, joined with
+`\n`, is what feeds this paste path in the first place — not a separate
+feature). No column-selection-aware multi-cursor unification with the
+*existing* multi-cursor model (`Ctrl+D`/Alt+Click) — block selection is its
+own mode, not a reinterpretation of multi-cursor as "many single-column
+selections."
 
 ---
 
-## 7. Known gaps — not full parity with a real IDE's endpoint explorer
+# Substantial tier
 
-Worth naming explicitly rather than letting "endpoint map shipped" imply
-more than it does, same convention the completion feature's own §6/§7
-established:
+## 8. Customizable keybindings
 
-- **No re-scan on file change** — if a project's controllers change while
-  the popup stays closed, the *next* open re-scans fresh (§4), but nothing
-  watches for changes proactively. Consistent with this feature never
-  running on a timer at all (§0's own scope decision), not a regression
-  from some richer behavior this pass almost had.
-- **Simple-name annotation matching, no real classpath** — a project's own
-  unrelated `@GetMapping` (not Spring's) would false-positive; Spring's
-  own annotation resolved via a different import wouldn't be
-  distinguishable from it either. Same category of gap `type_of_
-  identifier_java`'s JDK-type handling already accepts.
-- **First-match-only for multi-value `method =`/path variables/query
-  params/`consumes`/`produces`** — not shown at all; only the bare path
-  and (single) HTTP method.
-- **No WebFlux, no JAX-RS** — annotation-based Spring MVC only, per §0.
-- **No multi-module path-prefix awareness** — a Gradle subproject's own
-  servlet context-path or a reverse-proxy prefix isn't known to this tool
-  at all (needs real build-file awareness, still `[SKIP]`); paths shown
-  are exactly what the `@...Mapping` annotations say, nothing more.
+`FEATURES.md`: `[SKIP]` — "needs a config format and rebinding
+infrastructure threaded through every hardcoded shortcut check (currently
+just `Ctrl+S`, but every future shortcut adds to this)."
+
+**Depends on `Command palette`'s own registry (§3) existing first** — a
+rebindable shortcut needs a stable, named thing to rebind (`Command.id`),
+which is exactly what that registry defines; building keybinding
+customization without it means inventing the same registry twice.
+
+**Shape, once the registry exists:** a `keybindings.json` (mirroring
+`run_configs.json`'s own "a project-independent-but-still-`.foxgarden/`-
+adjacent JSON file" shape, though this one is a *user* setting, so it
+belongs alongside `eframe::Storage`'s other persisted Settings values, not
+under a project's `.foxgarden/`) mapping `Command.id -> key chord string`
+(`"file.save" -> "Ctrl+S"`). `app.rs`'s current hardcoded `if ui.input(|i|
+i.key_pressed(egui::Key::S) && i.modifiers.command)`-style checks are
+replaced by a single dispatcher: for every input event, look up whether
+its chord matches any entry in the loaded keybinding map, and if so call
+`run_command` (§3) with that entry's `Command.id`. A Settings > Keyboard
+Shortcuts panel lists every command + its current chord with a "click to
+rebind" capture field (press the new chord, it's recorded, conflicting
+with an existing binding surfaces a warning rather than silently creating
+a duplicate).
+
+**Non-goals:** no per-project keybinding overrides (global/user-level
+only, like every other Settings value); no vim/emacs *keybinding preset*
+import — a real per-shortcut rebind UI is the whole feature, not a preset
+picker on top of it.
 
 ---
 
-# 8. Terminal panel
+## 9. Git diff gutter, inline blame, commit/stage/push UI
 
-A second, independent feature added to this same design pass — an
-in-app, PTY-backed terminal that opens as a **dockable bottom panel**
-(the VSCode shape: toggled open/closed below the editor content, its own
-small tab strip *inside* the panel for multiple terminal sessions),
-**not** a tab in the file tab strip. Revised from this entry's own first
-draft, which called for a tab-strip-integrated terminal — reversed after
-a live look at the Phase 5 tab-strip-integrated build (`TabKind::
-Terminal` interleaved with file tabs in one `tab_order`) read as
-unfamiliar next to the VSCode-style bottom-panel terminal most users
-already expect; recorded here rather than silently overwritten, since
-`PLAN.md`'s own Phase 5 entry and the code it already produced needed a
-matching revision, not just this doc. Still unrelated to §0-§7 above (no
-shared code, no shared dependency in either direction); `PLAN.md`'s
-phases for it remain a separate track for the same reason.
+`FEATURES.md`: `[SKIP]` — "more git integration than the tree's status
+indicators; realistically still shells out to the `git` CLI rather than
+embedding `libgit2`, but the UI surface (diff rendering, staging flow) is
+real work."
 
-Genuinely bigger and riskier than the endpoint map: real process
-management and a byte-level terminal protocol, though the panel-not-tab
-shape removes the tab-model rework §8.2 originally called for — `open_tabs`/
-`active_tab` stay exactly file-only, untouched by this feature entirely.
-`FEATURES.md` previously listed "Integrated terminal panel" as
-Substantial-tier, below the Major-tier undertakings; full keyboard-protocol
-translation (§8.5) alone still argues for treating that as optimistic,
-even without a tab-model rework alongside it.
+**Diff gutter:** on tab open/save/external-reload, shell out to `git diff
+--no-color -U0 -- <path>` (unified diff, zero context lines — just the
+changed-line ranges) against the file's own working-tree diff, parse the
+`@@ -a,b +c,d @@` hunk headers into `added`/`removed`/`modified` line
+ranges, paint a colored bar in the gutter (green add, red remove-marker at
+the boundary line, blue/orange modified) alongside the existing line-number
+column — same "per-tab computed state, refreshed on save" shape the syntax-
+error squiggle pipeline already uses, a second gutter decoration source,
+not a rendering rewrite.
 
-**Non-goals:** no terminal multiplexing *within one session* (splits/panes
-inside a single terminal — one shell process per session, full stop; the
-panel's own tab strip already covers "more than one terminal at once" via
-multiple sessions, so this isn't the same as forbidding concurrency); no
-terminal-specific color scheme or font distinct from the editor's own
-settings; no session persistence across restarts (a dead shell process has
-no scrollback/state worth resuming — `restore_session`/`persist_session`
-keep covering file tabs only, unaffected by this feature either way); no
-SSH/remote shell — a local process only, via whatever shell is installed.
+**Inline blame:** `git blame --porcelain <path>` parsed per line, shown as
+a dimmed inline annotation at the end of the current line (cursor-line
+only, not every line at once — a full per-line blame gutter competes
+visually with the diff gutter above it; a single "hover/cursor-line"
+annotation, closer to what VS Code's own GitLens does by default, is the
+better fit here) — author + relative date + first line of the commit
+message.
 
-## 8.1 Dependencies
+**Commit/stage/push UI:** a new dockable panel (structurally similar to
+the terminal panel, §8 of the *previous* SPEC.md pass — a bottom or side
+dock, its own small UI) listing `git status --porcelain`'s output as a
+checkbox tree (stage/unstage individual files or hunks — hunk-level
+staging needs `git apply --cached` against a hand-built patch of just the
+selected hunk, real parsing/patch-construction work, not a single CLI
+call), a commit-message text box + "Commit" button (`git commit -F -`
+piping the message in, avoiding shell-escaping the message directly), and
+a Push button (`git push`, surfacing stdout/stderr through the existing
+`last_error` modal on failure — auth failures, no upstream, rejected
+non-fast-forward push, etc. all need to read as *that specific* failure,
+not a generic "git failed").
 
-- **`portable-pty`** — spawns a shell with a real pseudo-terminal. A
-  plain pipe isn't enough: line editing, job control, and a colored
-  prompt all expect a *real* pty (the shell checks `isatty()` and behaves
-  differently otherwise), not just captured stdout/stdin.
-- **`vt100`** — parses the raw byte stream into a `Screen` (a grid of
-  cells, each with its own foreground/background/bold/etc.), which
-  FoxGarden then paints itself via egui, rather than embedding a full
-  terminal emulator's own rendering (e.g. `alacritty_terminal`, much
-  heavier). Matches `AGENTS.md`'s "lightweight AND functional" design
-  principle: hand-rolling VT100 *parsing* from scratch is not worth
-  doing (the real escape-sequence surface a shell/editor/`htop` actually
-  emits is large), but *rendering* an already-parsed grid is squarely the
-  same kind of custom-painting work this app already does for the
-  editor's own text/squiggles/brackets — no reason to pull in a second
-  renderer for that half.
+**This is realistically the shell-out-to-CLI approach across the board**
+(matches this feature's own `FEATURES.md` framing) — embedding `libgit2`
+via the `git2` crate would avoid subprocess overhead and give structured
+results instead of parsing CLI text output, but shelling out is simpler,
+matches how the tree's *existing* status indicators already work (if they
+already shell out — verify against the current status-indicator
+implementation before assuming this consistency holds), and avoids adding
+a large native-dependency crate for a feature whose main cost is UI
+surface, not diffing performance.
 
-## 8.2 Panel model — deliberately independent of the file tab model
+**Non-goals:** no merge-conflict resolution UI, no interactive rebase, no
+branch management beyond what's needed to commit/push on the current
+branch — this is "the daily commit loop," not a full git client.
 
-Unlike this entry's original draft, `EditorState.open_tabs: Vec<Document>`/
-`active_tab: Option<usize>` need **no change at all** for this feature —
-the panel-not-tab shape means a terminal session is never interleaved with
-file tabs, never indexed by the same field, never touches `parsers`
-(kept *index-aligned* with `open_tabs`, an already-documented `AGENTS.md`
-gotcha that a terminal session simply never participates in).
+---
 
-Shape (mirrors `side_panel`'s own "a dockable area with its own visibility
-flag" precedent, `PLAN.md` Phase 5):
-- `EditorState` gains `terminal_tabs: Vec<TerminalTab>` (new struct — the
-  pty child handle, its writer half, the shared `vt100::Parser`/`Screen`,
-  a display title) and `active_terminal: Option<usize>` (which session,
-  if any, the panel's own small tab strip has focused) — both entirely
-  separate from `open_tabs`/`active_tab`.
-- `FoxGardenApp` gains `terminal_panel_visible: bool`, mirroring
-  `side_panel_visible`'s own role for the project tree — toggled by
-  `Ctrl+\`` (backtick, matching VSCode's own terminal-toggle shortcut) or
-  a View menu item, independent of which file tab (if any) is active.
-- The panel itself renders via `egui::TopBottomPanel::bottom` (the
-  bottom-dock counterpart to `side_panel`'s `egui::SidePanel::left`),
-  shown only while `terminal_panel_visible` — its own tab strip lists
-  `terminal_tabs`, a "+" adds another session, closing one removes it from
-  `terminal_tabs` and reassigns `active_terminal` to a neighbor if it was
-  focused. No `TabKind`/shared-ordering type is needed at all: a terminal
-  session's position is just its own index in `terminal_tabs`, since nothing
-  ever interleaves it with a file tab's position.
-- Closing a terminal session has nothing to push onto `closed_tabs`
-  (§8's own non-goal: nothing meaningful to reopen) — `closed_tabs`
-  stays exactly the file-tab-only mechanism it already was.
+## 10. Code folding
 
-## 8.3 Spawning and lifecycle
+`FEATURES.md`: `[TODO]` — "collapse a method/class body. Needs tree-
+sitter-based fold-range computation; no clean home in `egui::TextEdit`'s
+single-blob text model, so it likely piggybacks on `Large file handling`
+(Major tier)."
 
-- **Opening the panel** — `Ctrl+\``/View menu toggles
-  `terminal_panel_visible`; if the panel has no sessions yet the first
-  time it's shown, one is created automatically (matching VSCode's own
-  "opening the terminal for the first time starts a shell" behavior), a
-  new toolbar/panel "+" button starts another one alongside it. Additive
-  next to the existing *external* "Open Terminal" button (`terminal.rs`,
-  spawns the OS's own terminal emulator window) — some users want their
-  own terminal emulator's ergonomics (copy/paste, tmux, saved profiles);
-  this in-app panel is a second, complementary option, not a replacement.
-- Spawns the user's default shell via `portable-pty`: `$SHELL` on Unix
-  (falling back to `/bin/sh` if unset), `%COMSPEC%` on Windows (falling
-  back to `cmd.exe`) — verify the exact fallback `terminal.rs`'s own
-  external-terminal spawn already uses for "no project open" before
-  assuming this feature should match it, rather than inventing a second,
-  possibly-inconsistent default.
-- A background thread does a blocking read of the pty's output
-  continuously (fine off the UI thread) and feeds bytes into the
-  `vt100::Parser` behind a `Mutex`/channel the UI thread drains once per
-  frame; calls `egui::Context::request_repaint()` whenever new output
-  arrives, since a long-running command's own output (unlike the user's
-  own typing) has no other event to trigger a repaint on.
-- Closing a terminal session kills its child process — no "still
-  running, are you sure" confirmation for a first pass (a dirty *file*
-  tab's close-confirmation modal doesn't translate; a terminal has no
-  "unsaved" concept). Matches most terminal-panel UIs' own default.
+**The real blocker, named honestly:** `egui::TextEdit`'s single-blob model
+has no concept of "this byte range is collapsed, don't lay it out or paint
+it, but keep it in the buffer" — the *existing* fold-map machinery this
+codebase already has (`FoldMap`, used by import-block folding per the
+`ide-henshin` branch's own recent work) proves the *rendering* half is
+already solvable without full virtualization; the real question is
+whether that same `FoldMap` shape (a set of hidden line ranges, visual-row
+math done through it) generalizes to *arbitrary user-toggled* fold regions
+(a method/class body) the same way it already handles *auto-computed*
+import-block folding, or whether it needs its own second mechanism. **This
+needs a direct look at the current `FoldMap`/import-folding
+implementation before assuming either answer** — it may turn out this
+feature doesn't need `Large file handling`'s full virtualization rewrite
+as a hard prerequisite after all, only as `FEATURES.md`'s own
+conservative worst case.
 
-## 8.4 Rendering
+**Fold-range computation:** tree-sitter query per language identifying
+"foldable" node kinds (Java: `class_body`, `method_declaration`'s block
+body, `interface_body`; Kotlin: `class_body`, `function_declaration`'s
+block body) — a fold range is `(open_brace_line, close_brace_line)`, and
+the gutter renders a collapse/expand triangle at `open_brace_line` for
+each one found (mirroring the *existing* import-block folding's own gutter
+marker, if that's how it's currently rendered).
 
-New `crates/app/src/widgets/terminal_widget.rs` (not `terminal.rs` — already
-taken by the existing external-terminal-launcher module). Reads the current
-`vt100::Screen`'s cells once per frame — only for whichever session is
-`active_terminal` and only while the panel itself is visible (same "don't
-do per-frame work for something that isn't shown" discipline the editor's
-own tab rendering already follows) — and paints each cell as a monospace
-glyph using the *editor's own* configured font/size (`EditorFont`,
-`font_size`) rather than a second, separate terminal font setting. `vt100`'s
-own cell attributes (foreground/background/bold/etc.) map onto the current
-theme's own color table (`theme.rs`), not the raw ANSI 16-color palette
-verbatim — a terminal panel that ignores light/dark mode would visually
-clash with the rest of the app. Cursor renders as a blinking block/bar;
-reuse the editor's own blink-timing logic if it's factored generically
-enough to share rather than a second timer.
+**State:** `Document` (or a per-tab side structure, mirroring `parsers`)
+gains `folded_ranges: HashSet<usize>` (line numbers currently collapsed);
+toggling one adds/removes its line from the set, and the fold-map used for
+layout/painting is rebuilt from the union of auto-import-folding's own
+existing hidden ranges plus this set.
 
-## 8.5 Input
+**Non-goals:** no fold-state persistence across restarts in a first pass
+(recomputed/reset to "everything expanded" on reopen) — revisit only if
+that reads as a real gap once the base feature ships. No custom
+user-defined fold regions (`// region`/`// endregion` comment markers) —
+tree-sitter-node-based folding only.
 
-While the terminal panel is focused, keyboard `Event`s translate to the byte
-sequences a real terminal sends and get written to the pty's writer
-half: printable characters as UTF-8 bytes, Enter → `\r`, Backspace/Tab
-→ their own single control bytes, arrow keys/Home/End/Page Up/Down/
-function keys → their standard ANSI escape sequences, Ctrl+letter → the
-matching control byte (Ctrl+C → `0x03`, Ctrl+D → `0x04`, …). This is a
-real, nontrivial translation table — a full terminal keyboard protocol,
-not a one-line `match` — budget a dedicated phase for it and table-test
-the byte sequences for at least arrows/Enter/Tab/Backspace/Ctrl+C/Ctrl+D
-against known-correct values, not asserted correct by inspection alone.
-Paste writes the clipboard text's raw bytes the same way, no different
-handling from typing it.
+---
 
-## 8.6 Resizing
+## 11. Multi-window / split-pane editing
 
-On a size change (font-size setting, side-panel width drag, window
-resize), compute the new rows/cols from the available rect and the
-font's own glyph metrics (the same measurement the editor's own layout
-already needs — reuse it rather than re-deriving) and call the pty's
-`resize()`, so the shell's own `$LINES`/`$COLUMNS` — and any full-screen
-program running inside it (`vim`, `htop`, `less`) — redraw correctly.
-Getting this wrong doesn't crash anything, but a TUI program in an
-unresized pty renders garbled; treat a resize as a real, testable event
-(construct a known rect, assert the computed rows/cols), not an
-afterthought discovered only by eyeballing a live resize.
+`FEATURES.md`: `[SKIP]` — "one tab visible at a time, one OS window total
+today; a real change to the app's state model, not just a new widget."
 
-## 8.7 Known gaps
+**The real scope, named honestly:** `EditorState.active_tab: Option<usize>`
+is a single focus index — the entire app assumes exactly one tab is "the"
+active one at any moment. Split-pane editing (two or more tabs visible
+side by side in the *same* window) needs `active_tab` to become
+`Vec<Option<usize>>` (one per pane) or an equivalent multiple-focus model,
+with every place that currently reads `state.active_tab` directly
+(dozens of call sites across `app.rs`/`panels/tabs.rs`/the editor widget)
+audited for "which pane is this for" — genuinely pervasive, not a
+contained addition. Multi-*window* (a second OS window, a second
+`eframe`/`egui::Context` instance or a second native window under one
+process) is a different, likely *larger* problem: `eframe`'s single-window
+assumption would need to be worked around or a multi-viewport approach
+(`egui::Context::show_viewport_immediate`, if `eframe`'s current version
+supports it — verify against the actual `eframe`/`egui` version this
+project pins before assuming the API exists) adopted instead.
 
-- No multiplexing, no terminal-specific theming, no session persistence,
-  no remote/SSH shells — §8's own stated non-goals, repeated here for the
-  same "don't let partial scope read as a bug" reason §7 gives for the
-  endpoint map.
-- **Windows support is the one real platform risk** — `portable-pty`'s
-  ConPTY backend is a different code path from its Unix pty
-  implementation; verify it actually works end-to-end in this app's own
-  build during Phase 6/7 rather than assuming parity with the Unix path,
-  mirroring `terminal.rs`'s own existing per-OS branching for the
-  external-terminal case (proof that this app already can't assume one
-  code path covers every platform for anything terminal-adjacent).
-- No attempt at terminal-inside-terminal edge cases (a shell running
-  another shell, `screen`/`tmux` launched from inside a session) beyond
-  whatever `vt100` itself already handles — not a scenario this feature
-  tests for deliberately.
+**Recommended scope if this is ever picked up:** split-pane first (same
+window, same `eframe` app, "just" a state-model change), multi-window
+only as a much later, separate follow-up — conflating the two into one
+undertaking is how a "real change to the state model" (split-pane) turns
+into "also re-architect the windowing model" (multi-window), which is a
+different order of risk. This spec deliberately doesn't commit to
+designing multi-window at all beyond naming it as out of split-pane's own
+scope.
+
+**Non-goals (for split-pane specifically):** no independent side-panel/
+terminal-panel-per-pane — those stay single, shared chrome around
+whichever panes exist, mirroring how VS Code's own side panel doesn't
+duplicate per split either.
+
+---
+
+## 12. Spring config property autocomplete
+
+`FEATURES.md`: `[SKIP]` — "completing keys in `application.properties`/
+`.yml` against each dependency jar's bundled `spring-configuration-
+metadata.json`. Depends on Maven/Gradle dependency-aware classpath
+resolution (Major tier) existing first."
+
+**Hard dependency on `Maven/Gradle awareness` (§21) — not workable
+without it.** `spring-configuration-metadata.json` files live *inside*
+each dependency's own jar (Spring Boot's annotation processor generates
+one per module at build time, bundled into `META-INF/`) — there is no
+"walk the open project's file tree" equivalent for this the way the
+Spring endpoint map's own extraction got away with (that feature's own
+`SPEC.md` entry explicitly noted it doesn't need real classpath
+awareness; this one categorically does, since the data it completes
+against isn't source the project's own tree contains at all). This
+section is a placeholder for *how* it would work once that dependency
+exists, not a feature this codebase can build today.
+
+**Once classpath resolution exists:** on opening an `application.properties`/
+`.yml` file, resolve the project's dependency jars (from `Maven/Gradle
+awareness`'s own resolved classpath), scan each for a bundled
+`META-INF/spring-configuration-metadata.json`, parse its `properties`
+array (`name`, `type`, `description`) into a flat completion candidate
+list, keyed by the property-key prefix already typed (`server.p` →
+`server.port`, `server.port-header`, ...) — same completion-popup
+mechanism the existing dot-completion already renders through
+(`CompletionItem`), a new *candidate source* feeding it, not a new UI.
+
+**Non-goals:** no live re-scan on dependency change (re-resolved when the
+classpath itself is re-resolved, whatever cadence `Maven/Gradle awareness`
+settles on for that); no completion for custom `@ConfigurationProperties`
+classes the project defines itself (that needs semantic understanding of
+the project's own annotated classes, arguably closer to what
+`LSP integration`, §20, would eventually provide, not this feature's own
+jar-scanning approach).
+
+---
+
+## 13. Code coverage overlay
+
+`FEATURES.md`: `[SKIP]` — "run tests with instrumentation (JaCoCo for
+Maven), parse its report, paint covered/uncovered gutter marks. Depends
+on `Build/run/test integration` (Major tier) existing first."
+
+**Hard dependency on `Build/run/test integration` (§22)** — this feature's
+entire trigger ("run tests with instrumentation") needs that feature's own
+test-running infrastructure to exist first; there's no standalone "run
+JaCoCo" action this codebase can offer without it.
+
+**Once test integration exists:** a "Run with Coverage" variant of the
+existing test-run action invokes the build tool with JaCoCo's Maven/Gradle
+plugin enabled (`mvn test jacoco:report` / the Gradle `jacoco` plugin's
+own report task — exact invocation depends on which build tool `Maven/
+Gradle awareness` (§21) determined the project uses), parses the
+generated `jacoco.xml` report (an XML format with per-class,
+per-line hit-count data), and paints a gutter mark per source line (green
+hit, red miss, no mark for a non-executable line like a blank line or a
+brace) — a third gutter-decoration source alongside the diff gutter (§9)
+and the syntax-error squiggle, same shared-gutter-real-estate
+consideration `theme.rs`'s existing gutter colors would need extending to
+cover.
+
+**Non-goals:** no branch-coverage-specific visualization (line-level
+hit/miss only, matching what a gutter mark can show at a glance); no
+coverage-trend-over-time tracking — this is "what does the *last* run
+cover," not a historical dashboard.
+
+---
+
+## 14. Docker/container run integration
+
+`FEATURES.md`: `[TODO]` — "build and run the project's Dockerfile/compose
+stack, stream container logs into the output panel. Distinct from just
+editing those files (Dockerfile highlighting, shipped)."
+
+**Shape:** a Run > "Docker: Build & Run" (single `Dockerfile`) / "Docker
+Compose: Up" (a `docker-compose.yml`/`compose.yaml` at the project root)
+action shells out to `docker build`/`docker compose up`, streaming
+stdout/stderr into an output panel — this needs the same "a dockable panel
+showing live process output" infrastructure `Build/run/test integration`
+(§22) also needs; **building that shared plumbing once, for whichever of
+the two features lands first, and having the other reuse it** is the
+right sequencing, rather than two independent output-streaming
+implementations. If `Build/run/test integration` hasn't landed yet when
+this is picked up, this feature's own output panel becomes that shared
+piece's first real implementation, not a Docker-specific one-off.
+
+**Container lifecycle:** a running container/compose stack shows as an
+entry in the panel with a Stop button (`docker stop`/`docker compose
+down`); closing the panel does *not* stop the container by default
+(matching how closing a terminal-panel session behaves differently —
+here, a long-running dev server the user wants to keep running in the
+background across panel-visibility toggles is the common case, unlike a
+terminal session with no meaningful "keep running invisibly" use case) —
+only the explicit Stop button, or the app closing entirely (which does
+stop every tracked container, so nothing leaks after the app exits).
+
+**Non-goals:** no Dockerfile *linting* beyond existing syntax
+highlighting (that's closer to `Static analysis integration`, §5's own
+scope, if ever extended to Docker-specific tools like `hadolint`); no
+container shell/exec UI (`docker exec -it`) — a user who wants a shell
+inside a running container can already use the terminal panel's own
+"external terminal" fallback or the in-app one, run `docker exec`
+manually, without this feature needing a dedicated button for it.
+
+---
+
+## 15. Quick-fix intention actions
+
+`FEATURES.md`: `[SKIP]` — "a lightbulb offering an auto-import, a
+suggested fix, etc. Depends on `LSP integration` (Major tier) actually
+supplying structured `CodeAction` data; the UI (lightbulb + apply) is
+comparatively small once that exists."
+
+**Hard dependency on `LSP integration` (§20)** — the LSP `textDocument/
+codeAction` request is what actually supplies "here's a specific,
+structured fix for this diagnostic" data (a `WorkspaceEdit`); without a
+language server, there's no source of *real* code actions to offer (a
+static-analysis-only fallback — e.g. always offering "suppress this
+Checkstyle rule" for a `Static analysis integration`, §5, finding — is a
+much narrower, lower-value version of this feature and arguably not worth
+building on its own ahead of real LSP-backed actions).
+
+**Once LSP integration exists:** a small lightbulb icon appears in the
+gutter on any line with an active diagnostic that has one or more
+associated `CodeAction`s (requested via `textDocument/codeAction` scoped
+to that diagnostic's range); clicking it (or a keyboard shortcut with the
+cursor on that line) shows a small popup listing each action's title,
+picking one applies its `WorkspaceEdit` via the *same* text-editing
+primitives the rest of the editor already uses (an edit is an edit,
+regardless of whether a human typed it or a language server generated
+it) — `Document`'s own edit-application path, not a new one.
+
+**Non-goals:** no *editor-generated* quick fixes independent of LSP (e.g.
+a hardcoded "add missing import" heuristic built directly into this
+codebase, bypassing the language server) — that would duplicate semantic
+work a real language server already does correctly, and is exactly the
+kind of "syntax-only heuristic masquerading as semantic understanding"
+this codebase's own completion feature already draws a hard line against
+for anything beyond simple-name matching.
+
+---
+
+## 16. Minimap
+
+`FEATURES.md`: `[SKIP]` — "a scaled-down whole-file overview beside the
+scrollbar with a viewport indicator and click-to-jump. Its own miniature
+rendering pass over the buffer, separate from the main editor's layout."
+
+**Shape:** a narrow (~100px) strip on the editor's right edge, painted as
+a heavily-downscaled render of the whole buffer — not literally shrinking
+the real per-line galleys (expensive, and illegible at that scale anyway),
+but a *simplified* second rendering pass: each line becomes a single thin
+horizontal bar, colored per-pixel-column by that column's dominant syntax
+`Scope` color (a coarse "line shape" impression, the way every existing
+minimap implementation actually works, not literal tiny text). A
+semi-transparent rectangle overlay shows the current viewport's position
+within the whole file; dragging it (or clicking anywhere on the minimap)
+scrolls the main editor to that position.
+
+**Cost consideration:** this is a *second* full-buffer pass on every
+edit/scroll for a large file — the same cost concern `Large file handling`
+(§19) already exists to solve for the *main* editor's own layout.
+Building the minimap against the *unvirtualized* current editor risks
+adding a second unbounded-cost operation right as the first one (§19) is
+trying to get bounded; either sequence this after §19 lands, or scope the
+minimap's own rendering to already be viewport-bounded from day one (only
+render the currently-scrolled-near region's lines at full detail, a
+coarse solid-color placeholder for the rest, refined lazily) rather than
+assuming it can defer that same cost question to "later."
+
+**Non-goals:** no minimap *search-result* highlighting (marks for every
+match of an active find query) as a first pass — the viewport indicator +
+syntax-color impression is the whole initial feature.
+
+---
+
+## 17. Peek definition
+
+`FEATURES.md`: `[SKIP]` — "an inline preview of a symbol's definition
+without switching tabs. Consumes the LSP go-to-definition below; the peek
+overlay itself is the new editor-side work."
+
+**Hard dependency on `LSP integration` (§20)** for go-to-definition
+resolution — this codebase's own existing "jump to a symbol's
+declaration" capabilities (Override Method's superclass lookup,
+completion's own type resolution) are narrow, single-purpose lookups, not
+a general "resolve this identifier to its declaration site" primitive a
+peek feature needs across arbitrary code, which only a real language
+server realistically provides.
+
+**Once go-to-definition exists (LSP or otherwise):** triggering peek (a
+keyboard shortcut or a gutter icon, distinct from an actual jump so the
+current tab/scroll position isn't disturbed) opens an inline expandable
+panel *within* the current editor's own layout, at the line below the
+peek request — showing the target definition's surrounding lines
+(read-only, syntax-highlighted the same as any other view) without
+switching tabs or scrolling the main editor away from where the user was
+reading. Dismissing it (Escape, or clicking outside it) collapses the
+inline panel back to nothing, leaving the main editor exactly as it was.
+
+**Non-goals:** no *editing* inside the peek view (read-only preview only
+— "Go to Definition" proper, a real tab switch, is already what full
+editing access requires); no multi-result peek UI (if a symbol resolves
+to more than one definition — an interface with several implementations —
+this shows the first/primary result only in a first pass, deferring a
+disambiguation picker).
+
+---
+
+## 18. Inline diff viewer widget
+
+`FEATURES.md`: `[SKIP]` — "a reusable side-by-side/inline diff renderer,
+needed by both the git diff gutter and local file history above. Worth
+building once and sharing between them."
+
+**Shared prerequisite for `Git diff gutter` (§9)'s own full-diff view (if
+it ever grows beyond the gutter-marks-only scope specced there) and
+`Local file history` (§4)'s snapshot-vs-live comparison** — building this
+once, as its own reusable widget, rather than each of those two features
+growing its own bespoke diff renderer, is the entire point of this
+section existing separately.
+
+**Shape:** `pub fn show_diff(ui: &mut egui::Ui, old: &str, new: &str,
+mode: DiffMode) -> DiffResponse` where `DiffMode` is `SideBySide` or
+`Inline` (unified-style, `+`/`-` prefixed lines interleaved) — computed via
+a line-level diff (the `similar` crate, a well-established, actively
+maintained Rust diffing library — verify it's still the right choice by
+checking its current crates.io status before pinning a version, rather
+than assuming this doc's own naming stays accurate indefinitely) producing
+an ordered list of `Equal`/`Delete`/`Insert`/`Replace` line ops, each
+rendered as a colored row (green insert, red delete, a paired red/green
+row for a replace) using the editor's own font/theme, same "reuse the
+app's own visual language" principle every other new widget in this doc
+follows.
+
+**Non-goals:** no inline *editing* through the diff view (read-only
+rendering; `Local file history`'s own revert action operates on the whole
+snapshot, not a line-by-line accept/reject the way a merge-conflict UI
+would need — that's out of scope here and for `Git diff gutter`, §9, which
+explicitly excludes merge-conflict resolution too). No word-level diff
+highlighting within a changed line (line-level granularity only, for a
+first pass).
+
+---
+
+# Major tier
+
+## 19. Large file handling — full viewport virtualization
+
+`FEATURES.md`: `[WIP]` — the tab-switch cost is already fixed (a
+persistent per-tab galley cache survives switching away from and back to
+a tab). What's left: laying out a huge file's *entire* buffer on first
+open and on every keystroke, since `egui::TextEdit` has no concept of
+"only the visible lines."
+
+**The real scope, unchanged from `FEATURES.md`'s own framing:** fixing
+this means rendering only the visible line range, which in practice means
+**replacing `egui::TextEdit` with a hand-built widget** and reimplementing
+cursor movement, click-to-position, drag-select, and IME on top of it —
+everything `TextEdit` currently provides for free. This is the single
+largest undertaking in this entire doc measured by "how much of the
+editor's existing behavior has to be reimplemented rather than reused,"
+since the *entire* editor currently sits on `egui::TextEdit`'s own
+internals for those four things.
+
+**Recommended shape, if picked up:** keep the *data model*
+(`Document`/`Rope` buffer, `ShellState` caret/anchor, `HighlightSpan`s)
+entirely unchanged — this is a rendering/interaction-layer rewrite, not a
+data-model one. The new widget:
+- Computes `visible_rows` from scroll offset + viewport height + row
+  height (exactly the math `text_area::render::visible_rows` already does
+  for the *no-wrap* fast path today — the real new work is making the
+  *word-wrap* path, `layout_visible_wrapped`'s `cached_row_counts`, stop
+  needing every line's row-count computed up front, since that's the part
+  that still scales with total file size even though painting itself
+  already doesn't).
+- Reimplements click-to-position (`layout_visible`'s existing
+  `pos_from_cursor`/hit-testing logic already provides the *building
+  blocks* — `char_rect`, `row_galleys` — this widget needs to keep using
+  those exact same helpers, just called only for the visible slice, not
+  reinvent hit-testing from scratch).
+- Reimplements drag-select and IME composition — `egui::TextEdit`'s own
+  source (vendored or referenced via `../references/zed` for how a
+  production editor handles this without `TextEdit` at all — Zed's own
+  editor never used `egui::TextEdit` to begin with, so its handling of
+  these is the actual reference implementation to study, not egui's) is
+  the concrete precedent to study before writing this from scratch.
+
+**Code folding (§10) piggybacks on whatever `FoldMap`-generalization this
+work produces** — see that section's own note that this dependency should
+be re-verified, not assumed, before committing to it as a hard
+prerequisite.
+
+**Non-goals:** no change to the actual editing operations (auto-indent,
+bracket-matching, multi-cursor, live templates, ...) — every one of those
+operates on the `Document`/`ShellState` data model, which this rewrite
+doesn't touch; they should keep working unchanged once the new widget
+correctly reads/writes the same state the old `TextEdit`-based one did.
+
+---
+
+## 20. LSP integration
+
+`FEATURES.md`: `[SKIP]` — "autocomplete, real (semantic) diagnostics,
+go-to-definition, find-references, rename-symbol, hover docs. Needs a
+JSON-RPC/LSP client, per-language server process management (`jdtls` for
+Java, `kotlin-language-server` for Kotlin), and dedicated UI for each
+capability. The single biggest gap for this to read as a 'real' code
+editor."
+
+**Client architecture:** a per-language-server child process (`jdtls` for
+Java, `kotlin-language-server` for Kotlin — both real, existing binaries
+the user must have installed/discoverable, a Settings > External Tools
+path each, same pattern `Static analysis integration` (§5) already
+establishes for externally-installed tool binaries), communicating over
+stdio via LSP's JSON-RPC framing (`Content-Length: N\r\n\r\n<json>`).
+`../references/java`/`../references/kotlin` (Zed's own extensions for
+these exact two language servers) are the concrete reference for the
+*server-specific* quirks (which capabilities `jdtls`/`kotlin-language-
+server` actually implement well vs. poorly, non-standard initialization
+options either expects) — read those before assuming the LSP spec alone
+is enough to get a working integration; **every production editor's own
+integration with these two servers carries workarounds the bare spec
+doesn't hint at, and inventing an integration from the spec alone risks
+rediscovering all of them the hard way.**
+
+**Crate choice for the JSON-RPC/protocol-types layer:** `lsp-types`
+(protocol type definitions — requests/responses/notifications as real
+Rust structs, avoiding hand-rolled JSON schema matching) plus either a
+hand-rolled stdio-framing read/write loop (a background thread per
+server, mirroring `PtySession`'s own "background reader thread, channel
+into the UI thread" shape this codebase already established for the
+terminal panel) or an existing async LSP-client crate if one's current
+maturity/maintenance state justifies the dependency over hand-rolling —
+**verify the current state of the Rust LSP-client crate ecosystem before
+committing to either path**, since this is exactly the kind of "check
+real, current library state, don't assume" call this whole doc's own
+discipline demands, and crate maturity here specifically is likely to
+have shifted since this doc was written.
+
+**Feature surface, roughly in the order that makes sense to land it
+(each its own real phase, not a single undertaking):**
+1. Server lifecycle + `initialize`/`initialized` handshake, no user-
+   visible feature yet — the checkpoint-able foundation every capability
+   below needs.
+2. Diagnostics (`textDocument/publishDiagnostics`) — feeds the *existing*
+   `Diagnostic`/squiggle pipeline (a second, semantic source alongside
+   syntax errors and, if built, `Static analysis integration`'s findings)
+   — the smallest real capability to prove the connection works
+   end-to-end.
+3. Hover docs (`textDocument/hover`) — a tooltip on hover, structurally
+   similar to the *existing* syntax-error hover tooltip.
+4. Go-to-definition (`textDocument/definition`) — the first capability
+   needing the "open a file at a position" cross-tab primitive this
+   codebase's own Spring-endpoint-map work already built
+   (`pending_navigation`, `app.rs`) — reused directly, not reinvented.
+5. Autocomplete (`textDocument/completion`) — a second candidate source
+   feeding the *existing* completion popup (alongside word-completion/
+   dot-completion), the highest-value capability and also the one with
+   the most UI-merging subtlety (ranking/deduping LSP candidates against
+   this codebase's own existing ones in one coherent list).
+6. Find-references (`textDocument/references`) — needs a results-list UI
+   (another `go_to_file.rs`-shaped popup, or a dockable panel if the
+   result count regularly exceeds a popup's comfortable size).
+7. Rename-symbol (`textDocument/rename`) — applies a `WorkspaceEdit`
+   spanning potentially many files at once; needs a real "apply edits
+   across every affected open-or-not-yet-open `Document`" path, more
+   involved than the single-file edits every other capability produces.
+
+**Non-goals:** no support for language servers beyond `jdtls`/`kotlin-
+language-server` in a first pass (no generic "any LSP server" config,
+though the client itself should be protocol-generic under the hood — the
+UI/setup flow is scoped to exactly these two); no multi-root-workspace
+LSP support (one server instance per open project, matching this
+codebase's own existing single-project-open model everywhere else).
+
+---
+
+## 21. Maven/Gradle awareness
+
+`FEATURES.md`: `[SKIP]` — "parsing `pom.xml`/`build.gradle`, a
+dependency-aware classpath, multi-module project understanding. Today
+only the boilerplate generator's package inference knows Maven/Gradle
+conventions at all, and it's a path-string heuristic, not real
+project-model awareness."
+
+**Two genuinely separate sub-problems, worth naming as such rather than
+one undertaking:**
+
+**1. Build-file parsing (the contained, tractable half).** `pom.xml` is
+plain XML (`quick-xml`/`roxmltree` — either an established, low-level XML
+parser, verify current crate health before picking one) — parsing
+`<dependencies>`/`<modules>`/`<properties>` into a `MavenProject` struct
+is real but bounded work, similar in shape to this codebase's own
+tree-sitter-based extraction work (a structured parse of a known,
+documented file format). `build.gradle`/`build.gradle.kts` is the harder
+half: Gradle build files are executable Groovy/Kotlin *code*, not
+declarative data — a real parse means either (a) shelling out to Gradle's
+own `--offline` + a custom init-script that dumps resolved project model
+as JSON (the approach every serious Gradle-aware tool, including Gradle's
+own official tooling API consumers, actually takes — parsing the Groovy/
+Kotlin DSL *as* code with tree-sitter would only recover the *textual*
+structure, not what it *resolves to* after Gradle's own conventions/
+plugins apply), or (b) depending on Gradle's own Tooling API (a Java
+library — would need a JVM subprocess bridge, a nontrivial integration
+of its own). **(a) is very likely the pragmatic choice** — it reuses the
+project's *own* already-installed Gradle wrapper rather than needing to
+embed a JVM-facing API client, but this needs validating against a real
+multi-module Gradle project before committing.
+
+**2. Dependency-aware classpath resolution (the genuinely hard half).**
+Even with `pom.xml`/Gradle-model data parsed, resolving the *actual jar
+files* on disk means either invoking `mvn dependency:build-classpath`/
+Gradle's own dependency-resolution task (shelling out again, reusing the
+project's own build tool rather than reimplementing Maven Central/jar-
+resolution logic from scratch — reimplementing that resolution logic
+directly would be its own multi-month undertaking and isn't seriously in
+scope here) and parsing the resulting classpath string/file list.
+
+**What this unlocks, once both halves exist:** `Spring config property
+autocomplete` (§12), a real "resolve this import to its actual JDK/
+library source" for hover/go-to-definition beyond what `LSP integration`
+(§20) alone would need a classpath *for* in the first place (a language
+server like `jdtls` actually needs to be *told* the resolved classpath at
+`initialize` time via its own configuration — meaning **this feature is
+also a real prerequisite for `jdtls` working correctly on any non-trivial
+project**, not just a nice-to-have alongside it), and better accuracy for
+the existing Override Method/dot-completion features' own "look up a
+class... within the open project only" limitation (extending their
+search to resolved dependency jars, not just the open project's own
+source tree).
+
+**Non-goals:** no dependency *version resolution conflict* UI (accept
+whatever the build tool itself resolves to, don't attempt to second-guess
+or visualize its own conflict-resolution decisions); no support for
+custom/private Maven repositories requiring auth beyond whatever the
+user's own Maven/Gradle configuration already handles (this feature
+shells out to the user's own already-configured tooling, it doesn't
+reimplement repository auth).
+
+---
+
+## 22. Build/run/test integration
+
+`FEATURES.md`: `[SKIP]` — "process management, an output panel, problem-
+matcher wiring from compiler output back to file/line."
+
+**Benefits from `Maven/Gradle awareness` (§21) existing first** (to know
+which build tool a project uses and its module layout) but can start with
+a narrower, still-useful scope even without it: a Run > "Run" / "Test"
+action that just shells out to `mvn/./mvnw <goal>` or `gradle/./gradlew
+<task>` at the project root (preferring a wrapper script if present, the
+same convention every Maven/Gradle-aware tool follows, since it pins the
+exact tool version the project expects rather than whatever's on the
+user's global `PATH`) using whichever `RunConfig` the user has already
+defined (`.foxgarden/run_configs.json` — this codebase already has
+storage/editing for run configurations; this feature is what makes
+*running* one actually do something, closing the gap `FEATURES.md`'s own
+Shipped section explicitly names: "Storage/editing only — running one
+needs `Build/run/test integration`").
+
+**Output panel:** shares the same "dockable panel streaming live process
+output" infrastructure `Docker/container run integration` (§14) also
+needs — whichever of the two lands first builds it, the other reuses it
+(see that section's own note). Streams stdout/stderr line-by-line,
+`request_repaint` on new output, same background-thread-to-channel
+shape `PtySession` already established for the terminal panel (though
+this is a *plain* pipe, not a pty — a build/test process doesn't need
+`isatty()` to behave correctly the way an interactive shell does, so
+`portable-pty` isn't needed for this feature specifically, just
+`std::process::Command` with piped stdout/stderr).
+
+**Problem-matcher wiring (the genuinely new parsing work):** a per-tool
+regex/pattern set recognizing compiler-error line shapes in stdout/stderr
+(`javac`'s own `<path>:<line>: error: <message>` format at minimum; a
+Maven/Gradle-wrapped build reformats or prefixes this differently
+depending on the tool and plugin version — needs verifying against real
+build output, not assumed from `javac`'s own bare format) and converting
+each match into a clickable entry in the output panel that jumps to the
+file/line via the same `pending_navigation` cross-tab-jump primitive the
+Spring endpoint map's own jump-to-handler already built.
+
+**Non-goals:** no test-result tree/reporting UI beyond the raw streamed
+output plus problem-matcher jump links in a first pass (a structured
+"N passed, M failed, click a failure to jump to its assertion" view is a
+real, separate follow-up, not assumed here); no parallel/concurrent
+multi-run-config execution (one run at a time, matching how most
+single-window IDEs' own default Run behavior works too).
+
+---
+
+## 23. Debugger
+
+`FEATURES.md`: `[SKIP]` — "DAP protocol integration, breakpoints,
+stepping, variable inspection."
+
+**Depends on `Build/run/test integration` (§22) existing first** — a
+debugger needs to *launch* the target process (or attach to one already
+running via that feature's own process-management plumbing) before
+stepping/breakpoints mean anything; building debug launch independent of
+that feature's own run infrastructure would duplicate it.
+
+**Protocol:** DAP (Debug Adapter Protocol) — same JSON-RPC-over-stdio
+shape as LSP (§20), a real *second* protocol client to build (DAP and LSP
+are related in spirit but are two distinct protocols with their own
+message schemas — no code reuse between the two beyond "we already know
+how to frame/parse a JSON-RPC-over-stdio stream," which is genuinely
+useful shared plumbing, not a false savings). Needs a Java debug adapter
+(`java-debug`, the Eclipse/`vscode-java` project's own debug adapter
+implementation, run as a child process alongside or launched by `jdtls`)
+and, separately, a Kotlin one (Kotlin debugging typically runs through
+the *same* JDI/JDWP-based tooling as Java, since Kotlin compiles to JVM
+bytecode — likely the same debug adapter covers both languages, but
+**verify this concretely against `java-debug`'s own documented Kotlin
+support before assuming parity**, rather than treating "compiles to the
+same bytecode" as proof the tooling already handles it well).
+
+**UI surface:** breakpoint gutter markers (click a line number's margin to
+toggle, mirroring how the diff/coverage gutters, §9/§13, already share
+that same margin's real estate — a genuine "how many things want the
+gutter" design tension worth resolving explicitly once several of these
+land together, not before any of them exist); a debug toolbar (Continue/
+Step Over/Step Into/Step Out/Stop); a variables/call-stack side panel
+(structurally another dockable panel, alongside the side/terminal panels
+this codebase already has); inline "current line" highlight while paused
+at a breakpoint.
+
+**Non-goals:** no remote debugging (attach to a JVM on a different
+machine) — local process launch/attach only, matching every other
+feature in this doc's own "local only" scope; no conditional-breakpoint
+expression evaluation in a first pass (a breakpoint either fires or
+doesn't — expression conditions are DAP-spec-supported but add real
+complexity to the breakpoint UI itself, worth deferring past a first
+working pass).
+
+---
+
+## 24. Plugin/extension model
+
+`FEATURES.md`: `[SKIP]` — "an actual extensibility API, with the
+sandboxing and loading-mechanism design that implies. Reasonable to skip
+entirely at this stage; a real editor's feature set is usually extended
+by users, not just by us, but that's a 'someday' concern, not a gap in
+the current architecture."
+
+**This section is deliberately the most speculative in this doc** —
+`FEATURES.md`'s own framing ("reasonable to skip entirely," "a 'someday'
+concern") is the honest state of it, and a design written today would be
+substantially guessing at requirements no concrete plugin author has
+actually expressed yet. What follows is the shape a first design pass
+would need to resolve, not a committed design.
+
+**The central open question: sandboxing model.** Three real options, each
+with a materially different cost:
+- **WASM plugins** (via `wasmtime`/`extism`) — real sandboxing (a plugin
+  can't touch the host filesystem/process beyond an explicit host-function
+  API surface), cross-platform, but plugin authors write against a
+  constrained ABI, not "just Rust" — a real API-design burden on this
+  project to expose enough host capability (editor state read/write,
+  UI contribution points) through that ABI for plugins to do anything
+  useful.
+- **Native dynamic libraries** (`.so`/`.dll`/`.dylib` loaded via `libloading`)
+  — full native capability, easiest for a plugin author already
+  comfortable in Rust, but **no sandboxing at all** — a plugin can crash
+  or corrupt the host process, and ABI stability across this app's own
+  Rust compiler-version bumps is a real, recurring maintenance cost (Rust
+  has no stable ABI across compiler versions by default — a plugin
+  compiled against one `rustc` version isn't guaranteed loadable by a
+  host built with a different one, `abi_stable`-style crates exist to
+  paper over this but add their own complexity).
+- **A scripting language embedded directly** (Lua via `mlua`, or similar)
+  — a middle ground: sandboxable, but plugin capability is limited to
+  whatever the embedded scripting API exposes, similar in spirit to the
+  WASM option but with a friendlier authoring experience for many users
+  at the cost of embedding a full language runtime.
+
+**Recommended default if this is ever seriously picked up:** WASM — the
+sandboxing story is the most defensible for a plugin ecosystem written by
+people outside this project, and the "someday, maybe a marketplace"
+framing (`Extension marketplace`, §25) all but requires real sandboxing
+before untrusted third-party code is something a normal user should be
+downloading and running at all.
+
+**Non-goals (for this doc's own purposes):** no concrete API surface
+design here — that's real work for whenever this is actually picked up,
+informed by what plugin authors would realistically want to build against
+a *specific*, then-current version of this codebase's own internals, not
+guessed at years ahead of time.
+
+---
+
+## 25. Extension marketplace
+
+`FEATURES.md`: `[SKIP]` — "installable/discoverable plugins on top of the
+plugin/extension model above. The distribution and marketplace layer
+implies that underlying API already exists, making this an even bigger
+scope than the API alone."
+
+**Hard dependency on `Plugin/extension model` (§24) existing and being
+stable first** — a marketplace is a distribution/discovery layer on top
+of an extension API; there is nothing to distribute without one, and a
+marketplace built against an API that's still actively changing would
+need constant marketplace-side rework alongside every API revision.
+
+**Rough shape, once a plugin API is stable:** a hosted registry (a static
+JSON manifest served from somewhere, or a full backend service — the
+static-manifest approach is dramatically cheaper to build and host and is
+sufficient for a first pass; a full backend implies its own hosting,
+auth, and abuse-prevention concerns this doc explicitly doesn't scope)
+listing available plugins (name, description, version, download URL,
+author) with an in-app browse/search/install UI (another `go_to_file.rs`-
+shaped fuzzy list, consistent with this doc's own repeated "reuse the
+existing popup pattern" theme), downloading + verifying (checksum at
+minimum; a real signing/trust model is a further open question this
+section doesn't resolve) a plugin package into a local plugins directory,
+then loading it through whatever mechanism §24 settled on.
+
+**Non-goals:** no plugin *publishing* workflow from within the app itself
+(a plugin author uploads/registers through some out-of-app process,
+however §24/this section's own registry ends up hosted) — this feature
+is the consumer-side install/discover experience only.
+
+---
+
+## 26. Profiler integration
+
+`FEATURES.md`: `[SKIP]` — "CPU/heap profiling of a running JVM process,
+flame graphs. JVM instrumentation/agent attachment plus a nontrivial
+visualization."
+
+**Depends on `Build/run/test integration` (§22) (to launch/attach to the
+target JVM process) and benefits from `Debugger` (§23)'s own DAP/process-
+management plumbing existing first**, though profiling and debugging are
+functionally independent (a user might profile a process they're not
+debugging at all) — the dependency here is on shared *process-launch*
+infrastructure, not on the debugger's own stepping/breakpoint machinery
+specifically.
+
+**Approach:** JVM profiling realistically means attaching `async-profiler`
+(the de facto standard low-overhead JVM profiler, widely used precisely
+because it doesn't require special JVM flags at startup — it attaches via
+the JVM's own Dynamic Attach mechanism to an already-running process) as a
+native agent, either invoked as a CLI wrapper (shelling out to its own
+`asprof`/`profiler.sh` script against the target PID, parsing its
+generated output) or loaded via its own socket/file-based control
+protocol if driving it more directly is worth the integration cost over
+just shelling out — **verify `async-profiler`'s current invocation/output
+format against its actual current documentation before committing to
+either approach**, since profiler tooling specifics are exactly the kind
+of "check real current state" item this doc's discipline applies to
+everywhere else.
+
+**Visualization:** flame graphs are `async-profiler`'s own well-
+established output format (it can emit these directly, via Brendan
+Gregg's original `FlameGraph` collapsed-stack format) — rendering one is
+its own dedicated interactive-SVG-like widget (rectangles sized by sample
+count, stacked by call depth, hover for the full symbol name, click to
+zoom into a subtree) — real, nontrivial custom-painting work, though
+narrower in scope than, say, the terminal panel's own full cell-grid
+renderer, since a flame graph's own shape is simpler (static once
+captured, no live per-frame update needed the way a running terminal
+session has).
+
+**Non-goals:** no heap-dump *analysis* UI (object retention graphs, etc.)
+beyond raw heap-profiling sample capture — a full heap analyzer (in the
+shape of, say, Eclipse MAT) is its own separate, large undertaking this
+section doesn't attempt to scope; no continuous/production profiling —
+local, on-demand profiling of a process this app itself launched or that
+the user points it at, matching this doc's "local only" theme throughout.
+
+---
+
+## 27. Dependency-injection / bean graph visualizer
+
+`FEATURES.md`: `[SKIP]` — "needs real semantic understanding of the whole
+classpath and its annotations, not just syntax; effectively gated on the
+same depth of analysis LSP/Maven-Gradle awareness above would need to
+provide."
+
+**Hard dependency on both `Maven/Gradle awareness` (§21) and, for real
+accuracy, `LSP integration` (§20)** — a Spring bean graph (which
+`@Component`/`@Service`/`@Repository`/`@Bean`-annotated classes exist,
+which ones `@Autowired`/constructor-inject which others, which
+`@Configuration` classes `@Import` which others) needs to resolve types
+across the *entire* classpath, not just the open project's own source
+tree the way the Spring endpoint map's own honest "no real classpath"
+scope got away with — a bean's dependency might be an interface whose
+single implementation lives in a *different* module or a third-party
+library jar entirely, which only real classpath awareness can resolve.
+Syntax-only extraction (walking `@Autowired` annotations the way the
+endpoint map walks `@GetMapping` ones) would produce a graph with
+silently-missing edges for exactly the cross-module cases that make a
+real Spring application's bean graph interesting to visualize in the
+first place — not an honest smaller feature the way the endpoint map's
+own scope limits are, but a *misleading* one, since a bean graph that
+quietly drops external-jar/other-module edges looks complete while
+actually being wrong in a way a user can't easily tell from the picture
+alone.
+
+**Shape, once both dependencies exist:** a whole-project + whole-
+classpath scan collecting every discoverable bean definition (annotated
+class, `@Bean`-annotated method in a `@Configuration` class) and every
+discoverable injection point (constructor parameter, `@Autowired` field,
+`@Autowired` setter) on each, resolving each injection point's declared
+type to the bean(s) that satisfy it (by type, or by `@Qualifier`
+name if present) — a directed graph, rendered as an interactive node/
+edge diagram (a new custom-painting widget: nodes as boxes, edges as
+routed lines, pan/zoom, click a node to jump to its source) in its own
+dockable panel.
+
+**Non-goals:** no *runtime* bean-graph inspection (attaching to a running
+Spring context via Actuator's own `/beans` endpoint or JMX, which would
+show the *actual* resolved graph including profile-specific/conditional
+beans a static analysis can't fully resolve) as a first pass — purely
+static analysis, with the corresponding accuracy gap around
+`@ConditionalOn*`/profile-specific beans named explicitly as a known gap,
+not silently assumed away; no cycle-detection *diagnostics* beyond what
+the visualization itself makes visually obvious (a real "detect and
+report a circular dependency" check is a reasonable later addition, not
+assumed here).

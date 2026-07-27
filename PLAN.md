@@ -1,447 +1,773 @@
 # PLAN.md
 
-Execution plan for `SPEC.md`'s Spring endpoint map: a `Ctrl+Shift+E`
-popup listing every Spring MVC endpoint found across the open project's
-Java and Kotlin controllers, jump-to-handler on pick. Fully replaces
-whatever this file covered before (the previous code-completion pass —
-see git history/`TECHNICAL_DEBT.md` if any of its items need to survive;
-nothing here continues that work). Local-only planning doc (tracked on
-`ide-henshin`, same as `SPEC.md`) — a commitment to an *order*, not a
-timeline.
+Execution plan for every track `SPEC.md` covers — every `FEATURES.md`
+`[TODO]`/`[SKIP]` entry, plus the remaining scope of its `[WIP]` ones.
+Replaces this file's previous single-purpose scope (Spring endpoint map +
+terminal panel); both are shipped — see this file's own prior build-status
+history in git, and `FEATURES.md`'s Shipped section — and everything below
+is what's left. Local-only planning doc (tracked on `ide-henshin`, same as
+`SPEC.md`) — a commitment to an *order*, not a timeline.
 
-Dependency graph:
+**27 tracks, one per `SPEC.md` section**, grouped into the same three
+tiers, ordered easiest-to-hardest within each tier as `FEATURES.md` itself
+orders them. A track's own phases are independent of every *other*
+track's phases unless a dependency is named explicitly (mirroring the
+previous pass's own "Phases 0/1 don't depend on each other" convention) —
+most tracks here are fully independent of each other and can be picked up
+in any order or in parallel across sessions; the explicit dependency notes
+below (e.g. `Spring config autocomplete` needs `Maven/Gradle awareness`
+first) are the exceptions, not the rule.
 
-```
-Phase 0  Java endpoint extraction    ─┐   [crates/syntax, headless]
-Phase 1  Kotlin endpoint extraction  ─┤
-                                       │  (0/1 don't depend on each other —
-                                       │   either order, or genuinely
-                                       │   parallel across two sessions)
-                                       └─► Phase 2  Whole-project scan
-                                               [crates/app, new module]
-                                               │
-                                               └─► Phase 3  Popup UI shell
-                                                       (list/filter/select
-                                                       a real scanned list;
-                                                       picking a row
-                                                       doesn't navigate yet)
-                                                       │
-                                                       └─► Phase 4  Jump-to-
-                                                               handler (the
-                                                               new cross-
-                                                               tab-switch
-                                                               `set_caret`
-                                                               wiring)
-```
-
-Each phase ends at a **green checkpoint**: `cargo build --workspace`,
-`cargo test --workspace`, `cargo clippy --workspace --all-targets` all
-pass. Phases 2-4 additionally need a live click-through in `cargo run -p
-foxgarden` for anything the phase touches, per `AGENTS.md`'s testing-
-conventions section: build the change, get the automated checkpoint
+Same checkpoint discipline throughout: `cargo build --workspace`, `cargo
+test --workspace`, `cargo clippy --workspace --all-targets` all green,
+plus a live click-through for anything with a UI-facing surface, per
+`AGENTS.md`'s testing conventions — build it, get the automated checkpoint
 green, then hand the user exact numbered steps and wait for them to
-report back what actually happened — never claim a click-through passed
-without that. **Unlike the completion feature's own plan, there is no
-early "useful on its own" stopping point here** — Phase 3's popup with no
-working jump is a complete mechanism proven live, but not a usable
-feature by itself (a list you can't act on). If this doesn't land in one
-sitting, Phase 2 (a real, tested whole-project scan with no UI yet) is
-the most defensible pause point, not Phase 3.
+report back, never claim a click-through passed without that.
 
----
-
-## Phase 0 — Java endpoint extraction
-
-New `crates/syntax/src/spring_endpoints.rs`. `EndpointInfo` (`SPEC.md`
-§1) and `java_endpoints_in_file(tree: &Tree, source: &str) ->
-Vec<EndpointInfo>` (`SPEC.md` §2): walks every `class_declaration`
-(top-level and nested, same "don't miss nested classes" precedent
-`fields.rs`/`methods.rs` already set), reading each one's own
-`@RequestMapping` (if any) as a base path, then every `method_declaration`
-in its body carrying one of the five recognized mapping annotations.
-
-- Recognized-annotation dispatch table (`GetMapping`→`GET`, …,
-  `RequestMapping`→ from `method =` or `"ANY"`) and the path-joining rule
-  — both exactly as `SPEC.md` §2 specifies.
-- `annotation`/`marker_annotation` extraction from a `modifiers` node's
-  children, `annotation_argument_list`'s bare-value vs. `element_value_
-  pair` shapes, `string_literal`'s `string_fragment` child for the actual
-  text — verify all of this against `tree-sitter-java-0.23.5`'s real
-  parse output fresh (this spec's own dump is a starting point, not a
-  substitute for checking) before writing the extraction, same "check
-  `node-types.json`/real parser output yourself" discipline
-  `TECHNICAL_DEBT.md` #3 established for Kotlin, applied here to a piece
-  of Java's own grammar this codebase hasn't walked before.
-- Table tests per `SPEC.md` §2's list: positional-string path, `value =`,
-  `path =`, `method =` combined with a class-level base path, a bare
-  marker annotation, no class-level base path, a nested class, multiple
-  unrelated annotations on one method, no recognized annotation at all.
-
-**Checkpoint 0:** `cargo test -p syntax` green. No live click-through
-needed yet — nothing in the running app calls this module until Phase 2.
-
----
-
-## Phase 1 — Kotlin endpoint extraction
-
-`spring_endpoints.rs`, same file (mirrors `kotlin_members.rs` living
-alongside `fields.rs`/`methods.rs` rather than as a separate module,
-since both languages' extraction is one concern: "what endpoints does
-this file declare").
-
-- **First**, independent of any code: confirm every node kind/shape
-  `SPEC.md` §3 cites (`annotation`, `constructor_invocation`,
-  `value_argument`, `collection_literal`, `string_content`, `navigation_
-  expression`, and the bare-marker-annotation shape §3 explicitly flags
-  as unverified) against `tree-sitter-kotlin-ng`'s own `node-types.json`
-  *and* a real parse dump fresh — re-verify rather than trusting `SPEC.md`
-  already did this correctly, same discipline Phase 0 just applied to
-  Java.
-- `kotlin_endpoints_in_file(tree: &Tree, source: &str) ->
-  Vec<EndpointInfo>` — same recognized-annotation table, same path-join
-  rule, same "method-level annotation makes it an endpoint regardless of
-  class-level `@Controller`" rule as Phase 0, walking `class_body`'s
-  `function_declaration` children (mirroring `kotlin_members.rs`'s own
-  traversal) instead of Java's `method_declaration` children.
-- Shared `endpoints_in_file(language, tree, source) -> Vec<EndpointInfo>`
-  dispatcher (`SPEC.md` §3, "Shared entry point") — the one function
-  outside this module actually calls.
-- Table tests per `SPEC.md` §3's list, translated to Kotlin syntax, plus
-  the Kotlin-specific array-literal-unwrapping case for `method =`/
-  `path =` explicitly (Kotlin requires `[RequestMethod.DELETE]` where
-  Java accepts a bare `RequestMethod.DELETE`).
-
-**Checkpoint 1:** `cargo test -p syntax` green for both sub-phases; no
-live click-through needed yet, same reasoning as Checkpoint 0.
-
----
-
-## Phase 2 — Whole-project scan
-
-New `crates/app/src/widgets/editor/spring_scan.rs` — **not**
-`codegen.rs`: that file is already ~720 lines covering getter/setter/
-constructor/`toString`/`equals`+`hashCode` generation plus the shared
-file-finder, a cohesive "code generation" concern this scan doesn't
-belong in (it doesn't generate anything, and doesn't share logic with
-those functions beyond the same recursive-tree-walk shape
-`find_source_file_by_stem`/`go_to_file.rs`'s `all_files` already use
-independently of each other).
-
-- `pub fn scan_project_endpoints(root: &FileNode) ->
-  Vec<(PathBuf, EndpointInfo)>` (`SPEC.md` §4): walks every `.java`/`.kt`
-  file in the tree, reads + throwaway-parses each with a fresh
-  `IncrementalParser`, calls `syntax::endpoints_in_file` on each, and
-  collects the results with their originating path attached. A file that
-  fails to read is skipped silently (`TECHNICAL_DEBT.md` #11's own "don't
-  fail the whole operation over one bad entry" reasoning, not a new
-  decision this phase invents).
-- Tests: a small multi-file project fixture (mirroring dot-completion's
-  own cross-project fixture shape — a temp dir with 2-3 `.java`/`.kt`
-  files, at least one controller with a class-level base path and
-  multiple mapped methods, one plain non-controller file) asserting the
-  aggregated list contains exactly the expected entries with the right
-  paths attached; a non-source file in the tree is ignored; an empty
-  project returns `[]`.
-
-**Checkpoint 2:** `cargo test -p app` (or workspace-wide) green. No live
-click-through yet — still no UI calls this function.
-
----
-
-## Phase 3 — Popup UI shell
-
-New `crates/app/src/panels/spring_endpoints.rs`, structurally a near-twin
-of `go_to_file.rs` (`SPEC.md` §5): `SpringEndpointsState { open, query,
-selected }` + `toggle()`, `show(ui, state: &EditorState, popup: &mut
-SpringEndpointsState) -> Option<(PathBuf, usize)>`.
-
-- Re-scan via Phase 2's `scan_project_endpoints` once per `toggle()`
-  (open), not every frame — mirrors `CompletionState::open`'s own
-  "recomputed on open" reasoning.
-- Reuse `go_to_file.rs`'s `fuzzy_score` for filtering against each row's
-  rendered text (`"GET /api/users/{id} — UserController#getUser"`) —
-  promote it from private to `pub(crate)` if it isn't already reachable
-  from a sibling `panels` module, rather than writing a second fuzzy
-  matcher.
-- Wire into `app.rs`: a `spring_endpoints: SpringEndpointsState` field on
-  `FoxGardenApp`, a `Ctrl+Shift+E` shortcut (**verify it's still unused**
-  against `menu_bar.rs`'s current shortcuts before wiring it — this plan
-  believes it's free as of Phase 0/1's own writing, but re-check fresh,
-  same "verify, don't trust an older note" discipline this whole feature
-  already applies to grammar claims) or a Tools/View menu item calling
-  `toggle()`, and a `spring_endpoints::show(...)` call in the same place
-  `quick_switcher::show`/`go_to_file::show` are called today. Its
-  `Some((path, byte))` return is captured but not acted on yet — Phase 4's
-  job.
-
-**Checkpoint 3:** full suite green; live-verify in a real multi-controller
-project: the shortcut/menu item opens the popup with every real endpoint
-listed, typing narrows the list by path *and* by controller/method name,
-arrow keys + Enter or a click selects and closes the popup (confirm
-nothing crashes or navigates yet — that's expected, not a bug, until
-Phase 4 lands), Escape dismisses without picking.
-
----
-
-## Phase 4 — Jump-to-handler
-
-`app.rs`, alongside `open_path` (`SPEC.md` §6) — the phase that makes
-picking a row actually do something, and the one genuinely new piece of
-cross-cutting infrastructure this feature needs (nothing in this app
-today opens a file *at a position*; `go_to_file`/`quick_switcher` only
-ever return a bare `PathBuf`).
-
-- Read `text_area::shell.rs`'s `set_caret`/`peek_caret` and every current
-  call site fresh before assuming a ready-made cross-tab-switch pattern
-  exists — its own doc comment names "a generated getter/setter jumping
-  to it" as precedent, but the actual only caller today is `widget.rs`'s
-  own end-of-`show` `manual_caret` application, entirely within one
-  already-focused frame. Confirm concretely whether `set_caret` can be
-  called *ahead of* a widget's first `show` after a fresh tab-open (no
-  extra frame of delay needed) or whether it needs to wait one frame,
-  rather than assuming either shape.
-- `pending_navigation: Option<(PathBuf, usize)>` (byte offset) on
-  `FoxGardenApp`, alongside `pending_editor_input`/`cached_clipboard_
-  text`. Phase 3's `Some((path, byte))` triggers `open_path` (as today)
-  plus setting this field; once the target `Document` exists, convert the
-  byte offset to a char offset via its buffer and call `text_area::
-  set_caret(ctx, egui::Id::new(path.to_string_lossy()...), Caret::at
-  (char_offset))` — the exact same `Id` computation `widget.rs`'s `show`/
-  every existing test helper already use — then clear the field.
-- **Resolve, don't assume:** does setting the shell's persisted caret
-  alone scroll the new position into view, or does this need an explicit
-  scroll call alongside it? Check live before calling this phase done —
-  a cursor that jumps to the right byte while the viewport stays scrolled
-  elsewhere is a half-working feature, not a finished one.
-- Tests: a `pending_navigation` round-trip test mirroring `app/tests.rs`'s
-  existing `FakeStorage`-based shape, confirming the byte-to-char
-  conversion and that `set_caret` receives the right `Id`/`Caret` once
-  the target document exists. The actual visible-scroll behavior is a
-  live-verification item, not something the automated test proves either
-  way.
-
-**Checkpoint 4:** full suite green; live-verify picking an endpoint from
-the popup switches to (or opens) the right file, lands the cursor on the
-handler method's own name, and the viewport is actually scrolled to show
-it — check once for a handler already in an open tab and once for a
-handler in a file that isn't open yet, since those are genuinely
-different code paths through `open_path`.
-
----
-
-## Ordering notes
-
-- **Phases 0 and 1 don't depend on each other** — either order, or
-  genuinely parallel across two sessions, same as the completion
-  feature's own Java/Kotlin sub-phases. Both are hard prerequisites for
-  Phase 2, which needs `endpoints_in_file` to cover whatever languages a
-  real project actually uses.
-- **There is no safe-to-ship-partial point before Phase 4** — unlike the
-  completion feature (where word-completion alone was a complete, useful
-  feature), a popup that lists endpoints but can't jump to them is a
-  demo, not a shipped feature. Don't report this feature as done at
-  Phase 3.
-- **Phase 2's scan is the most defensible pause point** if this doesn't
-  land in one sitting — real, tested, and independently verifiable
-  (`cargo test`) without needing any UI decision made yet.
-
----
-
----
-
-# Terminal panel
-
-A second, independent feature track added to this same plan (`SPEC.md`
-§8) — an in-app, PTY-backed terminal in a **dockable bottom panel** (the
-VSCode shape, toggled via `Ctrl+\``), not a tab in the file tab strip.
-Revised from this track's own first draft (a tab-strip-integrated
-terminal via `TabKind`/`tab_order`) after a live look at that build read
-as unfamiliar next to the bottom-panel terminal most users already
-expect — reversed before Phase 6+ built anything on top of the
-tab-strip shape, so only Phase 5 needed redoing. No dependency in either
-direction on Phases 0-4 above; this track's own Phase 5 is its hard
-starting point, the same way Phase 0 is for the endpoint map.
-
-Dependency graph:
+**Cross-track dependency graph** (only the tracks with a real dependency
+on another track are shown; everything else is independent):
 
 ```
-Phase 5  Panel model (terminal_tabs/active_terminal on EditorState,
-         terminal_panel_visible + Ctrl+` toggle on FoxGardenApp, a
-         bottom-docked panel with its own small tab strip) —
-         foundational; nothing below is visible in the running app
-         without this first.
-   │
-   └─► Phase 6  PTY spawn/read/write (portable-pty), raw byte dump into
-           the panel's content area — no vt100 yet, proves the process
-           + threading model works before investing in real rendering.
-               │
-               └─► Phase 7  vt100 parsing + real cell-grid rendering
-                       (crates/app/src/widgets/terminal_widget.rs)
-                           │
-                           └─► Phase 8  Full keyboard input translation
-                                   table (arrows/control chars/function
-                                   keys/paste)
-                                       │
-                                       └─► Phase 9  Resizing (rows/cols
-                                               recompute + pty.resize on
-                                               layout changes)
+Track 21  Maven/Gradle awareness
+    │
+    ├──► Track 12  Spring config property autocomplete
+    ├──► Track 20  LSP integration (classpath feeds jdtls's own init config)
+    └──► Track 27  DI/bean graph visualizer ◄── Track 20 (both needed)
+
+Track 22  Build/run/test integration
+    │
+    ├──► Track 13  Code coverage overlay
+    ├──► Track 23  Debugger
+    ├──► Track 26  Profiler integration
+    └──► Track 14  Docker/container run integration (shares its output-panel infra)
+
+Track 20  LSP integration
+    │
+    ├──► Track 15  Quick-fix intention actions
+    ├──► Track 17  Peek definition
+    └──► Track 27  DI/bean graph visualizer ◄── Track 21 (both needed)
+
+Track 3   Command palette (action registry)
+    │
+    └──► Track 8   Customizable keybindings
+
+Track 18  Inline diff viewer widget
+    │
+    └──► Track 4   Local (non-git) file history (its own revert-diff view)
+
+Track 19  Large file handling — full virtualization
+    │
+    └──► Track 10  Code folding (re-verify this dependency before treating
+                    it as hard — see Track 10's own Phase 1)
+
+Track 24  Plugin/extension model
+    │
+    └──► Track 25  Extension marketplace
 ```
 
-Same checkpoint discipline as Phases 0-4: `cargo build/test/clippy`
-green, then a live click-through per `AGENTS.md`'s testing conventions
-(exact numbered steps handed to the user, wait for them to report back —
-not a click-automation tool). **No safe-to-ship-partial point before
-Phase 8** — a terminal session that renders output but can't take more
-than raw/printable input (no arrow keys, no Ctrl+C) isn't usable for
-anything beyond the most trivial commands; Phase 7 (rendering proven,
-input still crude) is the most defensible pause point, the same role
-Phase 2 plays for the endpoint map.
+---
+
+# Moderate tier
+
+## Track 1 — Multi-select in the tree
+
+**Phase 1 — selection state + gestures.** `side_panel.rs`'s
+`SidePanelState` gains `selected: HashSet<PathBuf>`; Ctrl+Click
+toggles a node, Shift+Click selects the contiguous visual range from the
+last click, a plain click collapses back to single-selection.
+
+**Checkpoint 1:** full suite green; live-verify Ctrl+Click builds up a
+multi-selection, Shift+Click extends a range, a plain click clears it.
+
+**Phase 2 — batch actions.** Delete confirms once for the whole set
+("Delete N items?"); Cut/Copy serialize every selected path. Rename/"New
+File" stay disabled (or hidden) in the context menu whenever more than one
+node is selected.
+
+**Checkpoint 2:** full suite green; live-verify a multi-selected batch
+delete, a multi-selected cut-then-paste round-trip, and that Rename is
+unavailable with more than one node selected.
 
 ---
 
-## Phase 5 — Panel model
+## Track 2 — Richer Java/Kotlin syntax highlighting
 
-`crates/core/src/editor_state.rs` (`SPEC.md` §8.2) — the real design
-question to resolve here, not before: exact shape of `terminal_tabs`/
-`active_terminal`, read against the current code fresh rather than
-assumed from this doc alone. **No change to `open_tabs`/`active_tab`/
-`parsers` at all** — the whole point of the panel-not-tab shape is that a
-terminal session never shares a namespace or an index with a file tab.
+**Phase 1 — Java: parameters, operators, labels, doc comments.** New
+`Scope` variant(s) per `SPEC.md` §2 (resolve the parameter-vs-`Scope::
+Property` design question there, not before); grammar shapes verified
+fresh against real `tree-sitter-java` parse output before writing each
+query (`TECHNICAL_DEBT.md` #3's own discipline); a color added to both of
+`theme.rs`'s light/dark tables per new variant. Table tests per
+distinction, one commit-sized change at a time (the feature's own
+"ongoing, one distinction at a time by design" framing, not a single
+sweeping rewrite).
 
-- `EditorState` gains `terminal_tabs: Vec<TerminalTab>` (placeholder
-  struct for this phase — a title, nothing pty-related yet, that's Phase
-  6) and `active_terminal: Option<usize>`, both independent of
-  `open_tabs`/`active_tab`.
-- `FoxGardenApp` gains `terminal_panel_visible: bool` (mirrors
-  `side_panel_visible`'s role) and a `Ctrl+\`` shortcut (verify free
-  against `menu_bar.rs`'s current shortcuts first, same "verify, don't
-  trust an older note" discipline every other new shortcut in this plan
-  already applies) toggling it; opening the panel with no sessions yet
-  creates the first one automatically.
-- New `crates/app/src/panels/terminal_panel.rs`: renders via
-  `egui::TopBottomPanel::bottom`, only while `terminal_panel_visible` —
-  its own small tab strip over `terminal_tabs` (not `TabKind`/`tab_order`;
-  a terminal session's position is just its own `Vec` index, since
-  nothing ever interleaves it with a file tab), a "+" to add another
-  session, closing one removes it from `terminal_tabs` and reassigns
-  `active_terminal` to a neighbor if it was focused — never pushed onto
-  `closed_tabs` (§8's own non-goal: nothing meaningful to reopen).
-- Confirm `persist_session`/`restore_session` need no change at all
-  (they only ever touched `open_tabs`/`active_tab`, both untouched by
-  this feature) rather than assuming — the panel-not-tab shape should
-  make this a non-issue, but verify against the real code rather than
-  taking that on faith.
+**Checkpoint 1:** `cargo test -p syntax` green per distinction landed; no
+live click-through strictly required (headless-testable via the existing
+highlight-span test shape) but worth a quick visual sanity check on a real
+file.
 
-**Checkpoint 5:** full suite green; live-verify `Ctrl+\`` opens the
-bottom panel with one session already running (empty/placeholder content
-is fine — Phase 6's job), a "+" adds another session with its own small
-tab, closing a session's tab closes just that one, toggling the panel
-closed and back open preserves whatever sessions existed, and every
-existing file-tab behavior (open/close/reopen/save/session persistence)
-is provably unaffected — the panel model shouldn't touch any of it.
+**Phase 2 — Kotlin: modifiers, regex literals, `it`/`field`.** Same
+discipline, against `tree-sitter-kotlin-ng`'s real parse output (never
+Zed's own reference query, which targets a different grammar —
+`TECHNICAL_DEBT.md` #3's own established warning). Regex-literal detection
+specifically needs a first checked look at whether tree-sitter can
+distinguish it from an ordinary string-call at all before committing to
+building it — flag and skip rather than force a syntactic answer to what
+may be a semantic-only distinction.
+
+**Checkpoint 2:** `cargo test -p syntax` green per distinction landed.
 
 ---
 
-## Phase 6 — PTY spawn/read/write
+## Track 3 — Command palette
 
-`Cargo.toml` gains `portable-pty`. A terminal session's content area
-(still no `vt100` involved) shows the *raw* byte stream from its shell,
-decoded lossily as text for this phase only — proves the process
-lifecycle and the background-reader-thread-into-UI-thread plumbing
-(`SPEC.md` §8.3) works before investing in real VT100 parsing.
+**Phase 1 — action registry + dispatcher.** New `Command { id, label,
+shortcut }` type and a registry (`crates/app/src/commands.rs` or similar)
+covering every currently-hardcoded shortcut/menu item. `app.rs`'s shortcut
+block and every `menu_bar.rs` item migrated to call a single `fn
+run_command(app: &mut FoxGardenApp, id: &str)` dispatcher instead of
+their own inline logic — a real refactor of existing call sites, not new
+behavior yet (every shortcut/menu item must do exactly what it did before,
+just through the new indirection).
 
-- Spawn the shell (`$SHELL`/`%COMSPEC%` fallback per `SPEC.md` §8.3,
-  verified against `terminal.rs`'s own current fallback first) whenever a
-  new session starts (the panel's first auto-created one, or a "+"
-  click), store the child + writer half on the `TerminalTab`.
-- Background thread: blocking read loop into a channel; UI thread drains
-  it once per frame, appends to a simple `String`/`Vec<u8>` buffer,
-  calls `request_repaint()` on new data.
-- Typed characters (plain `Event::Text` only — no special-key translation
-  yet, that's Phase 8) get written to the writer half.
-- Closing a session's tab now kills the real child process.
+**Checkpoint 1:** full suite green; live-verify every existing shortcut
+and every existing Tools/menu item still does exactly what it did before
+this refactor — a regression here would be silent and easy to miss, so
+this is worth walking the *entire* existing shortcut/menu list once, not
+spot-checking a few.
 
-**Checkpoint 6:** full suite green; live-verify a spawned shell's prompt
-appears (however garbled/un-color-coded — raw bytes, expected), typing a
-simple command + Enter and seeing *some* response confirms read/write
-both work, closing a session's tab actually ends the process (check via
-the OS's own process list, not just that the tab disappeared).
+**Phase 2 — palette UI.** `Ctrl+Shift+P` (verify free against
+`menu_bar.rs`'s current shortcuts) opens a `go_to_file.rs`-shaped fuzzy
+list over the registry; picking an entry calls `run_command`.
 
----
-
-## Phase 7 — vt100 parsing + real rendering
-
-`Cargo.toml` gains `vt100`. New `crates/app/src/widgets/terminal_widget.rs`
-(`SPEC.md` §8.4): the background reader feeds bytes into a
-`vt100::Parser` instead of a raw buffer; the widget reads the parser's
-`Screen` once per frame (the active session only) and paints each cell as a
-monospace glyph via the editor's own `EditorFont`/`font_size`, `vt100`
-attributes mapped onto the current theme's color table, a blinking
-cursor.
-
-- Table tests for the cell-attribute → theme-color mapping (a `vt100`
-  cell with each relevant attribute combination maps to the expected
-  `egui::Color32`), headless — this part doesn't need a live terminal to
-  verify.
-- Live click-through: a real shell session (`ls`, `cd`, a colored prompt
-  if the shell has one) renders recognizably as an actual terminal, not
-  a raw byte dump — colors and cursor position both correct.
-
-**Checkpoint 7:** full suite green; live-verify per above. This is the
-plan's own "most defensible pause point" (see this track's intro) if
-work stops here — rendering is real, input is still crude (plain typed
-characters only, no arrows/Ctrl+C yet).
+**Checkpoint 2:** full suite green; live-verify the palette opens, filters
+by typed text, and invoking an entry actually runs it and closes the
+palette.
 
 ---
 
-## Phase 8 — Full keyboard input translation
+## Track 4 — Local (non-git) file history
 
-`terminal_widget.rs` (`SPEC.md` §8.5) — the dedicated phase that table-`SPEC.md`
-§8.5 itself flags as needing its own budget, not a one-line `match`.
+Depends on Track 18 (`Inline diff viewer widget`) for its own revert-diff
+view — land that track first, or this one's Phase 2 duplicates its own
+diff rendering, which the whole point of Track 18 existing is to avoid.
 
-- Byte-sequence table for arrows, Home/End/Page Up/Down, function keys,
-  Backspace/Tab/Enter, Ctrl+letter combinations (at minimum Ctrl+C/D/Z,
-  the ones a real shell session can't be used without).
-- Table tests asserting each mapped key produces the exact expected byte
-  sequence — against known-correct VT100/xterm sequences, not asserted
-  correct by inspection.
-- Paste writes clipboard text's raw bytes the same way typing does.
+**Phase 1 — snapshot on save.** Every `Document::save` additionally writes
+the pre-save buffer into `.foxgarden/history/<relative path>/
+<timestamp>.snapshot`; a per-file cap (e.g. 50) prunes the oldest beyond
+it.
 
-**Checkpoint 8:** full suite green; live-verify Ctrl+C actually
-interrupts a running foreground command (e.g. `sleep 100`), arrow keys
-navigate shell history/line-editing correctly, and a full-screen program
-that needs real input (`less`, `vim` if installed) is at least
-navigable, not just displayed.
+**Checkpoint 1:** `cargo test -p fg-core`/`-p app` green (a temp-project
+fixture asserting snapshots accumulate and prune correctly); no live
+click-through needed yet (no UI reads them).
+
+**Phase 2 — history UI + revert.** Tab context-menu "File History…" lists
+snapshots (timestamp + diff-stat); selecting one shows Track 18's diff
+widget (snapshot vs. live buffer); "Revert to this version" replaces the
+live buffer through the normal edit path.
+
+**Checkpoint 2:** full suite green; live-verify saving a file several
+times populates history, opening it shows a real diff against each past
+version, and Revert actually restores that version's content (undoably,
+via a normal Ctrl+Z afterward).
 
 ---
 
-## Phase 9 — Resizing
+## Track 5 — Static analysis integration
 
-`terminal_widget.rs` (`SPEC.md` §8.6): on a font-size change, side-panel drag,
-or window resize while a terminal tab is visible, recompute rows/cols
-from the available rect + glyph metrics and call the pty's `resize()`.
+**Phase 1 — shared plumbing + Checkstyle.** Settings > External Tools gains
+a path field per tool; Tools > "Run Checkstyle" shells out against the
+project root, parses its XML report, converts each finding into the
+existing `Diagnostic` shape feeding the current squiggle pipeline.
 
-- Table tests: a given rect + font metrics produces the expected rows/
-  cols (pure arithmetic, headless).
-- Live click-through: resize the window (or change font size) with a
-  full-screen program running inside the terminal session (`htop`/`vim`) and
-  confirm it redraws to fit rather than rendering garbled at the old
-  dimensions.
+**Checkpoint 1:** full suite green (a fixture Checkstyle XML report parsed
+into expected `Diagnostic`s, headless); live-verify running Checkstyle
+against a real project with a known violation shows a squiggle at the
+right line.
 
-**Checkpoint 9:** full suite green; live-verify per above — this closes
-out the terminal-panel track.
+**Phase 2 — PMD.** Same shape, PMD's own XML report format.
+
+**Checkpoint 2:** same as above, PMD-specific fixture + live-verify.
+
+**Phase 3 — SpotBugs.** Same shape, SpotBugs' own XML schema (bytecode-
+based — verify it reports source line numbers accurately enough to map
+back to a `Diagnostic` range before assuming parity with the other two).
+
+**Checkpoint 3:** same as above, SpotBugs-specific fixture + live-verify.
+
+---
+
+## Track 6 — Auto-save
+
+**Phase 1 — settings + triggers.** Settings > Auto-save toggle (off by
+default) with "on focus loss" / "after N seconds idle" modes, both calling
+the existing `Document::save` unchanged.
+
+**Checkpoint 1:** full suite green (a fake-clock/fake-focus-event test
+asserting the right trigger fires `save` at the right moment); live-verify
+both modes against a real dirty tab.
+
+**Phase 2 — conflict-banner interaction.** Auto-save suppressed for any
+tab currently showing the "changed on disk" banner; resumes once
+Reload/Keep Mine resolves it.
+
+**Checkpoint 2:** full suite green; live-verify auto-save does *not* fire
+while the conflict banner is showing, and does resume normally after
+resolving it.
+
+---
+
+## Track 7 — Rectangular (block) paste
+
+**Phase 1 — column/block selection.** `Alt`+drag produces a
+`BlockSelection { start_line, end_line, start_col, end_col }`; `text_area`
+gains a second highlight-painting path for it alongside the existing
+linear-range one.
+
+**Checkpoint 1:** full suite green; live-verify `Alt`+drag visibly
+highlights a rectangular region across several lines.
+
+**Phase 2 — block-scoped editing.** Typing/Backspace/Delete over an
+active block selection applies the same column-range edit to every row
+the block spans.
+
+**Checkpoint 2:** full suite green; live-verify typing over a block
+selection edits every spanned row identically, Backspace/Delete likewise.
+
+**Phase 3 — block paste.** Clipboard text split on `\n`, row *i* inserted
+at `(start_line + i, start_col)`; a row-count mismatch (fewer/more
+clipboard lines than the block spans) leaves the surplus/shortfall
+untouched rather than wrapping or clearing.
+
+**Checkpoint 3:** full suite green (table tests for exact-match,
+fewer-lines, and more-lines cases); live-verify a real block-select →
+copy → block-paste round-trip.
+
+---
+
+# Substantial tier
+
+## Track 8 — Customizable keybindings
+
+Depends on Track 3 (`Command palette`)'s action registry existing first.
+
+**Phase 1 — keybindings.json + dispatcher.** A persisted `Command.id ->
+chord` map; every input-event check in `app.rs` replaced by a single
+lookup-then-`run_command` dispatch.
+
+**Checkpoint 1:** full suite green; live-verify every existing shortcut
+still fires correctly through the new lookup path (same "walk the whole
+list, don't spot-check" discipline Track 3's own Phase 1 checkpoint
+calls for).
+
+**Phase 2 — rebinding UI.** Settings > Keyboard Shortcuts lists every
+command + its chord, with a capture-and-rebind field; a conflicting chord
+surfaces a warning rather than silently double-binding.
+
+**Checkpoint 2:** full suite green; live-verify rebinding a shortcut takes
+effect immediately, and rebinding to an already-used chord warns instead
+of silently succeeding.
+
+---
+
+## Track 9 — Git diff gutter, inline blame, commit/stage/push UI
+
+**Phase 1 — diff gutter.** `git diff --no-color -U0` per open/save/
+reload, hunk headers parsed into added/removed/modified line ranges,
+painted alongside the line-number gutter.
+
+**Checkpoint 1:** full suite green (a fixture diff-output string parsed
+into expected ranges, headless); live-verify editing a tracked file shows
+the right gutter marks against a real git repo.
+
+**Phase 2 — inline blame.** `git blame --porcelain` parsed per line,
+shown as a dimmed cursor-line annotation.
+
+**Checkpoint 2:** full suite green; live-verify the annotation updates as
+the cursor moves between lines with different blame authors/dates.
+
+**Phase 3 — stage/commit panel.** A dockable panel listing `git status
+--porcelain` as a checkbox tree, a commit-message box + Commit button
+(`git commit -F -`).
+
+**Checkpoint 3:** full suite green; live-verify staging a file and
+committing it via the panel produces a real commit matching what `git
+log` shows afterward.
+
+**Phase 4 — hunk-level staging + push.** Per-hunk stage via a hand-built
+patch + `git apply --cached`; a Push button surfacing real failure
+reasons (auth, no upstream, rejected) through the existing error modal.
+
+**Checkpoint 4:** full suite green; live-verify staging a single hunk
+(not the whole file) reflects correctly in `git diff --cached`, and Push
+against a real (test) remote succeeds/fails with an accurate message.
+
+---
+
+## Track 10 — Code folding
+
+**Phase 1 — verify the `FoldMap` dependency, don't assume it.** Read the
+current `FoldMap`/import-folding implementation directly; determine
+concretely whether it already generalizes to arbitrary user-toggled
+regions or needs its own second mechanism, and whether `Track 19`'s full
+virtualization work is actually a hard prerequisite or `FEATURES.md`'s
+own conservative guess. This phase's *output* is that determination, not
+code — don't write Phase 2 against an assumed answer.
+
+**Phase 2 — fold-range computation.** Per-language tree-sitter query for
+foldable node kinds (class/method/interface bodies); a collapse/expand
+gutter marker at each range's opening line.
+
+**Checkpoint 2:** `cargo test -p syntax` green (fold ranges match
+expected line numbers per fixture); live-verify the gutter marker appears
+at the right lines on a real file.
+
+**Phase 3 — fold state + toggle.** `folded_ranges: HashSet<usize>` per
+document (or per-tab side structure); toggling updates the layout fold-
+map (built from the union of this and the existing auto-import folding).
+
+**Checkpoint 3:** full suite green; live-verify clicking a fold marker
+collapses/expands the right region and scrolling/editing around a folded
+region doesn't corrupt layout.
+
+---
+
+## Track 11 — Multi-window / split-pane editing
+
+**Phase 1 — split-pane only (multi-window explicitly out of scope for
+this track, per `SPEC.md` §11's own recommendation).** `active_tab:
+Option<usize>` generalized to a per-pane focus model; every existing
+`state.active_tab` call site (an audit, not a guess — grep every call
+site first and confirm the full list before starting the change) updated
+to be pane-aware.
+
+**Checkpoint 1:** full suite green; live-verify opening a second pane,
+each pane independently switching/closing tabs without affecting the
+other, and every existing single-pane behavior (save, dirty-tracking,
+session persistence) still working correctly with only one pane open.
+
+---
+
+## Track 12 — Spring config property autocomplete
+
+**Hard dependency on Track 21 (`Maven/Gradle awareness`) — not startable
+before it lands.**
+
+**Phase 1 — metadata extraction + candidates.** Once classpath resolution
+exists: scan resolved dependency jars for bundled `spring-configuration-
+metadata.json`, parse into completion candidates, feed the existing
+completion popup keyed by typed prefix.
+
+**Checkpoint 1:** full suite green (a fixture jar/metadata file producing
+expected candidates, headless); live-verify typing a partial property key
+in `application.properties`/`.yml` in a real Spring Boot project offers
+real completions.
+
+---
+
+## Track 13 — Code coverage overlay
+
+**Hard dependency on Track 22 (`Build/run/test integration`) — not
+startable before it lands.**
+
+**Phase 1 — coverage run + gutter marks.** "Run with Coverage" invokes
+the build tool with JaCoCo enabled, parses `jacoco.xml`, paints per-line
+hit/miss gutter marks.
+
+**Checkpoint 1:** full suite green (a fixture `jacoco.xml` parsed into
+expected per-line marks, headless); live-verify running coverage on a
+real project shows accurate hit/miss marks matching the actual test run.
+
+---
+
+## Track 14 — Docker/container run integration
+
+Shares its output-panel infrastructure with Track 22 (`Build/run/test
+integration`) — whichever track lands first builds that shared piece;
+this track's Phase 1 assumes it doesn't exist yet and builds a Docker-
+specific version only if Track 22 genuinely hasn't landed first.
+
+**Phase 1 — build & run.** Run > "Docker: Build & Run" / "Docker Compose:
+Up" shells out, streams output into the (possibly newly-built) output
+panel.
+
+**Checkpoint 1:** full suite green; live-verify building/running a real
+Dockerfile/compose stack streams real output and the container actually
+starts (checked via `docker ps`, not just panel output).
+
+**Phase 2 — lifecycle + stop.** A Stop button per running container/
+stack; app-close stops every tracked container.
+
+**Checkpoint 2:** full suite green; live-verify Stop actually ends the
+container, closing the panel does *not*, and quitting the app stops
+everything still tracked.
+
+---
+
+## Track 15 — Quick-fix intention actions
+
+**Hard dependency on Track 20 (`LSP integration`) supplying real
+`CodeAction` data — not startable before it lands.**
+
+**Phase 1 — lightbulb + apply.** A gutter lightbulb on any line with an
+active diagnostic that has associated `CodeAction`s; picking one applies
+its `WorkspaceEdit` via the existing edit-application path.
+
+**Checkpoint 1:** full suite green; live-verify a real diagnostic with a
+known quick fix (e.g. an unused import a language server flags) offers
+and correctly applies it.
+
+---
+
+## Track 16 — Minimap
+
+**Phase 1 — viewport-bounded rendering.** A narrow strip painting a
+coarse per-line color impression; scoped to the currently-scrolled-near
+region at full detail from day one (not deferred past this phase — see
+`SPEC.md` §16's own cost-sequencing note) with a solid-color placeholder
+for the rest.
+
+**Checkpoint 1:** full suite green; live-verify the minimap renders a
+recognizable color impression of a real syntax-highlighted file without
+a visible frame-rate hit on a large file.
+
+**Phase 2 — viewport indicator + click/drag-to-scroll.** An overlay
+rectangle showing the current viewport; clicking/dragging it scrolls the
+main editor.
+
+**Checkpoint 2:** full suite green; live-verify clicking anywhere on the
+minimap scrolls to that position, and dragging the viewport indicator
+scrolls continuously.
+
+---
+
+## Track 17 — Peek definition
+
+**Hard dependency on Track 20 (`LSP integration`)'s go-to-definition —
+not startable before it lands.**
+
+**Phase 1 — inline peek panel.** A shortcut/gutter icon opens an inline
+expandable read-only panel showing the resolved definition's surrounding
+lines, without switching tabs; Escape/click-outside collapses it.
+
+**Checkpoint 1:** full suite green; live-verify peeking a real symbol
+shows its definition inline, and the main editor's own tab/scroll position
+is completely undisturbed afterward.
+
+---
+
+## Track 18 — Inline diff viewer widget
+
+**Phase 1 — diff computation + rendering.** `show_diff(ui, old, new,
+mode: DiffMode)` using a line-level diff (verify the `similar` crate's
+current status before pinning it, or an equivalent) rendered as
+side-by-side or inline colored rows, via the editor's own font/theme.
+
+**Checkpoint 1:** `cargo test -p app` green (known old/new pairs producing
+expected diff ops, headless); live-verify both `DiffMode`s render legibly
+against a real changed file.
+
+---
+
+# Major tier
+
+## Track 19 — Large file handling — full viewport virtualization
+
+**Phase 1 — bounded word-wrap row-count computation.** The current
+`cached_row_counts`/`layout_visible_wrapped` path (the part that still
+scales with total file size even after the tab-switch cache fix) replaced
+with an incrementally-maintained or viewport-bounded equivalent that
+doesn't need every line's row-count computed up front.
+
+**Checkpoint 1:** `cargo test -p app` green; a synthetic huge-file
+benchmark (documented, not necessarily a hard-asserted threshold) showing
+first-open/per-keystroke cost no longer scales with total file size.
+
+**Phase 2 — hand-built widget: layout + click-to-position.** Replaces
+`egui::TextEdit` for the visible-row-only case, reusing `layout_visible`'s
+existing `char_rect`/`row_galleys` helpers for hit-testing, scoped to only
+the visible slice.
+
+**Checkpoint 2:** full suite green; live-verify clicking anywhere in a
+huge file positions the cursor correctly and instantly (no perceptible
+lag versus a small file).
+
+**Phase 3 — drag-select.** Reimplemented against the new widget, studied
+against `../references/zed`'s own non-`TextEdit` editor as the concrete
+precedent (real production code, not egui's own internals, which never
+had to solve this at this file's own scale).
+
+**Checkpoint 3:** full suite green; live-verify drag-select across a
+scrolled viewport (crossing the visible/invisible boundary mid-drag)
+works correctly.
+
+**Phase 4 — IME composition.** Reimplemented against the new widget; same
+`../references/zed` precedent.
+
+**Checkpoint 4:** full suite green; live-verify IME composition (a CJK
+input method, if available to test with) works correctly in the new
+widget.
+
+---
+
+## Track 20 — LSP integration
+
+**Phase 1 — server lifecycle + handshake.** Child-process management for
+`jdtls`/`kotlin-language-server` (external-tool paths via Settings,
+mirroring Track 5's own convention); `lsp-types` for protocol structs;
+stdio JSON-RPC framing read/write loop on a background thread per server
+(mirroring `PtySession`'s own background-reader-thread shape).
+`initialize`/`initialized` handshake, no user-visible feature yet.
+
+**Checkpoint 1:** `cargo test -p app` green (a fake-server-process
+handshake test, headless where possible); live-verify a real `jdtls`
+process launches and completes its handshake against a real Java project
+(inspectable via logging, not yet any visible feature).
+
+**Phase 2 — diagnostics.** `textDocument/publishDiagnostics` feeds the
+existing `Diagnostic`/squiggle pipeline as a second source.
+
+**Checkpoint 2:** full suite green; live-verify a real semantic error
+(not just a syntax error) shows a squiggle, with a message
+`javac`/`kotlinc` — not just this codebase's own parser — actually
+produced.
+
+**Phase 3 — hover docs.** `textDocument/hover` feeds a tooltip,
+structurally mirroring the existing syntax-error hover.
+
+**Checkpoint 3:** full suite green; live-verify hovering a real symbol
+shows real documentation (a JDK type's own Javadoc, for instance).
+
+**Phase 4 — go-to-definition.** `textDocument/definition` reuses
+`pending_navigation`'s existing cross-tab-jump primitive.
+
+**Checkpoint 4:** full suite green; live-verify go-to-definition on a
+symbol whose source isn't the open project's own tree (a JDK/library
+type) actually jumps there — the case this codebase's own existing
+lookups can't handle today.
+
+**Phase 5 — autocomplete.** `textDocument/completion` as a second
+candidate source merged into the existing completion popup.
+
+**Checkpoint 5:** full suite green; live-verify LSP candidates and this
+codebase's own existing candidates appear together, sensibly ranked, with
+no visible duplication.
+
+**Phase 6 — find-references.** `textDocument/references`, a results-list
+UI (popup or panel depending on typical result count observed live).
+
+**Checkpoint 6:** full suite green; live-verify find-references on a
+widely-used symbol returns a real, complete list.
+
+**Phase 7 — rename-symbol.** `textDocument/rename`, applying a
+`WorkspaceEdit` across every affected file (open or not).
+
+**Checkpoint 7:** full suite green; live-verify renaming a symbol used
+across multiple files correctly updates every one of them, including
+files that weren't open in a tab beforehand.
+
+---
+
+## Track 21 — Maven/Gradle awareness
+
+**Phase 1 — `pom.xml` parsing.** `MavenProject` struct from
+`<dependencies>`/`<modules>`/`<properties>` via `quick-xml`/`roxmltree`
+(verify current crate health before pinning).
+
+**Checkpoint 1:** `cargo test -p fg-core` green against real-world
+`pom.xml` fixtures (a simple project, a multi-module parent).
+
+**Phase 2 — Gradle model extraction.** Validate the offline-init-script-
+dump approach against a real multi-module Gradle project before
+committing further; if it holds up, build the extraction against it
+rather than attempting to parse Groovy/Kotlin DSL as text.
+
+**Checkpoint 2:** `cargo test -p fg-core` green against real Gradle
+project fixtures; live-verify against an actual local Gradle project (not
+just a fixture) since this phase's own approach depends on shelling out
+to a real Gradle wrapper.
+
+**Phase 3 — dependency-aware classpath resolution.** `mvn
+dependency:build-classpath` / Gradle's own resolution task, parsed into a
+resolved jar-file list.
+
+**Checkpoint 3:** full suite green; live-verify against a real project
+with actual third-party dependencies that the resolved classpath contains
+real, correct jar paths on disk.
+
+---
+
+## Track 22 — Build/run/test integration
+
+**Phase 1 — output-panel infra + plain run.** Shared dockable output
+panel (reused by Track 14 if it lands after this); Run/Test actions
+invoke the project's `RunConfig` via its build tool's wrapper script,
+streaming stdout/stderr.
+
+**Checkpoint 1:** full suite green; live-verify running a real Maven/
+Gradle project's build/test task streams real, live output.
+
+**Phase 2 — problem-matcher wiring.** Per-tool regex patterns recognizing
+compiler-error line shapes (verified against real Maven/Gradle-wrapped
+build output, not just bare `javac`'s own format); clickable jump via
+`pending_navigation`.
+
+**Checkpoint 2:** full suite green (fixture build-output strings matched
+into expected file/line); live-verify a real compile error in a real
+project produces a clickable entry that jumps to the right line.
+
+---
+
+## Track 23 — Debugger
+
+Depends on Track 22 (`Build/run/test integration`) for process launch.
+
+**Phase 1 — DAP client + launch.** JSON-RPC-over-stdio client (shared
+framing code with Track 20's LSP client where genuinely reusable); launch
+`java-debug` (verify its Kotlin support concretely, per `SPEC.md` §23,
+before assuming one adapter covers both languages).
+
+**Checkpoint 1:** full suite green; live-verify launching a real Java
+program under the debugger successfully attaches (no breakpoints/stepping
+yet — just a running, attached, controllable process).
+
+**Phase 2 — breakpoints + stepping.** Gutter breakpoint markers; a debug
+toolbar (Continue/Step Over/Step Into/Step Out/Stop); inline
+current-line highlight while paused.
+
+**Checkpoint 2:** full suite green; live-verify setting a real breakpoint
+actually pauses execution there, and every stepping command moves
+execution as expected.
+
+**Phase 3 — variable/call-stack panel.** A dockable panel showing local
+variables and the call stack while paused.
+
+**Checkpoint 3:** full suite green; live-verify the panel shows accurate,
+live variable values and an accurate call stack while paused at a real
+breakpoint.
+
+---
+
+## Track 24 — Plugin/extension model
+
+**This track is explicitly the most speculative in this plan** —
+`SPEC.md` §24 itself resolves no concrete API design; the phases below are
+what a *first design pass* would need to do, not code to write from a
+standing start.
+
+**Phase 1 — sandboxing model decision.** A real prototype (not just a
+written decision) of the WASM approach (`wasmtime`/`extism`): a minimal
+host-function surface (read the current document's text, insert a plain
+text edit) callable from a trivial example plugin, proving the sandboxing
+boundary actually works end-to-end before committing further.
+
+**Checkpoint 1:** a working minimal example plugin, live-demonstrated
+(not a headless test — this phase's own success criterion is "a real
+external `.wasm` file can read and modify editor state through the host
+API," which is inherently an integration demo, not a unit test).
+
+**Phase 2 — real API surface + loading mechanism.** Informed by whatever
+Phase 1's prototype revealed about what's actually ergonomic to expose;
+deliberately not designed further in this plan, since `SPEC.md` §24 itself
+defers this to whenever the track is actually picked up.
+
+---
+
+## Track 25 — Extension marketplace
+
+**Hard dependency on Track 24 (`Plugin/extension model`) reaching a
+stable API — not startable before then.**
+
+**Phase 1 — static registry + install UI.** A hosted JSON manifest;
+in-app browse/search (a `go_to_file.rs`-shaped fuzzy list) + install
+(download, checksum-verify, load via Track 24's mechanism).
+
+**Checkpoint 1:** full suite green; live-verify installing a real
+published plugin end-to-end (browse → install → it loads and runs).
+
+---
+
+## Track 26 — Profiler integration
+
+Depends on Track 22 (`Build/run/test integration`) for process launch/
+attach.
+
+**Phase 1 — async-profiler attach + capture.** Shell out to
+`asprof`/`profiler.sh` against a target PID (verify current invocation
+against `async-profiler`'s own current docs before committing); capture a
+flame-graph-format (collapsed-stack) sample.
+
+**Checkpoint 1:** full suite green; live-verify profiling a real running
+JVM process produces a real, non-empty collapsed-stack output.
+
+**Phase 2 — flame graph widget.** Custom-painted interactive flame graph
+(stacked rectangles by call depth, hover for symbol name, click to zoom).
+
+**Checkpoint 2:** full suite green; live-verify a real captured profile
+renders a legible, correctly-proportioned flame graph, and zoom/hover both
+work.
+
+---
+
+## Track 27 — Dependency-injection / bean graph visualizer
+
+**Hard dependency on both Track 21 (`Maven/Gradle awareness`) and Track
+20 (`LSP integration`) — not startable before both land, per `SPEC.md`
+§27's own explicit warning against a syntax-only version of this feature
+being misleading rather than honestly-scoped.**
+
+**Phase 1 — bean/injection-point extraction.** Whole-project +
+whole-classpath scan for bean definitions and injection points, resolved
+by type (and `@Qualifier` name, if present) to candidate beans.
+
+**Checkpoint 1:** full suite green (a fixture multi-module project with a
+cross-module injection, asserting the resolved edge is found — the exact
+case a syntax-only pass would miss); live-verify against a real,
+non-trivial Spring project.
+
+**Phase 2 — graph visualization panel.** A dockable panel rendering the
+resolved graph (pan/zoom node/edge diagram); click a node to jump to its
+source.
+
+**Checkpoint 2:** full suite green; live-verify the rendered graph
+matches the real project's actual bean wiring, and clicking a node jumps
+to the right file/line.
 
 ---
 
 ## Build status (live)
 
-- [x] Phase 0 — Java endpoint extraction
-- [x] Phase 1 — Kotlin endpoint extraction
-- [x] Phase 2 — whole-project scan
-- [x] Phase 3 — popup UI shell
-- [x] Phase 4 — jump-to-handler (known issue: cursor doesn't land correctly, `TECHNICAL_DEBT.md` #15)
-- [ ] Phase 5 — terminal panel: panel model
-- [ ] Phase 6 — terminal panel: PTY spawn/read/write
-- [ ] Phase 7 — terminal panel: vt100 parsing + rendering
-- [ ] Phase 8 — terminal panel: full keyboard input translation
-- [ ] Phase 9 — terminal panel: resizing
+### Moderate tier
+- [ ] Track 1 — Multi-select in the tree
+- [ ] Track 2 — Richer Java/Kotlin syntax highlighting
+- [ ] Track 3 — Command palette
+- [ ] Track 4 — Local (non-git) file history
+- [ ] Track 5 — Static analysis integration
+- [ ] Track 6 — Auto-save
+- [ ] Track 7 — Rectangular (block) paste
+
+### Substantial tier
+- [ ] Track 8 — Customizable keybindings
+- [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
+- [ ] Track 10 — Code folding
+- [ ] Track 11 — Multi-window / split-pane editing
+- [ ] Track 12 — Spring config property autocomplete
+- [ ] Track 13 — Code coverage overlay
+- [ ] Track 14 — Docker/container run integration
+- [ ] Track 15 — Quick-fix intention actions
+- [ ] Track 16 — Minimap
+- [ ] Track 17 — Peek definition
+- [ ] Track 18 — Inline diff viewer widget
+
+### Major tier
+- [ ] Track 19 — Large file handling — full viewport virtualization
+- [ ] Track 20 — LSP integration
+- [ ] Track 21 — Maven/Gradle awareness
+- [ ] Track 22 — Build/run/test integration
+- [ ] Track 23 — Debugger
+- [ ] Track 24 — Plugin/extension model
+- [ ] Track 25 — Extension marketplace
+- [ ] Track 26 — Profiler integration
+- [ ] Track 27 — Dependency-injection / bean graph visualizer
