@@ -114,7 +114,7 @@ pub fn type_of_identifier_java(tree: &Tree, source: &str, cursor_byte: usize, na
 // 1.1.0's grammar, per `TECHNICAL_DEBT.md` #3's discipline) — everything
 // here is `child_by_kind`, never `child_by_field_name`.
 
-fn child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+pub(crate) fn child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     node.children(&mut cursor).find(|c| c.kind() == kind)
 }
@@ -127,7 +127,7 @@ fn child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 /// first non-`identifier`/non-`modifiers` named child as the type relies
 /// on `type` always preceding a default `expression` in source order,
 /// true for both node kinds.
-fn identifier_and_type_children<'a>(node: Node<'a>) -> (Option<Node<'a>>, Option<Node<'a>>) {
+pub(crate) fn identifier_and_type_children<'a>(node: Node<'a>) -> (Option<Node<'a>>, Option<Node<'a>>) {
     let mut identifier = None;
     let mut type_node = None;
     let mut cursor = node.walk();
@@ -152,7 +152,7 @@ fn enclosing_function_kotlin(node: Node) -> Option<Node> {
     }
 }
 
-fn enclosing_class_kotlin(node: Node) -> Option<Node> {
+pub(crate) fn enclosing_class_kotlin(node: Node) -> Option<Node> {
     let mut node = node;
     loop {
         if node.kind() == "class_declaration" {
@@ -202,7 +202,7 @@ fn primary_constructor_class_parameter_type(class_node: Node, source: &str, name
 /// This is not real type inference — anything else as an initializer
 /// (another function call, a literal, an existing variable) resolves to
 /// `None` rather than a wrong guess.
-fn property_declaration_type(property: Node, source: &str) -> Option<String> {
+pub(crate) fn property_declaration_type(property: Node, source: &str) -> Option<String> {
     let var_decl = child_by_kind(property, "variable_declaration")?;
     let (_, explicit_type) = identifier_and_type_children(var_decl);
     if let Some(explicit_type) = explicit_type {

@@ -37,7 +37,7 @@ rewritten or removed, not blindly executed.
 | # | Tag | Entry |
 |---|-----|-------|
 | 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
-| 9 | `[OPEN]` | Cross-class dot-completion offers a Java field regardless of its visibility, unlike methods |
+| 9 | `[OPEN]` | Cross-class dot-completion offers a field regardless of its visibility, unlike methods — Java and Kotlin both |
 | 10 | `[OPEN]` | `fields_in_type` can never find an interface's own constants — a second, more severe instance of #9's shape |
 | 11 | `[OPEN]` | Opening a project tree aborts entirely on the first unreadable file/directory, anywhere in the tree |
 | 12 | `[OPEN]` | Dot-completion's local-variable scan doesn't respect declaration order relative to the cursor |
@@ -152,16 +152,23 @@ also has one worked example of the fix process to follow.
 
 ---
 
-## 9. [OPEN] Cross-class dot-completion offers a Java field regardless of its visibility, unlike methods
+## 9. [OPEN] Cross-class dot-completion offers a field regardless of its visibility, unlike methods — Java and Kotlin both
 
 **Where:** `crates/syntax/src/fields.rs` (`fields_in_class_body`,
 `fields_in_type`), used by `crates/app/src/widgets/editor/widget.rs`
-(`java_members_as_items`) for the code-completion popup's field
-candidates (`SPEC.md`/`PLAN.md` Phase 3b).
+(`java_members_as_items`); `crates/syntax/src/kotlin_members.rs`
+(`kotlin_properties_in_class_body`, `kotlin_properties_in_type`), used by
+`kotlin_members_as_items` — for the code-completion popup's field/property
+candidates (`SPEC.md`/`PLAN.md` Phases 3b/3c).
 
-**Status:** Open. Found while wiring Phase 3b's Java dot-completion; not
-fixed on the spot since `SPEC.md` §4 never asked for it and
-`fields_in_class_body` already had this shape before Phase 3b touched it.
+**Status:** Open, now confirmed on both languages. Found on the Java side
+while wiring Phase 3b; not fixed on the spot since `SPEC.md` §4 never asked
+for it and `fields_in_class_body` already had this shape before Phase 3b
+touched it. Phase 3c's Kotlin wiring reproduced the identical shape rather
+than fixing it, for the same reason: `SPEC.md` §4's Kotlin section only
+asks for visibility filtering on `kotlin_functions_in_type` (mirroring
+`methods_in_type`'s complement rule), never on properties — no `SPEC.md`
+ask, no fix, same as the Java side.
 
 ### What was found
 
@@ -177,6 +184,16 @@ in `widget/tests/completion.rs`), but would incorrectly still offer any of
 receiver. `this.`/`super.` are unaffected by this gap (they're supposed to
 see every member regardless of visibility already); only the
 external-receiver path is wrong.
+
+`kotlin_properties_in_class_body`/`kotlin_properties_in_type` (added for
+Phase 3c) have the exact same shape: no modifier check at all, unlike
+`kotlin_function_signature`'s deliberate `contains("private")` check for
+functions.
+`kotlin_a_local_variable_typed_as_another_project_class_offers_that_classs_public_members`
+in `widget/tests/completion.rs` proves the function side is filtered
+correctly, same as Java's equivalent test, but there's no companion test
+with a `private val`/`private var` on the fixture class — because there's
+no filtering to test yet.
 
 ### Why it wasn't fixed immediately
 
@@ -202,12 +219,24 @@ seeing it regardless. Add a regression test mirroring
 `a_local_variable_typed_as_another_project_class_offers_that_classs_public_members`
 but with a private *field* on `Bar` instead of a private method.
 
+Same fix, same shape, on the Kotlin side: give
+`kotlin_properties_in_class_body` the `contains("private")` check over a
+property's own `child_by_kind(member, "modifiers")` span (the same node
+`kotlin_function_signature` already checks for functions), gated the same
+way — an `unfiltered` parameter threaded through
+`kotlin_properties_in_class_body`/`kotlin_properties_in_type`, mirroring
+`kotlin_functions_in_type`'s own `unfiltered` parameter exactly. Add a
+regression test mirroring
+`kotlin_a_local_variable_typed_as_another_project_class_offers_that_classs_public_members`
+but with a `private val`/`private var` on `Bar` instead of a private `fun`.
+
 ### Trigger condition
 
-Next time Phase 3c (Kotlin wiring) or Phase 4 touches `fields.rs`/
-`java_members_as_items` for an unrelated reason — same file, low
-incremental cost to fix alongside it — or sooner if a user notices a
-private field leaking into the dot-completion popup.
+Next time Phase 4 (now landed) or any later phase touches `fields.rs`/
+`java_members_as_items`/`kotlin_members.rs`/`kotlin_members_as_items` for
+an unrelated reason — same files, low incremental cost to fix alongside it
+— or sooner if a user notices a private field/property leaking into the
+dot-completion popup, on either language.
 
 ---
 

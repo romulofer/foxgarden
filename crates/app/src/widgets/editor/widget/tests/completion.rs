@@ -1,10 +1,11 @@
-//! Dot-completion's candidate resolution (`SPEC.md` §4, `PLAN.md` Phase
-//! 3b): `dot_completion_candidates`/`java_dot_completion_candidates`
-//! directly, rather than through the full `show` harness — same "pure
-//! function first, widget wiring proven live separately" split
-//! `word_completion_candidates` itself already has no direct test of its
-//! own, for the same reason. The actual in-editor trigger (typing `.`) is
-//! verified live in `cargo run -p foxgarden`, not here.
+//! Dot-completion's candidate resolution (`SPEC.md` §4, `PLAN.md` Phases
+//! 3b/3c): `dot_completion_candidates`/`java_dot_completion_candidates`/
+//! `kotlin_dot_completion_candidates` directly, rather than through the
+//! full `show` harness — same "pure function first, widget wiring proven
+//! live separately" split `word_completion_candidates` itself already has
+//! no direct test of its own, for the same reason. The actual in-editor
+//! trigger (typing `.`) is verified live in `cargo run -p foxgarden`, not
+//! here.
 
 use super::super::*;
 use fg_core::Language;
@@ -141,12 +142,150 @@ fn dispatcher_routes_java_to_java_dot_completion_candidates() {
     assert_eq!(labels(&items), vec!["helper", "run"]);
 }
 
-#[test]
-fn dispatcher_returns_none_for_kotlin_until_phase_3c_wires_it_up() {
-    let source = "class Foo {\n    fun run() {\n        val x = 0\n    }\n}\n";
+fn kotlin_tree_of(source: &str) -> Tree {
     let mut parser = IncrementalParser::new(Language::Kotlin);
-    let tree = parser.parse(source).clone();
+    parser.parse(source).clone()
+}
+
+#[test]
+fn kotlin_this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
+    let source = "class Foo {\n    val x: Int = 0\n    private fun helper() {\n    }\n    fun run() {\n    }\n}\n";
+    let tree = kotlin_tree_of(source);
+    let cursor = source.find("helper").unwrap();
+
+    let items =
+        kotlin_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+
+    assert_eq!(labels(&items), vec!["helper", "run", "x"]);
+}
+
+#[test]
+fn kotlin_super_dot_offers_the_superclasss_members_from_the_project_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Base.kt"),
+        "open class Base {\n    val baseField: Int = 0\n    fun run() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "class Foo : Base() {\n    fun go() {\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("go").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project))
+        .expect("super. should find Base.kt in the project tree");
+
+    assert_eq!(labels(&items), vec!["baseField", "run"]);
+}
+
+#[test]
+fn kotlin_super_dot_reports_none_when_the_superclass_has_no_project_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let foo_source = "class Foo : SomeStdlibThing() {\n    fun go() {\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("go").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project)).is_none());
+}
+
+#[test]
+fn kotlin_a_local_variable_typed_as_another_project_class_offers_that_classs_public_members() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Bar.kt"),
+        "class Bar {\n    fun baz() {\n    }\n    private fun secret() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "class Foo {\n    fun run() {\n        val b: Bar = Bar()\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("val x").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+        .expect("a local typed as an in-project class should resolve");
+
+    // `secret` is private on `Bar` — an external receiver keeps
+    // `kotlin_functions_in_type`'s existing visibility filtering, unlike
+    // `this.`/`super.`'s unfiltered listing.
+    assert_eq!(labels(&items), vec!["baz"]);
+}
+
+#[test]
+fn kotlin_an_external_receivers_one_level_supertype_is_included() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Baz.kt"), "open class Baz {\n    fun inherited() {\n    }\n}\n").unwrap();
+    std::fs::write(
+        dir.path().join("Bar.kt"),
+        "class Bar : Baz() {\n    fun baz() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "class Foo {\n    fun run() {\n        val b: Bar = Bar()\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("val x").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+        .expect("a local typed as an in-project class should resolve");
+
+    assert_eq!(labels(&items), vec!["baz", "inherited"]);
+}
+
+#[test]
+fn kotlin_a_constructor_promoted_property_is_offered_via_this() {
+    let source = "class Foo(val x: Int) {\n    fun run() {\n    }\n}\n";
+    let tree = kotlin_tree_of(source);
+    let cursor = source.find("run").unwrap();
+
+    let items =
+        kotlin_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+
+    assert_eq!(labels(&items), vec!["run", "x"]);
+}
+
+#[test]
+fn kotlin_a_stdlib_typed_local_produces_no_candidates() {
+    let foo_source = "class Foo {\n    fun run() {\n        val s: String = \"hi\"\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("val x").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "s", Some(&project)).is_none());
+}
+
+#[test]
+fn kotlin_a_non_constructor_call_inferred_local_produces_no_candidates() {
+    let foo_source = "class Foo {\n    fun run() {\n        val b = someFunction()\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(foo_source);
+    let cursor = foo_source.find("val x").unwrap();
+
+    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", None).is_none());
+}
+
+#[test]
+fn kotlin_an_undeclared_receiver_produces_no_candidates() {
+    let source = "class Foo {\n    fun run() {\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(source);
     let cursor = source.find("val x").unwrap();
 
-    assert!(dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None).is_none());
+    assert!(kotlin_dot_completion_candidates(&tree, source, cursor, "neverDeclared", None).is_none());
+}
+
+#[test]
+fn kotlin_this_dot_reports_none_outside_any_class() {
+    let source = "// just a comment\n";
+    let tree = kotlin_tree_of(source);
+    assert!(kotlin_dot_completion_candidates(&tree, source, 0, "this", None).is_none());
+}
+
+#[test]
+fn dispatcher_routes_kotlin_to_kotlin_dot_completion_candidates() {
+    let source = "class Foo {\n    private fun helper() {\n    }\n    fun run() {\n        val x = 0\n    }\n}\n";
+    let tree = kotlin_tree_of(source);
+    let cursor = source.find("val x").unwrap();
+
+    let items = dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None)
+        .expect("Kotlin should dispatch to kotlin_dot_completion_candidates");
+    assert_eq!(labels(&items), vec!["helper", "run"]);
 }

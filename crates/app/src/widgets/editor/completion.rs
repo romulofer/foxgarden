@@ -7,6 +7,7 @@
 
 use ropey::Rope;
 
+use super::templates::CURSOR_MARKER;
 use super::text_area::TextAreaOutput;
 use super::text_offset::{byte_to_char, char_to_byte};
 
@@ -29,6 +30,11 @@ pub struct CompletionItem {
     pub kind: CompletionKind,
     /// e.g. `"int"` for a field, `"(String) -> void"` for a method.
     pub detail: Option<String>,
+    /// `Method` candidates only (`SPEC.md` §5, `PLAN.md` Phase 4): whether
+    /// the method takes at least one parameter — `insert_completion` places
+    /// the cursor between `()` when true, right after when false. Ignored
+    /// for every other `CompletionKind`.
+    pub has_params: bool,
 }
 
 /// Per-tab completion-popup state — `None` (via the caller's
@@ -195,11 +201,16 @@ pub(super) fn filter_and_rank<'a>(candidates: &'a [CompletionItem], prefix: &str
 
 /// Applies `item` at the popup's current position (`SPEC.md` §5): replaces
 /// `text[anchor_char..cursor_char]` — whatever's been typed since the popup
-/// opened — with `item.label`. Covers `Word`/`Keyword`/`Field` candidates
-/// for Phase 1 (plain prefix-replace, no paren-insertion); `Method`'s
-/// `()`-insertion is Phase 4. `Template` never reaches this function at all
-/// — its caller in `widget.rs` calls `templates::expand` directly instead,
-/// same as the existing Tab-trigger path.
+/// opened — with `item.label`, plain prefix-replace for `Word`/`Keyword`/
+/// `Field` candidates. For `Method` candidates (`PLAN.md` Phase 4), appends
+/// `()` and places the cursor between the parens if `item.has_params`, or
+/// right after the closing paren otherwise — built via the same
+/// `${cursor}`-marker convention `templates::expand` already uses (a
+/// has-params insertion is literally `"{label}(${cursor})"` run through the
+/// identical marker-strip-and-locate step) rather than a second
+/// cursor-placement mechanism. `Template` never reaches this function at
+/// all — its caller in `widget.rs` calls `templates::expand` directly
+/// instead, same as the existing Tab-trigger path.
 pub(super) fn insert_completion(
     text: &str,
     anchor_char: usize,
@@ -208,8 +219,23 @@ pub(super) fn insert_completion(
 ) -> (String, usize) {
     let anchor_byte = char_to_byte(text, anchor_char);
     let cursor_byte = char_to_byte(text, cursor_char);
-    let new_text = format!("{}{}{}", &text[..anchor_byte], item.label, &text[cursor_byte..]);
-    let new_cursor = anchor_char + item.label.chars().count();
+
+    let body = if item.kind == CompletionKind::Method {
+        if item.has_params {
+            format!("{}({CURSOR_MARKER})", item.label)
+        } else {
+            format!("{}()", item.label)
+        }
+    } else {
+        item.label.clone()
+    };
+    let cursor_offset = body
+        .find(CURSOR_MARKER)
+        .map_or(body.chars().count(), |byte_pos| body[..byte_pos].chars().count());
+    let expansion = body.replace(CURSOR_MARKER, "");
+
+    let new_text = format!("{}{expansion}{}", &text[..anchor_byte], &text[cursor_byte..]);
+    let new_cursor = anchor_char + cursor_offset;
     (new_text, new_cursor)
 }
 
@@ -226,6 +252,16 @@ mod tests {
             label: label.to_string(),
             kind: CompletionKind::Word,
             detail: None,
+            has_params: false,
+        }
+    }
+
+    fn method_item(label: &str, has_params: bool) -> CompletionItem {
+        CompletionItem {
+            label: label.to_string(),
+            kind: CompletionKind::Method,
+            detail: None,
+            has_params,
         }
     }
 
@@ -365,5 +401,19 @@ mod tests {
         let (text, cursor) = insert_completion("foo.", 4, 4, &item("bar"));
         assert_eq!(text, "foo.bar");
         assert_eq!(cursor, 7);
+    }
+
+    #[test]
+    fn insert_completion_a_zero_arg_method_places_the_cursor_after_the_closing_paren() {
+        let (text, cursor) = insert_completion("foo.ru", 4, 6, &method_item("run", false));
+        assert_eq!(text, "foo.run()");
+        assert_eq!(cursor, text.chars().count());
+    }
+
+    #[test]
+    fn insert_completion_a_parameterized_method_places_the_cursor_between_the_parens() {
+        let (text, cursor) = insert_completion("foo.co", 4, 6, &method_item("compute", true));
+        assert_eq!(text, "foo.compute()");
+        assert_eq!(&text[..cursor], "foo.compute(");
     }
 }

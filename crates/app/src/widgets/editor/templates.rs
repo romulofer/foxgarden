@@ -5,7 +5,7 @@ use super::text_offset::char_to_byte;
 /// Marks where the cursor should land after a template expands. Not a
 /// literal character sequence a user would type, so a plain substring
 /// search/replace is enough — no escaping needed.
-const CURSOR_MARKER: &str = "${cursor}";
+pub(super) const CURSOR_MARKER: &str = "${cursor}";
 
 /// One trigger-word-to-expansion live template — IntelliJ-style: type
 /// `trigger`, press Tab with no selection, get `body` in its place.

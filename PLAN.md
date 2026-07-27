@@ -343,5 +343,5 @@ through the same code.
 - [x] Phase 2b — Kotlin receiver-type resolution
 - [x] Phase 3a — generalized file-finder
 - [x] Phase 3b — Java cross-project member lookup + wiring (automated checkpoint green; live click-through in `cargo run -p foxgarden` still to be done)
-- [ ] Phase 3c — Kotlin cross-project member lookup + wiring
-- [ ] Phase 4 — method-aware insertion
+- [x] Phase 3c — Kotlin cross-project member lookup + wiring (automated checkpoint green: `crates/syntax/src/kotlin_members.rs` — `kotlin_properties_in_class_body`/`kotlin_properties_in_type`/`kotlin_functions_in_type`/`all_kotlin_functions_in_type`/`kotlin_enclosing_class`/`kotlin_superclass_name` — plus `widget.rs`'s `kotlin_dot_completion_candidates`/`kotlin_members_as_items` wiring and `widget/tests/completion.rs` fixtures; live click-through in `cargo run -p foxgarden` still to be done, same as 3b)
+- [x] Phase 4 — method-aware insertion (automated checkpoint green: `CompletionItem::has_params`, `insert_completion`'s `${cursor}`-marker-based `()`-insertion in `completion.rs`, wired at both `java_members_as_items`/`kotlin_members_as_items`; live click-through in `cargo run -p foxgarden` still to be done, same as 3b/3c)

@@ -1824,6 +1824,7 @@ fn word_completion_candidates(
             label,
             kind: CompletionKind::Word,
             detail: None,
+            has_params: false,
         })
         .collect();
 
@@ -1838,6 +1839,7 @@ fn word_completion_candidates(
         label,
         kind: CompletionKind::Template,
         detail: None,
+        has_params: false,
     }));
 
     let keywords: &[&str] = match language {
@@ -1849,6 +1851,7 @@ fn word_completion_candidates(
         label: label.to_string(),
         kind: CompletionKind::Keyword,
         detail: None,
+        has_params: false,
     }));
 
     candidates
@@ -1856,10 +1859,9 @@ fn word_completion_candidates(
 
 /// Dot-completion's real candidate source (`SPEC.md` §4), dispatched by
 /// language — the one entry point the trigger above calls, mirroring
-/// `syntax::type_of_identifier`'s own dispatcher shape. Kotlin isn't wired
-/// yet (`PLAN.md` Phase 3c); every other language has no dot-completion at
-/// all, same as they have no `type_of_identifier` resolution to begin
-/// with.
+/// `syntax::type_of_identifier`'s own dispatcher shape. Every other
+/// language has no dot-completion at all, same as they have no
+/// `type_of_identifier` resolution to begin with.
 fn dot_completion_candidates(
     language: Language,
     tree: &Tree,
@@ -1870,6 +1872,7 @@ fn dot_completion_candidates(
 ) -> Option<Vec<CompletionItem>> {
     match language {
         Language::Java => java_dot_completion_candidates(tree, source, cursor_byte, receiver, project),
+        Language::Kotlin => kotlin_dot_completion_candidates(tree, source, cursor_byte, receiver, project),
         _ => None,
     }
 }
@@ -1942,6 +1945,7 @@ fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered:
             label: f.name,
             kind: CompletionKind::Field,
             detail: Some(f.java_type),
+            has_params: false,
         })
         .collect();
 
@@ -1954,6 +1958,90 @@ fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered:
         label: m.name,
         kind: CompletionKind::Method,
         detail: Some(m.return_type),
+        has_params: !m.params.is_empty(),
+    }));
+
+    items
+}
+
+/// Kotlin's dot-completion candidates (`SPEC.md` §4, `PLAN.md` Phase 3c) —
+/// same shape as `java_dot_completion_candidates`: `this.`/`super.` route
+/// through `syntax::kotlin_enclosing_class`/`kotlin_superclass_name` to an
+/// unfiltered member listing; a bare identifier routes through
+/// `syntax::type_of_identifier_kotlin`, and a resolved type with an
+/// in-project `.kt` file gets its externally-visible members plus one
+/// level of inherited members via the same `kotlin_superclass_name`/
+/// `find_source_file_by_stem` chain. Anything unresolvable at any step is
+/// `None`, same "don't open the popup" contract as the Java side.
+fn kotlin_dot_completion_candidates(
+    tree: &Tree,
+    source: &str,
+    cursor_byte: usize,
+    receiver: &str,
+    project: Option<&Project>,
+) -> Option<Vec<CompletionItem>> {
+    let class_name = syntax::kotlin_enclosing_class(tree, source, cursor_byte)?;
+
+    if receiver == "this" {
+        return Some(kotlin_members_as_items(tree, source, &class_name, true));
+    }
+
+    if receiver == "super" {
+        let super_name = syntax::kotlin_superclass_name(tree, source, &class_name)?;
+        let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))?;
+        let super_source = std::fs::read_to_string(&super_path).ok()?;
+        let mut super_parser = IncrementalParser::new(Language::Kotlin);
+        let super_tree = super_parser.parse(&super_source).clone();
+        return Some(kotlin_members_as_items(&super_tree, &super_source, &super_name, true));
+    }
+
+    let type_name = syntax::type_of_identifier_kotlin(tree, source, cursor_byte, receiver)?;
+    let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "kt"))?;
+    let type_source = std::fs::read_to_string(&type_path).ok()?;
+    let mut type_parser = IncrementalParser::new(Language::Kotlin);
+    let type_tree = type_parser.parse(&type_source).clone();
+
+    let mut items = kotlin_members_as_items(&type_tree, &type_source, &type_name, false);
+
+    if let Some(super_name) = syntax::kotlin_superclass_name(&type_tree, &type_source, &type_name)
+        && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))
+        && let Ok(super_source) = std::fs::read_to_string(&super_path)
+    {
+        let mut super_parser = IncrementalParser::new(Language::Kotlin);
+        let super_tree = super_parser.parse(&super_source).clone();
+        items.extend(kotlin_members_as_items(&super_tree, &super_source, &super_name, false));
+    }
+
+    Some(items)
+}
+
+/// `type_name`'s own properties and functions as `CompletionItem`s —
+/// `unfiltered` selects `all_kotlin_functions_in_type` over
+/// `kotlin_functions_in_type`'s private-excluding filtering, for the
+/// `this.`/`super.` case; properties aren't visibility-filtered at all,
+/// mirroring Java's `fields_in_type` (visibility filtering there is only
+/// ever about `static`, never `private`).
+fn kotlin_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = syntax::kotlin_properties_in_type(tree, source, type_name)
+        .into_iter()
+        .map(|f| CompletionItem {
+            label: f.name,
+            kind: CompletionKind::Field,
+            detail: Some(f.java_type),
+            has_params: false,
+        })
+        .collect();
+
+    let functions = if unfiltered {
+        syntax::all_kotlin_functions_in_type(tree, source, type_name)
+    } else {
+        syntax::kotlin_functions_in_type(tree, source, type_name)
+    };
+    items.extend(functions.into_iter().map(|m| CompletionItem {
+        label: m.name,
+        kind: CompletionKind::Method,
+        detail: Some(m.return_type),
+        has_params: !m.params.is_empty(),
     }));
 
     items
