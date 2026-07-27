@@ -625,8 +625,9 @@ to the right file/line.
 
 ### Moderate tier
 
-- [x] Track 1 — Multi-select in the tree (code green; live click-through
-      per Checkpoint 2 not yet performed)
+- [x] Track 1 — Multi-select in the tree (live-verified: Ctrl/Cmd/Shift-
+      click gestures, batch delete/copy/cut/paste, and New File/Rename
+      disabled under multi-selection all confirmed working)
 - [ ] Track 2 — Richer Java/Kotlin syntax highlighting
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration
