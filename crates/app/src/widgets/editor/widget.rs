@@ -7,9 +7,9 @@ use ropey::Rope;
 use syntax::{IncrementalParser, Tree};
 
 use super::auto_edit::{
-    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, current_line_range, duplicate_line,
-    indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, sort_lines,
-    toggle_line_comments, unique_lines, wrap_selection,
+    CaseConversion, apply_auto_indent, apply_auto_pair, apply_auto_pair_delete, convert_selection_case,
+    current_line_range, duplicate_line, indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up,
+    smart_home_target, sort_lines, toggle_line_comments, unique_lines, wrap_selection,
 };
 use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
@@ -1220,7 +1220,8 @@ pub fn show(
             manual_caret = indent_cursor.map(Caret::at);
             text_after_indent.into_owned()
         } else {
-            apply_auto_pair(&old_text, &raw_new_text, cursor_char)
+            let paired = apply_auto_pair(&old_text, &raw_new_text, cursor_char);
+            apply_auto_pair_delete(&old_text, &paired, cursor_char)
         };
 
         apply_edit(doc, parser, &old_text, &corrected);

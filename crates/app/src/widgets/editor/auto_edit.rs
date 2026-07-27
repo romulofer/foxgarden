@@ -710,6 +710,49 @@ pub(super) fn apply_auto_pair(old_text: &str, text: &str, cursor_char: Option<us
     }
 }
 
+/// The reverse of `apply_auto_pair`'s bracket-closing: deleting the opening
+/// half of an adjacent, empty pair (`"()"`, `"[]"`, `"{}"`, `"<>"`, `""`,
+/// `''`) deletes the closing half too — whether the deletion was a
+/// Backspace (cursor was right after the opener before the edit) or a
+/// forward Delete (cursor was right before it), both leave the post-edit
+/// cursor sitting exactly where the opener used to be, with the closer now
+/// immediately after it. No "was this pair actually auto-inserted" tracking
+/// — a manually-typed adjacent pair gets the same treatment, matching how
+/// most editors' own bracket-delete behavior works. Only fires on a pure
+/// single-character deletion (so deleting a multi-char selection is
+/// untouched), same "diff the two full-text snapshots plus the real
+/// post-edit cursor" technique `apply_auto_pair` itself already uses, for
+/// the same reason: text-diffing alone can't disambiguate this from an
+/// unrelated single-char deletion elsewhere in the buffer.
+pub(super) fn apply_auto_pair_delete(old_text: &str, text: &str, cursor_char: Option<usize>) -> String {
+    let old_chars = old_text.chars().count();
+    let new_chars = text.chars().count();
+    if new_chars + 1 != old_chars {
+        return text.to_string();
+    }
+    let Some(cursor_char) = cursor_char else {
+        return text.to_string();
+    };
+
+    // The char now at `cursor_char` in `old_text` is exactly the one that
+    // just got deleted, regardless of which key did it: a Backspace moves
+    // the cursor back by one to land there, a forward Delete never moves it
+    // at all since it was already there.
+    let Some(deleted) = old_text.chars().nth(cursor_char) else {
+        return text.to_string();
+    };
+    let Some(expected_closer) = closing_char(deleted) else {
+        return text.to_string();
+    };
+    if old_text.chars().nth(cursor_char + 1) != Some(expected_closer) {
+        return text.to_string();
+    }
+
+    let closer_start = char_to_byte(text, cursor_char);
+    let closer_end = char_to_byte(text, cursor_char + 1);
+    format!("{}{}", &text[..closer_start], &text[closer_end..])
+}
+
 /// Wraps `old_text[start_char..end_char]` in `opener`/its matching closer,
 /// replacing egui's default "typing a bracket over a selection deletes it"
 /// behavior. Used when a selection is active and the typed character is one

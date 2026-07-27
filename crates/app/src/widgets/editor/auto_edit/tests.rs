@@ -164,6 +164,59 @@ fn multi_char_paste_is_left_untouched() {
 }
 
 #[test]
+fn backspacing_the_opener_of_an_adjacent_empty_pair_deletes_the_closer_too() {
+    // "a()b", cursor between ( and ) (index 2), Backspace removes '(' —
+    // egui's own edit already produced "a)b" with the cursor now at 1.
+    assert_eq!(apply_auto_pair_delete("a()b", "a)b", Some(1)), "ab");
+    assert_eq!(apply_auto_pair_delete("a[]b", "a]b", Some(1)), "ab");
+    assert_eq!(apply_auto_pair_delete("a{}b", "a}b", Some(1)), "ab");
+    assert_eq!(apply_auto_pair_delete("a<>b", "a>b", Some(1)), "ab");
+}
+
+#[test]
+fn forward_deleting_the_opener_of_an_adjacent_empty_pair_deletes_the_closer_too() {
+    // Same "a()b" buffer, but the cursor was right *before* the '(' (index
+    // 1) and a forward Delete removed it — egui's own edit again produces
+    // "a)b", but this time the cursor doesn't move (it was already there).
+    assert_eq!(apply_auto_pair_delete("a()b", "a)b", Some(1)), "ab");
+}
+
+#[test]
+fn deleting_an_empty_quote_pair_deletes_both_sides() {
+    assert_eq!(apply_auto_pair_delete("a\"\"b", "a\"b", Some(1)), "ab");
+    assert_eq!(apply_auto_pair_delete("a''b", "a'b", Some(1)), "ab");
+}
+
+#[test]
+fn deleting_an_opener_not_immediately_followed_by_its_closer_is_untouched() {
+    // "(a" — deleting the '(' leaves a lone 'a', not an empty pair.
+    assert_eq!(apply_auto_pair_delete("(a", "a", Some(0)), "a");
+}
+
+#[test]
+fn deleting_a_non_bracket_character_is_untouched() {
+    assert_eq!(apply_auto_pair_delete("ab", "b", Some(0)), "b");
+}
+
+#[test]
+fn deleting_a_non_empty_pairs_contents_does_not_also_remove_the_brackets() {
+    // "(ab)" backspacing the 'b' (index 2) — a real, non-empty pair;
+    // nothing here should touch the surrounding brackets.
+    assert_eq!(apply_auto_pair_delete("(ab)", "(a)", Some(2)), "(a)");
+}
+
+#[test]
+fn deleting_a_selection_is_left_untouched_by_pair_delete() {
+    // new_chars + 1 != old_chars -> not a pure single-char deletion.
+    assert_eq!(apply_auto_pair_delete("hello", "ho", None), "ho");
+}
+
+#[test]
+fn pair_delete_with_no_cursor_position_is_left_untouched() {
+    assert_eq!(apply_auto_pair_delete("ab", "b", None), "b");
+}
+
+#[test]
 fn join_lines_inserts_a_single_space_between_two_words() {
     let (joined, cursor) = join_lines("foo\nbar", 1).unwrap();
     assert_eq!(joined, "foo bar");
