@@ -36,7 +36,7 @@ pub fn enclosing_class(tree: &Tree, source: &str, cursor_byte: usize) -> Option<
 /// qualification (`java.util.Foo` -> `Foo`) down to the bare simple name —
 /// what a same-name-as-the-class `.java` file is actually called on disk,
 /// which is what the caller needs to look the superclass's source up by.
-fn simple_name(raw: &str) -> String {
+pub(crate) fn simple_name(raw: &str) -> String {
     let no_generics = raw.split('<').next().unwrap_or(raw);
     no_generics.rsplit('.').next().unwrap_or(no_generics).trim().to_string()
 }
@@ -79,23 +79,28 @@ pub fn superclass_name(tree: &Tree, source: &str, class_name: &str) -> Option<St
     Some(simple_name(&source[first_type.byte_range()]))
 }
 
-/// One method's signature, if `node` is a `method_declaration` that can
-/// actually be overridden — `static`/`private`/`final` methods are
-/// filtered out here (detected the same way `fields.rs`'s
+/// One method's signature, if `node` is a `method_declaration` — filtered
+/// down to only what can actually be overridden (`static`/`private`/
+/// `final` methods excluded, detected the same way `fields.rs`'s
 /// `fields_in_class_body` detects `static`/`final` fields: modifiers are
 /// anonymous tokens in tree-sitter-java's grammar, not their own named
 /// child, so the reliable way to find them is a text search over the span
 /// between the declaration's start and its return type — there's nothing
-/// else that could appear there).
-fn method_signature(node: Node, source: &str) -> Option<MethodSignature> {
+/// else that could appear there) unless `unfiltered` is set, in which case
+/// every method is included regardless of modifiers — completion's
+/// `this.`/`super.` case, where code inside the same class can call any of
+/// its own members (`SPEC.md` §4).
+fn method_signature(node: Node, source: &str, unfiltered: bool) -> Option<MethodSignature> {
     if node.kind() != "method_declaration" {
         return None;
     }
     let type_node = node.child_by_field_name("type")?;
     let name_node = node.child_by_field_name("name")?;
-    let modifiers_text = &source[node.start_byte()..type_node.start_byte()];
-    if modifiers_text.contains("static") || modifiers_text.contains("private") || modifiers_text.contains("final") {
-        return None;
+    if !unfiltered {
+        let modifiers_text = &source[node.start_byte()..type_node.start_byte()];
+        if modifiers_text.contains("static") || modifiers_text.contains("private") || modifiers_text.contains("final") {
+            return None;
+        }
     }
 
     let params_node = node.child_by_field_name("parameters")?;
@@ -133,11 +138,21 @@ fn method_signature(node: Node, source: &str) -> Option<MethodSignature> {
 /// already excludes them without needing a name-based check.
 pub fn methods_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<MethodSignature> {
     let mut out = Vec::new();
-    collect_methods(tree.root_node(), source, type_name, &mut out);
+    collect_methods(tree.root_node(), source, type_name, false, &mut out);
     out
 }
 
-fn collect_methods(node: Node, source: &str, type_name: &str, out: &mut Vec<MethodSignature>) {
+/// Every method declared directly in `type_name`'s class or interface
+/// body, regardless of visibility/`static`/`final` — completion's
+/// `this.`/`super.` listing (`SPEC.md` §4), as opposed to
+/// `methods_in_type`'s "what's overridable" filtering.
+pub fn all_methods_in_type(tree: &Tree, source: &str, type_name: &str) -> Vec<MethodSignature> {
+    let mut out = Vec::new();
+    collect_methods(tree.root_node(), source, type_name, true, &mut out);
+    out
+}
+
+fn collect_methods(node: Node, source: &str, type_name: &str, unfiltered: bool, out: &mut Vec<MethodSignature>) {
     let is_target = matches!(node.kind(), "class_declaration" | "interface_declaration")
         && node
             .child_by_field_name("name")
@@ -147,7 +162,7 @@ fn collect_methods(node: Node, source: &str, type_name: &str, out: &mut Vec<Meth
         if let Some(body) = node.child_by_field_name("body") {
             let mut cursor = body.walk();
             for child in body.children(&mut cursor) {
-                if let Some(sig) = method_signature(child, source) {
+                if let Some(sig) = method_signature(child, source, unfiltered) {
                     out.push(sig);
                 }
             }
@@ -157,7 +172,7 @@ fn collect_methods(node: Node, source: &str, type_name: &str, out: &mut Vec<Meth
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_methods(child, source, type_name, out);
+        collect_methods(child, source, type_name, unfiltered, out);
     }
 }
 
@@ -285,5 +300,17 @@ mod tests {
         let source = "class Bar {\n    void run() {}\n}\n";
         let tree = parsed(source);
         assert_eq!(methods_in_type(&tree, source, "NoSuchType"), vec![]);
+    }
+
+    #[test]
+    fn all_methods_in_type_includes_static_private_and_final_methods() {
+        let source = "class Bar {\n    public static void a() {}\n    private void b() {}\n    public final void c() {}\n    public void d() {}\n}\n";
+        let tree = parsed(source);
+
+        let methods = all_methods_in_type(&tree, source, "Bar");
+
+        assert_eq!(methods.len(), 4);
+        let names: Vec<&str> = methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
     }
 }

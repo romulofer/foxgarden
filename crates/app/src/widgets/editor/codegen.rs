@@ -529,26 +529,35 @@ pub fn show_generate_accessors_dialog(
     }
 }
 
-/// Finds a `.java` file anywhere in `node`'s subtree whose name (without
-/// extension) is exactly `stem` — "Override Method"'s way of turning a
-/// superclass's simple name (`syntax::superclass_name`) into a source file
-/// to look its methods up in. Deliberately limited to files already in the
-/// project's own (already-filtered, skip-list-applied) tree rather than a
-/// fresh filesystem walk — a JDK/library supertype has no file in the
-/// project at all, so this correctly returns `None` for one rather than
-/// searching disk for it.
-pub fn find_java_file_by_stem(node: &FileNode, stem: &str) -> Option<std::path::PathBuf> {
+/// Finds a source file of the given `extension` (no leading dot — `"java"`,
+/// `"kt"`) anywhere in `node`'s subtree whose name (without extension) is
+/// exactly `stem` — generalizes what was originally "Override Method"'s
+/// Java-only way of turning a superclass's simple name
+/// (`syntax::superclass_name`) into a source file to look its methods up
+/// in, now shared with dot-completion's cross-project member lookup
+/// (`SPEC.md` §4) for both languages. Deliberately limited to files already
+/// in the project's own (already-filtered, skip-list-applied) tree rather
+/// than a fresh filesystem walk — a JDK/library/stdlib type has no file in
+/// the project at all, so this correctly returns `None` for one rather
+/// than searching disk for it.
+pub fn find_source_file_by_stem(node: &FileNode, stem: &str, extension: &str) -> Option<std::path::PathBuf> {
     match node.kind {
         FileKind::File => {
-            let is_java = node.path.extension().and_then(|ext| ext.to_str()) == Some("java");
+            let matches_ext = node.path.extension().and_then(|ext| ext.to_str()) == Some(extension);
             let matches_stem = node.path.file_stem().and_then(|s| s.to_str()) == Some(stem);
-            (is_java && matches_stem).then(|| node.path.clone())
+            (matches_ext && matches_stem).then(|| node.path.clone())
         }
         FileKind::Dir => node
             .children
             .iter()
-            .find_map(|child| find_java_file_by_stem(child, stem)),
+            .find_map(|child| find_source_file_by_stem(child, stem, extension)),
     }
+}
+
+/// "Override Method"'s original entry point — kept as a one-line wrapper
+/// so its one existing call site doesn't need to change at all.
+pub fn find_java_file_by_stem(node: &FileNode, stem: &str) -> Option<std::path::PathBuf> {
+    find_source_file_by_stem(node, stem, "java")
 }
 
 /// The literal Java expression `Override Method`'s generated stub should

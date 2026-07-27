@@ -12,6 +12,7 @@ mod common;
 mod auto_edit;
 mod click;
 mod codegen;
+mod completion;
 mod context_menu;
 mod line_comment;
 mod multi_cursor;

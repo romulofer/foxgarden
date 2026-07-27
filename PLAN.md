@@ -339,9 +339,9 @@ through the same code.
 
 - [x] Phase 0 — popup shell
 - [x] Phase 1 — word-completion end to end
-- [ ] Phase 2a — Java receiver-type resolution
-- [ ] Phase 2b — Kotlin receiver-type resolution
-- [ ] Phase 3a — generalized file-finder
-- [ ] Phase 3b — Java cross-project member lookup + wiring
+- [x] Phase 2a — Java receiver-type resolution
+- [x] Phase 2b — Kotlin receiver-type resolution
+- [x] Phase 3a — generalized file-finder
+- [x] Phase 3b — Java cross-project member lookup + wiring (automated checkpoint green; live click-through in `cargo run -p foxgarden` still to be done)
 - [ ] Phase 3c — Kotlin cross-project member lookup + wiring
 - [ ] Phase 4 — method-aware insertion

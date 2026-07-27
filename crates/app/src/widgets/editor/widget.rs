@@ -4,7 +4,7 @@ use std::sync::Arc;
 use egui::{Event, FontId, Key};
 use fg_core::{Document, Language, Project};
 use ropey::Rope;
-use syntax::IncrementalParser;
+use syntax::{IncrementalParser, Tree};
 
 use super::auto_edit::{
     CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, current_line_range, duplicate_line,
@@ -1238,6 +1238,42 @@ pub fn show(
         }
     }
 
+    // Dot-completion's own trigger (`SPEC.md` §3): typing `.` right after a
+    // non-empty identifier run opens the popup anchored at the cursor
+    // (right after the dot — nothing typed yet, so every resolved member
+    // shows unfiltered), same "checked after this frame's edit lands"
+    // timing as the word-completion trigger just above (`parser`'s tree is
+    // already reparsed to include the just-typed `.` by this point,
+    // `apply_edit` having run synchronously earlier this frame). Resolving
+    // the receiver's type and failing to find an in-project source file
+    // for it (`dot_completion_candidates` returning `None`) is a silent
+    // no-op — the popup just doesn't open, and word-completion's own
+    // trigger above still applies once enough identifier characters follow
+    // (`SPEC.md` §3's documented degrade-gracefully case, e.g. typing `.`
+    // after a JDK-typed local).
+    if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
+        let typed_dot = ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(s) if s == ".")));
+        if typed_dot
+            && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
+            && let Some(language) = doc.language
+            && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        {
+            let before_dot_char = cursor_char.saturating_sub(1);
+            let word_range = word_before_cursor(&old_text, before_dot_char);
+            if !word_range.is_empty() {
+                let receiver_start = char_to_byte(&old_text, word_range.start);
+                let receiver_end = char_to_byte(&old_text, word_range.end);
+                let receiver = old_text[receiver_start..receiver_end].to_string();
+                if let Some(candidates) =
+                    dot_completion_candidates(language, tree, &old_text, receiver_end, &receiver, project)
+                {
+                    let anchor_byte = char_to_byte(&old_text, cursor_char);
+                    *completion = Some(CompletionState::open(anchor_byte, candidates));
+                }
+            }
+        }
+    }
+
     // Completes the Alt+Click interception begun above `shell_out`: place a
     // bare secondary cursor at the click position, then restore the
     // primary cursor to `alt_click_prior_primary` (undoing the move the
@@ -1816,6 +1852,111 @@ fn word_completion_candidates(
     }));
 
     candidates
+}
+
+/// Dot-completion's real candidate source (`SPEC.md` §4), dispatched by
+/// language — the one entry point the trigger above calls, mirroring
+/// `syntax::type_of_identifier`'s own dispatcher shape. Kotlin isn't wired
+/// yet (`PLAN.md` Phase 3c); every other language has no dot-completion at
+/// all, same as they have no `type_of_identifier` resolution to begin
+/// with.
+fn dot_completion_candidates(
+    language: Language,
+    tree: &Tree,
+    source: &str,
+    cursor_byte: usize,
+    receiver: &str,
+    project: Option<&Project>,
+) -> Option<Vec<CompletionItem>> {
+    match language {
+        Language::Java => java_dot_completion_candidates(tree, source, cursor_byte, receiver, project),
+        _ => None,
+    }
+}
+
+/// Java's dot-completion candidates (`SPEC.md` §4): `this.`/`super.` route
+/// directly through `syntax::enclosing_class`/`superclass_name` (no new
+/// resolution logic, per §3's own note) to an *unfiltered* member listing
+/// — every field/method regardless of visibility, since code inside the
+/// same class sees all of its own members. A bare identifier routes
+/// through `syntax::type_of_identifier_java`; if it resolves to a type
+/// with a source file elsewhere in the project, its members are offered
+/// through `methods_in_type`'s existing external-visibility filtering,
+/// plus one level of inherited members via the same
+/// `superclass_name`/`find_source_file_by_stem` chain "Override Method"
+/// already uses. Anything unresolvable at any step (no enclosing class, no
+/// superclass, a JDK/stdlib type with no project file, a chained/call-
+/// expression receiver `type_of_identifier_java` doesn't resolve at all)
+/// is `None` — the caller treats that as "don't open the popup," not an
+/// error.
+fn java_dot_completion_candidates(
+    tree: &Tree,
+    source: &str,
+    cursor_byte: usize,
+    receiver: &str,
+    project: Option<&Project>,
+) -> Option<Vec<CompletionItem>> {
+    let (class_name, _) = syntax::enclosing_class(tree, source, cursor_byte)?;
+
+    if receiver == "this" {
+        return Some(java_members_as_items(tree, source, &class_name, true));
+    }
+
+    if receiver == "super" {
+        let super_name = syntax::superclass_name(tree, source, &class_name)?;
+        let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))?;
+        let super_source = std::fs::read_to_string(&super_path).ok()?;
+        let mut super_parser = IncrementalParser::new(Language::Java);
+        let super_tree = super_parser.parse(&super_source).clone();
+        return Some(java_members_as_items(&super_tree, &super_source, &super_name, true));
+    }
+
+    let type_name = syntax::type_of_identifier_java(tree, source, cursor_byte, receiver)?;
+    let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "java"))?;
+    let type_source = std::fs::read_to_string(&type_path).ok()?;
+    let mut type_parser = IncrementalParser::new(Language::Java);
+    let type_tree = type_parser.parse(&type_source).clone();
+
+    let mut items = java_members_as_items(&type_tree, &type_source, &type_name, false);
+
+    if let Some(super_name) = syntax::superclass_name(&type_tree, &type_source, &type_name)
+        && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))
+        && let Ok(super_source) = std::fs::read_to_string(&super_path)
+    {
+        let mut super_parser = IncrementalParser::new(Language::Java);
+        let super_tree = super_parser.parse(&super_source).clone();
+        items.extend(java_members_as_items(&super_tree, &super_source, &super_name, false));
+    }
+
+    Some(items)
+}
+
+/// `type_name`'s own fields and methods as `CompletionItem`s — `unfiltered`
+/// selects `fields_in_type`'s `include_static` and `all_methods_in_type`
+/// over `methods_in_type`'s overridable-only filtering, for the `this.`/
+/// `super.` case.
+fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = syntax::fields_in_type(tree, source, type_name, unfiltered)
+        .into_iter()
+        .map(|f| CompletionItem {
+            label: f.name,
+            kind: CompletionKind::Field,
+            detail: Some(f.java_type),
+        })
+        .collect();
+
+    let methods = if unfiltered {
+        syntax::all_methods_in_type(tree, source, type_name)
+    } else {
+        syntax::methods_in_type(tree, source, type_name)
+    };
+    items.extend(methods.into_iter().map(|m| CompletionItem {
+        label: m.name,
+        kind: CompletionKind::Method,
+        detail: Some(m.return_type),
+    }));
+
+    items
 }
 
 /// Removes and returns the first event in this frame's input queue matching

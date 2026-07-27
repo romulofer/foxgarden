@@ -23,12 +23,14 @@ pub struct ClassFields {
 }
 
 /// Every field declared directly in `body` (a `class_declaration`'s body
-/// node), in source order. Static fields are skipped (accessors for them
-/// are a much rarer, more deliberate choice than for instance state, and
-/// this keeps the generated set to what's usually wanted). A
-/// multi-variable declaration (`int x, y;`) yields one `FieldInfo` per
-/// variable.
-fn fields_in_class_body(body: Node, source: &str) -> Vec<FieldInfo> {
+/// node), in source order. Static fields are skipped unless
+/// `include_static` is set — accessors (`java_classes_with_fields`'s use)
+/// want them skipped (a much rarer, more deliberate choice than for
+/// instance state), completion (`fields_in_type`'s use) wants them
+/// included, since a class's constants are legitimately callable off
+/// `this.`/`super.`. A multi-variable declaration (`int x, y;`) yields one
+/// `FieldInfo` per variable.
+pub(crate) fn fields_in_class_body(body: Node, source: &str, include_static: bool) -> Vec<FieldInfo> {
     let mut fields = Vec::new();
     let mut body_cursor = body.walk();
     for field_decl in body.children(&mut body_cursor) {
@@ -45,7 +47,7 @@ fn fields_in_class_body(body: Node, source: &str) -> Vec<FieldInfo> {
         // between the declaration's start and its type — there's nothing
         // else that could appear there.
         let modifiers_text = &source[field_decl.start_byte()..type_node.start_byte()];
-        if modifiers_text.contains("static") {
+        if modifiers_text.contains("static") && !include_static {
             continue;
         }
         let is_final = modifiers_text.contains("final");
@@ -83,7 +85,7 @@ fn collect_classes_with_fields(node: Node, source: &str, out: &mut Vec<ClassFiel
         && let Some(name_node) = node.child_by_field_name("name")
         && let Some(body) = node.child_by_field_name("body")
     {
-        let fields = fields_in_class_body(body, source);
+        let fields = fields_in_class_body(body, source, false);
         if !fields.is_empty() {
             out.push(ClassFields {
                 name: source[name_node.byte_range()].to_string(),
@@ -96,6 +98,36 @@ fn collect_classes_with_fields(node: Node, source: &str, out: &mut Vec<ClassFiel
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_classes_with_fields(child, source, out);
+    }
+}
+
+/// Every field declared directly in `type_name`'s class body, anywhere in
+/// `tree` — analogous to `methods::methods_in_type` but for fields, and
+/// completion's (`SPEC.md` §4) entry point for "what fields does this
+/// type have," as opposed to `java_classes_with_fields`'s "every class
+/// that has fields" whole-file listing. `include_static` is threaded
+/// straight through to `fields_in_class_body`.
+pub fn fields_in_type(tree: &Tree, source: &str, type_name: &str, include_static: bool) -> Vec<FieldInfo> {
+    let mut out = Vec::new();
+    collect_fields_in_type(tree.root_node(), source, type_name, include_static, &mut out);
+    out
+}
+
+fn collect_fields_in_type(node: Node, source: &str, type_name: &str, include_static: bool, out: &mut Vec<FieldInfo>) {
+    if node.kind() == "class_declaration"
+        && node
+            .child_by_field_name("name")
+            .is_some_and(|n| &source[n.byte_range()] == type_name)
+    {
+        if let Some(body) = node.child_by_field_name("body") {
+            out.extend(fields_in_class_body(body, source, include_static));
+        }
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_fields_in_type(child, source, type_name, include_static, out);
     }
 }
 
@@ -240,5 +272,50 @@ mod tests {
         let classes = classes_in(source);
 
         assert_eq!(&source[classes[0].insertion_byte..classes[0].insertion_byte + 1], "}");
+    }
+
+    fn tree_of(source: &str) -> Tree {
+        let mut parser = IncrementalParser::new(Language::Java);
+        parser.parse(source).clone()
+    }
+
+    #[test]
+    fn fields_in_type_finds_a_named_types_fields() {
+        let source = "class Foo {\n    private int x;\n}\nclass Bar {\n    private int y;\n}\n";
+        let tree = tree_of(source);
+        let fields = fields_in_type(&tree, source, "Bar", false);
+        assert_eq!(
+            fields,
+            vec![FieldInfo {
+                name: "y".to_string(),
+                java_type: "int".to_string(),
+                is_final: false
+            }]
+        );
+    }
+
+    #[test]
+    fn fields_in_type_skips_static_fields_by_default() {
+        let source = "class Foo {\n    private static int counter;\n    private int id;\n}\n";
+        let tree = tree_of(source);
+        let fields = fields_in_type(&tree, source, "Foo", false);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "id");
+    }
+
+    #[test]
+    fn fields_in_type_includes_static_fields_when_asked() {
+        let source = "class Foo {\n    private static int counter;\n    private int id;\n}\n";
+        let tree = tree_of(source);
+        let fields = fields_in_type(&tree, source, "Foo", true);
+        assert_eq!(fields.len(), 2);
+        assert!(fields.iter().any(|f| f.name == "counter"));
+    }
+
+    #[test]
+    fn fields_in_type_returns_empty_for_an_unknown_type() {
+        let source = "class Foo {\n    private int x;\n}\n";
+        let tree = tree_of(source);
+        assert_eq!(fields_in_type(&tree, source, "NoSuchType", false), vec![]);
     }
 }

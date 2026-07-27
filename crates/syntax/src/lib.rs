@@ -1,4 +1,5 @@
 mod brackets;
+mod completion;
 mod diagnostics;
 mod document_parser;
 mod fields;
@@ -11,12 +12,13 @@ mod selection;
 mod sticky;
 
 pub use brackets::bracket_match;
+pub use completion::{type_of_identifier, type_of_identifier_java, type_of_identifier_kotlin};
 pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
-pub use fields::{ClassFields, FieldInfo, java_classes_with_fields};
+pub use fields::{ClassFields, FieldInfo, fields_in_type, java_classes_with_fields};
 pub use folding::{FoldRange, foldable_ranges};
 pub use highlight::{Scope, highlight_spans};
-pub use methods::{MethodSignature, enclosing_class, methods_in_type, superclass_name};
+pub use methods::{MethodSignature, all_methods_in_type, enclosing_class, methods_in_type, superclass_name};
 pub use selection::expand_selection;
 pub use sticky::enclosing_scope_starts;
 pub use tree_sitter::{InputEdit, Point, Tree};

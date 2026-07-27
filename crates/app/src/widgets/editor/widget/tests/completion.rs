@@ -1,0 +1,152 @@
+//! Dot-completion's candidate resolution (`SPEC.md` §4, `PLAN.md` Phase
+//! 3b): `dot_completion_candidates`/`java_dot_completion_candidates`
+//! directly, rather than through the full `show` harness — same "pure
+//! function first, widget wiring proven live separately" split
+//! `word_completion_candidates` itself already has no direct test of its
+//! own, for the same reason. The actual in-editor trigger (typing `.`) is
+//! verified live in `cargo run -p foxgarden`, not here.
+
+use super::super::*;
+use fg_core::Language;
+
+fn tree_of(source: &str) -> Tree {
+    let mut parser = IncrementalParser::new(Language::Java);
+    parser.parse(source).clone()
+}
+
+fn labels(items: &[CompletionItem]) -> Vec<String> {
+    let mut out: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+    out.sort_unstable();
+    out
+}
+
+#[test]
+fn this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
+    let source = "class Foo {\n    private int x;\n    private static final int MAX = 1;\n    private void helper() {\n    }\n    public void run() {\n    }\n}\n";
+    let tree = tree_of(source);
+    let cursor = source.find("helper").unwrap();
+
+    let items =
+        java_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+
+    assert_eq!(labels(&items), vec!["MAX", "helper", "run", "x"]);
+}
+
+#[test]
+fn super_dot_offers_the_superclasss_members_from_the_project_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Base.java"),
+        "public class Base {\n    private int baseField;\n    public void run() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "public class Foo extends Base {\n    public void go() {\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("go").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project))
+        .expect("super. should find Base.java in the project tree");
+
+    assert_eq!(labels(&items), vec!["baseField", "run"]);
+}
+
+#[test]
+fn super_dot_reports_none_when_the_superclass_has_no_project_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let foo_source = "public class Foo extends SomeJdkThing {\n    public void go() {\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("go").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project)).is_none());
+}
+
+#[test]
+fn a_local_variable_typed_as_another_project_class_offers_that_classs_public_members() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Bar.java"),
+        "public class Bar {\n    public void baz() {\n    }\n    private void secret() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "class Foo {\n    void run() {\n        Bar b = new Bar();\n        int x = 0;\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("int x").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+        .expect("a local typed as an in-project class should resolve");
+
+    // `secret` is private on `Bar` — an external receiver keeps
+    // `methods_in_type`'s existing visibility filtering, unlike `this.`/
+    // `super.`'s unfiltered listing.
+    assert_eq!(labels(&items), vec!["baz"]);
+}
+
+#[test]
+fn an_external_receivers_one_level_supertype_is_included() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Baz.java"), "public class Baz {\n    public void inherited() {\n    }\n}\n").unwrap();
+    std::fs::write(
+        dir.path().join("Bar.java"),
+        "public class Bar extends Baz {\n    public void baz() {\n    }\n}\n",
+    )
+    .unwrap();
+    let foo_source = "class Foo {\n    void run() {\n        Bar b = new Bar();\n        int x = 0;\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("int x").unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+        .expect("a local typed as an in-project class should resolve");
+
+    assert_eq!(labels(&items), vec!["baz", "inherited"]);
+}
+
+#[test]
+fn a_jdk_typed_local_produces_no_candidates() {
+    let foo_source = "class Foo {\n    void run() {\n        String s = \"hi\";\n        int x = 0;\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("int x").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "s", Some(&project)).is_none());
+}
+
+#[test]
+fn an_undeclared_receiver_produces_no_candidates() {
+    let foo_source = "class Foo {\n    void run() {\n        int x = 0;\n    }\n}\n";
+    let tree = tree_of(foo_source);
+    let cursor = foo_source.find("int x").unwrap();
+
+    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "neverDeclared", None).is_none());
+}
+
+#[test]
+fn this_dot_reports_none_outside_any_class() {
+    let source = "// just a comment\n";
+    let tree = tree_of(source);
+    assert!(java_dot_completion_candidates(&tree, source, 0, "this", None).is_none());
+}
+
+#[test]
+fn dispatcher_routes_java_to_java_dot_completion_candidates() {
+    let source = "class Foo {\n    private void helper() {\n    }\n    void run() {\n        int x = 0;\n    }\n}\n";
+    let tree = tree_of(source);
+    let cursor = source.find("int x").unwrap();
+
+    let items = dot_completion_candidates(Language::Java, &tree, source, cursor, "this", None).expect("Java should dispatch to java_dot_completion_candidates");
+    assert_eq!(labels(&items), vec!["helper", "run"]);
+}
+
+#[test]
+fn dispatcher_returns_none_for_kotlin_until_phase_3c_wires_it_up() {
+    let source = "class Foo {\n    fun run() {\n        val x = 0\n    }\n}\n";
+    let mut parser = IncrementalParser::new(Language::Kotlin);
+    let tree = parser.parse(source).clone();
+    let cursor = source.find("val x").unwrap();
+
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None).is_none());
+}

@@ -337,6 +337,28 @@ fn find_java_file_by_stem_returns_none_when_not_found() {
 }
 
 #[test]
+fn find_source_file_by_stem_finds_a_kotlin_file_by_extension() {
+    let tree = dir(
+        "/root",
+        vec![
+            java_file("/root/Main.kt"),
+            dir("/root/pkg", vec![java_file("/root/pkg/Base.kt")]),
+        ],
+    );
+
+    assert_eq!(
+        find_source_file_by_stem(&tree, "Base", "kt"),
+        Some(std::path::PathBuf::from("/root/pkg/Base.kt"))
+    );
+}
+
+#[test]
+fn find_source_file_by_stem_does_not_cross_extensions() {
+    let tree = dir("/root", vec![java_file("/root/Base.java")]);
+    assert_eq!(find_source_file_by_stem(&tree, "Base", "kt"), None);
+}
+
+#[test]
 fn default_return_for_void_is_none() {
     assert_eq!(default_return_for("void"), None);
 }
