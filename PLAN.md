@@ -6,17 +6,20 @@ Replaces this file's previous single-purpose scope (Spring endpoint map +
 terminal panel); both are shipped — see this file's own prior build-status
 history in git, and `FEATURES.md`'s Shipped section — and everything below
 is what's left. Local-only planning doc (tracked on `ide-henshin`, same as
-`SPEC.md`) — a commitment to an *order*, not a timeline.
+`SPEC.md`) — a commitment to an _order_, not a timeline.
 
-**27 tracks, one per `SPEC.md` section**, grouped into the same three
-tiers, ordered easiest-to-hardest within each tier as `FEATURES.md` itself
-orders them. A track's own phases are independent of every *other*
-track's phases unless a dependency is named explicitly (mirroring the
-previous pass's own "Phases 0/1 don't depend on each other" convention) —
-most tracks here are fully independent of each other and can be picked up
-in any order or in parallel across sessions; the explicit dependency notes
-below (e.g. `Spring config autocomplete` needs `Maven/Gradle awareness`
-first) are the exceptions, not the rule.
+**22 tracks**, grouped into the same three tiers, ordered easiest-to-
+hardest within each tier as `FEATURES.md` itself orders them. Track
+numbers match `SPEC.md`'s own section numbers and are **not** renumbered
+after trimming — a track's number is a stable id, not a position, so a
+removed track just leaves a gap rather than shifting every later one. A
+track's own phases are independent of every _other_ track's phases unless
+a dependency is named explicitly (mirroring the previous pass's own
+"Phases 0/1 don't depend on each other" convention) — most tracks here
+are fully independent of each other and can be picked up in any order or
+in parallel across sessions; the explicit dependency notes below (e.g.
+`Spring config autocomplete` needs `Maven/Gradle awareness` first) are the
+exceptions, not the rule.
 
 Same checkpoint discipline throughout: `cargo build --workspace`, `cargo
 test --workspace`, `cargo clippy --workspace --all-targets` all green,
@@ -48,10 +51,6 @@ Track 20  LSP integration
     ├──► Track 17  Peek definition
     └──► Track 27  DI/bean graph visualizer ◄── Track 21 (both needed)
 
-Track 3   Command palette (action registry)
-    │
-    └──► Track 8   Customizable keybindings
-
 Track 18  Inline diff viewer widget
     │
     └──► Track 4   Local (non-git) file history (its own revert-diff view)
@@ -60,10 +59,6 @@ Track 19  Large file handling — full virtualization
     │
     └──► Track 10  Code folding (re-verify this dependency before treating
                     it as hard — see Track 10's own Phase 1)
-
-Track 24  Plugin/extension model
-    │
-    └──► Track 25  Extension marketplace
 ```
 
 ---
@@ -118,33 +113,6 @@ building it — flag and skip rather than force a syntactic answer to what
 may be a semantic-only distinction.
 
 **Checkpoint 2:** `cargo test -p syntax` green per distinction landed.
-
----
-
-## Track 3 — Command palette
-
-**Phase 1 — action registry + dispatcher.** New `Command { id, label,
-shortcut }` type and a registry (`crates/app/src/commands.rs` or similar)
-covering every currently-hardcoded shortcut/menu item. `app.rs`'s shortcut
-block and every `menu_bar.rs` item migrated to call a single `fn
-run_command(app: &mut FoxGardenApp, id: &str)` dispatcher instead of
-their own inline logic — a real refactor of existing call sites, not new
-behavior yet (every shortcut/menu item must do exactly what it did before,
-just through the new indirection).
-
-**Checkpoint 1:** full suite green; live-verify every existing shortcut
-and every existing Tools/menu item still does exactly what it did before
-this refactor — a regression here would be silent and easy to miss, so
-this is worth walking the *entire* existing shortcut/menu list once, not
-spot-checking a few.
-
-**Phase 2 — palette UI.** `Ctrl+Shift+P` (verify free against
-`menu_bar.rs`'s current shortcuts) opens a `go_to_file.rs`-shaped fuzzy
-list over the registry; picking an entry calls `run_command`.
-
-**Checkpoint 2:** full suite green; live-verify the palette opens, filters
-by typed text, and invoking an entry actually runs it and closes the
-palette.
 
 ---
 
@@ -213,7 +181,7 @@ both modes against a real dirty tab.
 tab currently showing the "changed on disk" banner; resumes once
 Reload/Keep Mine resolves it.
 
-**Checkpoint 2:** full suite green; live-verify auto-save does *not* fire
+**Checkpoint 2:** full suite green; live-verify auto-save does _not_ fire
 while the conflict banner is showing, and does resume normally after
 resolving it.
 
@@ -236,7 +204,7 @@ the block spans.
 **Checkpoint 2:** full suite green; live-verify typing over a block
 selection edits every spanned row identically, Backspace/Delete likewise.
 
-**Phase 3 — block paste.** Clipboard text split on `\n`, row *i* inserted
+**Phase 3 — block paste.** Clipboard text split on `\n`, row _i_ inserted
 at `(start_line + i, start_col)`; a row-count mismatch (fewer/more
 clipboard lines than the block spans) leaves the surplus/shortfall
 untouched rather than wrapping or clearing.
@@ -248,29 +216,6 @@ copy → block-paste round-trip.
 ---
 
 # Substantial tier
-
-## Track 8 — Customizable keybindings
-
-Depends on Track 3 (`Command palette`)'s action registry existing first.
-
-**Phase 1 — keybindings.json + dispatcher.** A persisted `Command.id ->
-chord` map; every input-event check in `app.rs` replaced by a single
-lookup-then-`run_command` dispatch.
-
-**Checkpoint 1:** full suite green; live-verify every existing shortcut
-still fires correctly through the new lookup path (same "walk the whole
-list, don't spot-check" discipline Track 3's own Phase 1 checkpoint
-calls for).
-
-**Phase 2 — rebinding UI.** Settings > Keyboard Shortcuts lists every
-command + its chord, with a capture-and-rebind field; a conflicting chord
-surfaces a warning rather than silently double-binding.
-
-**Checkpoint 2:** full suite green; live-verify rebinding a shortcut takes
-effect immediately, and rebinding to an already-used chord warns instead
-of silently succeeding.
-
----
 
 ## Track 9 — Git diff gutter, inline blame, commit/stage/push UI
 
@@ -313,7 +258,7 @@ current `FoldMap`/import-folding implementation directly; determine
 concretely whether it already generalizes to arbitrary user-toggled
 regions or needs its own second mechanism, and whether `Track 19`'s full
 virtualization work is actually a hard prerequisite or `FEATURES.md`'s
-own conservative guess. This phase's *output* is that determination, not
+own conservative guess. This phase's _output_ is that determination, not
 code — don't write Phase 2 against an assumed answer.
 
 **Phase 2 — fold-range computation.** Per-language tree-sitter query for
@@ -401,7 +346,7 @@ starts (checked via `docker ps`, not just panel output).
 stack; app-close stops every tracked container.
 
 **Checkpoint 2:** full suite green; live-verify Stop actually ends the
-container, closing the panel does *not*, and quitting the app stops
+container, closing the panel does _not_, and quitting the app stops
 everything still tracked.
 
 ---
@@ -418,28 +363,6 @@ its `WorkspaceEdit` via the existing edit-application path.
 **Checkpoint 1:** full suite green; live-verify a real diagnostic with a
 known quick fix (e.g. an unused import a language server flags) offers
 and correctly applies it.
-
----
-
-## Track 16 — Minimap
-
-**Phase 1 — viewport-bounded rendering.** A narrow strip painting a
-coarse per-line color impression; scoped to the currently-scrolled-near
-region at full detail from day one (not deferred past this phase — see
-`SPEC.md` §16's own cost-sequencing note) with a solid-color placeholder
-for the rest.
-
-**Checkpoint 1:** full suite green; live-verify the minimap renders a
-recognizable color impression of a real syntax-highlighted file without
-a visible frame-rate hit on a large file.
-
-**Phase 2 — viewport indicator + click/drag-to-scroll.** An overlay
-rectangle showing the current viewport; clicking/dragging it scrolls the
-main editor.
-
-**Checkpoint 2:** full suite green; live-verify clicking anywhere on the
-minimap scrolls to that position, and dragging the viewport indicator
-scrolls continuously.
 
 ---
 
@@ -650,45 +573,6 @@ breakpoint.
 
 ---
 
-## Track 24 — Plugin/extension model
-
-**This track is explicitly the most speculative in this plan** —
-`SPEC.md` §24 itself resolves no concrete API design; the phases below are
-what a *first design pass* would need to do, not code to write from a
-standing start.
-
-**Phase 1 — sandboxing model decision.** A real prototype (not just a
-written decision) of the WASM approach (`wasmtime`/`extism`): a minimal
-host-function surface (read the current document's text, insert a plain
-text edit) callable from a trivial example plugin, proving the sandboxing
-boundary actually works end-to-end before committing further.
-
-**Checkpoint 1:** a working minimal example plugin, live-demonstrated
-(not a headless test — this phase's own success criterion is "a real
-external `.wasm` file can read and modify editor state through the host
-API," which is inherently an integration demo, not a unit test).
-
-**Phase 2 — real API surface + loading mechanism.** Informed by whatever
-Phase 1's prototype revealed about what's actually ergonomic to expose;
-deliberately not designed further in this plan, since `SPEC.md` §24 itself
-defers this to whenever the track is actually picked up.
-
----
-
-## Track 25 — Extension marketplace
-
-**Hard dependency on Track 24 (`Plugin/extension model`) reaching a
-stable API — not startable before then.**
-
-**Phase 1 — static registry + install UI.** A hosted JSON manifest;
-in-app browse/search (a `go_to_file.rs`-shaped fuzzy list) + install
-(download, checksum-verify, load via Track 24's mechanism).
-
-**Checkpoint 1:** full suite green; live-verify installing a real
-published plugin end-to-end (browse → install → it loads and runs).
-
----
-
 ## Track 26 — Profiler integration
 
 Depends on Track 22 (`Build/run/test integration`) for process launch/
@@ -740,16 +624,16 @@ to the right file/line.
 ## Build status (live)
 
 ### Moderate tier
+
 - [ ] Track 1 — Multi-select in the tree
 - [ ] Track 2 — Richer Java/Kotlin syntax highlighting
-- [ ] Track 3 — Command palette
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration
 - [ ] Track 6 — Auto-save
 - [ ] Track 7 — Rectangular (block) paste
 
 ### Substantial tier
-- [ ] Track 8 — Customizable keybindings
+
 - [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
 - [ ] Track 10 — Code folding
 - [ ] Track 11 — Multi-window / split-pane editing
@@ -757,17 +641,15 @@ to the right file/line.
 - [ ] Track 13 — Code coverage overlay
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions
-- [ ] Track 16 — Minimap
 - [ ] Track 17 — Peek definition
 - [ ] Track 18 — Inline diff viewer widget
 
 ### Major tier
+
 - [ ] Track 19 — Large file handling — full viewport virtualization
 - [ ] Track 20 — LSP integration
 - [ ] Track 21 — Maven/Gradle awareness
 - [ ] Track 22 — Build/run/test integration
 - [ ] Track 23 — Debugger
-- [ ] Track 24 — Plugin/extension model
-- [ ] Track 25 — Extension marketplace
 - [ ] Track 26 — Profiler integration
 - [ ] Track 27 — Dependency-injection / bean graph visualizer

@@ -39,17 +39,21 @@ orderings also drive `PLAN.md`'s own track sequencing.
 
 ## Contents
 
-**Moderate tier** (§1-§7) — contained to a subsystem or two:
+Section numbers are stable ids matching `PLAN.md`'s own track numbers,
+not a position — §3 (Command palette), §8 (Customizable keybindings), §16
+(Minimap), §24 (Plugin/extension model), and §25 (Extension marketplace)
+were cut from scope; their numbers are retired, not reassigned, rather
+than renumbering every section after them.
+
+**Moderate tier** — contained to a subsystem or two:
 1. Multi-select in the tree
 2. Richer Java/Kotlin syntax highlighting (remaining scope)
-3. Command palette
 4. Local (non-git) file history
 5. Static analysis integration
 6. Auto-save
 7. Rectangular (block) paste
 
-**Substantial tier** (§8-§18) — real new subsystems, several files touched:
-8. Customizable keybindings
+**Substantial tier** — real new subsystems, several files touched:
 9. Git diff gutter, inline blame, commit/stage/push UI
 10. Code folding
 11. Multi-window / split-pane editing
@@ -57,19 +61,16 @@ orderings also drive `PLAN.md`'s own track sequencing.
 13. Code coverage overlay
 14. Docker/container run integration
 15. Quick-fix intention actions
-16. Minimap
 17. Peek definition
 18. Inline diff viewer widget
 
-**Major tier** (§19-§27) — architecture-level, external processes, or a
-rewrite of a core piece:
+**Major tier** — architecture-level, external processes, or a rewrite of
+a core piece:
 19. Large file handling — full viewport virtualization
 20. LSP integration
 21. Maven/Gradle awareness
 22. Build/run/test integration
 23. Debugger
-24. Plugin/extension model
-25. Extension marketplace
 26. Profiler integration
 27. Dependency-injection / bean graph visualizer
 
@@ -158,44 +159,6 @@ against real `tree-sitter-java`/`tree-sitter-kotlin-ng` parse output before
 writing the query** (`TECHNICAL_DEBT.md` #3's own established discipline)
 — this section names what's missing, not the exact node shapes, since
 those haven't been checked yet.
-
----
-
-## 3. Command palette
-
-`FEATURES.md`: `[SKIP]` — "needs a registry of actions to search over
-(most don't exist as decoupled, nameable actions yet) plus the search UI
-itself."
-
-**The real prerequisite, not the UI:** every current shortcut (`Ctrl+S`,
-`Ctrl+E`, `Ctrl+P`, `Ctrl+Shift+E`, `Ctrl+B`, `Ctrl+\``, `F11`, the Tools
-menu's codegen actions, ...) is implemented as an ad hoc `if ui.input(...)`
-check or an inline menu-item closure — not a callable, named, list-able
-unit. A command palette needs those decoupled into:
-
-```rust
-/// One nameable, invokable action — the unit both the command palette and
-/// (already-existing) menu items/shortcuts resolve to, so a command isn't
-/// defined twice in two different shapes.
-struct Command {
-    id: &'static str,       // stable key, e.g. "file.save"
-    label: &'static str,    // "Save File" — what the palette searches/shows
-    shortcut: Option<&'static str>,   // "Ctrl+S", shown as a hint, not parsed
-}
-```
-
-with a single `Vec<Command>` (or a build-time-const table) as the registry,
-and a `fn run_command(app: &mut FoxGardenApp, id: &str)` dispatcher that
-every existing shortcut/menu-item call site is migrated to call *through*,
-rather than continuing to invoke its own logic directly. This is real,
-cross-cutting refactor work touching `app.rs`'s shortcut block and every
-menu item in `menu_bar.rs` — the palette UI itself (a `Ctrl+Shift+P`-
-triggered popup, structurally another `go_to_file.rs`-shaped fuzzy list) is
-comparatively small once the registry exists.
-
-**Non-goals:** no user-configurable command *rebinding* through the palette
-(that's `Customizable keybindings`, §8, a separate and larger feature) —
-this just searches and invokes already-fixed shortcuts by name.
 
 ---
 
@@ -332,39 +295,6 @@ selections."
 ---
 
 # Substantial tier
-
-## 8. Customizable keybindings
-
-`FEATURES.md`: `[SKIP]` — "needs a config format and rebinding
-infrastructure threaded through every hardcoded shortcut check (currently
-just `Ctrl+S`, but every future shortcut adds to this)."
-
-**Depends on `Command palette`'s own registry (§3) existing first** — a
-rebindable shortcut needs a stable, named thing to rebind (`Command.id`),
-which is exactly what that registry defines; building keybinding
-customization without it means inventing the same registry twice.
-
-**Shape, once the registry exists:** a `keybindings.json` (mirroring
-`run_configs.json`'s own "a project-independent-but-still-`.foxgarden/`-
-adjacent JSON file" shape, though this one is a *user* setting, so it
-belongs alongside `eframe::Storage`'s other persisted Settings values, not
-under a project's `.foxgarden/`) mapping `Command.id -> key chord string`
-(`"file.save" -> "Ctrl+S"`). `app.rs`'s current hardcoded `if ui.input(|i|
-i.key_pressed(egui::Key::S) && i.modifiers.command)`-style checks are
-replaced by a single dispatcher: for every input event, look up whether
-its chord matches any entry in the loaded keybinding map, and if so call
-`run_command` (§3) with that entry's `Command.id`. A Settings > Keyboard
-Shortcuts panel lists every command + its current chord with a "click to
-rebind" capture field (press the new chord, it's recorded, conflicting
-with an existing binding surfaces a warning rather than silently creating
-a duplicate).
-
-**Non-goals:** no per-project keybinding overrides (global/user-level
-only, like every other Settings value); no vim/emacs *keybinding preset*
-import — a real per-shortcut rebind UI is the whole feature, not a preset
-picker on top of it.
-
----
 
 ## 9. Git diff gutter, inline blame, commit/stage/push UI
 
@@ -643,40 +573,6 @@ work a real language server already does correctly, and is exactly the
 kind of "syntax-only heuristic masquerading as semantic understanding"
 this codebase's own completion feature already draws a hard line against
 for anything beyond simple-name matching.
-
----
-
-## 16. Minimap
-
-`FEATURES.md`: `[SKIP]` — "a scaled-down whole-file overview beside the
-scrollbar with a viewport indicator and click-to-jump. Its own miniature
-rendering pass over the buffer, separate from the main editor's layout."
-
-**Shape:** a narrow (~100px) strip on the editor's right edge, painted as
-a heavily-downscaled render of the whole buffer — not literally shrinking
-the real per-line galleys (expensive, and illegible at that scale anyway),
-but a *simplified* second rendering pass: each line becomes a single thin
-horizontal bar, colored per-pixel-column by that column's dominant syntax
-`Scope` color (a coarse "line shape" impression, the way every existing
-minimap implementation actually works, not literal tiny text). A
-semi-transparent rectangle overlay shows the current viewport's position
-within the whole file; dragging it (or clicking anywhere on the minimap)
-scrolls the main editor to that position.
-
-**Cost consideration:** this is a *second* full-buffer pass on every
-edit/scroll for a large file — the same cost concern `Large file handling`
-(§19) already exists to solve for the *main* editor's own layout.
-Building the minimap against the *unvirtualized* current editor risks
-adding a second unbounded-cost operation right as the first one (§19) is
-trying to get bounded; either sequence this after §19 lands, or scope the
-minimap's own rendering to already be viewport-bounded from day one (only
-render the currently-scrolled-near region's lines at full detail, a
-coarse solid-color placeholder for the rest, refined lazily) rather than
-assuming it can defer that same cost question to "later."
-
-**Non-goals:** no minimap *search-result* highlighting (marks for every
-match of an active find query) as a first pass — the viewport indicator +
-syntax-color impression is the whole initial feature.
 
 ---
 
@@ -1038,93 +934,6 @@ expression evaluation in a first pass (a breakpoint either fires or
 doesn't — expression conditions are DAP-spec-supported but add real
 complexity to the breakpoint UI itself, worth deferring past a first
 working pass).
-
----
-
-## 24. Plugin/extension model
-
-`FEATURES.md`: `[SKIP]` — "an actual extensibility API, with the
-sandboxing and loading-mechanism design that implies. Reasonable to skip
-entirely at this stage; a real editor's feature set is usually extended
-by users, not just by us, but that's a 'someday' concern, not a gap in
-the current architecture."
-
-**This section is deliberately the most speculative in this doc** —
-`FEATURES.md`'s own framing ("reasonable to skip entirely," "a 'someday'
-concern") is the honest state of it, and a design written today would be
-substantially guessing at requirements no concrete plugin author has
-actually expressed yet. What follows is the shape a first design pass
-would need to resolve, not a committed design.
-
-**The central open question: sandboxing model.** Three real options, each
-with a materially different cost:
-- **WASM plugins** (via `wasmtime`/`extism`) — real sandboxing (a plugin
-  can't touch the host filesystem/process beyond an explicit host-function
-  API surface), cross-platform, but plugin authors write against a
-  constrained ABI, not "just Rust" — a real API-design burden on this
-  project to expose enough host capability (editor state read/write,
-  UI contribution points) through that ABI for plugins to do anything
-  useful.
-- **Native dynamic libraries** (`.so`/`.dll`/`.dylib` loaded via `libloading`)
-  — full native capability, easiest for a plugin author already
-  comfortable in Rust, but **no sandboxing at all** — a plugin can crash
-  or corrupt the host process, and ABI stability across this app's own
-  Rust compiler-version bumps is a real, recurring maintenance cost (Rust
-  has no stable ABI across compiler versions by default — a plugin
-  compiled against one `rustc` version isn't guaranteed loadable by a
-  host built with a different one, `abi_stable`-style crates exist to
-  paper over this but add their own complexity).
-- **A scripting language embedded directly** (Lua via `mlua`, or similar)
-  — a middle ground: sandboxable, but plugin capability is limited to
-  whatever the embedded scripting API exposes, similar in spirit to the
-  WASM option but with a friendlier authoring experience for many users
-  at the cost of embedding a full language runtime.
-
-**Recommended default if this is ever seriously picked up:** WASM — the
-sandboxing story is the most defensible for a plugin ecosystem written by
-people outside this project, and the "someday, maybe a marketplace"
-framing (`Extension marketplace`, §25) all but requires real sandboxing
-before untrusted third-party code is something a normal user should be
-downloading and running at all.
-
-**Non-goals (for this doc's own purposes):** no concrete API surface
-design here — that's real work for whenever this is actually picked up,
-informed by what plugin authors would realistically want to build against
-a *specific*, then-current version of this codebase's own internals, not
-guessed at years ahead of time.
-
----
-
-## 25. Extension marketplace
-
-`FEATURES.md`: `[SKIP]` — "installable/discoverable plugins on top of the
-plugin/extension model above. The distribution and marketplace layer
-implies that underlying API already exists, making this an even bigger
-scope than the API alone."
-
-**Hard dependency on `Plugin/extension model` (§24) existing and being
-stable first** — a marketplace is a distribution/discovery layer on top
-of an extension API; there is nothing to distribute without one, and a
-marketplace built against an API that's still actively changing would
-need constant marketplace-side rework alongside every API revision.
-
-**Rough shape, once a plugin API is stable:** a hosted registry (a static
-JSON manifest served from somewhere, or a full backend service — the
-static-manifest approach is dramatically cheaper to build and host and is
-sufficient for a first pass; a full backend implies its own hosting,
-auth, and abuse-prevention concerns this doc explicitly doesn't scope)
-listing available plugins (name, description, version, download URL,
-author) with an in-app browse/search/install UI (another `go_to_file.rs`-
-shaped fuzzy list, consistent with this doc's own repeated "reuse the
-existing popup pattern" theme), downloading + verifying (checksum at
-minimum; a real signing/trust model is a further open question this
-section doesn't resolve) a plugin package into a local plugins directory,
-then loading it through whatever mechanism §24 settled on.
-
-**Non-goals:** no plugin *publishing* workflow from within the app itself
-(a plugin author uploads/registers through some out-of-app process,
-however §24/this section's own registry ends up hosted) — this feature
-is the consumer-side install/discover experience only.
 
 ---
 
