@@ -117,11 +117,60 @@ pub const KOTLIN_TEMPLATES: &[Template] = &[
 /// context-sensitive, not reserved everywhere), just the always-reserved
 /// set a word-completion popup is worth offering.
 pub const JAVA_KEYWORDS: &[&str] = &[
-    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
-    "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
-    "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
-    "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
-    "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null", "var",
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "void",
+    "volatile",
+    "while",
+    "true",
+    "false",
+    "null",
+    "var",
 ];
 
 /// Kotlin's hard keywords — always reserved, unlike its soft/modifier
@@ -129,9 +178,34 @@ pub const JAVA_KEYWORDS: &[&str] = &[
 /// identifiers elsewhere and so are a worse fit for an unconditional
 /// candidate list.
 pub const KOTLIN_KEYWORDS: &[&str] = &[
-    "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is", "null",
-    "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof", "val", "var",
-    "when", "while",
+    "as",
+    "break",
+    "class",
+    "continue",
+    "do",
+    "else",
+    "false",
+    "for",
+    "fun",
+    "if",
+    "in",
+    "interface",
+    "is",
+    "null",
+    "object",
+    "package",
+    "return",
+    "super",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typealias",
+    "typeof",
+    "val",
+    "var",
+    "when",
+    "while",
 ];
 
 /// Every distinct identifier-shaped token in `text` (`SPEC.md` §1) — the
@@ -329,10 +403,7 @@ mod tests {
 
     #[test]
     fn identifiers_in_splits_on_punctuation() {
-        assert_eq!(
-            identifiers_in("foo.bar(baz, 1);"),
-            vec!["foo", "bar", "baz", "1"]
-        );
+        assert_eq!(identifiers_in("foo.bar(baz, 1);"), vec!["foo", "bar", "baz", "1"]);
     }
 
     #[test]
@@ -412,7 +483,10 @@ mod tests {
             trigger: "myown".to_string(),
             body: "custom body".to_string(),
         }];
-        assert_eq!(find_expansion(&[&custom], &[JAVA_TEMPLATES], "myown"), Some("custom body"));
+        assert_eq!(
+            find_expansion(&[&custom], &[JAVA_TEMPLATES], "myown"),
+            Some("custom body")
+        );
         assert_eq!(find_expansion(&[&custom], &[JAVA_TEMPLATES], "nope"), None);
     }
 

@@ -248,8 +248,11 @@ pub(super) fn indent_selected_lines(
 /// The `start..end` char range of the line containing `cursor_char`
 /// (`end` excludes the line's own trailing `\n`, if any) — shared by
 /// `duplicate_line`/`move_line_up`/`move_line_down` to find "the current
-/// line" the same way each time.
-fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
+/// line" the same way each time, and by `widget.rs`'s triple-click
+/// select-current-line interception (the same "current line" concept, not
+/// a text transform, but no reason to re-derive line boundaries a second
+/// way).
+pub(super) fn current_line_range(chars: &[char], cursor_char: usize) -> (usize, usize) {
     let n = chars.len();
     let cursor_char = cursor_char.min(n);
     let start = chars[..cursor_char]

@@ -7,9 +7,9 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{
-    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, duplicate_line, indent_selected_lines,
-    is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, sort_lines, toggle_line_comments,
-    unique_lines, wrap_selection,
+    CaseConversion, apply_auto_indent, apply_auto_pair, convert_selection_case, current_line_range, duplicate_line,
+    indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up, smart_home_target, sort_lines,
+    toggle_line_comments, unique_lines, wrap_selection,
 };
 use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
@@ -449,9 +449,7 @@ pub fn show(
     // candidate showing unfiltered.
     if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() {
         let ctrl_space_pressed = ui.input(|i| i.key_pressed(Key::Space) && i.modifiers.command);
-        if ctrl_space_pressed
-            && let Some(cursor_char) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary)
-        {
+        if ctrl_space_pressed && let Some(cursor_char) = text_area::peek_caret(ui.ctx(), widget_id).map(|c| c.primary) {
             let word_range = word_before_cursor(&old_text, cursor_char);
             let anchor_byte = char_to_byte(&old_text, word_range.start);
             let current_run = &old_text[anchor_byte..char_to_byte(&old_text, word_range.end)];
@@ -483,7 +481,17 @@ pub fn show(
         // own "moved off the thing being edited" close rule, which this
         // approximates rather than fully implements.
         let closed_by_anchor_or_escape = cursor_byte < state.anchor_byte()
-            || take_event(ui, |e| matches!(e, Event::Key { key: Key::Escape, pressed: true, .. })).is_some();
+            || take_event(ui, |e| {
+                matches!(
+                    e,
+                    Event::Key {
+                        key: Key::Escape,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+            .is_some();
 
         if closed_by_anchor_or_escape {
             *completion = None;
@@ -501,9 +509,10 @@ pub fn show(
             });
 
             if let Some(key) = arrow_key {
-                let removed = take_event(ui, |e| {
-                    matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none())
-                });
+                let removed = take_event(
+                    ui,
+                    |e| matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none()),
+                );
                 if removed.is_some() {
                     let visible_len = state.visible(&old_text, cursor_byte).len();
                     state.move_selection(if key == Key::ArrowDown { 1 } else { -1 }, visible_len);
@@ -529,9 +538,10 @@ pub fn show(
                         .map(|item| (*item).clone());
 
                     if let Some(item) = selected_item {
-                        take_event(ui, |e| {
-                            matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none())
-                        });
+                        take_event(
+                            ui,
+                            |e| matches!(e, Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.is_none()),
+                        );
                         let anchor_char = byte_to_char(&old_text, anchor_byte);
                         let cursor_char = byte_to_char(&old_text, cursor_byte);
 
@@ -725,7 +735,8 @@ pub fn show(
                     let word_range = word_before_cursor(&old_text, range.start);
                     let word_start_byte = char_to_byte(&old_text, word_range.start);
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
-                    let (language_templates, language_custom) = language_template_tables(doc.language, custom_templates);
+                    let (language_templates, language_custom) =
+                        language_template_tables(doc.language, custom_templates);
                     // `templates::GLOBAL_TEMPLATES`/`custom_templates.global` are
                     // included unconditionally, even for a file with no
                     // recognized language at all — a global trigger like `pipe`
@@ -1216,9 +1227,7 @@ pub fn show(
             })
         });
 
-        if typed_identifier_char
-            && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
-        {
+        if typed_identifier_char && let Some(cursor_char) = shell_out.caret.map(|c| c.primary) {
             let word_range = word_before_cursor(&old_text, cursor_char);
             if word_range.len() >= 2 {
                 let anchor_byte = char_to_byte(&old_text, word_range.start);
@@ -1311,6 +1320,44 @@ pub fn show(
         if let Some((joined, new_cursor)) = join_lines(&text_now, primary_caret.primary) {
             apply_edit(doc, parser, &text_now, &joined);
             manual_caret = Some(Caret::at(new_cursor));
+        }
+    }
+
+    // Double-click selects the word under the (second) click; triple-click
+    // selects the whole line. Neither is egui's `TextEdit` own behavior —
+    // it has no click-count awareness at all (every click, regardless of
+    // `i.pointer.button_double_clicked`/`_triple_clicked`, just collapses
+    // the cursor to that position) — so both are applied here, purely as a
+    // post-frame *selection* override: `show_interactive` already ran this
+    // same frame and positioned `shell_out.caret` at the click (both clicks
+    // of a double-click land the primary cursor at the same spot), so there
+    // is no click position of our own to compute — same "read the caret
+    // `show_interactive` already produced" timing every other post-frame
+    // block here uses, just turning a collapsed cursor into a selection
+    // instead of moving it. Triple-click is checked first since egui counts
+    // a third click as *both* triple and double (each click within the
+    // window bumps the running count, so `_triple_clicked` and `_double_
+    // clicked` can be true the same frame) — line selection is what a
+    // third click means, not word selection.
+    if let Some(primary_caret) = shell_out.caret {
+        let triple_clicked = ui.input(|i| i.pointer.button_triple_clicked(egui::PointerButton::Primary));
+        let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+
+        if triple_clicked {
+            let chars: Vec<char> = old_text.chars().collect();
+            let (line_start, line_end) = current_line_range(&chars, primary_caret.primary);
+            manual_caret = Some(Caret {
+                primary: line_end,
+                anchor: line_start,
+            });
+        } else if double_clicked {
+            let word = multi_cursor::word_range_at(&old_text, primary_caret.primary);
+            if !word.is_empty() {
+                manual_caret = Some(Caret {
+                    primary: word.end,
+                    anchor: word.start,
+                });
+            }
         }
     }
 
@@ -1546,7 +1593,15 @@ pub fn show(
         match shell_out.caret.map(|c| char_to_byte(&old_text, c.primary)) {
             Some(cursor_byte) if !state.visible(&old_text, cursor_byte).is_empty() => {
                 let popup_id = egui::Id::new(("completion_popup", widget_id));
-                state.paint(ui, popup_id, &shell_out.base, &doc.buffer, &old_text, cursor_byte, editor_rect);
+                state.paint(
+                    ui,
+                    popup_id,
+                    &shell_out.base,
+                    &doc.buffer,
+                    &old_text,
+                    cursor_byte,
+                    editor_rect,
+                );
             }
             _ => *completion = None,
         }

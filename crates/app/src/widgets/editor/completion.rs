@@ -144,28 +144,31 @@ impl CompletionState {
         let visible = self.visible(text, cursor_byte);
         let selected = self.selected.min(visible.len().saturating_sub(1));
 
-        egui::Area::new(id).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                // Without this, a row's label wraps against whatever width
-                // happens to be left between `pos` and the *screen's* edge
-                // (an `Area`'s default layout width, not `pane_rect` —
-                // `popup_position`'s own clamp only ever adjusts `pos`, it
-                // can't widen the room left after it), which shrinks to
-                // near zero the closer the caret sits to the pane's right
-                // edge and wraps a label like "protected" one character per
-                // line instead of showing it on one row. `Extend` makes a
-                // row grow the `Area`/`Frame` to fit instead of wrapping —
-                // same effect `go_to_file.rs`/`quick_switcher.rs` get via
-                // an explicit `set_min_width`, just content-sized here
-                // rather than a fixed modal width.
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                for (i, item) in visible.iter().enumerate() {
-                    // Click-to-accept lands with the rest of §0's mouse
-                    // handling; for now the row just renders highlighted.
-                    let _ = ui.selectable_label(i == selected, &item.label);
-                }
+        egui::Area::new(id)
+            .fixed_pos(pos)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    // Without this, a row's label wraps against whatever width
+                    // happens to be left between `pos` and the *screen's* edge
+                    // (an `Area`'s default layout width, not `pane_rect` —
+                    // `popup_position`'s own clamp only ever adjusts `pos`, it
+                    // can't widen the room left after it), which shrinks to
+                    // near zero the closer the caret sits to the pane's right
+                    // edge and wraps a label like "protected" one character per
+                    // line instead of showing it on one row. `Extend` makes a
+                    // row grow the `Area`/`Frame` to fit instead of wrapping —
+                    // same effect `go_to_file.rs`/`quick_switcher.rs` get via
+                    // an explicit `set_min_width`, just content-sized here
+                    // rather than a fixed modal width.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    for (i, item) in visible.iter().enumerate() {
+                        // Click-to-accept lands with the rest of §0's mouse
+                        // handling; for now the row just renders highlighted.
+                        let _ = ui.selectable_label(i == selected, &item.label);
+                    }
+                });
             });
-        });
     }
 }
 
@@ -197,7 +200,12 @@ pub(super) fn filter_and_rank<'a>(candidates: &'a [CompletionItem], prefix: &str
 /// `()`-insertion is Phase 4. `Template` never reaches this function at all
 /// — its caller in `widget.rs` calls `templates::expand` directly instead,
 /// same as the existing Tab-trigger path.
-pub(super) fn insert_completion(text: &str, anchor_char: usize, cursor_char: usize, item: &CompletionItem) -> (String, usize) {
+pub(super) fn insert_completion(
+    text: &str,
+    anchor_char: usize,
+    cursor_char: usize,
+    item: &CompletionItem,
+) -> (String, usize) {
     let anchor_byte = char_to_byte(text, anchor_char);
     let cursor_byte = char_to_byte(text, cursor_char);
     let new_text = format!("{}{}{}", &text[..anchor_byte], item.label, &text[cursor_byte..]);
