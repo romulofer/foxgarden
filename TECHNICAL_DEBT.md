@@ -968,7 +968,7 @@ the existing `focused_frame`/`focused_frame_with_selection` pattern that
 reuses *one* `egui::Context` across a whole sequence of frames (with
 `completion`/`project` threaded through, which the existing helpers
 didn't expose), since this bug only reproduces across successive frames
-of the same widget, not a single one-shot call. Three regression tests in
+of the same widget, not a single one-shot call. Four regression tests in
 `widget/tests/completion.rs`:
 - `java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediately`
   and its Kotlin counterpart — both reproduce the reported "super." bug
@@ -976,14 +976,24 @@ of the same widget, not a single one-shot call. Three regression tests in
   fix (verified by temporarily disabling the early check and re-running:
   both failed with the fix removed, confirming they weren't
   accidentally-passing tests).
-- `kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion` — a
-  minimal `b.` case (single-character receiver, so word-completion's own
-  2+-char trigger never opens while typing it) isolated specifically to
-  check whether the reported Kotlin `b.` failure was a *separate* bug.
-  This one passes with or without the fix — confirming the Kotlin report
-  was the same root cause via some other adjacent typing (e.g. finishing
-  `Bar()`'s constructor call, or `super.` itself, moments earlier in the
-  same session), not a second, `b.`-specific bug worth chasing separately.
+- `kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion` and
+  `java_typing_a_single_char_receiver_then_dot_opens_dot_completion` — a
+  minimal `b.` case each (single-character receiver, so word-completion's
+  own 2+-char trigger never opens while typing it), isolated specifically
+  to check whether the reported `b.` failures were a *separate* bug. Both
+  pass with or without the fix.
+
+A follow-up live retest confirmed these two `b.`-shaped reports (and a
+separate live "Kotlin `super.` doesn't work either" report) were never
+this bug at all: the user had typed the receiver directly in the class
+body, outside any method — invalid Java/Kotlin syntax for a bare
+expression (confirmed by a live syntax-error squiggle under it), which
+breaks the resolver's tree walk for an unrelated reason. Retyping the
+exact same receivers *inside* a method body worked immediately, matching
+what the passing `b.` tests above already covered. Recorded here so a
+future reader doesn't wonder why two live bug reports resolved to "user
+error" rather than a second fix — the four regression tests above are the
+complete, real coverage this bug needed.
 
 ### Trigger condition
 
