@@ -418,7 +418,7 @@ out the terminal-tab track.
 
 - [x] Phase 0 — Java endpoint extraction
 - [x] Phase 1 — Kotlin endpoint extraction
-- [ ] Phase 2 — whole-project scan
+- [x] Phase 2 — whole-project scan
 - [ ] Phase 3 — popup UI shell
 - [ ] Phase 4 — jump-to-handler
 - [ ] Phase 5 — terminal tabs: tab model restructuring

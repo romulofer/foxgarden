@@ -3,8 +3,9 @@
 //! rendering (`painting`), Ctrl+D multi-cursor support (`multi_cursor`),
 //! Java getter/setter and constructor/toString/equals+hashCode generation
 //! (`codegen`), live templates (`templates`), the completion popup
-//! (`completion`), the right-click context menu (`context_menu`), and
-//! shared byte↔char offset conversion (`text_offset`). `show` and the
+//! (`completion`), the right-click context menu (`context_menu`), the
+//! Spring endpoint map's whole-project scan (`spring_scan`), and shared
+//! byte↔char offset conversion (`text_offset`). `show` and the
 //! handful of types the Tools menu needs to request generation/
 //! case-conversion are the only things used outside this module.
 
@@ -15,6 +16,7 @@ mod context_menu;
 mod folding;
 mod multi_cursor;
 mod painting;
+mod spring_scan;
 mod templates;
 mod text_area;
 mod text_offset;
