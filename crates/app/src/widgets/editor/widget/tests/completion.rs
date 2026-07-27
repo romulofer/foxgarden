@@ -387,3 +387,32 @@ fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
     let cursor_byte = initial_caret + 1;
     assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["baz"]);
 }
+
+#[test]
+fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
+    // Java counterpart of the Kotlin test above — reported broken too
+    // ("b. does nothing on java as well").
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Bar.java"),
+        "public class Bar {\n    public void baz() {\n    }\n}\n",
+    )
+    .unwrap();
+    let before = "class Foo {\n    void go() {\n        Bar b = new Bar();\n        b";
+    let after = "\n    }\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir2, mut doc) = open_fixture(&source, "Foo.java");
+    let mut parser = parsed(Language::Java, &source);
+    let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+    let mut completion = None;
+
+    let initial_caret = before.len();
+    let frames = vec![vec![egui::Event::Text(".".to_string())]];
+
+    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+
+    let state = completion.expect("typing \".\" right after an already-present \"b\" should open dot-completion");
+    let text = doc.buffer.to_string();
+    let cursor_byte = initial_caret + 1;
+    assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["baz"]);
+}
