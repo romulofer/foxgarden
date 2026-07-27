@@ -1,31 +1,59 @@
 # TECHNICAL_DEBT.md
 
 Known-and-deferred issues in this codebase — things a `/simplify`-style
-review found and a human or agent explicitly chose *not* to fix on the
-spot, with the reasoning preserved. This file is git-tracked (unlike
-`FEATURES.md`/`PLAN.md`/`SPEC.md`, which are local-only) because deferred
-debt is exactly the kind of context that's expensive to reconstruct and
-cheap to lose.
+review (or ordinary feature work) found and a human or agent explicitly
+chose *not* to fix on the spot, with the reasoning preserved. Git-tracked
+(unlike `FEATURES.md`/`PLAN.md`/`SPEC.md`, which are local-only) because
+deferred debt is exactly the kind of context that's expensive to
+reconstruct and cheap to lose.
 
-**Format note for whoever (human or agent) picks one of these up:** each
-entry gives the current code shape, the proposed fix with a code sketch,
-why it wasn't done immediately, and a concrete trigger condition for when
-it becomes worth doing. Line numbers are a snapshot and will drift — the
-function names and file paths are the stable anchor. Verify the "current
-shape" section still matches reality before trusting the rest of the entry;
-if it doesn't, the entry is stale and should be rewritten or removed, not
-blindly executed.
+**Schema** — every entry's heading carries one status tag:
+- `[OPEN]` — unresolved: either a real fix still to do, or a question
+  that's been considered and argued against for now (reasoning in the
+  entry itself) but isn't fixed code, so it stays open rather than
+  closed — a future pass can re-open the question if circumstances
+  change instead of re-litigating it from scratch.
+- `[RESOLVED]` — fixed. Kept as historical record of what the bug/gap was
+  and how it was actually fixed, in case the same shape resurfaces
+  elsewhere.
 
-Entry numbers are stable IDs assigned in discovery order, not a priority
-ranking or a sequential count within a section — a cross-reference like
-"see #2" always means the same entry regardless of which section (Open or
-Resolved) it currently lives in.
+Grouped by tag into two sections (Open / Resolved) below, but
+**entry numbers are stable IDs assigned in discovery order** — not a
+priority ranking, not a per-section count — so "see #2" always means the
+same entry no matter which section it currently lives in. An entry moves
+sections as its status changes; the number never changes.
+
+Each entry gives: the current code shape (`Where`/`What was found`), the
+reasoning for not fixing it immediately or at all (`Why it wasn't fixed`/
+`Why it doesn't apply`), a concrete fix sketch (`Proposed fix`), and a
+trigger condition for when it's worth revisiting. **Line numbers are a
+snapshot and will drift** — function names and file paths are the stable
+anchor. Verify the "current shape" still matches reality before trusting
+the rest of an entry; if it doesn't, the entry is stale and should be
+rewritten or removed, not blindly executed.
+
+## Index
+
+| # | Tag | Entry |
+|---|-----|-------|
+| 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
+| 9 | `[OPEN]` | Cross-class dot-completion offers a Java field regardless of its visibility, unlike methods |
+| 10 | `[OPEN]` | `fields_in_type` can never find an interface's own constants — a second, more severe instance of #9's shape |
+| 11 | `[OPEN]` | Opening a project tree aborts entirely on the first unreadable file/directory, anywhere in the tree |
+| 12 | `[OPEN]` | Dot-completion's local-variable scan doesn't respect declaration order relative to the cursor |
+| 5 | `[OPEN]` | Splitting `widget.rs` further |
+| 6 | `[OPEN]` | `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it |
+| 1 | `[RESOLVED]` | Moving `display_path` computation into the `Err` arm |
+| 2 | `[RESOLVED]` | `highlights_java.scm`'s `@constant` capture was dead — no `Scope` rendered it |
+| 4 | `[RESOLVED]` | Context menu's Paste item created a new OS clipboard connection every frame the menu was open |
+| 7 | `[RESOLVED]` | `widget::show`/`tabs::show`/`menu_bar::show` were missing a `too_many_arguments` allowance a sibling function's comment already claimed they had |
+| 8 | `[RESOLVED]` | A stray `cargo fmt` run reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults |
 
 ---
 
 # Open
 
-## 3. Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here
+## 3. [OPEN] Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here
 
 **Where:** `crates/syntax/queries/highlights_kotlin.scm` vs.
 `../references/kotlin/languages/kotlin/highlights.scm`.
@@ -89,7 +117,7 @@ children are `modifiers`, `value_arguments`, and `class_body` — all
 distinct node types — so `(enum_entry (identifier) @constant)` unambiguously
 matches just the entry's own name, not an identifier buried inside a
 constructor-argument list. Added to `highlights_kotlin.scm`, with
-`Scope::Constant` (added for TECHNICAL_DEBT.md #2) as where it now renders.
+`Scope::Constant` (added for #2) as where it now renders.
 Verified via `cargo test -p syntax`: an `enum class Level { LOW, MEDIUM,
 HIGH }` fixture in `valid.kt` plus `has_scope_over("LOW"/"MEDIUM"/"HIGH",
 Scope::Constant)` assertions in `kotlin_highlight_query_compiles_and_covers_expected_ranges`.
@@ -124,7 +152,250 @@ also has one worked example of the fix process to follow.
 
 ---
 
-## 5. Considered and rejected: splitting `widget.rs` further
+## 9. [OPEN] Cross-class dot-completion offers a Java field regardless of its visibility, unlike methods
+
+**Where:** `crates/syntax/src/fields.rs` (`fields_in_class_body`,
+`fields_in_type`), used by `crates/app/src/widgets/editor/widget.rs`
+(`java_members_as_items`) for the code-completion popup's field
+candidates (`SPEC.md`/`PLAN.md` Phase 3b).
+
+**Status:** Open. Found while wiring Phase 3b's Java dot-completion; not
+fixed on the spot since `SPEC.md` §4 never asked for it and
+`fields_in_class_body` already had this shape before Phase 3b touched it.
+
+### What was found
+
+`fields_in_class_body`'s only visibility-adjacent check is `include_static`
+gating whether `static` fields are skipped — it never checks
+`private`/`protected`/package-private the way `methods_in_type`'s sibling
+`method_signature` does (excludes `static`/`private`/`final` for the
+default, "what can an external caller see" listing). Concretely: `Bar b =
+new Bar(); b.` correctly excludes `Bar`'s private *methods* (verified by
+`a_local_variable_typed_as_another_project_class_offers_that_classs_public_members`
+in `widget/tests/completion.rs`), but would incorrectly still offer any of
+`Bar`'s private *fields* — nothing filters those out for a cross-class
+receiver. `this.`/`super.` are unaffected by this gap (they're supposed to
+see every member regardless of visibility already); only the
+external-receiver path is wrong.
+
+### Why it wasn't fixed immediately
+
+`SPEC.md` §4's own field-related ask was narrower — add `include_static` so
+completion could offer a class's constants — and never mentions field
+privacy filtering at all, unlike its explicit "`this.`/`super.` unfiltered
+vs. `methods_in_type`'s existing filtering" call for methods. Adding
+privacy filtering unprompted would mean guessing at a shape `SPEC.md`
+doesn't specify (mirror `method_signature`'s modifier-text-search exactly?
+thread a `Visibility` enum through instead of a bool?) rather than
+following an existing design decision, and risked scope creep on a phase
+already large enough (Phase 3b's Java wiring plus its own "does
+`this.`/`super.` need an unfiltered variant" design question).
+
+### Proposed fix
+
+Give `fields_in_class_body`/`fields_in_type` the same modifier-text-search
+`private` check `method_signature` already does
+(`modifiers_text.contains("private")`), gated the same way
+`unfiltered`/`include_static` already is: skip a private field for the
+external, filtered listing; `this.`/`super.`'s unfiltered call keeps
+seeing it regardless. Add a regression test mirroring
+`a_local_variable_typed_as_another_project_class_offers_that_classs_public_members`
+but with a private *field* on `Bar` instead of a private method.
+
+### Trigger condition
+
+Next time Phase 3c (Kotlin wiring) or Phase 4 touches `fields.rs`/
+`java_members_as_items` for an unrelated reason — same file, low
+incremental cost to fix alongside it — or sooner if a user notices a
+private field leaking into the dot-completion popup.
+
+---
+
+## 10. [OPEN] `fields_in_type` can never find an interface's own constants — a second, more severe instance of #9's shape
+
+**Where:** `crates/syntax/src/fields.rs` (`collect_fields_in_type:116`,
+`fields_in_class_body:37`), contrasted with `crates/syntax/src/methods.rs`
+(`collect_methods:156`, which explicitly covers both `class_declaration`
+and `interface_declaration`).
+
+**Status:** Open. Found via a dedicated debt-hunting pass after #9 landed
+— grew directly out of the same code #9 already flags, so recorded
+alongside it rather than as a fully independent surprise.
+
+### What was found
+
+`collect_fields_in_type` only ever matches `node.kind() == "class_declaration"`:
+
+```rust
+fn collect_fields_in_type(node: Node, source: &str, type_name: &str, include_static: bool, out: &mut Vec<FieldInfo>) {
+    if node.kind() == "class_declaration"
+```
+
+`collect_methods`, its direct sibling, explicitly covers both:
+
+```rust
+let is_target = matches!(node.kind(), "class_declaration" | "interface_declaration")
+```
+
+— and has a dedicated regression test, `methods_in_type_finds_interface_methods`,
+that `fields.rs`'s test module has no equivalent of.
+
+It's a two-layer gap, not one: even with the node-kind check added,
+`fields_in_class_body` only matches children of kind exactly
+`"field_declaration"` — but per `tree-sitter-java-0.23.5`'s own
+`node-types.json`, an interface's constants are a structurally-identical,
+differently-named node kind, `"constant_declaration"` (same
+`declarator`/`type`/`modifiers` fields as `field_declaration`, just its own
+tag; `interface_body`'s possible children list `constant_declaration`, not
+`field_declaration`, at all). Both the node-kind filter *and* the
+declaration-kind filter need a second case, or a class implementing
+`interface Constants { int MAX = 10; void run(); }` and typed as a
+dot-completion receiver offers `run()` (methods correctly walk interfaces)
+but never `MAX` (fields never do) — interface constants are an idiomatic,
+common Java pattern, not an edge case.
+
+### Why it wasn't fixed immediately
+
+Discovered during a debt-hunting pass, not while touching this file for a
+feature — fixing it now would mean editing `fields.rs` outside of any
+concrete phase that needs it, same "don't expand scope beyond what's
+already in flight" reasoning #9 gives, just one step further removed.
+
+### Proposed fix
+
+In `collect_fields_in_type`: match `"class_declaration" | "interface_declaration"`,
+same as `collect_methods`. In `fields_in_class_body` (or a variant of it):
+also accept `"constant_declaration"` bodies, mapping them into `FieldInfo`
+the same way `field_declaration` already is (same field names on the node,
+so the extraction logic itself doesn't need to change, only the node-kind
+gate). Add a `fields_in_type_finds_interface_constants` test mirroring
+`methods_in_type_finds_interface_methods`.
+
+### Trigger condition
+
+Same as #9 — next time Phase 3c/4 (or any other work) touches
+`fields.rs`/`java_members_as_items`, or sooner if a user notices interface
+constants missing from dot-completion on a class that implements an
+interface.
+
+---
+
+## 11. [OPEN] Opening a project tree aborts entirely on the first unreadable file/directory, anywhere in the tree
+
+**Where:** `crates/core/src/project.rs` (`FileNode::build:36-83`).
+
+**Status:** Open. Found via a dedicated debt-hunting pass; not observed to
+have actually misfired for a real user yet, which is why this is recorded
+rather than fixed speculatively.
+
+### What was found
+
+```rust
+for entry in std::fs::read_dir(path)? {
+    let entry = entry?;
+    let is_dir = entry.file_type()?.is_dir();
+    ...
+}
+...
+let children = entries.iter().map(|(_, child_path)| FileNode::build(child_path))
+    .collect::<std::io::Result<Vec<_>>>()?;
+```
+
+Every `?` here propagates through the recursive `FileNode::build` calls all
+the way up to `Project::open`, and from there to `EditorState::open_project`,
+which only assigns `self.project` if `Project::open` succeeds outright. A
+single `read_dir`/`file_type` failure *anywhere* in an arbitrarily large,
+arbitrarily deep tree — a permission-denied subdirectory, or a file
+deleted between `read_dir` listing it and the recursive `build` call
+reaching it — fails the *entire* "Open Folder" (or the post-rename/delete
+tree refresh in `side_panel.rs`) with an error banner and no tree at all,
+discarding every other file/directory that was already walked
+successfully. The failure mode is total, not per-node.
+
+### Why it wasn't fixed immediately
+
+Not observed to have actually caused a problem — `?`-propagation is the
+path of least resistance in Rust, and every existing test in this module
+only covers the happy path plus the `SKIPPED_DIR_NAMES` skip-list, not a
+read error mid-walk. Worth recording rather than fixing blind, since the
+right degrade-gracefully shape (skip the bad entry with a placeholder
+node? surface a non-fatal warning alongside the otherwise-complete tree?)
+is a real design decision, not a one-line change, and doesn't have a
+concrete trigger yet.
+
+### Proposed fix
+
+Change `FileNode::build`'s recursive-directory case to not fail the whole
+walk on one bad child: catch each child's `std::io::Result` individually
+(instead of `.collect::<Result<Vec<_>>>()?`) and either skip that entry
+silently (mirroring how `SKIPPED_DIR_NAMES` already treats some entries as
+not worth including) or represent it as a placeholder `FileNode` the tree
+UI can render distinctly (e.g. greyed out, non-expandable). Add a test that
+makes one subdirectory unreadable (`std::fs::set_permissions`, Unix-only —
+check how existing tests in this module handle platform-specific
+setup, if at all) and asserts the rest of the tree still builds.
+
+### Trigger condition
+
+A user reports "Open Folder" failing on a real project, or `side_panel.rs`'s
+tree-refresh path is touched for an unrelated reason and this is easy to
+fix alongside it.
+
+---
+
+## 12. [OPEN] Dot-completion's local-variable scan doesn't respect declaration order relative to the cursor
+
+**Where:** `crates/syntax/src/completion.rs` (`local_variable_type:57-80`,
+Java; `local_property_type`, Kotlin's equivalent, has the same shape).
+
+**Status:** Open, but low severity and already reasoned through inline —
+recorded per this pass's own "a comment documents a known simplification
+that was never logged" criterion, not because anyone missed it.
+
+### What was found
+
+The function's own doc comment already states the limitation:
+
+```rust
+/// A simpler "anywhere in the enclosing method" scan rather than a precise
+/// backward-from-cursor one (`SPEC.md` §3a's own documented first-cut
+/// simplification) — a variable declared *after* the cursor being wrongly
+/// offered is a rare, low-consequence shadowing edge case.
+fn local_variable_type(node: Node, source: &str, name: &str) -> Option<String> {
+```
+
+Confirmed by reading the body: it recurses the whole enclosing method/
+constructor subtree for a name match with no byte-position comparison
+against the cursor at all. A variable declared *later* in the same method
+is offered as if already in scope, and in a shadowing case (two same-named
+locals at different points in one method) the wrong one's type can win.
+
+### Why it wasn't fixed immediately
+
+Already a deliberate, `SPEC.md`-sanctioned tradeoff (§3a explicitly called
+this an acceptable first cut) — genuinely rare in practice (declaring two
+locals with the same name in one method is itself unusual style), and a
+precise backward-from-cursor scan is more code for a low-consequence edge
+case. Recorded here mainly so it's discoverable from `TECHNICAL_DEBT.md`
+directly rather than only from a source comment.
+
+### Proposed fix
+
+If ever prioritized: track byte position during the recursive walk and
+only accept a `local_variable_declaration`/`property_declaration` whose
+own start byte is `<=` the resolution's `cursor_byte`, keeping the
+*nearest preceding* declaration on a name collision instead of the first
+one found in tree order.
+
+### Trigger condition
+
+Only if a real shadowing case is reported as confusing in practice —
+`SPEC.md` already accepted this tradeoff once; revisit only with new
+evidence it matters, not preemptively.
+
+---
+
+## 5. [OPEN] Splitting `widget.rs` further
 
 **Where:** `crates/app/src/widgets/editor/widget.rs` (~1360 lines since its
 colocated test module was extracted to the sibling `widget/tests.rs`; ~2214
@@ -138,7 +409,10 @@ changes only threaded one more plumbing parameter
 (`cached_clipboard_text`) through `show()` and its call sites — no new
 self-contained feature landed inside `show()` the way getters/setters
 generation once did, so the "Why it doesn't apply" reasoning below is
-unchanged and no split was made.
+unchanged and no split was made. Re-checked again while landing
+dot-completion (Phase 2-3b): the trigger/candidate-builder functions added
+to `widget.rs` for that feature are new *functions*, not new logic mixed
+into `show()` itself, so this still doesn't apply.
 
 ### What was flagged
 
@@ -184,7 +458,7 @@ few dozen lines — extract that feature, not the file in general.
 
 ---
 
-## 6. `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it directly
+## 6. [OPEN] `widget.rs`'s `open_fixture` test helper wraps `test_support::temp_document` instead of being replaced by it
 
 **Where:** `crates/app/src/widgets/editor/widget/tests.rs` (the extracted test
 module), `fn open_fixture`.
@@ -234,105 +508,9 @@ this test module — not worth a dedicated pass on its own.
 
 ---
 
-## 8. ~~A `cargo fmt` run (no project `rustfmt.toml`) reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults~~ — Resolved
-
-**Where:** Every file touched while landing PLAN.md Phase 2 (the
-`egui::TextEdit` → `text_area` swap), Phase 3 (code folding), and Phase 4
-(word-wrap) — `widget.rs`, `widget/tests.rs`, `painting.rs`,
-`context_menu.rs`, `folding.rs`, everything under `text_area/`,
-`menu_bar.rs`, `tabs.rs`, `app.rs`, `widgets/editor.rs`.
-
-**Status:** Resolved (PLAN.md Phase 7 / SPEC.md §12) — see "What was done"
-below. The rest of this entry (through "Proposed fix") is kept as the
-historical record of why the partial reformatting happened in the first
-place.
-
-### What was found
-
-Mid-session, a mechanical `sed`/Python edit across `shell.rs`/`painting.rs`/
-`folding.rs` left a few lines mis-indented, and `cargo fmt -p app` was run
-to clean it up. This repo has no `rustfmt.toml` at any level, so that ran
-with rustfmt's *defaults* — roughly 90-column wrapping, and (for imports
-specifically) alphabetized `use` braces — against a codebase that
-consistently hand-formats much wider (single-line function signatures and
-`use` blocks well past 100 columns are the norm throughout, e.g. `widget.rs`
-`show`'s own 20-parameter signature) and doesn't alphabetize within `use`
-braces. The result: every file touched from that point on in the session
-got a large, purely-cosmetic reformatting pass layered on top of the real
-logic changes, on top of an already-substantial diff (the `TextEdit` swap
-alone touched ~15 files). ~17 files that had been touched by an earlier,
-unrelated `cargo fmt` invocation but carried no intentional edits were
-caught and reverted to `HEAD` in the same session (pure noise, zero risk);
-the files listed above still carry the reformatting mixed into real changes
-and were not reverted.
-
-### Why it wasn't fixed immediately
-
-No clean pre-`fmt` snapshot existed to diff against (all of Phase 2–4 was
-uncommitted working-tree state, not a commit), so separating "my intentional
-edit" from "rustfmt's rewrap" line-by-line across ~15 files would have meant
-either a slow, error-prone manual pass (real risk of reintroducing a bug
-while doing so) or re-deriving each file's content from scratch. Neither
-was worth the risk this deep into an already-large, already-tested change,
-and the reformatting itself is purely cosmetic — verified functionally
-inert (`cargo build`, `cargo test --workspace`, `cargo clippy --all-targets`
-all stayed green across the revert). Flagged here instead, per explicit
-direction to keep going and track it as debt rather than block on it.
-
-### Proposed fix
-
-Add a `rustfmt.toml` at the workspace root that actually matches this
-project's established style (`max_width` well past rustfmt's 100 default —
-look at `widget.rs`'s existing signatures/`use` blocks for a real target
-number; `imports_granularity`/import-sorting settings that stop
-alphabetizing within a `use` brace), then run `cargo fmt --all` **once**,
-deliberately, as its own commit — so the whole workspace converges to one
-consistent, chosen style in a single reviewable diff instead of the
-accidental partial one this entry describes. Until that lands, avoid running
-bare `cargo fmt`/`cargo fmt -p <crate>` again on this repo; fix any stray
-indentation by hand or with a narrowly-scoped editor action instead.
-
-### Trigger condition
-
-Whenever there's appetite for a dedicated formatting-normalization pass —
-not urgent (no functional impact), but the longer it's deferred the bigger
-that one-time diff gets as more files accumulate hand-formatting drift from
-whatever rustfmt's defaults would produce.
-
-### What was done
-
-Added a workspace-root `rustfmt.toml` with `max_width = 120`, chosen
-empirically rather than guessed: ran `cargo fmt --all` at a few candidate
-widths on this codebase and compared the diffs. 100 (the default) is exactly
-the problem this entry describes. 120 fixed the over-wrapping while staying
-readable. 150 went too far the other way — several `use` blocks and match
-arms landed at 145-149 columns, hard to scan even in a wide editor pane.
-
-No `imports_granularity`/import-sorting override, contrary to this entry's
-own "Proposed fix" above: `imports_granularity` and `group_imports` turned
-out to be nightly-only options on this project's rustfmt version (stable
-1.9.0) — setting either just prints a warning and is ignored. Turns out
-none was needed anyway: stable rustfmt's *default* behavior already leaves
-each `use { ... }` block's item order exactly as written, only rewrapping
-line breaks to fit `max_width` — verified by running the real `cargo fmt
---all` and diffing every touched `use` block for reordering, not just
-inspecting a few by eye. This entry's original "doesn't alphabetize within a
-`use` brace" framing was itself imprecise: the hand-written blocks that
-looked alphabetized were coincidentally so (short lists a human would
-naturally write in a sensible order), not evidence rustfmt would reorder
-them — there was never actually a setting to fix here.
-
-Ran `cargo fmt --all` once, as the only change alongside `rustfmt.toml`
-itself — no logic mixed in. Verified functionally inert the same way the
-original stray run was: `cargo build --workspace`, `cargo test --workspace`
-(same pass count before and after), and `cargo clippy --workspace
---all-targets` all stayed green across the formatting-only diff.
-
----
-
 # Resolved
 
-## 1. ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~ — Resolved
+## 1. [RESOLVED] ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~
 
 **Where:** `crates/core/src/document.rs` (`OpenDocumentError`, `Document::open`)
 and `crates/app/src/app.rs` (`open_path`).
@@ -380,7 +558,7 @@ matters.
 
 ---
 
-## 2. ~~`highlights_java.scm`'s `@constant` capture is dead — no `Scope` renders it~~ — Resolved
+## 2. [RESOLVED] ~~`highlights_java.scm`'s `@constant` capture is dead — no `Scope` renders it~~
 
 **Where:** `crates/syntax/queries/highlights_java.scm:94-95`, and
 `crates/syntax/src/highlight.rs:25-41` (`fn scope_for_capture`).
@@ -474,7 +652,7 @@ for adding a `Scope`-mapped constant is already in place.
 
 ---
 
-## 4. ~~Context menu's Paste item creates a new OS clipboard connection every frame the menu is open~~ — Resolved
+## 4. [RESOLVED] ~~Context menu's Paste item creates a new OS clipboard connection every frame the menu is open~~
 
 **Where:** `crates/app/src/widgets/editor/context_menu.rs`, the
 `arboard::Clipboard::new()` call inside `show_context_menu`'s
@@ -539,7 +717,7 @@ instead of waiting for that evidence.
 
 ---
 
-## 7. ~~`widget::show`/`tabs::show`/`menu_bar::show` were missing the `too_many_arguments` allowance a sibling function's comment already claimed they had~~ — Resolved
+## 7. [RESOLVED] ~~`widget::show`/`tabs::show`/`menu_bar::show` were missing the `too_many_arguments` allowance a sibling function's comment already claimed they had~~
 
 **Where:** `crates/app/src/widgets/editor/widget.rs` (`show`),
 `crates/app/src/panels/tabs.rs` (`show`), `crates/app/src/panels/menu_bar.rs`
@@ -588,3 +766,99 @@ clean of `too_many_arguments` warnings as of this fix.
 ### Trigger condition
 
 N/A — already fixed.
+
+---
+
+## 8. [RESOLVED] ~~A `cargo fmt` run (no project `rustfmt.toml`) reformatted every file touched during the Phase 2–4 virtualized-editor work to rustfmt's defaults~~
+
+**Where:** Every file touched while landing PLAN.md Phase 2 (the
+`egui::TextEdit` → `text_area` swap), Phase 3 (code folding), and Phase 4
+(word-wrap) — `widget.rs`, `widget/tests.rs`, `painting.rs`,
+`context_menu.rs`, `folding.rs`, everything under `text_area/`,
+`menu_bar.rs`, `tabs.rs`, `app.rs`, `widgets/editor.rs`.
+
+**Status:** Resolved (PLAN.md Phase 7 / SPEC.md §12) — see "What was done"
+below. The rest of this entry (through "Proposed fix") is kept as the
+historical record of why the partial reformatting happened in the first
+place.
+
+### What was found
+
+Mid-session, a mechanical `sed`/Python edit across `shell.rs`/`painting.rs`/
+`folding.rs` left a few lines mis-indented, and `cargo fmt -p app` was run
+to clean it up. This repo has no `rustfmt.toml` at any level, so that ran
+with rustfmt's *defaults* — roughly 90-column wrapping, and (for imports
+specifically) alphabetized `use` braces — against a codebase that
+consistently hand-formats much wider (single-line function signatures and
+`use` blocks well past 100 columns are the norm throughout, e.g. `widget.rs`
+`show`'s own 20-parameter signature) and doesn't alphabetize within `use`
+braces. The result: every file touched from that point on in the session
+got a large, purely-cosmetic reformatting pass layered on top of the real
+logic changes, on top of an already-substantial diff (the `TextEdit` swap
+alone touched ~15 files). ~17 files that had been touched by an earlier,
+unrelated `cargo fmt` invocation but carried no intentional edits were
+caught and reverted to `HEAD` in the same session (pure noise, zero risk);
+the files listed above still carry the reformatting mixed into real changes
+and were not reverted.
+
+### Why it wasn't fixed immediately
+
+No clean pre-`fmt` snapshot existed to diff against (all of Phase 2–4 was
+uncommitted working-tree state, not a commit), so separating "my intentional
+edit" from "rustfmt's rewrap" line-by-line across ~15 files would have meant
+either a slow, error-prone manual pass (real risk of reintroducing a bug
+while doing so) or re-deriving each file's content from scratch. Neither
+was worth the risk this deep into an already-large, already-tested change,
+and the reformatting itself is purely cosmetic — verified functionally
+inert (`cargo build`, `cargo test --workspace`, `cargo clippy --all-targets`
+all stayed green across the revert). Flagged here instead, per explicit
+direction to keep going and track it as debt rather than block on it.
+
+### Proposed fix
+
+Add a `rustfmt.toml` at the workspace root that actually matches this
+project's established style (`max_width` well past rustfmt's 100 default —
+look at `widget.rs`'s existing signatures/`use` blocks for a real target
+number; `imports_granularity`/import-sorting settings that stop
+alphabetizing within a `use` brace), then run `cargo fmt --all` **once**,
+deliberately, as its own commit — so the whole workspace converges to one
+consistent, chosen style in a single reviewable diff instead of the
+accidental partial one this entry describes. Until that lands, avoid running
+bare `cargo fmt`/`cargo fmt -p <crate>` again on this repo; fix any stray
+indentation by hand or with a narrowly-scoped editor action instead.
+
+### Trigger condition
+
+Whenever there's appetite for a dedicated formatting-normalization pass —
+not urgent (no functional impact), but the longer it's deferred the bigger
+that one-time diff gets as more files accumulate hand-formatting drift from
+whatever rustfmt's defaults would produce.
+
+### What was done
+
+Added a workspace-root `rustfmt.toml` with `max_width = 120`, chosen
+empirically rather than guessed: ran `cargo fmt --all` at a few candidate
+widths on this codebase and compared the diffs. 100 (the default) is exactly
+the problem this entry describes. 120 fixed the over-wrapping while staying
+readable. 150 went too far the other way — several `use` blocks and match
+arms landed at 145-149 columns, hard to scan even in a wide editor pane.
+
+No `imports_granularity`/import-sorting override, contrary to this entry's
+own "Proposed fix" above: `imports_granularity` and `group_imports` turned
+out to be nightly-only options on this project's rustfmt version (stable
+1.9.0) — setting either just prints a warning and is ignored. Turns out
+none was needed anyway: stable rustfmt's *default* behavior already leaves
+each `use { ... }` block's item order exactly as written, only rewrapping
+line breaks to fit `max_width` — verified by running the real `cargo fmt
+--all` and diffing every touched `use` block for reordering, not just
+inspecting a few by eye. This entry's original "doesn't alphabetize within a
+`use` brace" framing was itself imprecise: the hand-written blocks that
+looked alphabetized were coincidentally so (short lists a human would
+naturally write in a sensible order), not evidence rustfmt would reorder
+them — there was never actually a setting to fix here.
+
+Ran `cargo fmt --all` once, as the only change alongside `rustfmt.toml`
+itself — no logic mixed in. Verified functionally inert the same way the
+original stray run was: `cargo build --workspace`, `cargo test --workspace`
+(same pass count before and after), and `cargo clippy --workspace
+--all-targets` all stayed green across the formatting-only diff.
