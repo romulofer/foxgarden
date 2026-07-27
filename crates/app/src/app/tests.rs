@@ -472,3 +472,42 @@ fn handle_rename_repoints_a_single_tab_by_exact_path() {
     // OS-facing representation has to be checked too.
     assert_eq!(state.open_tabs[0].path().as_os_str(), new_path.as_os_str());
 }
+
+#[test]
+fn resolve_pending_navigation_converts_byte_to_char_offset_and_clears_the_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Foo.java");
+    // "café"'s `é` is 2 bytes, so `bar`'s byte offset and char offset
+    // genuinely differ — a real test of the conversion, not a coincidence
+    // that would also pass with no conversion happening at all.
+    let source = "// café\nclass Foo { void bar() {} }\n";
+    std::fs::write(&path, source).unwrap();
+
+    let mut state = EditorState::new();
+    state.open_tab(path.clone()).unwrap();
+
+    let byte_offset = source.find("bar").unwrap();
+    let expected_char_offset = source[..byte_offset].chars().count();
+    assert_ne!(byte_offset, expected_char_offset, "sanity: café's multi-byte é must make these differ");
+
+    let mut pending = Some((path.clone(), byte_offset));
+    let resolved = resolve_pending_navigation(&state, &mut pending);
+
+    assert_eq!(resolved, Some((path, expected_char_offset)));
+    assert!(pending.is_none(), "resolving clears the field");
+}
+
+#[test]
+fn resolve_pending_navigation_is_none_with_nothing_pending() {
+    let state = EditorState::new();
+    let mut pending = None;
+    assert_eq!(resolve_pending_navigation(&state, &mut pending), None);
+}
+
+#[test]
+fn resolve_pending_navigation_leaves_the_field_pending_if_the_document_isnt_open() {
+    let state = EditorState::new();
+    let mut pending = Some((PathBuf::from("/not/open.java"), 5));
+    assert_eq!(resolve_pending_navigation(&state, &mut pending), None);
+    assert!(pending.is_some(), "left pending for a later frame to retry");
+}

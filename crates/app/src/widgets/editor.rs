@@ -27,9 +27,9 @@ pub use codegen::{
     AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
 };
 pub use completion::CompletionState;
-pub use spring_scan::scan_project_endpoints;
+pub use spring_scan::{EndpointCache, scan_project_endpoints_cached};
 pub use templates::{
     GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,
     serialize_user_templates,
 };
-pub use widget::show;
+pub use widget::{jump_to, show};

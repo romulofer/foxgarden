@@ -126,6 +126,7 @@ pub fn show(
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
     cached_clipboard_text: &mut Option<String>,
+    jump_to_char: Option<usize>,
     custom_templates: &UserTemplates,
 ) {
     let mut focus_request = None;
@@ -226,6 +227,31 @@ pub fn show(
     // overflows horizontally by construction, so this is a no-op — no
     // horizontal scrollbar appears — whenever wrapping is on.
     egui::ScrollArea::both().show(ui, |ui| {
+        // The Spring endpoint map's jump-to-handler (PLAN.md Phase 4):
+        // scrolls the picked handler's line into view. `ui.next_widget_
+        // position()` is exactly where `editor::show`'s own first
+        // allocation will land (nothing's been drawn in this `ui` yet this
+        // frame), so it doubles as that call's own internal `content_
+        // origin` without needing anything back out of it. The target row
+        // is only approximate — the logical line treated as a visual row,
+        // ignoring word-wrap and any currently-collapsed folds before it —
+        // rather than reproducing `render.rs`'s own (internal-only)
+        // wrapped/folded row accounting; close enough in the common case
+        // (most source lines are short, wrap is the exception not the
+        // rule), and cheap to verify live rather than assume needs the
+        // fuller treatment.
+        if let Some(char_offset) = jump_to_char {
+            let font_id = egui::FontId::new(font_size, editor_font.family());
+            let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
+            let origin = ui.next_widget_position();
+            let approx_row = doc.buffer.char_to_line(char_offset.min(doc.buffer.len_chars()));
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(origin.x, origin.y + approx_row as f32 * row_height),
+                egui::vec2(1.0, row_height),
+            );
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        }
+
         editor::show(
             ui,
             doc,

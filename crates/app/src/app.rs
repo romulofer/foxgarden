@@ -19,7 +19,7 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    CompletionState, GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog, UserTemplates,
+    CompletionState, GenerateAccessorsDialog, GenerateMethodDialog, OverrideMethodDialog, UserTemplates, jump_to,
 };
 use crate::widgets::modal::show_modal;
 
@@ -106,6 +106,12 @@ pub struct FoxGardenApp {
     /// here, not on a per-tab basis, since only the active tab's editor (and
     /// so only one context menu) is ever shown at a time.
     cached_clipboard_text: Option<String>,
+    /// The Spring endpoint map's jump-to-handler (`PLAN.md` Phase 4): a
+    /// picked popup row's `(path, byte offset)`, set the frame the popup
+    /// closes and resolved (converted to a char offset, then cleared) the
+    /// next time `resolve_pending_navigation` runs, once `open_path` has
+    /// made that path's document the active tab.
+    pending_navigation: Option<(PathBuf, usize)>,
     side_panel: SidePanelState,
     /// The project tree panel's current width, in points — read back every
     /// frame from `egui::Panel::left`'s own response rect (so it tracks a
@@ -230,6 +236,25 @@ fn open_path(
             *last_error = Some(message);
         }
     }
+}
+
+/// Resolves `pending_navigation` (the Spring endpoint map's jump-to-handler,
+/// `PLAN.md` Phase 4) once its target document is open: converts the byte
+/// offset to a char offset via that document's buffer, clears the field, and
+/// returns `(path, char_offset)` for the caller to act on. `None` if there's
+/// nothing pending, or the target document isn't open yet — left pending for
+/// a later frame to retry, though in practice `open_path` always opens it
+/// synchronously before this ever runs, so that path doesn't currently
+/// happen.
+fn resolve_pending_navigation(
+    state: &EditorState,
+    pending_navigation: &mut Option<(PathBuf, usize)>,
+) -> Option<(PathBuf, usize)> {
+    let (path, byte) = pending_navigation.clone()?;
+    let doc = state.open_tabs.iter().find(|d| d.path == path)?;
+    let char_offset = doc.buffer.byte_to_char(byte);
+    *pending_navigation = None;
+    Some((path, char_offset))
 }
 
 /// Closes every open tab whose path is `path` itself or starts inside it,
@@ -672,6 +697,7 @@ impl FoxGardenApp {
             completion: None,
             pending_editor_input: Vec::new(),
             cached_clipboard_text: None,
+            pending_navigation: None,
             side_panel: SidePanelState::default(),
             side_panel_width,
             side_panel_visible,
@@ -750,6 +776,15 @@ impl eframe::App for FoxGardenApp {
             &mut self.external_conflicts,
             &mut self.externally_deleted,
         );
+
+        // Resolved here, once per frame, ahead of `tabs::show` below so its
+        // own `jump_to_char` reflects whatever a popup pick set last frame
+        // (`spring_endpoints::show`, further down this same function, is
+        // what actually sets `pending_navigation` — see its own call site).
+        let jump_target = resolve_pending_navigation(&self.state, &mut self.pending_navigation);
+        if let Some((path, char_offset)) = &jump_target {
+            jump_to(ui.ctx(), path, *char_offset);
+        }
 
         let mut outcome = side_panel::SidePanelOutcome::default();
         let mut menu_outcome = menu_bar::MenuBarOutcome::default();
@@ -843,6 +878,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.last_error,
                 &mut self.pending_editor_input,
                 &mut self.cached_clipboard_text,
+                jump_target.as_ref().map(|(_, char_offset)| *char_offset),
                 &self.custom_templates,
             );
         });
@@ -853,11 +889,9 @@ impl eframe::App for FoxGardenApp {
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
             open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
         }
-        // `(path, handler_byte)` is captured but not acted on yet — Phase 4
-        // (`PLAN.md`) wires the byte offset into a cross-tab-switch jump;
-        // for now this only opens the file, same as every other popup here.
-        if let Some((path, _handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+        if let Some((path, handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path.clone());
+            self.pending_navigation = Some((path, handler_byte));
         }
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {
             run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);

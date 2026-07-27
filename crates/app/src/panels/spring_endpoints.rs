@@ -5,17 +5,26 @@ use fg_core::{EditorState, FileNode};
 use syntax::EndpointInfo;
 
 use crate::panels::go_to_file::fuzzy_score;
-use crate::widgets::editor::scan_project_endpoints;
+use crate::widgets::editor::{EndpointCache, scan_project_endpoints_cached};
+
+/// What a completed background scan sends back: the updated cache (for
+/// `SpringEndpointsState::cache` to keep across the next open) alongside
+/// this scan's flattened endpoint list.
+type ScanResult = (EndpointCache, Vec<(PathBuf, EndpointInfo)>);
 
 /// Transient state for the `Ctrl+Shift+E` Spring endpoint map popup, owned
 /// by the caller across frames — structurally a near-twin of
-/// `GoToFileState`/`QuickSwitcherState`, plus two fields neither of those
-/// carries: `endpoints`, the last completed whole-project scan's result,
-/// and `scan_rx`, `Some` while a scan is still running on a background
-/// thread. A real project's worth of `.java`/`.kt` files can take long
-/// enough to read-and-parse that running the scan on the UI thread freezes
-/// the whole app for that whole stretch (measured directly, not assumed —
-/// noticeably long on a large real project); spawning it onto its own
+/// `GoToFileState`/`QuickSwitcherState`, plus fields neither of those
+/// carries: `endpoints`, the last completed whole-project scan's result;
+/// `scan_rx`, `Some` while a scan is still running on a background thread;
+/// and `cache`, carried *across* opens (unlike `endpoints`, not reset in
+/// `toggle()`) so a re-open only re-reads + re-parses files that actually
+/// changed since the last scan (`spring_scan::scan_project_endpoints_cached`).
+/// A real project's worth of `.java`/`.kt` files can take long enough to
+/// read-and-parse that running the scan on the UI thread freezes the whole
+/// app for that whole stretch, and repeating that full cost on *every* open
+/// (rather than just the first) was directly reported as too slow on a real
+/// project — both measured, not assumed. Spawning the scan onto its own
 /// thread and polling `scan_rx` from `show` keeps the UI responsive and
 /// takes typing in the query box while the popup's own "Scanning…" state
 /// shows, the same background-thread-plus-channel shape `SPEC.md` §8.3
@@ -26,19 +35,27 @@ pub struct SpringEndpointsState {
     query: String,
     selected: usize,
     endpoints: Vec<(PathBuf, EndpointInfo)>,
-    scan_rx: Option<Receiver<Vec<(PathBuf, EndpointInfo)>>>,
+    scan_rx: Option<Receiver<ScanResult>>,
+    cache: EndpointCache,
 }
 
 impl SpringEndpointsState {
     /// Opens the popup and kicks off a fresh background scan of `root`
-    /// (`None` when no project is open, same as every other project-scoped
-    /// popup here); closing needs no scan. Same "recomputed on open"
-    /// reasoning `CompletionState::open` already uses for its own
-    /// candidate list, not every frame the popup is shown. Dropping a
-    /// still-running previous scan's receiver (if the popup is closed and
-    /// reopened quickly) is harmless: the worker thread's own `send` then
-    /// just fails silently and the thread exits, same as `endpoints`
-    /// filling in a frame late ever would.
+    /// against `self.cache` (`None` when no project is open, same as every
+    /// other project-scoped popup here); closing needs no scan. Same
+    /// "recomputed on open" reasoning `CompletionState::open` already uses
+    /// for its own candidate list, not every frame the popup is shown.
+    ///
+    /// `self.cache` is moved into the worker thread (not cloned — a large
+    /// project's cache is exactly the data this exists to avoid copying
+    /// around) and swapped back in once the scan completes, via `poll_scan`.
+    /// Dropping a still-running previous scan's receiver (if the popup is
+    /// closed and reopened quickly) loses that in-flight cache along with
+    /// its result — the worker thread's own `send` then just fails silently
+    /// and the thread exits — same "harmless, just a frame late or a re-scan
+    /// short of ideal" tolerance `endpoints` filling in a frame late already
+    /// has, just extended to the cache; the next successful scan rebuilds it
+    /// from scratch.
     pub fn toggle(&mut self, root: Option<&FileNode>) {
         self.open = !self.open;
         self.query.clear();
@@ -47,9 +64,11 @@ impl SpringEndpointsState {
         self.endpoints.clear();
         if self.open && let Some(root) = root {
             let root = root.clone();
+            let mut cache = std::mem::take(&mut self.cache);
             let (tx, rx) = channel();
             std::thread::spawn(move || {
-                let _ = tx.send(scan_project_endpoints(&root));
+                let endpoints = scan_project_endpoints_cached(&root, &mut cache);
+                let _ = tx.send((cache, endpoints));
             });
             self.scan_rx = Some(rx);
         }
@@ -89,8 +108,9 @@ fn poll_scan(popup: &mut SpringEndpointsState) {
         return;
     };
     match rx.try_recv() {
-        Ok(result) => {
-            popup.endpoints = result;
+        Ok((cache, endpoints)) => {
+            popup.cache = cache;
+            popup.endpoints = endpoints;
             popup.scan_rx = None;
         }
         Err(TryRecvError::Empty) => {}
@@ -234,6 +254,7 @@ mod tests {
             selected: 3,
             endpoints: Vec::new(),
             scan_rx: None,
+            cache: EndpointCache::new(),
         };
 
         popup.toggle(None);
@@ -273,9 +294,10 @@ mod tests {
         popup.toggle(Some(&project.tree));
 
         let rx = popup.scan_rx.take().expect("toggle should start a background scan");
-        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("scan should complete");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1.handler_name, "run");
+        let (cache, endpoints) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("scan should complete");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].1.handler_name, "run");
+        assert_eq!(cache.len(), 1, "the scan should have cached the one source file it read");
     }
 
     #[test]
@@ -305,5 +327,33 @@ mod tests {
         }
         assert_eq!(popup.endpoints.len(), 1);
         assert_eq!(popup.endpoints[0].1.handler_name, "run");
+    }
+
+    #[test]
+    fn toggle_keeps_the_cache_across_a_close_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Foo.java"),
+            "class Foo {\n    @GetMapping(\"/x\")\n    public void run() {}\n}\n",
+        )
+        .unwrap();
+        let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
+
+        let mut popup = SpringEndpointsState::default();
+        popup.toggle(Some(&project.tree));
+        while popup.scan_rx.is_some() {
+            poll_scan(&mut popup);
+            std::thread::yield_now();
+        }
+        assert_eq!(popup.cache.len(), 1, "the first scan should have cached the one source file");
+
+        popup.toggle(None);
+        assert_eq!(popup.cache.len(), 1, "closing must not reset the cache the way it resets endpoints");
+
+        popup.toggle(Some(&project.tree));
+        let rx = popup.scan_rx.take().expect("reopening should start a new scan");
+        let (cache, endpoints) = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(cache.len(), 1, "the reopened scan should still have the cached entry, not start from empty");
     }
 }

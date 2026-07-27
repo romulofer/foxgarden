@@ -36,6 +36,7 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 15 | `[OPEN]` | Spring endpoint map jump-to-handler doesn't land the cursor correctly |
 | 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
 | 9 | `[OPEN]` | Cross-class dot-completion offers a field regardless of its visibility, unlike methods — Java and Kotlin both |
 | 10 | `[OPEN]` | `fields_in_type` can never find an interface's own constants — a second, more severe instance of #9's shape |
@@ -536,6 +537,107 @@ each site under that same pass.
 
 Only opportunistically, alongside other work that already touches most of
 this test module — not worth a dedicated pass on its own.
+
+---
+
+## 15. [OPEN] Spring endpoint map jump-to-handler doesn't land the cursor correctly
+
+**Where:** `crates/app/src/widgets/editor/widget.rs` (`jump_to`),
+`crates/app/src/panels/tabs.rs` (the `jump_to_char` scroll block in
+`show`), `crates/app/src/app.rs` (`resolve_pending_navigation`,
+`PLAN.md` Phase 4's whole call chain).
+
+**Status:** Open. Reported live on a real project (`~/bridge/pec`) after
+Phase 4 landed: picking an endpoint from the popup does *not* land the
+cursor correctly. Two other bugs found in the same live-testing round
+(the query box losing keyboard focus; the endpoint scan re-running in
+full on every popup open) were root-caused and fixed in the same session
+— see `PLAN.md`'s own Phase 4 entry and the commits landing it. This one
+was deliberately not chased further in the same session; recorded here
+per explicit direction to move on rather than keep debugging blind.
+
+### What was found
+
+Only that the symptom is real and survived both other fixes — "the
+cursor still does not land correctly" was the exact report, with no
+further detail captured yet (which file, which endpoint, off by how
+much, whether it's the cursor's *position* or the viewport's *scroll*
+that's wrong, whether word-wrap was on). Nothing below is confirmed root
+cause; these are the candidates worth checking first, in rough order of
+suspicion given what's already known about this code:
+
+1. **The scroll-target math is a known, explicitly-flagged approximation.**
+   `tabs.rs`'s `jump_to_char` block computes the target row as `doc.buffer.
+   char_to_line(char_offset)` directly — i.e. it assumes one logical line
+   equals one visual row, which is only exactly true with word-wrap off
+   *and* nothing currently folded above the target line. `ViewSettings::
+   word_wrap` defaults to `true` in this app (`crates/app/src/style/
+   view.rs`), so the common case is exactly the one this approximation is
+   weakest in. `widget.rs`'s own doc comment on this already calls it out
+   as "close enough in the common case... cheap to verify live rather than
+   assume needs the fuller treatment" — this report is that verification
+   coming back negative. This would explain a *scroll* landing wrong (the
+   handler's line off-screen or far from centered) but not a wrong *caret
+   column/line* once you scroll to find it.
+2. **Something in the caret's own byte→char conversion or the scanned
+   `handler_byte` itself.** `resolve_pending_navigation` converts via
+   `doc.buffer.byte_to_char(byte)` (ropey's own conversion, not hand-rolled)
+   against the *currently open* document's buffer — if the popup's scan
+   read the file at a different moment than the buffer the caret gets
+   applied to (e.g. the file changed on disk between the scan and the
+   jump, or the cached scan result is stale in some case
+   `EndpointCache`'s mtime check doesn't actually catch), the byte offset
+   could point at the wrong place in what's now a different buffer. Worth
+   checking directly: does the reported file have unsaved edits, or did it
+   change on disk recently?
+3. **Focus/scroll timing interaction.** `jump_to` requests focus
+   immediately (same frame, via `ctx.memory_mut`), but the scroll
+   (`tabs.rs`) and the caret application itself (`text_area::set_caret`,
+   inside `jump_to`) are on different effective timelines — the caret
+   move takes effect next frame (same as every other `manual_caret` use
+   in this file), the scroll's `ui.scroll_to_rect` call also only
+   visually resolves next frame. If these two "next frame"s aren't
+   actually the same frame for some reason, the caret could momentarily
+   render in the pre-jump scroll position, or vice versa, and whichever
+   was actually observed live might have been a transient rather than the
+   final state.
+
+### Why it wasn't fixed immediately
+
+The report came with no reproduction detail, and this entry's own
+candidate list shows the fix would be different depending on which of
+(at least) three unrelated mechanisms is actually at fault — guessing
+which one and patching it blind risks fixing a mechanism that was never
+broken while leaving the real bug in place. Explicit direction was to
+record this and move on (to Phase 5, a fully independent track) rather
+than keep debugging without better information.
+
+### Proposed fix
+
+Next time this is picked up, get a precise repro first:
+- Which file, which endpoint, and whether word-wrap was on or off for
+  that live test.
+- Whether the *cursor column/line* is wrong, the *scroll position* is
+  wrong, or both — these point at different candidates above.
+- If it's the scroll: temporarily hardcode `word_wrap` off and retest: if
+  the jump lands correctly with wrap off, candidate 1 is confirmed, and
+  the real fix is either accepting the approximation only for the no-wrap
+  case (and finding some correct-enough fallback for wrapped mode) or
+  building the fuller wrap-aware row lookup `widget.rs`'s own doc comment
+  already gestures at as the alternative not yet built (reusing `render.
+  rs`'s per-line row-count shaping, exposed for a one-off external query
+  rather than only its own internal, visible-window-only cache).
+- If it's the caret position itself even after confirming scroll is
+  fine: add a temporary debug print of the byte offset `EndpointInfo`
+  carries, the char offset `resolve_pending_navigation` computes, and
+  what character is actually at that char offset in the live buffer —
+  compare against where the cursor visually lands.
+
+### Trigger condition
+
+Next time the Spring endpoint map's jump-to-handler is revisited, or a
+user provides a precise repro (file + endpoint + word-wrap setting) for
+this exact symptom.
 
 ---
 

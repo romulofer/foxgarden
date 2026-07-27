@@ -420,7 +420,7 @@ out the terminal-tab track.
 - [x] Phase 1 — Kotlin endpoint extraction
 - [x] Phase 2 — whole-project scan
 - [x] Phase 3 — popup UI shell
-- [ ] Phase 4 — jump-to-handler
+- [x] Phase 4 — jump-to-handler (known issue: cursor doesn't land correctly, `TECHNICAL_DEBT.md` #15)
 - [ ] Phase 5 — terminal tabs: tab model restructuring
 - [ ] Phase 6 — terminal tabs: PTY spawn/read/write
 - [ ] Phase 7 — terminal tabs: vt100 parsing + rendering

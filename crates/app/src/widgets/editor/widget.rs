@@ -1821,6 +1821,33 @@ pub fn show(
     }
 }
 
+/// Overrides the persisted caret for the document at `path` to `char_offset`
+/// and gives its widget keyboard focus — the Spring endpoint map's
+/// jump-to-handler (PLAN.md Phase 4), and the one place outside this module
+/// needs to reach into `text_area`'s otherwise-internal caret storage. Wraps
+/// `text_area::set_caret`/`Caret::at` and the exact same `Id::new`
+/// computation `show`'s own `widget_id` uses, so a caller (`app.rs`) never
+/// needs to touch `Caret`/`text_area` — both stay `pub(super)`, reachable
+/// only from within `widgets::editor` — or duplicate that `Id` computation
+/// itself.
+///
+/// The focus request matters as much as the caret move: `shell::show`'s own
+/// `has_focus` only ever becomes true from a real click/drag on the widget
+/// or already having had focus last frame (see its own doc comment on read-
+/// before-shape timing) — nothing about moving the persisted caret alone
+/// makes a widget focused, so without this, a jump would land the cursor at
+/// the right position but leave the pane looking (and behaving) unfocused,
+/// e.g. no blinking caret, arrow keys not landing there. Called ahead of
+/// `tabs::show`/`editor::show` in the same frame (see `app.rs`'s own call
+/// site), so `ui.memory(|m| m.has_focus(id))` already sees it as focused
+/// the very first time that document's widget runs this frame — no extra
+/// frame of delay needed for focus, unlike the caret move itself.
+pub fn jump_to(ctx: &egui::Context, path: &std::path::Path, char_offset: usize) {
+    let widget_id = egui::Id::new(path.to_string_lossy().into_owned());
+    text_area::set_caret(ctx, widget_id, Caret::at(char_offset));
+    ctx.memory_mut(|m| m.request_focus(widget_id));
+}
+
 /// The active language's built-in live-template table and any user-defined
 /// overrides for it (`custom_templates.java`/`.kotlin`) — the pairing both
 /// the Tab-trigger interception and the completion popup's `Template`
