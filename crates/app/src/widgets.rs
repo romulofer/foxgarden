@@ -3,3 +3,5 @@
 
 pub mod editor;
 pub mod modal;
+pub mod terminal_input;
+pub mod terminal_widget;

@@ -15,6 +15,7 @@ use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
+use crate::pty_session::PtySession;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -136,6 +137,11 @@ pub struct FoxGardenApp {
     /// §8's own non-goal), so there's nothing left to show the panel
     /// open *for* on a fresh launch.
     terminal_panel_visible: bool,
+    /// Kept index-aligned with `state.terminal_tabs`, same shape as
+    /// `parsers`/`open_tabs`: each session's real pty child process/writer/
+    /// output can't live on `EditorState` (`crates/core` stays headless,
+    /// `AGENTS.md`), so it lives here instead, one per `TerminalTab`.
+    terminal_sessions: Vec<crate::pty_session::PtySession>,
     menu_bar: MenuBarState,
     /// `Ctrl+E`'s recent-files popup.
     quick_switcher: QuickSwitcherState,
@@ -245,6 +251,40 @@ fn open_path(
             *last_error = Some(message);
         }
     }
+}
+
+/// Spawns a new pty session (the open project's root as its cwd, if any)
+/// and, only once that succeeds, appends a matching `TerminalTab` — keeping
+/// `sessions` and `state.terminal_tabs` index-aligned the same way
+/// `open_path` keeps `parsers` aligned with `open_tabs`. A spawn failure
+/// (no shell found, pty allocation failed, ...) surfaces through
+/// `last_error` instead of leaving a `TerminalTab` with no real session
+/// behind it.
+fn new_terminal_session(
+    state: &mut EditorState,
+    sessions: &mut Vec<PtySession>,
+    ctx: &egui::Context,
+    last_error: &mut Option<String>,
+) {
+    let cwd = state.project.as_ref().map(|project| project.root.clone());
+    match PtySession::spawn(cwd.as_deref(), ctx.clone()) {
+        Ok(session) => {
+            sessions.push(session);
+            state.new_terminal_tab();
+        }
+        Err(err) => *last_error = Some(format!("failed to start terminal: {err}")),
+    }
+}
+
+/// Removes both the session at `index` (dropping it kills its child
+/// process, see `PtySession`'s own `Drop`) and its `TerminalTab`, together —
+/// same index-aligned-removal shape `new_terminal_session` uses on the way
+/// in.
+fn close_terminal_session(state: &mut EditorState, sessions: &mut Vec<PtySession>, index: usize) {
+    if index < sessions.len() {
+        sessions.remove(index);
+    }
+    state.close_terminal_tab(index);
 }
 
 /// Resolves `pending_navigation` (the Spring endpoint map's jump-to-handler,
@@ -711,6 +751,7 @@ impl FoxGardenApp {
             side_panel_width,
             side_panel_visible,
             terminal_panel_visible: false,
+            terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
@@ -760,21 +801,32 @@ impl eframe::App for FoxGardenApp {
         if ui.input(|i| i.key_pressed(egui::Key::F11)) {
             self.zen_mode = !self.zen_mode;
         }
-        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
+        // Gates every Ctrl+letter shortcut below (but not `Ctrl+\``/`F11`,
+        // neither of which collides with a real terminal control byte):
+        // `PLAN.md`'s terminal-panel Phase 8 wires these same letters up as
+        // real control bytes (`Ctrl+P` recalls shell history, `Ctrl+E`
+        // moves to end-of-line, ...), so without this guard, typing one of
+        // them into a focused terminal session would *also* fire the app's
+        // own global popup/panel toggle.
+        let terminal_focused = terminal_panel::is_terminal_focused(ui.ctx());
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift)
+        {
             self.quick_switcher.toggle();
         }
-        if ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
             self.go_to_file.toggle();
         }
-        if ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift) {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift)
+        {
             self.spring_endpoints.toggle(self.state.project.as_ref().map(|p| &p.tree));
         }
-        if ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
+        if !terminal_focused
+            && ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
             self.side_panel.begin_new_file(root);
         }
-        if ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
             self.side_panel_visible = !self.side_panel_visible;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Backtick) && i.modifiers.command) {
@@ -784,7 +836,7 @@ impl eframe::App for FoxGardenApp {
             // an empty panel with nothing in it and a second click needed
             // just to get a session going.
             if self.terminal_panel_visible && self.state.terminal_tabs.is_empty() {
-                self.state.new_terminal_tab();
+                new_terminal_session(&mut self.state, &mut self.terminal_sessions, ui.ctx(), &mut self.last_error);
             }
         }
 
@@ -808,6 +860,7 @@ impl eframe::App for FoxGardenApp {
 
         let mut outcome = side_panel::SidePanelOutcome::default();
         let mut menu_outcome = menu_bar::MenuBarOutcome::default();
+        let mut terminal_outcome = terminal_panel::TerminalPanelOutcome::default();
 
         if !self.zen_mode {
             menu_outcome = egui::Panel::top("menu_bar")
@@ -852,9 +905,24 @@ impl eframe::App for FoxGardenApp {
                     .resizable(true)
                     .default_size(220.0)
                     .show(ui, |ui| {
-                        terminal_panel::show(ui, &mut self.state);
+                        terminal_outcome = terminal_panel::show(
+                            ui,
+                            &mut self.state,
+                            &mut self.terminal_sessions,
+                            self.editor_font,
+                            self.font_size,
+                            self.dark_mode,
+                            self.view_settings.cursor_blink,
+                        );
                     });
             }
+        }
+
+        if terminal_outcome.new_session_requested {
+            new_terminal_session(&mut self.state, &mut self.terminal_sessions, ui.ctx(), &mut self.last_error);
+        }
+        if let Some(index) = terminal_outcome.close_request {
+            close_terminal_session(&mut self.state, &mut self.terminal_sessions, index);
         }
 
         if let Some(path) = outcome.open {

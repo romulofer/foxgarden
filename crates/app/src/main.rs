@@ -1,6 +1,7 @@
 mod app;
 mod file_watch;
 mod panels;
+mod pty_session;
 mod style;
 mod terminal;
 mod widgets;

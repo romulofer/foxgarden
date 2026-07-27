@@ -108,6 +108,107 @@ pub fn structure(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_STRUCTURE } else { LIGHT_STRUCTURE }
 }
 
+/// `vt100`'s 16 indexed ANSI colors (0-7 normal, 8-15 bright), tinted per
+/// theme rather than the raw xterm RGB values (`SPEC.md` §8.4: "map onto the
+/// current theme's own color table ... not the raw ANSI 16-color palette
+/// verbatim") — a colored shell prompt using stock ANSI red/green/etc. would
+/// otherwise clash with `color_for_scope`'s own muted palette right above it.
+/// Extended (256-color/truecolor) values are deliberately *not* remapped here
+/// (see `terminal_fg`/`terminal_bg`) — those are a program's own explicit hue
+/// choice, unlike the base 16, which every real terminal emulator already
+/// treats as theme-customizable.
+const DARK_ANSI: [Color32; 16] = [
+    Color32::from_rgb(40, 44, 52),
+    Color32::from_rgb(224, 82, 82),
+    Color32::from_rgb(152, 195, 121),
+    Color32::from_rgb(229, 192, 123),
+    Color32::from_rgb(97, 175, 239),
+    Color32::from_rgb(198, 120, 221),
+    Color32::from_rgb(86, 182, 194),
+    Color32::from_rgb(171, 178, 191),
+    Color32::from_rgb(92, 99, 112),
+    Color32::from_rgb(255, 110, 110),
+    Color32::from_rgb(180, 220, 140),
+    Color32::from_rgb(245, 216, 150),
+    Color32::from_rgb(130, 200, 255),
+    Color32::from_rgb(220, 150, 240),
+    Color32::from_rgb(120, 210, 220),
+    Color32::from_rgb(255, 255, 255),
+];
+
+const LIGHT_ANSI: [Color32; 16] = [
+    Color32::from_rgb(56, 58, 66),
+    Color32::from_rgb(202, 42, 42),
+    Color32::from_rgb(80, 138, 51),
+    Color32::from_rgb(152, 104, 1),
+    Color32::from_rgb(37, 106, 194),
+    Color32::from_rgb(166, 38, 164),
+    Color32::from_rgb(24, 141, 148),
+    Color32::from_rgb(160, 160, 160),
+    Color32::from_rgb(110, 110, 110),
+    Color32::from_rgb(230, 80, 80),
+    Color32::from_rgb(110, 170, 70),
+    Color32::from_rgb(190, 140, 20),
+    Color32::from_rgb(60, 130, 220),
+    Color32::from_rgb(190, 60, 190),
+    Color32::from_rgb(40, 165, 175),
+    Color32::from_rgb(30, 30, 30),
+];
+
+/// The 6x6x6 color cube xterm-256 defines for indices 16-231 — the
+/// standard, fixed RGB levels every terminal emulator agrees on (not a value
+/// this app gets to reinterpret per theme, unlike the base 16 above).
+const ANSI256_CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+
+/// Resolves an indexed `vt100::Color::Idx` (0-255) to a concrete `Color32`:
+/// 0-15 through this theme's own `DARK_ANSI`/`LIGHT_ANSI` (bold promotes a
+/// normal color, 0-7, to its bright counterpart, 8-15 — the standard
+/// "bold-as-bright" fallback terminals use with no separate bold font
+/// loaded, and the only weight this app's bundled `JetBrainsMono-Regular.ttf`
+/// has), 16-231 through the fixed xterm color cube, 232-255 through its
+/// grayscale ramp.
+fn indexed_color(idx: u8, bold: bool, dark_mode: bool) -> Color32 {
+    if idx < 16 {
+        let palette = if dark_mode { &DARK_ANSI } else { &LIGHT_ANSI };
+        let idx = if bold && idx < 8 { idx + 8 } else { idx };
+        palette[usize::from(idx)]
+    } else if idx < 232 {
+        let cube = idx - 16;
+        let r = ANSI256_CUBE_LEVELS[usize::from(cube / 36)];
+        let g = ANSI256_CUBE_LEVELS[usize::from((cube / 6) % 6)];
+        let b = ANSI256_CUBE_LEVELS[usize::from(cube % 6)];
+        Color32::from_rgb(r, g, b)
+    } else {
+        let level = 8 + (idx - 232) * 10;
+        Color32::from_rgb(level, level, level)
+    }
+}
+
+/// A terminal cell's foreground color (`SPEC.md` §8.4) — `vt100::Color::
+/// Default` falls back to `default_text` (the same color the editor itself
+/// uses for unhighlighted text), `Idx`/`Rgb` resolve via `indexed_color`/
+/// passthrough respectively.
+pub fn terminal_fg(color: vt100::Color, bold: bool, dark_mode: bool) -> Color32 {
+    match color {
+        vt100::Color::Default => default_text(dark_mode),
+        vt100::Color::Idx(idx) => indexed_color(idx, bold, dark_mode),
+        vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+    }
+}
+
+/// The background counterpart of `terminal_fg`. `Color::Default` resolves to
+/// `Color32::TRANSPARENT` rather than an opaque fill matching the panel's own
+/// background — painting nothing for the common case (most cells never set
+/// an explicit background) is equivalent to painting the panel's own fill,
+/// without needing this theme-only module to know what that fill is.
+pub fn terminal_bg(color: vt100::Color, dark_mode: bool) -> Color32 {
+    match color {
+        vt100::Color::Default => Color32::TRANSPARENT,
+        vt100::Color::Idx(idx) => indexed_color(idx, false, dark_mode),
+        vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+    }
+}
+
 pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
     if dark_mode {
         match scope {
@@ -131,5 +232,66 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Tag => Color32::from_rgb(24, 141, 148),
             Scope::Constant => Color32::from_rgb(193, 132, 1),
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_color_tests {
+    use super::*;
+
+    #[test]
+    fn default_fg_matches_editor_text_color() {
+        assert_eq!(terminal_fg(vt100::Color::Default, false, true), default_text(true));
+        assert_eq!(terminal_fg(vt100::Color::Default, false, false), default_text(false));
+    }
+
+    #[test]
+    fn default_bg_is_transparent() {
+        assert_eq!(terminal_bg(vt100::Color::Default, true), Color32::TRANSPARENT);
+        assert_eq!(terminal_bg(vt100::Color::Default, false), Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn indexed_fg_resolves_through_this_themes_own_palette_not_raw_ansi() {
+        // Red (Idx(1)) is theme-tinted, not xterm's raw (205, 49, 49)-ish red.
+        assert_eq!(terminal_fg(vt100::Color::Idx(1), false, true), DARK_ANSI[1]);
+        assert_eq!(terminal_fg(vt100::Color::Idx(1), false, false), LIGHT_ANSI[1]);
+    }
+
+    #[test]
+    fn bold_promotes_normal_idx_to_its_bright_counterpart() {
+        assert_eq!(terminal_fg(vt100::Color::Idx(1), true, true), DARK_ANSI[9]);
+        assert_eq!(terminal_fg(vt100::Color::Idx(1), true, false), LIGHT_ANSI[9]);
+    }
+
+    #[test]
+    fn bold_does_not_wrap_an_already_bright_idx() {
+        assert_eq!(terminal_fg(vt100::Color::Idx(9), true, true), DARK_ANSI[9]);
+    }
+
+    #[test]
+    fn bold_is_ignored_for_backgrounds() {
+        assert_eq!(terminal_bg(vt100::Color::Idx(1), true), DARK_ANSI[1]);
+    }
+
+    #[test]
+    fn rgb_passes_through_unchanged_regardless_of_theme() {
+        let rgb = vt100::Color::Rgb(10, 20, 30);
+        assert_eq!(terminal_fg(rgb, false, true), Color32::from_rgb(10, 20, 30));
+        assert_eq!(terminal_bg(rgb, false), Color32::from_rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn extended_256_color_cube_is_not_theme_tinted() {
+        // Idx(196) is the cube's own pure red (r=5,g=0,b=0 -> 255,0,0),
+        // same value in both themes since only the base 16 get remapped.
+        assert_eq!(terminal_fg(vt100::Color::Idx(196), false, true), Color32::from_rgb(255, 0, 0));
+        assert_eq!(terminal_fg(vt100::Color::Idx(196), false, false), Color32::from_rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn extended_grayscale_ramp_endpoints() {
+        assert_eq!(terminal_fg(vt100::Color::Idx(232), false, true), Color32::from_rgb(8, 8, 8));
+        assert_eq!(terminal_fg(vt100::Color::Idx(255), false, true), Color32::from_rgb(238, 238, 238));
     }
 }

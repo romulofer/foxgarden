@@ -11,15 +11,26 @@ use crate::project::Project;
 const MAX_CLOSED_TABS: usize = 20;
 
 /// One terminal session in the terminal panel (`PLAN.md`'s terminal-panel
-/// track, Phase 5) — for this phase, a placeholder (a display title,
-/// nothing pty-related yet). `PLAN.md` Phase 6 adds the actual child
-/// process/writer/`vt100::Parser`. Deliberately **not** part of
-/// `open_tabs`/`active_tab` at all: `SPEC.md` §8.2 puts the terminal in its
-/// own dockable bottom panel (the VSCode shape), not the file tab strip, so
-/// a session never shares a namespace or an index with a file tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// track). Deliberately **not** part of `open_tabs`/`active_tab` at all:
+/// `SPEC.md` §8.2 puts the terminal in its own dockable bottom panel (the
+/// VSCode shape), not the file tab strip, so a session never shares a
+/// namespace or an index with a file tab.
+///
+/// Just a title plus a blink-timing anchor — the real child process,
+/// writer, and `vt100::Parser` all live on the app-side `PtySession`
+/// (`crates/app/src/pty_session.rs`, index-aligned with `terminal_tabs`, the
+/// same "index-aligned side vec, not on `EditorState`" shape `parsers`
+/// already uses for `open_tabs`), since a live process and its background
+/// reader thread can't be headless-testable the way `fg-core` needs to stay.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TerminalTab {
     pub title: String,
+    /// Mirrors `text_area::shell::ShellState::last_interaction` — the
+    /// timestamp `terminal_widget::show`'s own cursor-blink cycle is
+    /// anchored to, reset whenever the session receives keyboard input, so
+    /// the terminal's cursor blinks on the same cadence the editor's own
+    /// caret does rather than a second, independently-phased timer.
+    pub last_interaction: f64,
 }
 
 #[derive(Default)]
@@ -118,13 +129,15 @@ impl EditorState {
         Some(index)
     }
 
-    /// Pushes a new placeholder terminal session (`PLAN.md` Phase 5 — no
-    /// pty until Phase 6) and focuses it in the panel's own tab strip.
-    /// Returns its `terminal_tabs` index.
+    /// Pushes a new terminal session and focuses it in the panel's own tab
+    /// strip. Returns its `terminal_tabs` index. The caller (`app.rs`'s own
+    /// `new_terminal_session`) is responsible for spawning the matching
+    /// `PtySession` and keeping the two index-aligned.
     pub fn new_terminal_tab(&mut self) -> usize {
         let index = self.terminal_tabs.len();
         self.terminal_tabs.push(TerminalTab {
             title: format!("Terminal {}", index + 1),
+            last_interaction: 0.0,
         });
         self.active_terminal = Some(index);
         index
