@@ -112,6 +112,21 @@ dependencies optimized even in debug builds (see the gotcha below on why).
 That cost is one-time; it doesn't recur on ordinary edit-compile-run
 iteration against `core`/`syntax`/`app`.
 
+**Run `cargo sweep --time 14 .` every so often** (needs `cargo install
+cargo-sweep` once). Cargo never garbage-collects `target/` on its own —
+every dependency-version change (a `cargo add`, a `Cargo.lock` bump)
+leaves the *previous* fingerprinted build artifacts behind under
+`target/debug/deps`/`target/debug/incremental` alongside the new ones,
+unbounded. This is a real, fast-growing cost, not a theoretical one: a
+single session's worth of routine dependency churn (five or six `cargo
+add`s while landing Track 5's static-analysis integration) grew `target/`
+to 34GB before a `cargo clean` reset it. `--time 14` deletes only
+artifacts untouched for 14+ days, so it won't disrupt an actively-changing
+dependency; a plain `cargo clean` is still the right call for "the crate
+graph clearly changed a lot and I just want a guaranteed-clean rebuild
+right now" — reach for `sweep` for the routine, no-thinking-required
+version of that maintenance instead.
+
 A stable Rust toolchain is required (`rustup` if none is installed). This
 project was scaffolded against Rust 1.97 / edition 2024.
 
