@@ -4,6 +4,7 @@ mod panels;
 mod pty_session;
 mod style;
 mod terminal;
+mod tool_manager;
 mod widgets;
 
 use app::FoxGardenApp;

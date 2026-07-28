@@ -241,9 +241,12 @@ fn persisted_settings_round_trip() {
     let saved_tools = ExternalToolPaths {
         checkstyle_binary: "/usr/bin/checkstyle".to_string(),
         checkstyle_config: "/usr/share/checkstyle/sun_checks.xml".to_string(),
+        checkstyle_installed_version: "10.26.1".to_string(),
         pmd_binary: "/usr/bin/pmd".to_string(),
         pmd_ruleset: "rulesets/java/quickstart.xml".to_string(),
+        pmd_installed_version: "7.26.0".to_string(),
         spotbugs_binary: "/usr/bin/spotbugs".to_string(),
+        spotbugs_installed_version: "4.10.3".to_string(),
     };
     persist_settings(
         &mut storage,
@@ -292,9 +295,12 @@ fn persisted_settings_round_trip() {
     assert_eq!(custom_templates.global, saved_templates.global);
     assert_eq!(external_tool_paths.checkstyle_binary, saved_tools.checkstyle_binary);
     assert_eq!(external_tool_paths.checkstyle_config, saved_tools.checkstyle_config);
+    assert_eq!(external_tool_paths.checkstyle_installed_version, saved_tools.checkstyle_installed_version);
     assert_eq!(external_tool_paths.pmd_binary, saved_tools.pmd_binary);
     assert_eq!(external_tool_paths.pmd_ruleset, saved_tools.pmd_ruleset);
+    assert_eq!(external_tool_paths.pmd_installed_version, saved_tools.pmd_installed_version);
     assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
+    assert_eq!(external_tool_paths.spotbugs_installed_version, saved_tools.spotbugs_installed_version);
 }
 
 #[test]

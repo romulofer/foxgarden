@@ -55,9 +55,12 @@ const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
 const CUSTOM_GLOBAL_TEMPLATES_KEY: &str = "custom_global_templates";
 const CHECKSTYLE_BINARY_KEY: &str = "checkstyle_binary";
 const CHECKSTYLE_CONFIG_KEY: &str = "checkstyle_config";
+const CHECKSTYLE_INSTALLED_VERSION_KEY: &str = "checkstyle_installed_version";
 const PMD_BINARY_KEY: &str = "pmd_binary";
 const PMD_RULESET_KEY: &str = "pmd_ruleset";
+const PMD_INSTALLED_VERSION_KEY: &str = "pmd_installed_version";
 const SPOTBUGS_BINARY_KEY: &str = "spotbugs_binary";
+const SPOTBUGS_INSTALLED_VERSION_KEY: &str = "spotbugs_installed_version";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -679,14 +682,23 @@ fn restore_settings(
     if let Some(path) = storage.get_string(CHECKSTYLE_CONFIG_KEY) {
         external_tool_paths.checkstyle_config = path;
     }
+    if let Some(version) = storage.get_string(CHECKSTYLE_INSTALLED_VERSION_KEY) {
+        external_tool_paths.checkstyle_installed_version = version;
+    }
     if let Some(path) = storage.get_string(PMD_BINARY_KEY) {
         external_tool_paths.pmd_binary = path;
     }
     if let Some(path) = storage.get_string(PMD_RULESET_KEY) {
         external_tool_paths.pmd_ruleset = path;
     }
+    if let Some(version) = storage.get_string(PMD_INSTALLED_VERSION_KEY) {
+        external_tool_paths.pmd_installed_version = version;
+    }
     if let Some(path) = storage.get_string(SPOTBUGS_BINARY_KEY) {
         external_tool_paths.spotbugs_binary = path;
+    }
+    if let Some(version) = storage.get_string(SPOTBUGS_INSTALLED_VERSION_KEY) {
+        external_tool_paths.spotbugs_installed_version = version;
     }
 }
 
@@ -734,9 +746,12 @@ fn persist_settings(
     );
     storage.set_string(CHECKSTYLE_BINARY_KEY, external_tool_paths.checkstyle_binary.clone());
     storage.set_string(CHECKSTYLE_CONFIG_KEY, external_tool_paths.checkstyle_config.clone());
+    storage.set_string(CHECKSTYLE_INSTALLED_VERSION_KEY, external_tool_paths.checkstyle_installed_version.clone());
     storage.set_string(PMD_BINARY_KEY, external_tool_paths.pmd_binary.clone());
     storage.set_string(PMD_RULESET_KEY, external_tool_paths.pmd_ruleset.clone());
+    storage.set_string(PMD_INSTALLED_VERSION_KEY, external_tool_paths.pmd_installed_version.clone());
     storage.set_string(SPOTBUGS_BINARY_KEY, external_tool_paths.spotbugs_binary.clone());
+    storage.set_string(SPOTBUGS_INSTALLED_VERSION_KEY, external_tool_paths.spotbugs_installed_version.clone());
 }
 
 impl FoxGardenApp {
@@ -1026,6 +1041,15 @@ impl eframe::App for FoxGardenApp {
                 Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
                 Err(err) => self.last_error = Some(format!("PMD failed: {err}")),
             }
+        }
+        for result in self.static_analysis.tool_manager.poll_installs() {
+            match result {
+                Ok(installed) => self.external_tool_paths.apply_installed(&installed),
+                Err(err) => self.last_error = Some(format!("Install failed: {err}")),
+            }
+        }
+        for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
+            self.static_analysis.record_latest_version(tool, result);
         }
 
         egui::CentralPanel::default().show(ui, |ui| {

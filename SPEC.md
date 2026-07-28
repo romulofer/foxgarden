@@ -197,15 +197,37 @@ item (each tool a separate, explicit action — no auto-detection of which
 tool a project uses, since that needs real build-file awareness this
 codebase doesn't have, `Maven/Gradle awareness`, §21) shells out to the
 configured tool binary (a Settings > External Tools text field for its
-path, since none of these ship bundled — a real external dependency the
-user must already have installed, unlike `portable-pty`/`vt100`, which are
-linked into the binary itself) against the project root, parses its
-report (Checkstyle/PMD: XML; SpotBugs: XML with its own schema — each
-needs its own parser, not a shared one, the formats aren't related), and
-converts each finding into the existing `Diagnostic` shape (file + byte
-range + message + severity) already powering the live syntax-error
-squiggle — same pipeline, a second *source* of diagnostics feeding it,
-not a new rendering path.
+path) against the project root, parses its report (Checkstyle/PMD: XML;
+SpotBugs: XML with its own schema — each needs its own parser, not a
+shared one, the formats aren't related), and converts each finding into
+the existing `Diagnostic` shape (file + byte range + message + severity)
+already powering the live syntax-error squiggle — same pipeline, a second
+*source* of diagnostics feeding it, not a new rendering path.
+
+**Revised: these tools are downloadable/updatable from inside the app**
+(superseding this section's original "the user must already have installed
+it" framing). None of the three are linked into the FoxGarden binary
+itself the way `portable-pty`/`vt100` are — they're JVM tools (PMD's own
+release alone is ~70MB, and none run without a JVM FoxGarden doesn't
+bundle either), so embedding them would work directly against this
+project's own "lightweight, Zed-speed" principle. Instead, Settings >
+External Tools' own Install button (`crate::tool_manager` in the `app`
+crate) downloads each tool's official GitHub release into a per-user cache
+directory (`directories::ProjectDirs`) on first use, then fills in the
+binary/config fields itself — a JVM already on `PATH` is still required,
+same as before, just not the tool's own binary/ruleset file being
+pre-installed. "Install" always installs a specific pinned version per
+tool, not whatever GitHub calls "latest" — verified concretely (not
+assumed) that the *newest* Checkstyle release needs a newer JDK than a
+real, common Java 17 install has (a genuine `UnsupportedClassVersionError`
+against a real JVM). "Check for Updates" separately shows whatever
+GitHub's `releases/latest` currently says, informational only — it doesn't
+change what "Install" installs, so a JVM-incompatible newer release never
+gets installed silently. Checkstyle's and PMD's own bundled
+classpath-resource rulesets (`-c /sun_checks.xml`, `-R
+rulesets/java/quickstart.xml`) are used as each one's default `Config`/
+`Ruleset` field on install, rather than FoxGarden shipping/maintaining its
+own copies that could drift from whatever version was actually installed.
 
 **Non-goals:** no live/on-type analysis — these tools run as a whole-
 project batch job on demand (Tools menu), not per-keystroke; no

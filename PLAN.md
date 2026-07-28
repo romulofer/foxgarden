@@ -216,11 +216,92 @@ itself. PMD has no error/warning concept, just a 1(high)-5(low)
 `priority`; this codebase maps 1-2 to `Severity::Error` and 3-5 to
 `Severity::Warning` as its own judgment call, not a PMD convention.
 
+**Addendum — install/update the tools from inside the app (not in the
+original per-phase plan above; added once the user asked for it directly,
+after "shared plumbing" had already shipped for Checkstyle+PMD).**
+`crates/app/src/tool_manager.rs` downloads Checkstyle/PMD/SpotBugs'
+official GitHub releases into `directories::ProjectDirs`'s cache dir on an
+explicit Settings > External Tools "Install" click (`ureq` for the HTTP
+fetch, `zip` to extract PMD's/SpotBugs' own archives — Checkstyle ships a
+bare jar, no extraction needed), then fills in the binary/config fields
+itself. Every version/URL/tag-shape/archive-layout claim here was verified
+against a real download and a real run this session (`SPEC.md` §5's own
+revised text has the durable version of this reasoning) — three real bugs
+this caught before they shipped, each the kind of thing a "should just
+work" assumption would have missed:
+
+1. Checkstyle's *newest* GitHub release needs a newer JDK than a real Java
+   17 install has (a genuine `UnsupportedClassVersionError` running it) —
+   `Tool::recommended_version` pins Checkstyle to `10.26.1`, the newest
+   release confirmed (by running it) to still work under Java 17, rather
+   than always chasing whatever GitHub calls "latest."
+2. PMD's real git tag is `pmd_releases/7.26.0`, not the bare `7.26.0` a
+   normal-looking semver tag would suggest (SpotBugs' and Checkstyle's own
+   tags don't have this quirk) — caught by an actual failed download (a
+   real 404), not a code-review guess.
+3. A downloaded Checkstyle install is a bare `.jar` with no launcher
+   script (unlike PMD's/SpotBugs' own `bin/<script>`), so it can't be
+   `Command::new`'d directly — `fg_core::static_analysis::
+   command_for_binary` wraps any `.jar`-suffixed binary path in `java
+   -jar`, transparently to both `run_checkstyle_process` and the (already
+   jar-free) `run_pmd_process`. This lives in `core`, not `app::
+   tool_manager`, despite `tool_manager` being what produces the jar path
+   in the first place — `app` cannot be a dependency `core` reaches back
+   into (`core <- syntax <- app`), and this is really "how do I invoke a
+   configured Checkstyle binary correctly" logic, which belongs with the
+   rest of that invocation code regardless of where the binary came from.
+
+"Install" always installs the pinned `recommended_version`, never
+whatever GitHub's `releases/latest` says — a separate "Check for Updates"
+button shows the latest tag as plain informational text (`StaticAnalysisState::latest_versions`,
+session-only, not persisted) without ever installing it automatically, so
+a JVM-incompatible newer release (see bug 1 above) is never a surprise.
+`zip::ZipArchive::extract` was verified (via a real extraction of PMD's
+own archive) to already preserve the Unix executable bit from the
+archive's own metadata — no manual `chmod` step needed for PMD's/
+SpotBugs' launcher scripts. `ExternalToolPaths` gained a
+`{checkstyle,pmd,spotbugs}_installed_version` field per tool (persisted,
+`""` meaning "not installed via this downloader" — also the correct state
+for someone who pointed a binary field at an existing system install
+instead) so Settings can show "Installed: X" without re-deriving it from
+the path string.
+
+Live click-through (Install/Reinstall/Check for Updates for all three
+tools against the real cache directory, Checkstyle/PMD still running
+correctly off the freshly-installed binaries afterward) was confirmed
+working by the user. One round of UI-copy follow-up: the user read
+"Installed: 10.26.1" next to "Latest on GitHub: 13.9.0" as a possible bug
+rather than the intended pinned-vs-latest distinction, so the dialog's own
+top explanation and the per-tool "Latest on GitHub" label (now "Up to
+date (X)" when the pin already matches, otherwise a hover tooltip
+spelling out *why* Install doesn't just chase latest) were reworded to
+say so up front rather than requiring the user to ask.
+
 **Phase 3 — SpotBugs.** Same shape, SpotBugs' own XML schema (bytecode-
 based — verify it reports source line numbers accurately enough to map
 back to a `Diagnostic` range before assuming parity with the other two).
 
+**Deferred, not started** — investigated this session (real download,
+real compile-then-analyze run against a fixture, not assumed) and found a
+real blocker: unlike Checkstyle/PMD, SpotBugs analyzes **compiled `.class`
+files**, not source — there's no `project_root`-shaped entry point at all,
+and this app has no build step yet (`Maven/Gradle awareness`, §21, and
+`Build/run/test integration`, §22, are both still un-started) to produce
+one. User's own call: defer the actual analysis wiring until §22 lands.
+SpotBugs' own *binary* is still installable today via the tool-manager
+addendum above (`Tool::SpotBugs`, `bin/fb` launcher) — that part doesn't
+depend on the classes-directory question, only "Run SpotBugs" and its
+Diagnostic-conversion parser do. Also verified and worth keeping for
+whenever this phase resumes: `-xml:withMessages` (not bare `-xml`) is
+needed for a `<LongMessage>` at all; each `<BugInstance>` carries several
+`<SourceLine>` elements (class range, method range, the specific culprit
+line) and the useful one is the *last* direct child of `<BugInstance>`
+itself, not any of the ones nested inside `<Class>`/`<Method>`/`<Type>`/
+etc. — real depth-tracking during parsing, not a flat structure like
+Checkstyle's/PMD's own reports.
+
 **Checkpoint 3:** same as above, SpotBugs-specific fixture + live-verify.
+Not reached.
 
 ---
 
@@ -664,7 +745,11 @@ work.
       headless-testable via the highlight-span test shape)
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration (Phase 1/Checkstyle and Phase
-      2/PMD both live-verified; Phase 3/SpotBugs not started)
+      2/PMD both live-verified, including the in-app install/update
+      addition for all three tools' binaries; Phase 3/SpotBugs analysis
+      wiring deferred until Track 22 — Build/run/test integration —
+      lands, per the user's own call once the compiled-classes-directory
+      blocker surfaced)
 - [ ] Track 6 — Auto-save
 - [ ] Track 7 — Rectangular (block) paste
 

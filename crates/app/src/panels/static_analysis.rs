@@ -1,6 +1,9 @@
 //! Tools > "Run Checkstyle"/"Run PMD" (`PLAN.md` Track 5, Phases 1-2 —
-//! SpotBugs lands in a later phase) plus their shared Settings > External
-//! Tools… dialog. Running each tool itself lives in `fg_core::
+//! SpotBugs analysis itself is deferred until `Build/run/test integration`
+//! lands, since SpotBugs needs a compiled-classes directory this app has no
+//! way to produce yet) plus their shared Settings > External Tools…
+//! dialog, including installing/updating the tools themselves (`crate::
+//! tool_manager`). Running each tool itself lives in `fg_core::
 //! checkstyle_diagnostics`/`fg_core::pmd_diagnostics`; this module is the
 //! app-side wiring: persisted binary/config paths, each tool's own
 //! background scan, and applying a completed scan's findings to open
@@ -11,14 +14,18 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use fg_core::{Diagnostic, EditorState};
 
+use crate::tool_manager::{self, Tool, ToolManagerState};
 use crate::widgets::modal::show_modal;
 
 /// Settings > External Tools — binary/config paths for the static-analysis
 /// tools Tools > "Run Checkstyle"/"Run PMD"/"Run SpotBugs" shell out to
-/// (`SPEC.md` §5, none of them ship bundled). Grouped into one struct, the
-/// same "travels together through persistence as one unit" shape
-/// `IndentSettings`/`ViewSettings` already use, rather than four flat
-/// `menu_bar::show` parameters.
+/// (`SPEC.md` §5), plus which version (if any) `tool_manager` last
+/// installed into its own cache directory for each — `""` means "not
+/// installed via the in-app downloader," which is also the correct default
+/// for someone who's pointed a binary field at an existing system install
+/// instead. Grouped into one struct, the same "travels together through
+/// persistence as one unit" shape `IndentSettings`/`ViewSettings` already
+/// use, rather than a growing list of flat `menu_bar::show` parameters.
 #[derive(Debug, Clone, Default)]
 pub struct ExternalToolPaths {
     pub checkstyle_binary: String,
@@ -26,16 +33,47 @@ pub struct ExternalToolPaths {
     /// run needs an explicit `-c`, so this is required (not optional
     /// convenience) for "Run Checkstyle" to do anything.
     pub checkstyle_config: String,
+    pub checkstyle_installed_version: String,
     pub pmd_binary: String,
     /// PMD's `-R` — one ruleset path, or several comma-separated (PMD's own
     /// `-R=<rulesets>[,<rulesets>...]` shape, forwarded verbatim); required
     /// the same way `checkstyle_config` is, PMD also has no usable default.
     pub pmd_ruleset: String,
-    /// Unused until `PLAN.md` Track 5 Phase 3 lands — present now so
-    /// Settings > External Tools shows every tool's row up front (Phase 1's
-    /// own "shared plumbing" scope) rather than growing new UI piecemeal
-    /// per phase.
+    pub pmd_installed_version: String,
+    /// Unused by any Tools-menu action until `PLAN.md` Track 5 Phase 3
+    /// lands — present now (same as `spotbugs_installed_version` below) so
+    /// Settings > External Tools shows every tool's row, install button
+    /// included, up front rather than growing new UI piecemeal per phase.
     pub spotbugs_binary: String,
+    pub spotbugs_installed_version: String,
+}
+
+impl ExternalToolPaths {
+    /// Writes `installed`'s binary path (and default config, if the tool
+    /// has one) into the matching fields, overwriting whatever was there —
+    /// called after `tool_manager::ToolManagerState::install` completes.
+    /// An explicit "Install"/"Reinstall" click is exactly the case where
+    /// overwriting a hand-typed path is the right call: the user just
+    /// asked this app to go get a fresh copy and use it.
+    pub fn apply_installed(&mut self, installed: &tool_manager::Installed) {
+        let config = installed.default_config.clone().unwrap_or_default();
+        match installed.tool {
+            Tool::Checkstyle => {
+                self.checkstyle_binary = installed.binary.display().to_string();
+                self.checkstyle_config = config;
+                self.checkstyle_installed_version = installed.version.clone();
+            }
+            Tool::Pmd => {
+                self.pmd_binary = installed.binary.display().to_string();
+                self.pmd_ruleset = config;
+                self.pmd_installed_version = installed.version.clone();
+            }
+            Tool::SpotBugs => {
+                self.spotbugs_binary = installed.binary.display().to_string();
+                self.spotbugs_installed_version = installed.version.clone();
+            }
+        }
+    }
 }
 
 type ScanResult = Result<Vec<(PathBuf, Diagnostic)>, String>;
@@ -51,6 +89,19 @@ pub struct StaticAnalysisState {
     settings_open: bool,
     checkstyle_scan_rx: Option<Receiver<ScanResult>>,
     pmd_scan_rx: Option<Receiver<ScanResult>>,
+    /// Backs the Settings > External Tools… dialog's own Install/Check for
+    /// Updates buttons — a separate concern from the two scan slots above
+    /// (installing a tool vs. running it), so it's its own type rather than
+    /// three more near-identical `Option<Receiver<...>>` field pairs.
+    pub tool_manager: ToolManagerState,
+    /// The last "Check for Updates" result per tool, for the Settings
+    /// dialog to display — session-only (not persisted, and not written
+    /// back into `ExternalToolPaths`): this app never auto-installs
+    /// whatever GitHub calls latest (see `tool_manager::Tool::
+    /// recommended_version`'s own doc comment on why "Install" always
+    /// installs a pinned, verified version instead), so this is purely
+    /// informational, re-fetched fresh every time the user asks.
+    latest_versions: std::collections::HashMap<Tool, tool_manager::LatestVersionResult>,
 }
 
 /// Runs `work` on a fresh background thread and returns the receiving end
@@ -129,6 +180,17 @@ impl StaticAnalysisState {
     pub fn poll_pmd(&mut self) -> Option<ScanResult> {
         poll_scan(&mut self.pmd_scan_rx)
     }
+
+    /// Records a completed "Check for Updates" result for the Settings
+    /// dialog to read back via `latest_version` — called from
+    /// `FoxGardenApp::ui`'s per-frame poll of `self.tool_manager`.
+    pub fn record_latest_version(&mut self, tool: Tool, result: tool_manager::LatestVersionResult) {
+        self.latest_versions.insert(tool, result);
+    }
+
+    fn latest_version(&self, tool: Tool) -> Option<&tool_manager::LatestVersionResult> {
+        self.latest_versions.get(&tool)
+    }
 }
 
 /// Applies a completed scan's findings to every currently open tab, keyed
@@ -166,28 +228,39 @@ pub fn apply_pmd_results(state: &mut EditorState, results: &[(PathBuf, Diagnosti
 }
 
 /// Settings > External Tools… dialog — one binary/config path field per
-/// tool. SpotBugs' row is still shown even though its own phase hasn't
-/// landed yet, per this track's own Phase 1 "shared plumbing" scope, so a
-/// user can pre-fill it; "Run SpotBugs" just doesn't exist in the Tools
-/// menu yet to consume it.
+/// tool, plus an Install/Update row backed by `crate::tool_manager`: a
+/// tool doesn't have to already be on the user's system for these fields
+/// to get filled in. SpotBugs' row is still shown (install-only — no "Run
+/// SpotBugs" menu item yet) even though its own analysis phase hasn't
+/// landed, per this track's own Phase 1 "shared plumbing" scope.
 pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut ExternalToolPaths) {
     let outcome = show_modal(ui, "external_tools_dialog", state.settings_open.then_some(()), |ui, ()| {
-        ui.set_min_width(420.0);
+        ui.set_min_width(460.0);
         ui.heading("External Tools");
-        ui.label(egui::RichText::new("None of these ship bundled — point each field at an already-installed binary.").weak());
+        ui.label(
+            egui::RichText::new(
+                "Install fetches a specific, verified-compatible release into a local cache — not necessarily \
+                 GitHub's newest (hover \"GitHub's latest\" below for why). Still needs a JVM already on PATH. \
+                 Or point the fields at a binary you've already installed yourself.",
+            )
+            .weak(),
+        );
         ui.separator();
 
         ui.strong("Checkstyle");
+        show_install_row(ui, state, Tool::Checkstyle, &tools.checkstyle_installed_version);
         labeled_path_field(ui, "checkstyle_binary_path", "Binary", &mut tools.checkstyle_binary);
         labeled_path_field(ui, "checkstyle_config_path", "Config (-c)", &mut tools.checkstyle_config);
 
         ui.add_space(8.0);
         ui.strong("PMD");
+        show_install_row(ui, state, Tool::Pmd, &tools.pmd_installed_version);
         labeled_path_field(ui, "pmd_binary_path", "Binary", &mut tools.pmd_binary);
         labeled_path_field(ui, "pmd_ruleset_path", "Ruleset (-R)", &mut tools.pmd_ruleset);
 
         ui.add_space(8.0);
         ui.strong("SpotBugs");
+        show_install_row(ui, state, Tool::SpotBugs, &tools.spotbugs_installed_version);
         labeled_path_field(ui, "spotbugs_binary_path", "Binary", &mut tools.spotbugs_binary);
 
         ui.separator();
@@ -198,6 +271,65 @@ pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut
     {
         state.settings_open = false;
     }
+}
+
+/// One tool's Install/Update row: installed-version status, an Install (or
+/// Reinstall) button, and a Check for Updates button + whatever its last
+/// result was. Kicks off `state.tool_manager`'s background work directly
+/// from the button click — this dialog already owns `&mut
+/// StaticAnalysisState`, so there's no need to bubble a `menu_bar`-style
+/// outcome flag up through `FoxGardenApp::ui` just to start it one frame
+/// later.
+fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: Tool, installed_version: &str) {
+    ui.horizontal(|ui| {
+        if installed_version.is_empty() {
+            ui.label(egui::RichText::new("Not installed").weak());
+        } else {
+            ui.label(format!("Installed: {installed_version}"));
+        }
+
+        let installing = state.tool_manager.installing(tool);
+        let install_label = if installing {
+            "Installing…"
+        } else if installed_version.is_empty() {
+            "Install"
+        } else {
+            "Reinstall"
+        };
+        if ui.add_enabled(!installing, egui::Button::new(install_label)).clicked() {
+            state.tool_manager.install(tool);
+        }
+
+        let checking = state.tool_manager.checking(tool);
+        if ui
+            .add_enabled(!checking, egui::Button::new(if checking { "Checking…" } else { "Check for Updates" }))
+            .clicked()
+        {
+            state.tool_manager.check_latest(tool);
+        }
+
+        match state.latest_version(tool) {
+            Some(Ok(version)) if version == installed_version => {
+                ui.label(egui::RichText::new(format!("Up to date ({version})")).weak());
+            }
+            // Deliberately not "you're behind" phrasing — Install never
+            // auto-upgrades to this, so a version mismatch here is the
+            // normal steady state, not a warning. See the hover text.
+            Some(Ok(version)) => {
+                ui.label(egui::RichText::new(format!("GitHub's latest: {version}")).weak()).on_hover_text(format!(
+                    "Install always uses {pinned}, the version this app has verified actually \
+                     runs correctly — not necessarily whatever's newest on GitHub. A newer \
+                     release here is expected, not a problem; Reinstall will still install \
+                     {pinned} unless a future FoxGarden update changes that pin.",
+                    pinned = tool.recommended_version(),
+                ));
+            }
+            Some(Err(err)) => {
+                ui.label(egui::RichText::new(format!("Update check failed: {err}")).weak());
+            }
+            None => {}
+        }
+    });
 }
 
 fn labeled_path_field(ui: &mut egui::Ui, id_salt: &str, label: &str, value: &mut String) {

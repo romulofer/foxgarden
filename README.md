@@ -165,20 +165,30 @@ cross-platform "open a terminal here" API to call instead.
 | Clipboard | [`arboard`](https://github.com/1Password/arboard) |
 | File-system watching | [`notify`](https://github.com/notify-rs/notify) (external-change detection/conflict banner) |
 | Terminal panel | [`portable-pty`](https://github.com/wez/wezterm) + [`vt100`](https://github.com/doy/vt100-rust) |
-| Config/report parsing | [`serde`](https://serde.rs)/`serde_json` (run configurations, live templates), [`quick-xml`](https://github.com/tafia/quick-xml) (Checkstyle/PMD report parsing) |
+| Config/report parsing | [`serde`](https://serde.rs)/`serde_json` (run configurations, live templates, GitHub release API responses), [`quick-xml`](https://github.com/tafia/quick-xml) (Checkstyle/PMD report parsing) |
+| Tool downloader | [`ureq`](https://github.com/algesten/ureq) (HTTP), [`zip`](https://github.com/zip-rs/zip2) (archive extraction), [`directories`](https://github.com/dirs-dev/directories-rs) (per-OS cache directory) — see "External tools" below |
 | Test fixtures | [`tempfile`](https://github.com/Stebalien/tempfile) (dev-dependency only) |
 
 ### External tools (optional)
 
-Tools > Run Checkstyle / Run PMD (Settings > External Tools…) shell out to
-an already-installed binary — neither ships bundled with FoxGarden, the
-same way a JDK itself isn't bundled. Only needed if you use those two menu
-items; everything else in the app has no external-tool dependency.
-[Checkstyle](https://checkstyle.org)'s CLI additionally needs a ruleset
-config file (e.g. its own bundled `sun_checks.xml`/`google_checks.xml`);
-[PMD](https://pmd.github.io)'s needs a `-R` ruleset reference (e.g. its own
-bundled `rulesets/java/quickstart.xml`) — both configured alongside each
-binary's path.
+Tools > Run Checkstyle / Run PMD shell out to [Checkstyle](https://checkstyle.org)/[PMD](https://pmd.github.io)
+— neither is linked into the FoxGarden binary itself, unlike
+`portable-pty`/`vt100` above (both are JVM tools; PMD's own release alone
+is ~70MB, which would work directly against this project's own
+lightweight/fast-startup goal). Settings > External Tools…'s own Install
+button downloads each tool's official release into a per-user cache
+directory on first use and fills in its binary/config fields — a JVM
+still needs to already be on `PATH`, same as running any other Java tool.
+"Install" always installs a specific version this app has verified works
+(not necessarily whatever a tool's own GitHub release page currently
+calls "latest" — Checkstyle's newest major line, for one, needs a newer
+JDK than a plain Java 17 install has); "Check for Updates" shows what's
+newer on GitHub without installing it automatically. None of this is
+required for anything else in the app — only those two Tools-menu items
+have an external-tool dependency at all. SpotBugs' binary is installable
+the same way, but "Run SpotBugs" itself isn't wired up yet (it needs a
+compiled-classes directory this app has no way to produce until build
+integration lands — see `PLAN.md`'s own tracking of that gap).
 
 ## Project structure
 

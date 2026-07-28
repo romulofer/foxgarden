@@ -87,7 +87,7 @@ fn checkstyle_findings_to_diagnostics(findings: Vec<CheckstyleFinding>) -> Vec<(
 }
 
 fn run_checkstyle_process(binary: &Path, config: &Path, project_root: &Path) -> Result<String, StaticAnalysisError> {
-    let output = Command::new(binary)
+    let output = command_for_binary(binary)
         .arg("-c")
         .arg(config)
         .arg("-f")
@@ -96,6 +96,24 @@ fn run_checkstyle_process(binary: &Path, config: &Path, project_root: &Path) -> 
         .output()
         .map_err(|e| StaticAnalysisError::Spawn("Checkstyle", e))?;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Builds the `Command` to run a configured tool binary at `path`. A bare
+/// `.jar` (what an in-app-downloaded Checkstyle install actually is — see
+/// `crate` consumers of this module — since Checkstyle's own GitHub
+/// release ships no launcher script, unlike PMD's/SpotBugs') needs `java
+/// -jar` wrapped around it to be runnable at all; anything else (a real
+/// executable/launcher script, e.g. an apt-installed `/usr/bin/checkstyle`
+/// or PMD's/SpotBugs' own `bin/<script>`) is run directly. Requires a JVM
+/// on `PATH` for the `.jar` case — not this app's concern to bundle one.
+fn command_for_binary(path: &Path) -> Command {
+    if path.extension().is_some_and(|ext| ext == "jar") {
+        let mut cmd = Command::new("java");
+        cmd.arg("-jar").arg(path);
+        cmd
+    } else {
+        Command::new(path)
+    }
 }
 
 /// Parses a Checkstyle XML report (the `-f xml` format) into one
@@ -204,7 +222,7 @@ fn pmd_findings_to_diagnostics(findings: Vec<PmdFinding>) -> Vec<(PathBuf, Diagn
 }
 
 fn run_pmd_process(binary: &Path, ruleset: &str, project_root: &Path) -> Result<String, StaticAnalysisError> {
-    let output = Command::new(binary)
+    let output = command_for_binary(binary)
         .arg("check")
         .arg("-d")
         .arg(project_root)
@@ -359,6 +377,20 @@ fn diagnostics_from_findings<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_for_binary_wraps_a_jar_in_java_dash_jar() {
+        let cmd = command_for_binary(Path::new("/tools/checkstyle-10.26.1-all.jar"));
+        assert_eq!(cmd.get_program(), "java");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, vec!["-jar", "/tools/checkstyle-10.26.1-all.jar"]);
+    }
+
+    #[test]
+    fn command_for_binary_runs_a_non_jar_path_directly() {
+        let cmd = command_for_binary(Path::new("/tools/pmd-bin-7.26.0/bin/pmd"));
+        assert_eq!(cmd.get_program(), "/tools/pmd-bin-7.26.0/bin/pmd");
+    }
 
     /// Captured verbatim from a real `checkstyle -c sun_checks.xml -f xml`
     /// run against a small fixture file with several real violations —
