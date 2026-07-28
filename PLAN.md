@@ -98,10 +98,9 @@ distinction, one commit-sized change at a time (the feature's own
 "ongoing, one distinction at a time by design" framing, not a single
 sweeping rewrite).
 
-**Checkpoint 1:** `cargo test -p syntax` green per distinction landed; no
-live click-through strictly required (headless-testable via the existing
-highlight-span test shape) but worth a quick visual sanity check on a real
-file.
+**Checkpoint 1:** `cargo test -p syntax` green per distinction landed —
+done: `Scope::Parameter`/`Operator`/`Label`/`DocComment` all landed with
+table tests against the extended `valid.java` fixture.
 
 **Phase 2 — Kotlin: modifiers, regex literals, `it`/`field`.** Same
 discipline, against `tree-sitter-kotlin-ng`'s real parse output (never
@@ -112,7 +111,11 @@ distinguish it from an ordinary string-call at all before committing to
 building it — flag and skip rather than force a syntactic answer to what
 may be a semantic-only distinction.
 
-**Checkpoint 2:** `cargo test -p syntax` green per distinction landed.
+**Checkpoint 2:** `cargo test -p syntax` green per distinction landed —
+done: modifier-keyword coverage turned out already complete (verified
+against `grammar.js` directly, nothing to add); regex-literal detection
+confirmed no dedicated grammar node exists and was skipped per this
+phase's own instruction; `it`/`field` landed, reusing `Scope::Keyword`.
 
 ---
 
@@ -628,7 +631,9 @@ to the right file/line.
 - [x] Track 1 — Multi-select in the tree (live-verified: Ctrl/Cmd/Shift-
       click gestures, batch delete/copy/cut/paste, and New File/Rename
       disabled under multi-selection all confirmed working)
-- [ ] Track 2 — Richer Java/Kotlin syntax highlighting
+- [x] Track 2 — Richer Java/Kotlin syntax highlighting (code green, no
+      live click-through required per this track's own Checkpoint 1 note —
+      headless-testable via the highlight-span test shape)
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration
 - [ ] Track 6 — Auto-save

@@ -220,6 +220,25 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Property => Color32::from_rgb(224, 108, 117),
             Scope::Tag => Color32::from_rgb(86, 182, 194),
             Scope::Constant => Color32::from_rgb(209, 154, 102),
+            // A dusty rose close to (but distinct from) `Property`'s coral
+            // red — a parameter and a field are closely related lexical
+            // roles (both "a name you read/write, not code structure"), so
+            // a related-but-different hue reads as "kin to Property," not
+            // an arbitrary new color competing with it.
+            Scope::Parameter => Color32::from_rgb(198, 145, 145),
+            // Deliberately muted — operators appear on nearly every line,
+            // so a saturated color here would compete with the code itself
+            // far more than any other scope's own frequency ever would.
+            Scope::Operator => Color32::from_rgb(130, 145, 158),
+            // A rare token (one `labeled_statement` per file at most, in
+            // practice) can afford a more distinctive color; warm gold
+            // keeps it out of every other scope's own hue family.
+            Scope::Label => Color32::from_rgb(216, 176, 92),
+            // A desaturated green — between `Comment`'s gray and
+            // `String`'s fuller green — so a doc comment reads as "still a
+            // comment" while standing out as more structured/significant
+            // than a plain one.
+            Scope::DocComment => Color32::from_rgb(109, 145, 120),
         }
     } else {
         match scope {
@@ -231,6 +250,10 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Property => Color32::from_rgb(228, 86, 73),
             Scope::Tag => Color32::from_rgb(24, 141, 148),
             Scope::Constant => Color32::from_rgb(193, 132, 1),
+            Scope::Parameter => Color32::from_rgb(166, 92, 92),
+            Scope::Operator => Color32::from_rgb(95, 110, 125),
+            Scope::Label => Color32::from_rgb(150, 110, 20),
+            Scope::DocComment => Color32::from_rgb(70, 115, 75),
         }
     }
 }

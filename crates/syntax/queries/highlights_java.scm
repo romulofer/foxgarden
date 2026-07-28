@@ -32,6 +32,13 @@
 
 (identifier) @variable
 
+; Parameters: `formal_parameter`'s own `name` field is unambiguous, distinct
+; from a local variable declaration (which stays the generic `@variable`
+; capture above, `scope_for_capture` has no branch for it and it renders as
+; plain text) — `PLAN.md` Track 2, `SPEC.md` §2.
+(formal_parameter
+  name: (identifier) @variable.parameter)
+
 ; Methods
 
 (method_declaration
@@ -49,6 +56,23 @@
   name: (identifier) @type)
 
 "@" @operator
+
+; Operators: binary/unary/assignment expressions each declare their own
+; operator token under an `operator` field (verified against real
+; `tree-sitter-java` grammar.js source, not assumed) — `update_expression`'s
+; `++`/`--` have no field to key off instead, so they're matched by their
+; own literal token text, same shape `"@"` above already uses.
+(binary_expression operator: _ @operator)
+(unary_expression operator: _ @operator)
+(assignment_expression operator: _ @operator)
+["++" "--"] @operator
+
+; Labels: `labeled_statement`'s own grammar is `identifier ':' statement`
+; with no field names — the identifier is unambiguously the label, since
+; the wrapped `statement` child is never itself literally node type
+; `identifier` (verified against grammar.js, not assumed).
+(labeled_statement
+  (identifier) @label)
 
 ; Types
 
@@ -152,6 +176,16 @@
   (line_comment)
   (block_comment)
 ] @comment
+
+; Doc comments: a `/** ... */` block comment, distinguished from a plain
+; `/* ... */` one purely by its own leading text — tree-sitter-java has no
+; separate node type for a doc comment, unlike Kotlin's KDoc. Declared
+; *after* the generic `@comment` capture above so it wins the same-range
+; conflict `highlight_spans` resolves in favor of the later pattern (same
+; "Constants must stay the later pattern" reasoning the Fields section
+; above already documents).
+((block_comment) @comment.doc
+ (#match? @comment.doc "^/\\*\\*"))
 
 ; Keywords
 

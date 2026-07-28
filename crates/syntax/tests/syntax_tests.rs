@@ -162,6 +162,32 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     // gave Kotlin's enum entries).
     assert!(has_scope_over("Hearts", Scope::Constant));
     assert!(has_scope_over("Spades", Scope::Constant));
+
+    // PLAN.md Track 2 / SPEC.md §2: parameters, operators, labels, and doc
+    // comments each get their own Scope. `formatLength`'s own `length`
+    // parameter — its first occurrence in the file is the declaration site
+    // itself, not one of its later plain reads in the method body, which
+    // stay unhighlighted `@variable` same as any local.
+    assert!(
+        has_scope_over("length", Scope::Parameter),
+        "a formal parameter's own declaration site should be Scope::Parameter"
+    );
+    assert!(has_scope_over("<", Scope::Operator), "binary_expression's operator field");
+    assert!(has_scope_over("==", Scope::Operator), "binary_expression's operator field");
+    assert!(has_scope_over("++", Scope::Operator), "update_expression's literal token");
+    assert!(
+        has_scope_over("outer", Scope::Label),
+        "labeled_statement's own label identifier"
+    );
+    assert!(
+        has_scope_over("Formats a value for display.", Scope::DocComment),
+        "a /** ... */ block comment should be Scope::DocComment"
+    );
+    // A plain `/* */`-less line comment must still resolve to the ordinary
+    // Comment scope, not DocComment — regression coverage against the doc-
+    // comment regex over-matching.
+    assert!(has_scope_over("// A friendly greeting", Scope::Comment));
+    assert!(!has_scope_over("// A friendly greeting", Scope::DocComment));
 }
 
 #[test]
@@ -214,6 +240,32 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     // `(reification_modifier)` — the node grammar.js wraps it in — does, and
     // covers the same token.
     assert!(has_scope_over("reified", Scope::Keyword));
+
+    // PLAN.md Track 2 / SPEC.md §2's "richer modifier-keyword coverage"
+    // candidate turned out to already be complete: every modifier
+    // grammar.js actually defines (`suspend`, `inline`, `tailrec`,
+    // `crossinline`, `noinline`, `vararg`, `lateinit`, `expect`, `actual`,
+    // ...) was already in this file's own keyword list before this pass —
+    // verified by diffing grammar.js's modifier rules against it directly,
+    // not assumed from SPEC.md's own (stale) framing. `suspend` here is
+    // regression coverage for that finding, not a new addition.
+    assert!(has_scope_over("suspend", Scope::Keyword));
+
+    // `it` (the implicit lambda parameter) and `field` (a custom
+    // accessor's own backing-field reference) reuse Scope::Keyword, same
+    // treatment as `this`/`super`/`true`/`false`/`null` above.
+    // `has_scope_over`'s own substring search would false-match "it" inside
+    // "initial" earlier in this fixture, so this locates the implicit
+    // lambda parameter's own 2-char span directly via its surrounding
+    // spaces instead of reusing that helper.
+    let it_start = VALID_KOTLIN.find(" it ").unwrap() + 1;
+    let it_end = it_start + "it".len();
+    assert!(
+        spans
+            .iter()
+            .any(|(range, s)| *s == Scope::Keyword && range.start <= it_start && range.end >= it_end)
+    );
+    assert!(has_scope_over("field", Scope::Keyword));
 }
 
 #[test]

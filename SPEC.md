@@ -112,53 +112,45 @@ what single-node Paste already does per path.
 
 `FEATURES.md`: `[WIP]` — shipped: `Scope::Constant` (Java ALL-CAPS +
 `enum_constant`, Kotlin enum-entry-as-constant, `TECHNICAL_DEBT.md` #2/#3),
-`Scope::Property` for Java fields. Ongoing "one distinction at a time by
-design" — this section specs the next distinctions, not a single big
-rewrite.
+`Scope::Property` for Java fields, and — as of `PLAN.md` Track 2 —
+`Scope::Parameter`/`Operator`/`Label`/`DocComment` for Java (formal
+parameters, binary/unary/assignment/update-expression operators,
+`labeled_statement`'s own label, `/** */` vs. plain `/* */`) and, for
+Kotlin, `it`/`field` reusing `Scope::Keyword` (same treatment as
+`this`/`super`/`true`/`false`/`null`). Ongoing "one distinction at a time
+by design" — regex-literal detection is the one item explicitly *not*
+attempted (see below), everything else this section originally scoped is
+done.
 
-**Remaining for Java** (per a diff against Zed's own Java extension,
-`../references/java`, same `tree-sitter-java` grammar this codebase already
-vendors):
-- **Parameters vs. local variables** — a new `Scope::Parameter` (or reusing
-  `Scope::Property` if the two should render identically; a real design
-  call to make at implementation time, not assumed here) for
-  `formal_parameter`'s own `identifier` child, distinct from a
-  `local_variable_declaration`'s.
-- **Operators/punctuation** — a `Scope::Operator` for `+`/`-`/`==`/etc.
-  token nodes; currently unhighlighted (falls through to `default_text`).
-- **Labels** — `labeled_statement`'s own label identifier (rare in
-  practice, but distinct enough visually in other editors to be worth the
-  one `Scope` variant).
-- **Doc comments distinct from regular ones** — `/** */` (`block_comment`
-  whose text starts `/**`) vs. a plain `/* */`; needs a text-prefix check
-  alongside the existing `block_comment`/`line_comment` node-kind match,
-  not a new grammar node (tree-sitter-java doesn't distinguish these as
-  separate node kinds).
+**Regex-literal detection, deliberately not implemented:** confirmed
+against `tree-sitter-kotlin-ng`'s real `grammar.js` — no mention of
+"regex" anywhere in it at all. `Regex("...")` is an ordinary function call
+with a string-literal argument, indistinguishable syntactically from any
+other call; highlighting it as a regex would need real semantic/name
+resolution (recognizing the callee specifically resolves to `kotlin.text.
+Regex`), which is out of scope for a tree-sitter-only pass, per this
+section's own original "flag rather than attempt if the grammar confirms
+this" instruction.
 
-**Remaining for Kotlin** — hasn't had a further pass at all since the
-initial `Scope::Constant` work; `TECHNICAL_DEBT.md` #3's own worked example
-is the starting point:
-- Richer modifier-keyword coverage (`suspend`, `inline`, `reified`, ...)
-  beyond whatever subset already renders.
-- Regex-literal detection (Kotlin's `Regex("...")` string-call convention
-  has no dedicated grammar node — likely a semantic, not syntactic, call
-  and probably out of scope for a tree-sitter-only pass; flag rather than
-  attempt if the grammar confirms this).
-- `@variable.builtin`-equivalent treatment for `it` (implicit lambda
-  parameter) and `field` (property-accessor backing-field reference) — both
-  need their own `Scope` (or reuse an existing one) plus a check that they
-  only get it in the position where they're actually the implicit binding,
-  not an unrelated identifier that happens to be named `it`.
+**Kotlin's "richer modifier-keyword coverage" turned out to already be
+complete** — diffing `grammar.js`'s own modifier rules (`class_modifier`/
+`function_modifier`/`property_modifier`/`visibility_modifier`/
+`inheritance_modifier`/`member_modifier`/`parameter_modifier`/
+`platform_modifier`/`variance_modifier`) against `highlights_kotlin.scm`'s
+existing keyword list directly (not assumed) found every single modifier
+token — `suspend`, `inline`, `tailrec`, `crossinline`, `noinline`,
+`vararg`, `lateinit`, `expect`, `actual`, `const`, ... — already present.
+Nothing to add there; this section's own original framing (naming it as
+still-needed) was stale relative to the query file's real state.
 
-**Every new `Scope` variant needs a color in both of `theme.rs`'s light and
-dark tables** (`color_for_scope`) — a real design decision each time (see
-`theme.rs`'s own accumulated palette for the established visual vocabulary:
-keywords purple/magenta, strings green, types/constants amber, ...), not
-just a query change. **Grammar shapes for every item above must be verified
-against real `tree-sitter-java`/`tree-sitter-kotlin-ng` parse output before
-writing the query** (`TECHNICAL_DEBT.md` #3's own established discipline)
-— this section names what's missing, not the exact node shapes, since
-those haven't been checked yet.
+**Every new `Scope` variant needed a color in both of `theme.rs`'s light
+and dark tables** (`color_for_scope`) — `Parameter` a dusty rose kin to
+`Property`'s coral red (a parameter and a field are closely related
+lexical roles), `Operator` deliberately muted (appears on nearly every
+line — a saturated color there would compete with the code itself far
+more than any other scope's frequency ever would), `Label` a distinctive
+warm gold (rare enough to afford it), `DocComment` a desaturated green
+between `Comment`'s gray and `String`'s fuller green.
 
 ---
 

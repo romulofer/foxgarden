@@ -25,6 +25,14 @@ use crate::language::{highlights_query_source, ts_language};
 /// properties mapping key are different enough lexical concepts that
 /// sharing a color would read as a coincidence, not a deliberate visual
 /// grouping.
+///
+/// `Parameter`/`Operator`/`Label`/`DocComment` are `PLAN.md` Track 2's own
+/// "richer Java/Kotlin syntax highlighting" additions (`SPEC.md` §2).
+/// `Parameter` is a dedicated variant rather than reusing `Property`
+/// (`SPEC.md`'s own "a real design call to make at implementation time"):
+/// a method parameter and a field are different enough lexical roles to
+/// tell apart at a glance, even with a visually related (not identical)
+/// color — see `theme.rs`'s own color choice for the reasoning there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Keyword,
@@ -35,6 +43,10 @@ pub enum Scope {
     Property,
     Tag,
     Constant,
+    Parameter,
+    Operator,
+    Label,
+    DocComment,
 }
 
 fn scope_for_capture(name: &str) -> Option<Scope> {
@@ -42,18 +54,30 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
         Some(Scope::Keyword)
     } else if name.starts_with("string") {
         Some(Scope::String)
+    } else if name.starts_with("comment.doc") {
+        // Checked ahead of the plain "comment" branch below — `@comment.doc`
+        // itself starts with "comment", so the generic branch would
+        // otherwise shadow it and doc comments would render as ordinary
+        // ones.
+        Some(Scope::DocComment)
     } else if name.starts_with("comment") {
         Some(Scope::Comment)
     } else if name.starts_with("type") {
         Some(Scope::Type)
     } else if name.starts_with("function") {
         Some(Scope::Function)
+    } else if name.starts_with("variable.parameter") {
+        Some(Scope::Parameter)
     } else if name.starts_with("property") {
         Some(Scope::Property)
     } else if name.starts_with("tag") {
         Some(Scope::Tag)
     } else if name.starts_with("constant") {
         Some(Scope::Constant)
+    } else if name.starts_with("operator") {
+        Some(Scope::Operator)
+    } else if name.starts_with("label") {
+        Some(Scope::Label)
     } else {
         None
     }

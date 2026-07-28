@@ -19,3 +19,13 @@ enum class Level {
 }
 
 inline fun <reified T> isInstance(value: Any): Boolean = value is T
+
+suspend fun fetchData(): String = "data"
+
+val doubled: (Int) -> Int = { it * 2 }
+
+var counter: Int = 0
+    get() = field
+    set(value) {
+        field = value
+    }

@@ -37,6 +37,21 @@
 ((identifier) @keyword
  (#any-of? @keyword "true" "false" "null"))
 
+; `it` (the implicit single lambda parameter) and `field` (a custom
+; property accessor's own backing-field reference) are, same as above,
+; plain `identifier` nodes with no dedicated grammar node of their own —
+; `PLAN.md` Track 2's own "@variable.builtin-equivalent treatment"
+; (`SPEC.md` §2). Reuses `Scope::Keyword` rather than a new variant, same
+; treatment this file already gives `this`/`super`/`true`/`false`/`null`:
+; all are "special, context-dependent identifiers," not ordinary variable
+; reads. Matched purely by text, so an ordinary variable/parameter that
+; happens to be *named* `it` or `field` would false-positive — an accepted,
+; unavoidable limit of a syntax-only pass (no scope resolution here), same
+; category of gap the `true`/`false`/`null` match above already has if a
+; real variable were ever named one of those.
+((identifier) @keyword
+ (#any-of? @keyword "it" "field"))
+
 (line_comment) @comment
 (block_comment) @comment
 
