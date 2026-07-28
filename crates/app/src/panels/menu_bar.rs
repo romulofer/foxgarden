@@ -48,6 +48,15 @@ pub struct MenuBarOutcome {
     pub open_run_configs_request: bool,
     pub fold_all_request: bool,
     pub expand_all_request: bool,
+    /// Settings > External Tools… — opens `static_analysis::
+    /// StaticAnalysisState`'s dialog, which lives on `FoxGardenApp` rather
+    /// than `MenuBarState`, same "the feature's own state, not menu_bar's"
+    /// shape `open_run_configs_request` already established for `RunConfigsDialogState`.
+    pub open_external_tools_settings_request: bool,
+    /// Tools > Run Checkstyle.
+    pub run_checkstyle_request: bool,
+    /// Tools > Run PMD.
+    pub run_pmd_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -77,6 +86,8 @@ pub fn show(
     terminal_panel_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
+    checkstyle_running: bool,
+    pmd_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -166,6 +177,10 @@ pub fn show(
                     });
                 });
             });
+            if ui.button("External Tools…").clicked() {
+                outcome.open_external_tools_settings_request = true;
+                ui.close();
+            }
         });
 
         ui.menu_button("Tools", |ui| {
@@ -268,6 +283,27 @@ pub fn show(
                 .clicked()
             {
                 outcome.unique_lines_request = true;
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !checkstyle_running,
+                    egui::Button::new(if checkstyle_running { "Running Checkstyle…" } else { "Run Checkstyle" }),
+                )
+                .clicked()
+            {
+                outcome.run_checkstyle_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !pmd_running,
+                    egui::Button::new(if pmd_running { "Running PMD…" } else { "Run PMD" }),
+                )
+                .clicked()
+            {
+                outcome.run_pmd_request = true;
                 ui.close();
             }
         });

@@ -156,11 +156,65 @@ existing `Diagnostic` shape feeding the current squiggle pipeline.
 **Checkpoint 1:** full suite green (a fixture Checkstyle XML report parsed
 into expected `Diagnostic`s, headless); live-verify running Checkstyle
 against a real project with a known violation shows a squiggle at the
-right line.
+right line — done: `fg_core::static_analysis` parses/converts a real
+`checkstyle -c sun_checks.xml -f xml` report captured from a live run
+against a fixture file, `crates/app/src/panels/static_analysis.rs` wires
+Settings > External Tools… and Tools > Run Checkstyle end to end via a
+background thread, and the live click-through (Settings > External
+Tools… configured with a real `checkstyle` binary + `sun_checks.xml`,
+Tools > Run Checkstyle against a real violation) was confirmed working by
+the user.
+
+Real Checkstyle CLI (verified against an installed `8.36.1` binary, not
+assumed): `-c <config>` is required (no usable default ruleset), `-f xml`
+is the report flag, and it exits non-zero whenever it finds _any_
+violation — its exit code is the violation count, not a success signal,
+so success is judged by whether stdout parses as a report. Checkstyle's
+`column` attribute is a 1-based **character** offset into the line, only
+byte-equivalent for pure-ASCII source. Settings > External Tools also
+grew `pmd_binary`/`spotbugs_binary` fields now (Phase 1's own "shared
+plumbing" scope) even though nothing consumes them until Phase 2/3.
 
 **Phase 2 — PMD.** Same shape, PMD's own XML report format.
 
-**Checkpoint 2:** same as above, PMD-specific fixture + live-verify.
+**Checkpoint 2:** same as above, PMD-specific fixture + live-verify — done:
+`fg_core::static_analysis` gained `PmdFinding`/`parse_pmd_xml`/
+`pmd_severity`/`pmd_diagnostics`, verified against a real
+`pmd check -R rulesets/java/quickstart.xml -f xml --no-cache` run (PMD
+7.26.0, downloaded from the official GitHub release since this
+environment's package manager has no real PMD package — see
+`README.md`'s new "External tools" section); a from-scratch end-to-end
+smoke run (`fg_core::pmd_diagnostics` against the real downloaded binary
+and a real fixture file, not just the captured-XML unit tests) confirmed
+the assembled `pmd check -d ... -R ... -f xml --no-cache` invocation and
+byte-range math both work before handing off. `Document` gained a second,
+independent `pmd_diagnostics` field (Checkstyle's own `static_diagnostics`
+renamed to `checkstyle_diagnostics` alongside it) — one shared field would
+have meant a PMD run silently wiping out Checkstyle's still-valid
+squiggles and vice versa, since Phase 1's "replace wholesale, don't merge"
+design was written before a second tool existed to collide with it.
+Settings > External Tools gained a PMD "Ruleset (-R)" field (PMD, like
+Checkstyle, has no usable default and errors without one — confirmed via
+`pmd check` with no `-R`: "Missing required option: '--rulesets=<rulesets>'").
+`StaticAnalysisState` now tracks Checkstyle's and PMD's scans as two
+independent slots so one running doesn't block the other from starting.
+Live click-through (Settings > External Tools… configured with the real
+downloaded PMD binary + `rulesets/java/quickstart.xml`, Tools > Run PMD
+against real violations, Checkstyle's own squiggles confirmed undisturbed
+by the PMD run) was confirmed working by the user.
+
+PMD CLI specifics worth remembering (verified against a real `7.26.0`
+binary): the subcommand is `pmd check` (not a bare `pmd` invocation), `-R`
+is required the same way Checkstyle's `-c` is, and it also exits non-zero
+(status 4) on any violation — same "exit code is the finding count, judge
+success by whether stdout parses" pattern as Checkstyle. Unlike
+Checkstyle, PMD's `<violation>` carries its message as element *text
+content*, not an attribute, and reports a real inclusive `begincolumn`/
+`endcolumn` range rather than a single point — `Diagnostic.range`'s end is
+computed by querying one column *past* `endcolumn`, not `endcolumn`
+itself. PMD has no error/warning concept, just a 1(high)-5(low)
+`priority`; this codebase maps 1-2 to `Severity::Error` and 3-5 to
+`Severity::Warning` as its own judgment call, not a PMD convention.
 
 **Phase 3 — SpotBugs.** Same shape, SpotBugs' own XML schema (bytecode-
 based — verify it reports source line numbers accurately enough to map
@@ -598,32 +652,6 @@ work.
 
 ---
 
-## Track 27 — Dependency-injection / bean graph visualizer
-
-**Hard dependency on both Track 21 (`Maven/Gradle awareness`) and Track
-20 (`LSP integration`) — not startable before both land, per `SPEC.md`
-§27's own explicit warning against a syntax-only version of this feature
-being misleading rather than honestly-scoped.**
-
-**Phase 1 — bean/injection-point extraction.** Whole-project +
-whole-classpath scan for bean definitions and injection points, resolved
-by type (and `@Qualifier` name, if present) to candidate beans.
-
-**Checkpoint 1:** full suite green (a fixture multi-module project with a
-cross-module injection, asserting the resolved edge is found — the exact
-case a syntax-only pass would miss); live-verify against a real,
-non-trivial Spring project.
-
-**Phase 2 — graph visualization panel.** A dockable panel rendering the
-resolved graph (pan/zoom node/edge diagram); click a node to jump to its
-source.
-
-**Checkpoint 2:** full suite green; live-verify the rendered graph
-matches the real project's actual bean wiring, and clicking a node jumps
-to the right file/line.
-
----
-
 ## Build status (live)
 
 ### Moderate tier
@@ -635,7 +663,8 @@ to the right file/line.
       live click-through required per this track's own Checkpoint 1 note —
       headless-testable via the highlight-span test shape)
 - [ ] Track 4 — Local (non-git) file history
-- [ ] Track 5 — Static analysis integration
+- [ ] Track 5 — Static analysis integration (Phase 1/Checkstyle and Phase
+      2/PMD both live-verified; Phase 3/SpotBugs not started)
 - [ ] Track 6 — Auto-save
 - [ ] Track 7 — Rectangular (block) paste
 
@@ -659,4 +688,3 @@ to the right file/line.
 - [ ] Track 22 — Build/run/test integration
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
-- [ ] Track 27 — Dependency-injection / bean graph visualizer

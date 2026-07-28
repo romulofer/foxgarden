@@ -35,6 +35,21 @@ pub struct Document {
     /// completion.
     pub language: Option<Language>,
     pub diagnostics: Vec<Diagnostic>,
+    /// Findings from an externally-run Checkstyle scan (`fg_core::
+    /// checkstyle_diagnostics`), painted alongside `diagnostics` rather
+    /// than merged into it. Kept separate — from `diagnostics` *and* from
+    /// `pmd_diagnostics` below — because each has its own lifecycle:
+    /// `diagnostics` is recomputed wholesale on every reparse (open/edit/
+    /// save), while this is a whole-project batch result that only changes
+    /// when the user re-runs Checkstyle specifically, and would otherwise
+    /// be silently wiped out by the next keystroke's reparse (or by a PMD
+    /// run) if they all shared one field.
+    pub checkstyle_diagnostics: Vec<Diagnostic>,
+    /// Same as `checkstyle_diagnostics`, for an externally-run PMD scan
+    /// (`fg_core::pmd_diagnostics`) — a distinct field, not a shared
+    /// "static analysis" bucket, so re-running one tool doesn't clear the
+    /// other's still-valid findings.
+    pub pmd_diagnostics: Vec<Diagnostic>,
     /// Secondary Ctrl+D cursors/selections, as **char** (not byte) index
     /// ranges into `buffer`. An empty range is a bare caret. The primary
     /// cursor/selection remains owned by the editor widget's own state;
@@ -103,6 +118,8 @@ impl Document {
             saved_buffer,
             language,
             diagnostics: Vec::new(),
+            checkstyle_diagnostics: Vec::new(),
+            pmd_diagnostics: Vec::new(),
             extra_selections: Vec::new(),
             read_only: false,
             folded_lines: HashSet::new(),

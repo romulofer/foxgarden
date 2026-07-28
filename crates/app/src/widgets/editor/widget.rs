@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Event, FontId, Key};
-use fg_core::{Document, Language, Project};
+use fg_core::{Diagnostic, Document, Language, Project};
 use ropey::Rope;
 use syntax::{IncrementalParser, Tree};
 
@@ -1723,7 +1723,19 @@ pub fn show(
         paint_whitespace(ui, &shell_out.base, &doc.buffer);
     }
 
-    paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &doc.diagnostics);
+    // Three independent sources feeding one squiggle pipeline (see
+    // `Document::checkstyle_diagnostics`'s own doc comment for why they're
+    // separate fields) — collected into one slice here, at paint time,
+    // rather than a fourth stored field, since the cost scales with this
+    // one document's own diagnostic count, not project size.
+    let all_diagnostics: Vec<Diagnostic> = doc
+        .diagnostics
+        .iter()
+        .chain(doc.checkstyle_diagnostics.iter())
+        .chain(doc.pmd_diagnostics.iter())
+        .cloned()
+        .collect();
+    paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);
     paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);
     paint_line_numbers(
         ui,

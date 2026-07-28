@@ -238,6 +238,13 @@ fn persisted_settings_round_trip() {
             body: "|".to_string(),
         }],
     };
+    let saved_tools = ExternalToolPaths {
+        checkstyle_binary: "/usr/bin/checkstyle".to_string(),
+        checkstyle_config: "/usr/share/checkstyle/sun_checks.xml".to_string(),
+        pmd_binary: "/usr/bin/pmd".to_string(),
+        pmd_ruleset: "rulesets/java/quickstart.xml".to_string(),
+        spotbugs_binary: "/usr/bin/spotbugs".to_string(),
+    };
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -248,6 +255,7 @@ fn persisted_settings_round_trip() {
         275.0,
         false,
         &saved_templates,
+        &saved_tools,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -258,6 +266,7 @@ fn persisted_settings_round_trip() {
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
     let mut custom_templates = UserTemplates::default();
+    let mut external_tool_paths = ExternalToolPaths::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -268,6 +277,7 @@ fn persisted_settings_round_trip() {
         &mut side_panel_width,
         &mut side_panel_visible,
         &mut custom_templates,
+        &mut external_tool_paths,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -280,6 +290,11 @@ fn persisted_settings_round_trip() {
     assert_eq!(custom_templates.java, saved_templates.java);
     assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
     assert_eq!(custom_templates.global, saved_templates.global);
+    assert_eq!(external_tool_paths.checkstyle_binary, saved_tools.checkstyle_binary);
+    assert_eq!(external_tool_paths.checkstyle_config, saved_tools.checkstyle_config);
+    assert_eq!(external_tool_paths.pmd_binary, saved_tools.pmd_binary);
+    assert_eq!(external_tool_paths.pmd_ruleset, saved_tools.pmd_ruleset);
+    assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
 }
 
 #[test]
@@ -303,6 +318,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut side_panel_width,
         &mut side_panel_visible,
         &mut UserTemplates::default(),
+        &mut ExternalToolPaths::default(),
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -336,6 +352,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut side_panel_width,
         &mut side_panel_visible,
         &mut UserTemplates::default(),
+        &mut ExternalToolPaths::default(),
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -363,6 +380,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut side_panel_width,
         &mut side_panel_visible,
         &mut UserTemplates::default(),
+        &mut ExternalToolPaths::default(),
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);

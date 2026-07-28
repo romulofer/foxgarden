@@ -160,8 +160,25 @@ cross-platform "open a terminal here" API to call instead.
 | Language | Rust (backend and frontend) |
 | GUI | [`egui`](https://github.com/emilk/egui) + [`eframe`](https://github.com/emilk/egui) |
 | Text buffer | [`ropey`](https://github.com/cessen/ropey) |
-| Parsing | [`tree-sitter`](https://github.com/tree-sitter/tree-sitter) (Java + Kotlin grammars) |
+| Parsing | [`tree-sitter`](https://github.com/tree-sitter/tree-sitter) — one grammar crate each for Java, Kotlin (`tree-sitter-kotlin-ng`), YAML, XML, `.properties`, and Dockerfiles (`tree-sitter-containerfile`) |
 | File dialogs | [`rfd`](https://github.com/PolyMeilex/rfd) |
+| Clipboard | [`arboard`](https://github.com/1Password/arboard) |
+| File-system watching | [`notify`](https://github.com/notify-rs/notify) (external-change detection/conflict banner) |
+| Terminal panel | [`portable-pty`](https://github.com/wez/wezterm) + [`vt100`](https://github.com/doy/vt100-rust) |
+| Config/report parsing | [`serde`](https://serde.rs)/`serde_json` (run configurations, live templates), [`quick-xml`](https://github.com/tafia/quick-xml) (Checkstyle/PMD report parsing) |
+| Test fixtures | [`tempfile`](https://github.com/Stebalien/tempfile) (dev-dependency only) |
+
+### External tools (optional)
+
+Tools > Run Checkstyle / Run PMD (Settings > External Tools…) shell out to
+an already-installed binary — neither ships bundled with FoxGarden, the
+same way a JDK itself isn't bundled. Only needed if you use those two menu
+items; everything else in the app has no external-tool dependency.
+[Checkstyle](https://checkstyle.org)'s CLI additionally needs a ruleset
+config file (e.g. its own bundled `sun_checks.xml`/`google_checks.xml`);
+[PMD](https://pmd.github.io)'s needs a `-R` ruleset reference (e.g. its own
+bundled `rulesets/java/quickstart.xml`) — both configured alongside each
+binary's path.
 
 ## Project structure
 

@@ -13,6 +13,7 @@ use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
+use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
 use crate::pty_session::PtySession;
@@ -52,6 +53,11 @@ const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
 const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
 const CUSTOM_GLOBAL_TEMPLATES_KEY: &str = "custom_global_templates";
+const CHECKSTYLE_BINARY_KEY: &str = "checkstyle_binary";
+const CHECKSTYLE_CONFIG_KEY: &str = "checkstyle_config";
+const PMD_BINARY_KEY: &str = "pmd_binary";
+const PMD_RULESET_KEY: &str = "pmd_ruleset";
+const SPOTBUGS_BINARY_KEY: &str = "spotbugs_binary";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -216,6 +222,14 @@ pub struct FoxGardenApp {
     external_conflicts: HashSet<PathBuf>,
     /// Paths of open tabs whose file was deleted out from under them.
     externally_deleted: HashSet<PathBuf>,
+    /// Settings > External Tools… dialog state and any in-flight Checkstyle
+    /// scan — see `panels::static_analysis`.
+    static_analysis: StaticAnalysisState,
+    /// Settings > External Tools — binary/config paths for Checkstyle/PMD/
+    /// SpotBugs, a personal per-machine preference like `editor_font`, so
+    /// persisted the same way (see `restore_settings`/`persist_settings`),
+    /// not under a project's `.foxgarden/`.
+    external_tool_paths: ExternalToolPaths,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
@@ -601,6 +615,7 @@ fn restore_settings(
     side_panel_width: &mut f32,
     side_panel_visible: &mut bool,
     custom_templates: &mut UserTemplates,
+    external_tool_paths: &mut ExternalToolPaths,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -658,6 +673,21 @@ fn restore_settings(
     if let Some(saved) = storage.get_string(CUSTOM_GLOBAL_TEMPLATES_KEY) {
         custom_templates.global = crate::widgets::editor::parse_user_templates(&saved);
     }
+    if let Some(path) = storage.get_string(CHECKSTYLE_BINARY_KEY) {
+        external_tool_paths.checkstyle_binary = path;
+    }
+    if let Some(path) = storage.get_string(CHECKSTYLE_CONFIG_KEY) {
+        external_tool_paths.checkstyle_config = path;
+    }
+    if let Some(path) = storage.get_string(PMD_BINARY_KEY) {
+        external_tool_paths.pmd_binary = path;
+    }
+    if let Some(path) = storage.get_string(PMD_RULESET_KEY) {
+        external_tool_paths.pmd_ruleset = path;
+    }
+    if let Some(path) = storage.get_string(SPOTBUGS_BINARY_KEY) {
+        external_tool_paths.spotbugs_binary = path;
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -675,6 +705,7 @@ fn persist_settings(
     side_panel_width: f32,
     side_panel_visible: bool,
     custom_templates: &UserTemplates,
+    external_tool_paths: &ExternalToolPaths,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -701,6 +732,11 @@ fn persist_settings(
         CUSTOM_GLOBAL_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.global),
     );
+    storage.set_string(CHECKSTYLE_BINARY_KEY, external_tool_paths.checkstyle_binary.clone());
+    storage.set_string(CHECKSTYLE_CONFIG_KEY, external_tool_paths.checkstyle_config.clone());
+    storage.set_string(PMD_BINARY_KEY, external_tool_paths.pmd_binary.clone());
+    storage.set_string(PMD_RULESET_KEY, external_tool_paths.pmd_ruleset.clone());
+    storage.set_string(SPOTBUGS_BINARY_KEY, external_tool_paths.spotbugs_binary.clone());
 }
 
 impl FoxGardenApp {
@@ -716,6 +752,7 @@ impl FoxGardenApp {
         let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
         let mut side_panel_visible = true;
         let mut custom_templates = UserTemplates::default();
+        let mut external_tool_paths = ExternalToolPaths::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -729,6 +766,7 @@ impl FoxGardenApp {
                 &mut side_panel_width,
                 &mut side_panel_visible,
                 &mut custom_templates,
+                &mut external_tool_paths,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -770,6 +808,8 @@ impl FoxGardenApp {
             watched_dirs: HashSet::new(),
             external_conflicts: HashSet::new(),
             externally_deleted: HashSet::new(),
+            static_analysis: StaticAnalysisState::default(),
+            external_tool_paths,
         }
     }
 }
@@ -882,6 +922,8 @@ impl eframe::App for FoxGardenApp {
                         &mut self.terminal_panel_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
+                        self.static_analysis.checkstyle_running(),
+                        self.static_analysis.pmd_running(),
                     )
                 })
                 .inner;
@@ -944,6 +986,48 @@ impl eframe::App for FoxGardenApp {
             self.run_configs_dialog.open(&root);
         }
 
+        if menu_outcome.open_external_tools_settings_request {
+            self.static_analysis.open_settings();
+        }
+        if menu_outcome.run_checkstyle_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            let binary = self.external_tool_paths.checkstyle_binary.trim();
+            let config = self.external_tool_paths.checkstyle_config.trim();
+            if binary.is_empty() || config.is_empty() {
+                self.last_error =
+                    Some("Set the Checkstyle binary and config path in Settings > External Tools first.".to_string());
+            } else {
+                self.static_analysis
+                    .run_checkstyle(PathBuf::from(binary), PathBuf::from(config), root);
+            }
+        }
+        if menu_outcome.run_pmd_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            let binary = self.external_tool_paths.pmd_binary.trim();
+            let ruleset = self.external_tool_paths.pmd_ruleset.trim();
+            if binary.is_empty() || ruleset.is_empty() {
+                self.last_error =
+                    Some("Set the PMD binary and ruleset path in Settings > External Tools first.".to_string());
+            } else {
+                self.static_analysis
+                    .run_pmd(PathBuf::from(binary), ruleset.to_string(), root);
+            }
+        }
+        if let Some(result) = self.static_analysis.poll_checkstyle() {
+            match result {
+                Ok(diagnostics) => static_analysis::apply_checkstyle_results(&mut self.state, &diagnostics),
+                Err(err) => self.last_error = Some(format!("Checkstyle failed: {err}")),
+            }
+        }
+        if let Some(result) = self.static_analysis.poll_pmd() {
+            match result {
+                Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
+                Err(err) => self.last_error = Some(format!("PMD failed: {err}")),
+            }
+        }
+
         egui::CentralPanel::default().show(ui, |ui| {
             show_external_change_banner(
                 ui,
@@ -994,6 +1078,7 @@ impl eframe::App for FoxGardenApp {
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {
             run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);
         }
+        static_analysis::show_settings(ui, &mut self.static_analysis, &mut self.external_tool_paths);
 
         show_error_modal(ui, &mut self.last_error);
     }
@@ -1010,6 +1095,7 @@ impl eframe::App for FoxGardenApp {
             self.side_panel_width,
             self.side_panel_visible,
             &self.custom_templates,
+            &self.external_tool_paths,
         );
     }
 }
