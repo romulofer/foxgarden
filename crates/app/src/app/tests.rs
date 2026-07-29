@@ -50,7 +50,7 @@ fn process_file_events_reloads_a_clean_tab_transparently() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted);
+    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
 
     assert_eq!(
         state.open_tabs[index].buffer.to_string(),
@@ -81,7 +81,7 @@ fn process_file_events_flags_a_conflict_for_a_dirty_tab() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted);
+    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
 
     assert_eq!(
         state.open_tabs[index].buffer.to_string(),
@@ -109,7 +109,7 @@ fn process_file_events_ignores_its_own_recent_save() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted);
+    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
 
     assert!(!state.open_tabs[index].is_dirty());
     assert!(conflicts.is_empty());
@@ -130,7 +130,7 @@ fn process_file_events_marks_an_externally_deleted_tab() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted);
+    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
 
     assert!(deleted.contains(&path));
     assert!(conflicts.is_empty());
@@ -150,7 +150,7 @@ fn process_file_events_ignores_paths_with_no_open_tab() {
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
     // Must not panic despite there being no open tabs at all.
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted);
+    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
 
     assert!(conflicts.is_empty());
     assert!(deleted.is_empty());

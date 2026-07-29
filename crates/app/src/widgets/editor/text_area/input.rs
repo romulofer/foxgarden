@@ -206,6 +206,46 @@ pub fn block_delete_forward(text: &str, index: &LineIndex, block: BlockSelection
     Some((new_text, block.collapsed_at_col(cols.start)))
 }
 
+/// The text a block-scoped Copy/Cut (`PLAN.md` Track 7 Phase 3) puts on the
+/// clipboard: `block`'s own column range from every row it spans, joined by
+/// `\n` — the exact inverse of `block_paste`'s own per-row split below, so a
+/// block-select → Copy → block-paste round-trip reproduces the original
+/// rectangle exactly when pasted back over an identically-shaped block.
+pub fn block_selection_text(text: &str, index: &LineIndex, block: BlockSelection) -> String {
+    block_row_ranges(index, block)
+        .into_iter()
+        .map(|r| text.chars().skip(r.start).take(r.len()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Block-scoped paste (`PLAN.md` Track 7 Phase 3): `clipboard` split on
+/// `\n`, row _i_ of the split replacing `block`'s own column range on the
+/// _i_-th row it spans — `zip`ped against `block_row_ranges`, so a row-count
+/// mismatch in either direction leaves the surplus/shortfall untouched
+/// rather than wrapping a short clipboard around to cover every row or
+/// clearing rows past a short one, per this phase's own explicit rule.
+/// Applied back-to-front (`.rev()`) rather than through `multi_cursor::
+/// apply_multi_edit`'s ascending-with-delta-tracking approach: that engine
+/// only supports one `MultiEditOp` shared across every range, but here each
+/// row's insert text can differ in length, so each row needs its own
+/// splice — applying the last (highest-offset) row first keeps every
+/// earlier row's own range valid without needing to separately track a
+/// running delta.
+pub fn block_paste(text: &str, index: &LineIndex, block: BlockSelection, clipboard: &str) -> (String, BlockSelection) {
+    let cols = block.cols();
+    let ranges = block_row_ranges(index, block);
+    let lines: Vec<&str> = clipboard.split('\n').collect();
+
+    let mut chars: Vec<char> = text.chars().collect();
+    for (range, line) in ranges.iter().zip(lines.iter()).rev() {
+        let inserted: Vec<char> = line.chars().collect();
+        chars.splice(range.clone(), inserted);
+    }
+    let new_col = cols.start + lines.first().map_or(0, |l| l.chars().count());
+    (chars.into_iter().collect(), block.collapsed_at_col(new_col))
+}
+
 /// Line-start offsets (SPEC.md §7 / PLAN.md Phase 5): built once per actual
 /// text change — not once per motion, see `shell.rs`'s `process_events`, the
 /// sole caller of every function below that takes one — so `move_*`/

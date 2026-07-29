@@ -1,5 +1,6 @@
 mod boilerplate;
 mod diagnostic;
+mod diff;
 mod document;
 mod editor_state;
 mod language;
@@ -9,6 +10,7 @@ mod static_analysis;
 
 pub use boilerplate::generate as generate_boilerplate;
 pub use diagnostic::{Diagnostic, Severity};
+pub use diff::{DiffHunk, DiffLineKind, GitDiffError, git_diff_hunks, parse_unified_diff};
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
 pub use language::Language;

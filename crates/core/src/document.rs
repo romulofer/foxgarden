@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use ropey::Rope;
 
 use crate::diagnostic::Diagnostic;
+use crate::diff::DiffHunk;
 use crate::language::Language;
 
 #[derive(Debug)]
@@ -50,6 +51,15 @@ pub struct Document {
     /// "static analysis" bucket, so re-running one tool doesn't clear the
     /// other's still-valid findings.
     pub pmd_diagnostics: Vec<Diagnostic>,
+    /// Per-line added/removed/modified marks from an externally-run `git
+    /// diff` (`fg_core::git_diff_hunks`, `PLAN.md` Track 9 Phase 1) — a
+    /// batch result refreshed wholesale on open/save/reload, the same
+    /// lifecycle `checkstyle_diagnostics`/`pmd_diagnostics` already have and
+    /// for the same reason: recomputing it on every reparse would be both
+    /// wasteful (a `git diff` shells out; a keystroke shouldn't pay for
+    /// that) and wrong (it needs to reflect the *last saved* state versus
+    /// git's index, not whatever's mid-edit in `buffer` right now).
+    pub diff_hunks: Vec<DiffHunk>,
     /// Secondary Ctrl+D cursors/selections, as **char** (not byte) index
     /// ranges into `buffer`. An empty range is a bare caret. The primary
     /// cursor/selection remains owned by the editor widget's own state;
@@ -120,6 +130,7 @@ impl Document {
             diagnostics: Vec::new(),
             checkstyle_diagnostics: Vec::new(),
             pmd_diagnostics: Vec::new(),
+            diff_hunks: Vec::new(),
             extra_selections: Vec::new(),
             read_only: false,
             folded_lines: HashSet::new(),

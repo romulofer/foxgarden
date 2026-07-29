@@ -38,6 +38,19 @@ const LIGHT_LINE_NUMBER: Color32 = Color32::from_rgb(160, 160, 160);
 const DARK_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(140, 140, 140, 55);
 const LIGHT_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(90, 90, 90, 35);
 
+/// Diff gutter marks (`PLAN.md` Track 9 Phase 1) — the same green/red/blue
+/// vocabulary every real diff gutter (VS Code, IntelliJ) already uses, so
+/// nothing new has to be learned to read it. Full-opacity (unlike the
+/// alpha-blended structural cues above): this is a thin 4px bar, not a
+/// background fill competing with the code's own text, so there's no
+/// legibility reason to mute it.
+const DARK_DIFF_ADDED: Color32 = Color32::from_rgb(87, 171, 90);
+const LIGHT_DIFF_ADDED: Color32 = Color32::from_rgb(59, 138, 62);
+const DARK_DIFF_REMOVED: Color32 = Color32::from_rgb(224, 82, 82);
+const LIGHT_DIFF_REMOVED: Color32 = Color32::from_rgb(202, 42, 42);
+const DARK_DIFF_MODIFIED: Color32 = Color32::from_rgb(97, 175, 239);
+const LIGHT_DIFF_MODIFIED: Color32 = Color32::from_rgb(37, 106, 194);
+
 /// A matched bracket pair's outline — distinct from `occurrence_highlight`'s
 /// fill (a box outline reads as "these two characters pair up," not "this
 /// span is selected/repeated," so it shouldn't share that fill's visual
@@ -106,6 +119,18 @@ pub fn bracket_match(_dark_mode: bool) -> Color32 {
 
 pub fn structure(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_STRUCTURE } else { LIGHT_STRUCTURE }
+}
+
+pub fn diff_added(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_DIFF_ADDED } else { LIGHT_DIFF_ADDED }
+}
+
+pub fn diff_removed(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_DIFF_REMOVED } else { LIGHT_DIFF_REMOVED }
+}
+
+pub fn diff_modified(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_DIFF_MODIFIED } else { LIGHT_DIFF_MODIFIED }
 }
 
 /// `vt100`'s 16 indexed ANSI colors (0-7 normal, 8-15 bright), tinted per

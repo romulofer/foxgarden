@@ -18,9 +18,9 @@ use ropey::Rope;
 
 use super::history::{EditKind, History, Snapshot};
 use super::input::{
-    BlockSelection, Caret, LineIndex, backspace, block_backspace, block_delete_forward, clamp_out_of_hidden,
-    column_of, delete_forward, move_down, move_end, move_home, move_left, move_right, move_up, replace_block_selection,
-    replace_selection,
+    BlockSelection, Caret, LineIndex, backspace, block_backspace, block_delete_forward, block_paste,
+    block_selection_text, clamp_out_of_hidden, column_of, delete_forward, move_down, move_end, move_home, move_left,
+    move_right, move_up, replace_block_selection, replace_selection,
 };
 use super::render::{
     HighlightSpan, TextAreaOutput, layout_visible, layout_visible_wrapped, paint_rows, shape_line_range, shape_range,
@@ -756,6 +756,51 @@ fn process_events(
                     state.block_selection = Some(new_block);
                     changed = true;
                 }
+            }
+            // PLAN.md Track 7 Phase 3: Copy/Cut/Paste while a block
+            // selection is active are block-scoped too, same "checked
+            // first, never falls through" placement as the Text/Backspace/
+            // Delete arms above — a collapsed (zero-width) block Copy/Cut
+            // is a no-op, mirroring the ordinary-caret Copy/Cut arms'
+            // `!is_collapsed()` guard below.
+            Event::Copy if state.block_selection.is_some() => {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                if !block.cols().is_empty() {
+                    ui.ctx().copy_text(block_selection_text(&current, index, block));
+                }
+            }
+            Event::Cut if state.block_selection.is_some() => {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                if !block.cols().is_empty() {
+                    ui.ctx().copy_text(block_selection_text(&current, index, block));
+                    state.history.checkpoint(
+                        Snapshot {
+                            text: current.clone(),
+                            caret: state.caret,
+                        },
+                        EditKind::Other,
+                    );
+                    let (out, new_block) = replace_block_selection(&current, index, block, "");
+                    current = out;
+                    *index = LineIndex::build(&current);
+                    state.block_selection = Some(new_block);
+                    changed = true;
+                }
+            }
+            Event::Paste(pasted) if state.block_selection.is_some() && !pasted.is_empty() => {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                state.history.checkpoint(
+                    Snapshot {
+                        text: current.clone(),
+                        caret: state.caret,
+                    },
+                    EditKind::Other,
+                );
+                let (out, new_block) = block_paste(&current, index, block, pasted);
+                current = out;
+                *index = LineIndex::build(&current);
+                state.block_selection = Some(new_block);
+                changed = true;
             }
 
             Event::Text(insert) => {

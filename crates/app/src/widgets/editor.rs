@@ -4,8 +4,9 @@
 //! Java getter/setter and constructor/toString/equals+hashCode generation
 //! (`codegen`), live templates (`templates`), the completion popup
 //! (`completion`), the right-click context menu (`context_menu`), the
-//! Spring endpoint map's whole-project scan (`spring_scan`), and shared
-//! byte↔char offset conversion (`text_offset`). `show` and the
+//! Spring endpoint map's whole-project scan (`spring_scan`), the git diff
+//! gutter (`diff_gutter`), and shared byte↔char offset conversion
+//! (`text_offset`). `show` and the
 //! handful of types the Tools menu needs to request generation/
 //! case-conversion are the only things used outside this module.
 
@@ -13,6 +14,7 @@ mod auto_edit;
 mod codegen;
 mod completion;
 mod context_menu;
+mod diff_gutter;
 mod folding;
 mod multi_cursor;
 mod painting;

@@ -8,6 +8,7 @@ use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::file_watch::{self, ReconcileOutcome};
+use crate::panels::git_diff::DiffState;
 use crate::panels::go_to_file::{self, GoToFileState};
 use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
@@ -250,17 +251,31 @@ pub struct FoxGardenApp {
     /// across a restart: `was_focused` starts however the OS hands focus to
     /// a freshly launched window, and the idle clock starts over anyway).
     auto_save_state: AutoSaveState,
+    /// In-flight/completed `git diff` scans backing the diff gutter
+    /// (`PLAN.md` Track 9 Phase 1) — see `panels::git_diff::DiffState`.
+    /// Runtime-only, same as `auto_save_state`: a fresh launch just runs a
+    /// fresh diff for every reopened tab rather than trying to resume
+    /// anything.
+    diff: DiffState,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
 /// `EditorState::open_tab`'s own dedup), surfacing any failure through
 /// `last_error`. Shared by the side panel's "open a file from the tree"
 /// outcome and the recent-files quick switcher (`Ctrl+E`) — both just want
-/// "open this path, tell the user if it didn't work," identically.
+/// "open this path, tell the user if it didn't work," identically. Also
+/// kicks off a `git diff` for the newly-opened tab (`PLAN.md` Track 9 Phase
+/// 1's "on open" trigger) — a no-op when `diff_root` is `None` (no project
+/// open). Deliberately unconditional, even when `open_tab` just focused an
+/// *already*-open tab rather than truly opening a new one: cheap enough to
+/// re-run, and simpler than threading a "was this actually new" flag out of
+/// `EditorState::open_tab`'s own dedup just to skip it.
 fn open_path(
     state: &mut EditorState,
     parsers: &mut Vec<Option<IncrementalParser>>,
     last_error: &mut Option<String>,
+    diff: &mut DiffState,
+    diff_root: Option<PathBuf>,
     path: PathBuf,
 ) {
     match state.open_tab(path) {
@@ -268,6 +283,9 @@ fn open_path(
             if index == parsers.len() {
                 let parser = tabs::open_parser_for(&mut state.open_tabs[index]);
                 parsers.push(parser);
+            }
+            if let Some(root) = diff_root {
+                diff.run(state.open_tabs[index].path.clone(), root);
             }
         }
         Err(err) => {
@@ -394,21 +412,35 @@ fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParse
 }
 
 /// Replaces tab `index`'s buffer with `new_content` (an external change
-/// `file_watch::ReconcileOutcome::ReloadTransparently` cleared to reload)
-/// and gives it a fresh parser — the same "content changed out from under
-/// the existing tree, start over" move `handle_rename` already makes for a
-/// rename that changes a file's language, and every brand-new tab open
-/// already makes for its very first parse.
+/// `file_watch::ReconcileOutcome::ReloadTransparently` cleared to reload, or
+/// the external-change banner's manual "Reload" button) and gives it a
+/// fresh parser — the same "content changed out from under the existing
+/// tree, start over" move `handle_rename` already makes for a rename that
+/// changes a file's language, and every brand-new tab open already makes
+/// for its very first parse. Also kicks off a fresh `git diff`
+/// unconditionally (`PLAN.md` Track 9 Phase 1's "on reload" trigger, a
+/// no-op when `diff_root` is `None`) — `panels::git_diff::DiffState::
+/// check_for_saves`'s own dirty-transition heuristic already happens to
+/// catch the manual-Reload case (discarding local edits is itself a dirty
+/// -> clean transition) but *not* this transparent-auto-reload case (never
+/// dirty before or after, since it only fires when there were no local
+/// edits to begin with), so this explicit call is what actually covers it;
+/// re-running for the manual-Reload case too is harmless, just redundant.
 fn reload_tab_from_disk(
     state: &mut EditorState,
     parsers: &mut [Option<IncrementalParser>],
     index: usize,
     new_content: &str,
+    diff: &mut DiffState,
+    diff_root: Option<PathBuf>,
 ) {
     let doc = &mut state.open_tabs[index];
     doc.buffer = Rope::from_str(new_content);
     doc.saved_buffer = doc.buffer.clone();
     parsers[index] = tabs::open_parser_for(doc);
+    if let Some(root) = diff_root {
+        diff.run(doc.path.clone(), root);
+    }
 }
 
 /// Adds/removes `watcher`'s directory watches to match whatever `state`'s
@@ -450,6 +482,8 @@ fn process_file_events(
     parsers: &mut [Option<IncrementalParser>],
     external_conflicts: &mut HashSet<PathBuf>,
     externally_deleted: &mut HashSet<PathBuf>,
+    diff: &mut DiffState,
+    diff_root: Option<&Path>,
 ) {
     while let Ok(event_result) = rx.try_recv() {
         let Ok(event) = event_result else { continue };
@@ -478,6 +512,8 @@ fn process_file_events(
                         parsers,
                         index,
                         &disk_content.expect("Some per ReloadTransparently"),
+                        diff,
+                        diff_root.map(Path::to_path_buf),
                     );
                     external_conflicts.remove(path);
                     externally_deleted.remove(path);
@@ -506,6 +542,7 @@ fn show_external_change_banner(
     parsers: &mut [Option<IncrementalParser>],
     external_conflicts: &mut HashSet<PathBuf>,
     externally_deleted: &mut HashSet<PathBuf>,
+    diff: &mut DiffState,
 ) {
     let Some(active) = state.active_tab else {
         return;
@@ -529,7 +566,13 @@ fn show_external_change_banner(
             ui.label(format!("⚠ {name} changed on disk since you opened it."));
             if ui.button("Reload").clicked() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    reload_tab_from_disk(state, parsers, active, &content);
+                    // No explicit `git diff` trigger here — discarding
+                    // local edits to match disk is itself a dirty -> clean
+                    // transition, which `DiffState::check_for_saves`
+                    // (called once per frame from `FoxGardenApp::ui`)
+                    // already catches generically. See `reload_tab_from_
+                    // disk`'s own doc comment.
+                    reload_tab_from_disk(state, parsers, active, &content, diff, None);
                 }
                 external_conflicts.remove(&path);
             }
@@ -873,6 +916,7 @@ impl FoxGardenApp {
             external_tool_paths,
             auto_save_settings,
             auto_save_state: AutoSaveState::default(),
+            diff: DiffState::default(),
         }
     }
 }
@@ -954,6 +998,12 @@ impl eframe::App for FoxGardenApp {
         }
         let auto_save_fired = self.auto_save_state.tick(self.auto_save_settings, focused, now);
 
+        // Computed once and reused at every `git diff` trigger point below
+        // (open/save/reload) — `None` when no project is open, in which
+        // case each of those points is simply a no-op (nothing to diff
+        // against).
+        let diff_root = self.state.project.as_ref().map(|p| p.root.clone());
+
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
         process_file_events(
             &self.file_event_rx,
@@ -961,6 +1011,8 @@ impl eframe::App for FoxGardenApp {
             &mut self.parsers,
             &mut self.external_conflicts,
             &mut self.externally_deleted,
+            &mut self.diff,
+            diff_root.as_deref(),
         );
 
         if auto_save_fired {
@@ -1052,7 +1104,7 @@ impl eframe::App for FoxGardenApp {
         }
 
         if let Some(path) = outcome.open {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
         }
         for (old, new) in &outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, old, new);
@@ -1120,6 +1172,7 @@ impl eframe::App for FoxGardenApp {
         for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
             self.static_analysis.record_latest_version(tool, result);
         }
+        self.diff.poll(&mut self.state);
 
         egui::CentralPanel::default().show(ui, |ui| {
             show_external_change_banner(
@@ -1128,6 +1181,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.parsers,
                 &mut self.external_conflicts,
                 &mut self.externally_deleted,
+                &mut self.diff,
             );
             tabs::show(
                 ui,
@@ -1158,14 +1212,30 @@ impl eframe::App for FoxGardenApp {
             );
         });
 
+        // The frame's own `Ctrl+S`/File > Save/close-confirmation-modal
+        // Save/right-click Save/auto-save outcomes have all already landed
+        // by now (every one of them happens inside `tabs::show` above, or —
+        // for auto-save — earlier this same frame) — this is what lets
+        // `check_for_saves`'s dirty-transition check see the *post*-save
+        // state and fire for whichever of those actually happened, without
+        // any of those save call sites needing to know this feature exists.
+        self.diff.check_for_saves(&self.state, diff_root.as_deref());
+
         if let Some(path) = quick_switcher::show(ui, &self.state, &mut self.quick_switcher) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path);
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
         }
         if let Some((path, handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, path.clone());
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
             self.pending_navigation = Some((path, handler_byte));
         }
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {

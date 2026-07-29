@@ -456,3 +456,38 @@ fn typing_over_an_active_block_selection_edits_every_spanned_row() {
         .expect("the block selection stays active across the edit, so further typing keeps working");
     assert_eq!(block.cols(), 3..3, "collapses right after the inserted char, same as every spanned row");
 }
+
+/// The Track 7 Phase 3 checkpoint test: pasting a multi-line clipboard while
+/// a block selection is active replaces each spanned row's own column range
+/// with the matching clipboard line, same seeded-state pattern as the Phase
+/// 2 typing test above, and leaves the ordinary linear `Caret` untouched.
+#[test]
+fn pasting_over_an_active_block_selection_replaces_each_spanned_row_with_its_matching_clipboard_line() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("block_paste");
+    let buffer = Rope::from_str("aXXa\nbXXb\ncXXc");
+
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            ShellState {
+                block_selection: Some(BlockSelection::at(0, 1).moved_to(2, 3)),
+                ..ShellState::default()
+            },
+        );
+    });
+
+    let out = frame(&ctx, id, &buffer, vec![Event::Paste("11\n22\n33".into())], false);
+
+    assert_eq!(out.new_text.as_deref(), Some("a11a\nb22b\nc33c"));
+    assert_eq!(
+        out.caret,
+        Some(Caret::at(0)),
+        "block-scoped paste must not move the ordinary linear caret"
+    );
+    let block = ctx
+        .data(|d| d.get_temp::<ShellState>(id))
+        .and_then(|s| s.block_selection)
+        .expect("the block selection stays active across the paste");
+    assert_eq!(block.cols(), 3..3, "collapses right after the first row's own pasted text");
+}

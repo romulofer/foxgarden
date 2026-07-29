@@ -19,6 +19,7 @@ use super::completion::{CompletionItem, CompletionKind, CompletionState, insert_
 use super::context_menu;
 #[cfg(test)]
 use super::context_menu::synthetic_shortcut;
+use super::diff_gutter;
 use super::folding;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
@@ -1135,7 +1136,17 @@ pub fn show(
     } else {
         folding::FOLD_GUTTER_WIDTH
     };
-    let gutter_width = digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0 + fold_gutter_width;
+    // Same "only reserve it when there's something to show" rule as the
+    // fold column above — a file with no diff hunks (untracked, unchanged,
+    // or no project open at all) keeps exactly the gutter width it had
+    // before Track 9 Phase 1 existed.
+    let diff_gutter_width = if doc.diff_hunks.is_empty() {
+        0.0
+    } else {
+        diff_gutter::DIFF_GUTTER_WIDTH
+    };
+    let gutter_width =
+        digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0 + fold_gutter_width + diff_gutter_width;
 
     // `text_area` shapes with real per-token colors (`HighlightSpan`) instead
     // of egui's own `layouter` closure — resolved here (against `old_text`'s
@@ -1737,13 +1748,19 @@ pub fn show(
         .collect();
     paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);
     paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);
+    // The diff bar sits flush against the text's own left edge (the
+    // innermost sliver of the gutter, reserved above via `diff_gutter_
+    // width`); line numbers right-align against what's left of the gutter
+    // once that sliver is set aside, so their own position is unaffected by
+    // whether a diff bar is present this frame or not.
     paint_line_numbers(
         ui,
         &shell_out.base,
-        gutter_left + gutter_width - GUTTER_PADDING,
+        gutter_left + gutter_width - diff_gutter_width - GUTTER_PADDING,
         gutter_font_id,
         ui.visuals().dark_mode,
     );
+    diff_gutter::paint_diff_gutter(ui, &shell_out.base, &doc.diff_hunks, gutter_left + gutter_width, dark_mode);
     folding::show_fold_gutter(
         ui,
         &shell_out.base,

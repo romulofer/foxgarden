@@ -419,3 +419,65 @@ fn block_delete_forward_at_end_of_line_does_not_merge_lines() {
     let block = BlockSelection::at(0, 5).moved_to(2, 5);
     assert_eq!(block_delete_forward(text, &index, block), None);
 }
+
+// ---- block paste + copy (PLAN.md Track 7 Phase 3) ----
+
+#[test]
+fn block_selection_text_joins_each_rows_own_column_range_with_newlines() {
+    let text = "aXXa\nbXXb\ncXXc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 3);
+    assert_eq!(block_selection_text(text, &index, block), "XX\nXX\nXX");
+}
+
+#[test]
+fn block_selection_text_reads_a_short_lines_own_clamped_range() {
+    let text = "aaaaaa\nbb\ncccccc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 4); // cols 1..4
+    // The short middle row ("bb") only has one char past column 1.
+    assert_eq!(block_selection_text(text, &index, block), "aaa\nb\nccc");
+}
+
+#[test]
+fn block_paste_replaces_each_rows_own_column_range_with_its_matching_clipboard_line() {
+    let text = "aXXa\nbXXb\ncXXc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 3);
+    let (out, new_block) = block_paste(text, &index, block, "11\n22\n33");
+    assert_eq!(out, "a11a\nb22b\nc33c");
+    assert_eq!(new_block.cols(), 3..3, "collapses right after the first row's own pasted text");
+}
+
+#[test]
+fn block_paste_with_fewer_clipboard_lines_than_block_rows_leaves_the_extra_rows_untouched() {
+    let text = "aXa\nbXb\ncXc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 2); // spans 3 rows
+    let (out, _) = block_paste(text, &index, block, "1\n2"); // only 2 clipboard lines
+    assert_eq!(out, "a1a\nb2b\ncXc", "row 2 has no matching clipboard line, so it's left exactly as-is");
+}
+
+#[test]
+fn block_paste_with_more_clipboard_lines_than_block_rows_drops_the_surplus() {
+    let text = "aXa\nbXb"; // spans 2 rows
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(1, 2);
+    let (out, _) = block_paste(text, &index, block, "1\n2\n3\n4"); // 4 clipboard lines
+    assert_eq!(out, "a1a\nb2b", "clipboard lines 3/4 have no matching row and are simply dropped");
+}
+
+#[test]
+fn block_paste_round_trips_through_block_selection_text() {
+    let text = "aXXa\nbXXb\ncXXc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 3);
+    let copied = block_selection_text(text, &index, block);
+
+    // Pasting the copied text back over an identically-shaped (but blank)
+    // block reproduces the original rectangle exactly.
+    let blank = "a__a\nb__b\nc__c";
+    let blank_index = idx(blank);
+    let (out, _) = block_paste(blank, &blank_index, block, &copied);
+    assert_eq!(out, text);
+}

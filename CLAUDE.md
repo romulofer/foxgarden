@@ -36,5 +36,5 @@ later checkpoints call for should be approached.
 
 ## What Not To Do
 
-- do not author commits
-- do not push upstream
+- do not commit or push on your own initiative — only when the user explicitly asks for it in that moment (not standing authorization for the rest of the session)
+- whenever a commit does happen, the user is the sole author — no `Co-Authored-By` trailer, no mention of the agent in the message

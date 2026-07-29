@@ -443,8 +443,12 @@ Enter, Tab, Cut/Paste, …) is out of this phase's scope and still acts on
 clamping without padding, both merge-guard cases for Backspace/Delete, the
 "only rows genuinely at column 0 are skipped" distinction) plus one
 `shell::tests` integration test seeding a real `ShellState` and driving a
-real `Event::Text` through `process_events`. Live-verify not yet run by
-the user.
+real `Event::Text` through `process_events`. Live click-through (typing
+into a zero-width block inserts on every row and stays active for further
+typing; typing over a real-width block replaces that column range on
+every row; Backspace/Delete at both zero and real width all work; a short
+line inside the block neither crashes nor merges with its neighbor)
+confirmed working by the user.
 
 **Phase 3 — block paste.** Clipboard text split on `\n`, row _i_ inserted
 at `(start_line + i, start_col)`; a row-count mismatch (fewer/more
@@ -453,7 +457,29 @@ untouched rather than wrapping or clearing.
 
 **Checkpoint 3:** full suite green (table tests for exact-match,
 fewer-lines, and more-lines cases); live-verify a real block-select →
-copy → block-paste round-trip.
+copy → block-paste round-trip — code done: `text_area::input` gained
+`block_selection_text` (reads `block`'s own `cols()` range from every
+spanned row, joined by `\n` — the Copy/Cut side) and `block_paste`
+(`clipboard.split('\n')`, `zip`ped against `block_row_ranges` so an
+unmatched row or an unmatched clipboard line is simply left alone rather
+than wrapped/cleared, applied back-to-front so each row's own differently-
+sized insert never invalidates an earlier row's already-computed range —
+`multi_cursor::apply_multi_edit` wasn't reusable here since it only
+supports one `MultiEditOp` shared across every range, and each row's
+pasted line can differ in length). `shell::process_events` gained
+block-scoped `Event::Copy`/`Event::Cut`/`Event::Paste` arms (same
+"checked first, never falls through" placement as Phase 2's block Text/
+Backspace/Delete arms), Copy/Cut guarded by `!block.cols().is_empty()`
+matching the ordinary-caret Copy/Cut arms' own `!is_collapsed()` guard;
+Cut reuses `replace_block_selection(..., "")` to clear the block rather
+than a new deletion path. Five new `input::tests` table tests (join/
+short-line-clamp for `block_selection_text`; exact-match, fewer-lines,
+more-lines, and a `block_selection_text` → `block_paste` round-trip for
+`block_paste`) plus one `shell::tests` integration test seeding a real
+`ShellState` and driving a real `Event::Paste` through `process_events`,
+mirroring Phase 2's own checkpoint test shape. Live click-through (a real
+block-select → copy → block-paste round-trip, including the fewer-lines
+and more-lines mismatch cases) confirmed working by the user.
 
 ---
 
@@ -467,7 +493,83 @@ painted alongside the line-number gutter.
 
 **Checkpoint 1:** full suite green (a fixture diff-output string parsed
 into expected ranges, headless); live-verify editing a tracked file shows
-the right gutter marks against a real git repo.
+the right gutter marks against a real git repo — code done: this is the
+first git-aware code in the project (no `git2` dependency — shells out to
+the real CLI, mirroring `static_analysis`'s own approach, per a from-
+scratch check this session confirmed there was nothing existing to build
+on). `fg_core::diff` (new) has `git_diff_hunks(path, root)` (`git diff
+--no-color -U0 -- <path>` with `root` as cwd — `root` only needs to be
+*inside* the working tree, not necessarily the git root itself, so a
+Maven/Gradle multi-module project root still works) and the pure
+`parse_unified_diff`, converting real `@@ -old[,count] +new[,count] @@`
+headers (verified against several real captured `git diff -U0` runs this
+session — a plain modify, a pure add/remove at the start/middle/end of a
+file — not assumed) into 0-based `DiffHunk { kind: Added|Removed|
+Modified, lines }`. A `Removed` hunk has no surviving line of its own, so
+`lines` is an empty `at..at` marker rather than a real range — git's own
+`+0,0` zero-count convention already reports the correct 0-based index
+with no adjustment needed, including the real edge case of a deletion at
+the very start of the file. "Not a git repository"/"untracked file"/"no
+changes" are all deliberately left indistinguishable (empty stdout, no
+`Err`) — every one of them means the same thing to this gutter: nothing to
+show, not an error to surface; only a failure to launch `git` at all is a
+real `Err`. `Document` gained `diff_hunks: Vec<DiffHunk>`, refreshed
+wholesale, the same lifecycle `checkstyle_diagnostics`/`pmd_diagnostics`
+already have and for the same reason (see that field's own doc comment).
+
+App-side wiring (`panels::git_diff::DiffState`) mirrors `static_analysis`'s
+own `spawn_scan`/`poll_scan` background-thread shape, but keyed per-path
+(`HashMap`, not one `Option` slot) since a diff run is triggered per-
+document from several independent points rather than one project-wide
+action at a time. Open (`app::open_path`) and reload
+(`app::reload_tab_from_disk`) each trigger `DiffState::run` explicitly, a
+few call sites each. Save is deliberately *not* threaded through every one
+of this app's several save call sites (Ctrl+S, File > Save, the close-
+confirmation modal, the editor's own right-click Save, auto-save) — instead
+`DiffState::check_for_saves`, called once a frame after `tabs::show` runs,
+detects any open tab's dirty state going `true` -> `false` since the last
+frame and fires generically, catching every save path (and the external-
+change banner's manual "Reload" button, itself a dirty -> clean transition)
+without any of those call sites needing to know this feature exists. Only
+the file-watcher's *transparent* auto-reload doesn't fit that heuristic
+(never dirty before or after, since it only fires when there were no local
+edits to begin with) — `reload_tab_from_disk`'s own explicit trigger is
+what actually covers that one case; the other trigger points are real but
+redundant with `check_for_saves` where they overlap it, which is harmless.
+Results are silently dropped on failure (including "not a git repository")
+rather than surfaced through `last_error` — an automatic background
+refresh showing no marks is the right degrade, not an error toast on every
+non-git file.
+
+Gutter painting (`widgets::editor::diff_gutter`, new sibling to
+`folding`) reserves an extra 4px column flush against the gutter's own
+inner edge (immediately before the text starts), only when `doc.diff_hunks`
+is non-empty — same "only reserve it when there's something to show" rule
+`folding::FOLD_GUTTER_WIDTH` already established, so an untouched file's
+gutter width is unaffected. `Added`/`Modified` paint a filled rect per
+line in `hunk.lines`; a `Removed` hunk's empty-range marker paints a thin
+3px notch at a row boundary instead (the top edge of line 0 for a
+deletion at the very start of the file, else the bottom edge of the line
+right before the marker — which, with no extra casing, also correctly
+lands on the last real line's own bottom edge for a deletion at the very
+end of the file). Three new theme colors (`diff_added`/`diff_removed`/
+`diff_modified`, dark+light) reuse the same green/red/blue vocabulary
+every real diff gutter (VS Code, IntelliJ) already uses.
+
+18 new tests: 12 in `fg_core::diff` (parser table tests against the real
+captured fixtures above, plus two end-to-end tests running a real `git`
+binary against a real temp repo — one with a real commit+edit, one
+against a path outside any repository, confirming the "empty, not an
+error" degrade for real rather than just by parser inspection) and 6 in
+`panels::git_diff` (spawn-and-poll round trip, a dropped result for a
+since-closed tab, the dirty-transition trigger's no-false-positive-on-
+first-sighting and no-project-root cases). Live click-through (against
+this repo's own working tree — modify+save shows a blue bar, add+save
+shows a green bar, delete+save shows a red notch at the boundary, undo
+back to clean removes the marks, close/reopen reflects the current diff
+immediately, and an on-disk change while the tab is open and clean
+refreshes the marks without an explicit save) confirmed working by the
+user.
 
 **Phase 2 — inline blame.** `git blame --porcelain` parsed per line,
 shown as a dimmed cursor-line annotation.
@@ -855,13 +957,14 @@ work.
       lands, per the user's own call once the compiled-classes-directory
       blocker surfaced)
 - [x] Track 6 — Auto-save (both phases shipped and live-verified)
-- [ ] Track 7 — Rectangular (block) paste (Phase 1/column-block selection
-      shipped and live-verified; Phase 2/block-scoped editing code green,
-      live-verify pending; Phase 3/block paste not started)
+- [x] Track 7 — Rectangular (block) paste (all 3 phases shipped and
+      live-verified)
 
 ### Substantial tier
 
 - [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
+      (Phase 1/diff gutter shipped and live-verified; Phases 2-4 not
+      started)
 - [ ] Track 10 — Code folding
 - [ ] Track 11 — Multi-window / split-pane editing
 - [ ] Track 12 — Spring config property autocomplete
