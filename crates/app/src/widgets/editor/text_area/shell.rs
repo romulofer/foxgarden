@@ -18,8 +18,9 @@ use ropey::Rope;
 
 use super::history::{EditKind, History, Snapshot};
 use super::input::{
-    Caret, LineIndex, backspace, clamp_out_of_hidden, column_of, delete_forward, move_down, move_end, move_home,
-    move_left, move_right, move_up, replace_selection,
+    BlockSelection, Caret, LineIndex, backspace, block_backspace, block_delete_forward, clamp_out_of_hidden,
+    column_of, delete_forward, move_down, move_end, move_home, move_left, move_right, move_up, replace_block_selection,
+    replace_selection,
 };
 use super::render::{
     HighlightSpan, TextAreaOutput, layout_visible, layout_visible_wrapped, paint_rows, shape_line_range, shape_range,
@@ -34,6 +35,13 @@ struct ShellState {
     caret: Caret,
     preferred_col: usize,
     history: History,
+    /// An in-progress or just-finished Alt+drag rectangular selection
+    /// (`PLAN.md` Track 7 Phase 1) — `None` outside of that mode. Mutually
+    /// exclusive with `caret` having an active selection in practice (an
+    /// Alt+drag never touches `caret`), though both fields simply coexist
+    /// rather than one being derived from the other, matching `SPEC.md`
+    /// §7's "its own mode" framing.
+    block_selection: Option<BlockSelection>,
     /// The char range currently occupied by an in-progress IME composition
     /// (so the next `Preedit`/`Commit` knows what to replace), or `None`
     /// outside of composition.
@@ -53,6 +61,7 @@ impl Default for ShellState {
             caret: Caret::at(0),
             preferred_col: 0,
             history: History::default(),
+            block_selection: None,
             ime_range: None,
             last_interaction: 0.0,
         }
@@ -269,18 +278,42 @@ pub fn show(
     if let Some(pos) = pre.response.interact_pointer_pos() {
         let extend = ui.input(|i| i.modifiers.shift);
         let offset = char_offset_for_pos(&pre, buffer, pos);
-        if pre.response.drag_started() {
-            state.caret = Caret {
-                primary: offset,
-                anchor: if extend { state.caret.anchor } else { offset },
-            };
+        // Alt+drag (`PLAN.md` Track 7 Phase 1 / `SPEC.md` §7): its own
+        // selection mode, entirely separate from `caret` below — checked
+        // first so a block drag never also moves the linear caret this same
+        // frame. Plain Alt+Click (no drag) is deliberately *not* handled
+        // here: it still falls through to the ordinary click branch below,
+        // exactly as it always has — `widget.rs`'s own Alt+Click
+        // interception (multi-cursor) runs *after* this function returns
+        // and corrects the caret back, so this function doesn't need to
+        // know Alt+Click means something different downstream.
+        if ui.input(|i| i.modifiers.alt) && (pre.response.drag_started() || pre.response.dragged()) {
+            let (line, col) = index.line_col(offset);
+            state.block_selection = Some(if pre.response.drag_started() {
+                BlockSelection::at(line, col)
+            } else {
+                state.block_selection.unwrap_or_else(|| BlockSelection::at(line, col)).moved_to(line, col)
+            });
             state.history.break_run();
-        } else if pre.response.dragged() || pre.response.clicked() {
-            let keep_anchor = extend || pre.response.dragged();
-            state.caret = Caret {
-                primary: offset,
-                anchor: if keep_anchor { state.caret.anchor } else { offset },
-            };
+        } else {
+            // Any non-Alt click or drag exits block-select mode — covers
+            // both a deliberate switch back to normal selection and the
+            // edge case of releasing Alt mid-drag while the mouse button is
+            // still held (next frame's `dragged()` reads as a plain drag).
+            state.block_selection = None;
+            if pre.response.drag_started() {
+                state.caret = Caret {
+                    primary: offset,
+                    anchor: if extend { state.caret.anchor } else { offset },
+                };
+                state.history.break_run();
+            } else if pre.response.dragged() || pre.response.clicked() {
+                let keep_anchor = extend || pre.response.dragged();
+                state.caret = Caret {
+                    primary: offset,
+                    anchor: if keep_anchor { state.caret.anchor } else { offset },
+                };
+            }
         }
         state.preferred_col = column_of(&index, state.caret.primary);
     }
@@ -365,6 +398,9 @@ pub fn show(
 
     paint_rows(ui, &final_out, text_color);
     if has_focus {
+        if let Some(block) = &state.block_selection {
+            paint_block_selection(ui, &final_out, block);
+        }
         paint_caret(ui, &final_out, final_buffer, &state, text_color, cursor_blink);
 
         // Tell the platform integration where to anchor its IME candidate
@@ -448,6 +484,40 @@ fn paint_caret(
                 Stroke::new(1.0, caret_color),
             );
         }
+    }
+}
+
+/// `PLAN.md` Track 7 Phase 1's "second highlight-painting path": a filled
+/// rect at the *same* `cols()` char-column range on every row `block`
+/// spans, unlike `paint_caret`'s per-line clamp to that line's own length —
+/// that lack of clamping is exactly what makes this rectangular rather than
+/// per-line-linear (`SPEC.md` §7). A row shorter than `cols().end` still
+/// gets a rect stretching out to that column, past its own last character,
+/// same as every other block-select editor's own visual convention (VS
+/// Code, IntelliJ, Sublime).
+fn paint_block_selection(ui: &egui::Ui, out: &TextAreaOutput, block: &BlockSelection) {
+    let cols = block.cols();
+    if cols.is_empty() {
+        // A straight vertical drag with no horizontal movement yet — a
+        // real, valid `BlockSelection`, just not yet wide enough to paint
+        // anything visible.
+        return;
+    }
+    let painter = ui.painter();
+    let selection_color = ui.visuals().selection.bg_fill;
+    for line in block.lines() {
+        let Some(i) = out.row_galleys.iter().position(|(logical, _)| *logical == line) else {
+            continue;
+        };
+        let row_galley = &out.row_galleys[i].1;
+        let x0 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(cols.start)).left();
+        let x1 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(cols.end)).left();
+        let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0), y + out.row_height)),
+            0.0,
+            selection_color,
+        );
     }
 }
 
@@ -620,6 +690,73 @@ fn process_events(
             }
 
             _ if read_only => {}
+
+            // PLAN.md Track 7 Phase 2: while a block selection is active,
+            // Text/Backspace/Delete apply column-scoped across every row it
+            // spans instead of the ordinary single-`Caret` path below —
+            // checked first (and never falls through) so these three event
+            // kinds never also move `state.caret`, matching Phase 1's own
+            // "block selection is its own mode" framing. Every other event
+            // (arrows, Enter, Tab, Cut/Paste, …) is deliberately left
+            // untouched here — out of this phase's scope — and keeps
+            // acting on `state.caret` exactly as it already did.
+            Event::Text(insert)
+                if state.block_selection.is_some() && !insert.is_empty() && insert != "\n" && insert != "\r" =>
+            {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                state.history.checkpoint(
+                    Snapshot {
+                        text: current.clone(),
+                        caret: state.caret,
+                    },
+                    EditKind::Typing,
+                );
+                let (out, new_block) = replace_block_selection(&current, index, block, insert);
+                current = out;
+                *index = LineIndex::build(&current);
+                state.block_selection = Some(new_block);
+                changed = true;
+            }
+            Event::Key {
+                key: Key::Backspace,
+                pressed: true,
+                ..
+            } if state.block_selection.is_some() => {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                state.history.checkpoint(
+                    Snapshot {
+                        text: current.clone(),
+                        caret: state.caret,
+                    },
+                    EditKind::Deleting,
+                );
+                if let Some((out, new_block)) = block_backspace(&current, index, block) {
+                    current = out;
+                    *index = LineIndex::build(&current);
+                    state.block_selection = Some(new_block);
+                    changed = true;
+                }
+            }
+            Event::Key {
+                key: Key::Delete,
+                pressed: true,
+                ..
+            } if state.block_selection.is_some() => {
+                let block = state.block_selection.expect("guarded by is_some() above");
+                state.history.checkpoint(
+                    Snapshot {
+                        text: current.clone(),
+                        caret: state.caret,
+                    },
+                    EditKind::Deleting,
+                );
+                if let Some((out, new_block)) = block_delete_forward(&current, index, block) {
+                    current = out;
+                    *index = LineIndex::build(&current);
+                    state.block_selection = Some(new_block);
+                    changed = true;
+                }
+            }
 
             Event::Text(insert) => {
                 if !insert.is_empty() && insert != "\n" && insert != "\r" {

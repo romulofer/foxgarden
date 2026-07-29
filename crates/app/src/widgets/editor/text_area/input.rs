@@ -10,6 +10,8 @@
 //! interception/codegen code already speaks), converted to bytes only at the
 //! moment a `&str` is sliced.
 
+use crate::widgets::editor::multi_cursor::{MultiEditOp, apply_multi_edit};
+
 /// A single caret and its selection anchor, in char offsets. Collapsed (no
 /// selection) when `primary == anchor`. `primary` is the moving end (where the
 /// caret visibly is); `anchor` is the fixed end a Shift-drag/Shift-arrow
@@ -50,6 +52,158 @@ impl Caret {
             anchor: if extend { self.anchor } else { pos },
         }
     }
+}
+
+/// A rectangular (column) selection — `PLAN.md` Track 7 Phase 1, `SPEC.md`
+/// §7 — spanning every line between `anchor_line`/`primary_line` at the
+/// same `anchor_col`/`primary_col` char-columns, regardless of how long
+/// each individual line actually is. Orthogonal to `Caret`'s single linear
+/// range: `SPEC.md` §7 is explicit this is "its own mode, not a
+/// reinterpretation" of the existing single-range/multi-cursor models, so
+/// this never touches a `Caret`. Same `anchor`/`primary` shape as `Caret`
+/// (the fixed press point vs. the moving drag end) rather than pre-sorted
+/// bounds, so an in-progress drag that crosses back over its own start
+/// point doesn't need to remember separately which corner was the anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockSelection {
+    pub anchor_line: usize,
+    pub anchor_col: usize,
+    pub primary_line: usize,
+    pub primary_col: usize,
+}
+
+impl BlockSelection {
+    /// A fresh, zero-size block anchored at `(line, col)` — where an
+    /// Alt+drag's `drag_started()` frame starts one.
+    pub fn at(line: usize, col: usize) -> Self {
+        Self {
+            anchor_line: line,
+            anchor_col: col,
+            primary_line: line,
+            primary_col: col,
+        }
+    }
+
+    /// Moves the drag's far corner to `(line, col)`, keeping the anchor
+    /// fixed — every subsequent `dragged()` frame of the same gesture.
+    pub fn moved_to(self, line: usize, col: usize) -> Self {
+        Self {
+            primary_line: line,
+            primary_col: col,
+            ..self
+        }
+    }
+
+    /// The sorted, inclusive line range this block spans.
+    pub fn lines(&self) -> std::ops::RangeInclusive<usize> {
+        self.anchor_line.min(self.primary_line)..=self.anchor_line.max(self.primary_line)
+    }
+
+    /// The sorted char-column range (within *every* spanned line, not
+    /// clamped per-line) this block covers — end exclusive, matching
+    /// `Caret::range`'s own convention. Deliberately not clamped to any
+    /// particular line's actual length: a block selection covering a
+    /// shorter line still reports the same `end`, which is exactly what
+    /// makes painting it a rectangle rather than a per-line clamp.
+    pub fn cols(&self) -> std::ops::Range<usize> {
+        self.anchor_col.min(self.primary_col)..self.anchor_col.max(self.primary_col)
+    }
+
+    /// Collapses the column range to `col` on both ends, keeping the same
+    /// line span — the block-edit functions' analogue of `Caret::
+    /// collapsed_at`: where a block-scoped edit leaves the selection
+    /// afterward, same as typing over an ordinary selection collapses it to
+    /// where the edit landed.
+    fn collapsed_at_col(self, col: usize) -> Self {
+        Self {
+            anchor_col: col,
+            primary_col: col,
+            ..self
+        }
+    }
+}
+
+/// The per-row char ranges a block-scoped edit (`PLAN.md` Track 7 Phase 2)
+/// touches: for each line `block` spans, `cols()` clamped to that line's
+/// own length. An edit can't reach past a line's actual end without
+/// padding it, which this deliberately doesn't do (unlike painting, which
+/// leaves the block rectangular past a short line's own text purely for
+/// the visual — see `cols()`'s own doc comment).
+fn block_row_ranges(index: &LineIndex, block: BlockSelection) -> Vec<std::ops::Range<usize>> {
+    let cols = block.cols();
+    block
+        .lines()
+        .map(|line| {
+            let line_start = index.line_col_to_char(line, 0);
+            let line_len = index.line_end(line_start) - line_start;
+            let start = line_start + cols.start.min(line_len);
+            let end = line_start + cols.end.min(line_len);
+            start..end
+        })
+        .collect()
+}
+
+/// Inserts `insert` at the same column on every row `block` spans,
+/// replacing its column range on each — via `multi_cursor::
+/// apply_multi_edit`, the same "apply one op at N ranges, correcting for
+/// cumulative delta" engine `Ctrl+D`'s own multi-cursor typing already
+/// uses (a block selection is just a different way of producing the list
+/// of ranges that engine wants, not a different edit algorithm). The
+/// resulting column is computed directly from `cols().start + insert`'s
+/// own length, not from any one row's actual post-edit position — rows
+/// shorter than the block's own column range land their edit at their own
+/// end instead (see `block_row_ranges`), which would otherwise disagree
+/// row-to-row on where "the new column" is; every real block-select editor
+/// keeps the block's target column fixed independent of any single row's
+/// clamped content, same as this does.
+pub fn replace_block_selection(text: &str, index: &LineIndex, block: BlockSelection, insert: &str) -> (String, BlockSelection) {
+    let cols = block.cols();
+    let ranges = block_row_ranges(index, block);
+    let (new_text, _) = apply_multi_edit(text, &ranges, &MultiEditOp::Insert(insert.to_string()));
+    let new_col = cols.start + insert.chars().count();
+    (new_text, block.collapsed_at_col(new_col))
+}
+
+/// Block-scoped Backspace: deletes the column range if `block` has width,
+/// else the one char before it, on every spanned row — `None` if there's
+/// nothing anywhere safe to delete. A zero-width row already sitting at
+/// column 0 of its own line is skipped rather than falling through to
+/// `multi_cursor::apply_multi_edit`'s own raw-absolute-offset Backspace
+/// there, which would delete the *previous line's* trailing newline (a
+/// start-of-buffer boundary, not a start-of-line one) — silently merging
+/// that row into the one above it instead of leaving it alone, which is
+/// what every real block editor does at column 0.
+pub fn block_backspace(text: &str, index: &LineIndex, block: BlockSelection) -> Option<(String, BlockSelection)> {
+    let cols = block.cols();
+    let ranges: Vec<_> = block_row_ranges(index, block)
+        .into_iter()
+        .filter(|r| !r.is_empty() || index.line_col(r.start).1 > 0)
+        .collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    let (new_text, _) = apply_multi_edit(text, &ranges, &MultiEditOp::Backspace);
+    let new_col = if cols.is_empty() { cols.start.saturating_sub(1) } else { cols.start };
+    Some((new_text, block.collapsed_at_col(new_col)))
+}
+
+/// Block-scoped Delete (forward): deletes the column range if `block` has
+/// width, else the one char after it, on every spanned row — `None` if
+/// there's nothing anywhere safe to delete. Symmetric to `block_backspace`:
+/// a zero-width row already sitting at the *end* of its own line is
+/// skipped, so Delete there can't merge the next line up into this one
+/// either.
+pub fn block_delete_forward(text: &str, index: &LineIndex, block: BlockSelection) -> Option<(String, BlockSelection)> {
+    let cols = block.cols();
+    let ranges: Vec<_> = block_row_ranges(index, block)
+        .into_iter()
+        .filter(|r| !r.is_empty() || r.start != index.line_end(r.start))
+        .collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    let (new_text, _) = apply_multi_edit(text, &ranges, &MultiEditOp::Delete);
+    Some((new_text, block.collapsed_at_col(cols.start)))
 }
 
 /// Line-start offsets (SPEC.md §7 / PLAN.md Phase 5): built once per actual

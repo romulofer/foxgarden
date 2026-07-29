@@ -286,3 +286,136 @@ fn line_index_handles_a_trailing_newline_as_its_own_empty_last_line() {
     assert_eq!(index.last_line(), 2, "the trailing \\n starts an empty line 2");
     assert_eq!(index.line_col(4), (2, 0));
 }
+
+#[test]
+fn block_selection_at_starts_zero_size() {
+    let block = BlockSelection::at(3, 5);
+    assert_eq!(block.lines(), 3..=3);
+    assert_eq!(block.cols(), 5..5, "a fresh block has no width yet");
+}
+
+#[test]
+fn block_selection_lines_and_cols_are_sorted_regardless_of_drag_direction() {
+    // Dragging up-and-left of the press point: primary ends up above/before
+    // the anchor, so `lines()`/`cols()` must still report a normalized,
+    // ascending range rather than a "backwards" one.
+    let block = BlockSelection::at(8, 10).moved_to(2, 4);
+    assert_eq!(block.lines(), 2..=8);
+    assert_eq!(block.cols(), 4..10);
+}
+
+#[test]
+fn block_selection_moved_to_keeps_the_anchor_fixed_across_repeated_drag_frames() {
+    let mut block = BlockSelection::at(1, 1);
+    block = block.moved_to(4, 6);
+    block = block.moved_to(4, 9);
+    assert_eq!(block.lines(), 1..=4, "the anchor line must not have moved");
+    assert_eq!(block.cols(), 1..9, "the anchor col must not have moved");
+}
+
+// ---- block-scoped editing (PLAN.md Track 7 Phase 2) ----
+
+#[test]
+fn replace_block_selection_inserts_the_same_text_at_the_same_column_on_every_row() {
+    let text = "aaaa\nbbbb\ncccc";
+    let index = idx(text);
+    // A zero-width block at column 2 on rows 0-2.
+    let block = BlockSelection::at(0, 2).moved_to(2, 2);
+    let (out, new_block) = replace_block_selection(text, &index, block, "X");
+    assert_eq!(out, "aaXaa\nbbXbb\nccXcc");
+    assert_eq!(new_block.lines(), 0..=2);
+    assert_eq!(new_block.cols(), 3..3, "collapses right after the inserted char on every row");
+}
+
+#[test]
+fn replace_block_selection_replaces_a_real_column_range_on_every_row() {
+    let text = "aaaaaa\nbbbbbb";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(1, 4); // cols 1..4 on rows 0-1
+    let (out, new_block) = replace_block_selection(text, &index, block, "Z");
+    assert_eq!(out, "aZaa\nbZbb");
+    assert_eq!(new_block.cols(), 2..2);
+}
+
+#[test]
+fn replace_block_selection_inserts_at_a_short_lines_own_end_instead_of_padding() {
+    let text = "aaaaaa\nbb\ncccccc";
+    let index = idx(text);
+    // Column 4 doesn't exist on the short middle row ("bb", len 2) — that
+    // row's own edit lands at its own end (col 2) rather than being padded
+    // out to column 4.
+    let block = BlockSelection::at(0, 4).moved_to(2, 4);
+    let (out, new_block) = replace_block_selection(text, &index, block, "X");
+    assert_eq!(out, "aaaaXaa\nbbX\nccccXcc");
+    assert_eq!(
+        new_block.cols(),
+        5..5,
+        "the block's own target column advances uniformly regardless of any one row's clamp"
+    );
+}
+
+#[test]
+fn block_backspace_deletes_the_char_before_the_column_on_every_row() {
+    let text = "aXaa\nbXbb\ncXcc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 2).moved_to(2, 2);
+    let (out, new_block) = block_backspace(text, &index, block).expect("there's a char before column 2 on every row");
+    assert_eq!(out, "aaa\nbbb\nccc");
+    assert_eq!(new_block.cols(), 1..1);
+}
+
+#[test]
+fn block_backspace_deletes_a_real_column_range_on_every_row() {
+    let text = "aXXXa\nbXXXb";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(1, 4);
+    let (out, new_block) = block_backspace(text, &index, block).expect("a real range to delete");
+    assert_eq!(out, "aa\nbb");
+    assert_eq!(new_block.cols(), 1..1, "lands at the deleted range's own start");
+}
+
+#[test]
+fn block_backspace_at_column_zero_does_not_merge_lines() {
+    let text = "aaa\nbbb\nccc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 0).moved_to(2, 0);
+    // Every row is already at column 0 — nothing safe to delete anywhere,
+    // so this must be a clean no-op rather than eating the newline before
+    // row 1/2 (which a raw absolute-offset backspace would do).
+    assert_eq!(block_backspace(text, &index, block), None);
+}
+
+#[test]
+fn block_backspace_skips_only_the_rows_already_at_column_zero() {
+    // The middle row is an empty line — column 1 clamps down to its own
+    // column 0, so *only that row* must be skipped; rows 0/2 genuinely
+    // have a column 1 (not clamped at all) and must still lose their char
+    // before it.
+    let text = "aXa\n\ncXc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 1);
+    let (out, _) = block_backspace(text, &index, block).expect("rows 0 and 2 have something to delete");
+    assert_eq!(out, "Xa\n\nXc", "the empty middle row is left untouched, not merged into row 0");
+}
+
+#[test]
+fn block_delete_forward_deletes_the_char_after_the_column_on_every_row() {
+    let text = "aXaa\nbXbb\ncXcc";
+    let index = idx(text);
+    let block = BlockSelection::at(0, 1).moved_to(2, 1);
+    let (out, new_block) =
+        block_delete_forward(text, &index, block).expect("there's a char after column 1 on every row");
+    assert_eq!(out, "aaa\nbbb\nccc");
+    assert_eq!(new_block.cols(), 1..1, "delete never moves the caret");
+}
+
+#[test]
+fn block_delete_forward_at_end_of_line_does_not_merge_lines() {
+    let text = "aa\nbb\ncc";
+    let index = idx(text);
+    // Column 5 is past every row's own end — every row's clamped position
+    // is already that row's own end, so Delete has nothing safe to remove
+    // without eating the next line's own newline.
+    let block = BlockSelection::at(0, 5).moved_to(2, 5);
+    assert_eq!(block_delete_forward(text, &index, block), None);
+}

@@ -208,10 +208,10 @@ binary): the subcommand is `pmd check` (not a bare `pmd` invocation), `-R`
 is required the same way Checkstyle's `-c` is, and it also exits non-zero
 (status 4) on any violation — same "exit code is the finding count, judge
 success by whether stdout parses" pattern as Checkstyle. Unlike
-Checkstyle, PMD's `<violation>` carries its message as element *text
-content*, not an attribute, and reports a real inclusive `begincolumn`/
+Checkstyle, PMD's `<violation>` carries its message as element _text
+content_, not an attribute, and reports a real inclusive `begincolumn`/
 `endcolumn` range rather than a single point — `Diagnostic.range`'s end is
-computed by querying one column *past* `endcolumn`, not `endcolumn`
+computed by querying one column _past_ `endcolumn`, not `endcolumn`
 itself. PMD has no error/warning concept, just a 1(high)-5(low)
 `priority`; this codebase maps 1-2 to `Severity::Error` and 3-5 to
 `Severity::Warning` as its own judgment call, not a PMD convention.
@@ -230,7 +230,7 @@ revised text has the durable version of this reasoning) — three real bugs
 this caught before they shipped, each the kind of thing a "should just
 work" assumption would have missed:
 
-1. Checkstyle's *newest* GitHub release needs a newer JDK than a real Java
+1. Checkstyle's _newest_ GitHub release needs a newer JDK than a real Java
    17 install has (a genuine `UnsupportedClassVersionError` running it) —
    `Tool::recommended_version` pins Checkstyle to `10.26.1`, the newest
    release confirmed (by running it) to still work under Java 17, rather
@@ -242,10 +242,10 @@ work" assumption would have missed:
 3. A downloaded Checkstyle install is a bare `.jar` with no launcher
    script (unlike PMD's/SpotBugs' own `bin/<script>`), so it can't be
    `Command::new`'d directly — `fg_core::static_analysis::
-   command_for_binary` wraps any `.jar`-suffixed binary path in `java
-   -jar`, transparently to both `run_checkstyle_process` and the (already
+command_for_binary` wraps any `.jar`-suffixed binary path in `java
+-jar`, transparently to both `run_checkstyle_process` and the (already
    jar-free) `run_pmd_process`. This lives in `core`, not `app::
-   tool_manager`, despite `tool_manager` being what produces the jar path
+tool_manager`, despite `tool_manager` being what produces the jar path
    in the first place — `app` cannot be a dependency `core` reaches back
    into (`core <- syntax <- app`), and this is really "how do I invoke a
    configured Checkstyle binary correctly" logic, which belongs with the
@@ -274,7 +274,7 @@ working by the user. One round of UI-copy follow-up: the user read
 rather than the intended pinned-vs-latest distinction, so the dialog's own
 top explanation and the per-tool "Latest on GitHub" label (now "Up to
 date (X)" when the pin already matches, otherwise a hover tooltip
-spelling out *why* Install doesn't just chase latest) were reworded to
+spelling out _why_ Install doesn't just chase latest) were reworded to
 say so up front rather than requiring the user to ask.
 
 **Phase 3 — SpotBugs.** Same shape, SpotBugs' own XML schema (bytecode-
@@ -288,14 +288,14 @@ files**, not source — there's no `project_root`-shaped entry point at all,
 and this app has no build step yet (`Maven/Gradle awareness`, §21, and
 `Build/run/test integration`, §22, are both still un-started) to produce
 one. User's own call: defer the actual analysis wiring until §22 lands.
-SpotBugs' own *binary* is still installable today via the tool-manager
+SpotBugs' own _binary_ is still installable today via the tool-manager
 addendum above (`Tool::SpotBugs`, `bin/fb` launcher) — that part doesn't
 depend on the classes-directory question, only "Run SpotBugs" and its
 Diagnostic-conversion parser do. Also verified and worth keeping for
 whenever this phase resumes: `-xml:withMessages` (not bare `-xml`) is
 needed for a `<LongMessage>` at all; each `<BugInstance>` carries several
 `<SourceLine>` elements (class range, method range, the specific culprit
-line) and the useful one is the *last* direct child of `<BugInstance>`
+line) and the useful one is the _last_ direct child of `<BugInstance>`
 itself, not any of the ones nested inside `<Class>`/`<Method>`/`<Type>`/
 etc. — real depth-tracking during parsing, not a flat structure like
 Checkstyle's/PMD's own reports.
@@ -313,7 +313,32 @@ the existing `Document::save` unchanged.
 
 **Checkpoint 1:** full suite green (a fake-clock/fake-focus-event test
 asserting the right trigger fires `save` at the right moment); live-verify
-both modes against a real dirty tab.
+both modes against a real dirty tab — done: `crates/app/src/auto_save.rs`
+holds the pure trigger logic (`AutoSaveSettings`/`AutoSaveMode`/
+`AutoSaveState::tick`, unit-tested headlessly with a fake `i.time`/
+`i.focused` clock, no egui context needed) and `tabs::save_all_dirty_tabs`
+(new — saves every dirty open tab, not just the active one, since a
+focus-loss/idle trigger is app-level, not tab-level); `FoxGardenApp::ui`
+reads `ui.input(|i| (i.time, i.focused, !i.events.is_empty()))` once per
+frame to drive `tick`/`record_activity` and calls `save_all_dirty_tabs`
+when it fires. `crates/app/src/app/tests.rs` gained two integration tests
+(`auto_save_focus_loss_trigger_saves_only_the_dirty_tab`,
+`auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity`)
+wiring the fake clock through to a real temp-file save, not just
+`auto_save`'s own isolated unit tests — the Checkpoint 1 fake-clock/
+fake-focus test explicitly called for. One real deviation from `SPEC.md`
+§6's "reset on every keystroke" wording: the idle clock resets on _any_
+input event (`!i.events.is_empty()`, so pointer moves/clicks/scroll count
+too), not keystrokes only — a keystroke-only reset would make moving the
+mouse around while reading code (no typing) still count as "idle" and
+fire a save mid-thought, which reads as more surprising than useful.
+Settings > Auto-save is a new submenu alongside Theme/Font/Indentation
+(a checkbox for `enabled`, two radios for the mode, a `DragValue` for idle
+seconds clamped `5..=600`), persisted the same hand-rolled
+`eframe::Storage` way every other Settings value here already is (no
+serde in this crate — `app.rs`'s own established note). Live click-through
+(Settings > Auto-save, both modes against a real dirty tab) confirmed
+working by the user.
 
 **Phase 2 — conflict-banner interaction.** Auto-save suppressed for any
 tab currently showing the "changed on disk" banner; resumes once
@@ -321,7 +346,21 @@ Reload/Keep Mine resolves it.
 
 **Checkpoint 2:** full suite green; live-verify auto-save does _not_ fire
 while the conflict banner is showing, and does resume normally after
-resolving it.
+resolving it — code done: `tabs::save_all_dirty_tabs` gained an
+`external_conflicts: &HashSet<PathBuf>` parameter and skips any dirty tab
+whose path is in it (same set `show_external_change_banner` itself reads
+to decide whether to render the banner, and that Reload/Keep Mine already
+clear on resolution — Phase 2 needed no new state, just reading the
+existing one). `FoxGardenApp::ui`'s auto-save trigger check was moved to
+_after_ `process_file_events` (was before it in Phase 1) specifically so a
+conflict that appears this very frame already suppresses this same
+frame's auto-save, not one frame late. `crates/app/src/app/tests.rs`
+gained `auto_save_skips_a_tab_showing_the_external_conflict_banner`
+(conflicted tab stays dirty and untouched on disk; a second, unconflicted
+dirty tab still saves normally in the same call). Live click-through (a
+dirty tab with the conflict banner showing doesn't get auto-saved out from
+under it; resolving via Reload/Keep Mine lets auto-save resume normally)
+confirmed working by the user.
 
 ---
 
@@ -333,14 +372,79 @@ gains a second highlight-painting path for it alongside the existing
 linear-range one.
 
 **Checkpoint 1:** full suite green; live-verify `Alt`+drag visibly
-highlights a rectangular region across several lines.
+highlights a rectangular region across several lines — code done:
+`text_area::input` gained `BlockSelection { anchor_line, anchor_col,
+primary_line, primary_col }` (anchor/primary shape, like `Caret` itself,
+rather than pre-sorted bounds — an in-progress drag that crosses back over
+its own start point doesn't need to separately remember which corner was
+the anchor; `lines()`/`cols()` derive the sorted, PLAN-described
+`start_line..end_line`/`start_col..end_col` view on demand). `ShellState`
+gained `block_selection: Option<BlockSelection>`, checked first in
+`shell::show`'s pointer-handling block whenever `modifiers.alt` is held
+during `drag_started()`/`dragged()` — entirely separate from `Caret`
+(never touches it), and any non-Alt click/drag clears it (also covers
+releasing Alt mid-drag while the mouse stays down). Plain Alt+Click (no
+drag) is untouched — it still falls through to the ordinary click branch,
+same as before this track; `widget.rs`'s own Alt+Click multi-cursor
+interception runs after `shell::show` returns and was never touched.
+`paint_block_selection` (new, alongside `paint_caret`) paints a filled
+rect at the *same* column range on every spanned row, deliberately not
+clamped to each row's own length (unlike `paint_caret`'s per-line clamp) —
+that's what makes it a rectangle rather than a per-line-linear selection.
+One real discovery while testing: egui's own drag classification needs a
+dedicated frame boundary between the press and the first move for
+`drag_started()` to fire — a synthetic test that folds press+move into one
+frame never sees a drag at all (reads as a plain click); the checkpoint
+test (`shell::tests::alt_drag_produces_a_rectangular_block_selection_
+spanning_multiple_rows`) drives three real frames (press, then a small
+move — the frame `drag_started()` actually fires and anchors the block,
+then a further move that extends it) once this was caught. Three more
+`BlockSelection` unit tests cover `lines()`/`cols()` sorting/anchor-
+stability directly in `text_area::input::tests`. Live click-through
+(`Alt`+drag paints a rectangle spanning several rows, including past a
+shorter row's own text; releasing keeps it; a plain click elsewhere clears
+it; plain Alt+Click still drops a bare multi-cursor as before) confirmed
+working by the user.
 
 **Phase 2 — block-scoped editing.** Typing/Backspace/Delete over an
 active block selection applies the same column-range edit to every row
 the block spans.
 
 **Checkpoint 2:** full suite green; live-verify typing over a block
-selection edits every spanned row identically, Backspace/Delete likewise.
+selection edits every spanned row identically, Backspace/Delete likewise —
+code done: `text_area::input` gained `replace_block_selection`/
+`block_backspace`/`block_delete_forward`, all building their per-row char
+ranges from `BlockSelection::cols()` clamped to each row's own length
+(`block_row_ranges`), then applying the shared edit via `widgets::editor::
+multi_cursor::apply_multi_edit` — the same "apply one op at N ranges,
+correcting for cumulative delta" engine `Ctrl+D`'s own multi-cursor typing
+already uses, reused rather than reimplemented since it's already pure and
+Document-free. The resulting block's column is computed directly from the
+edit's own known width (`cols().start + insert.len()` for typing,
+`cols().start` for delete/selection-backspace), not from any one row's
+actual post-edit position — rows shorter than the block's column land
+their own edit at their own end (no padding), which would otherwise
+disagree row-to-row on "where the new column is"; the block's target
+column stays fixed independent of any single row's clamp, same as every
+real block-select editor's own convention. A real correctness risk caught
+before shipping: a zero-width row already sitting at column 0 (Backspace)
+or at its own line's end (Delete) is skipped rather than falling through
+to `apply_multi_edit`'s raw *absolute-offset* boundary check — that check
+only guards start/end of the whole buffer, not start/end of a line, so
+without this a block Backspace at column 0 across several rows would have
+silently deleted the *previous* line's trailing newline on each one,
+merging rows into each other instead of leaving them alone. `shell::show`'s
+`process_events` intercepts `Event::Text`/`Key::Backspace`/`Key::Delete`
+ahead of their ordinary single-`Caret` arms whenever `state.block_
+selection` is `Some`, and only those three — every other event (arrows,
+Enter, Tab, Cut/Paste, …) is out of this phase's scope and still acts on
+`state.caret` exactly as before. Ten new tests: nine pure table tests in
+`text_area::input::tests` (uniform insert, real-range replace, short-line
+clamping without padding, both merge-guard cases for Backspace/Delete, the
+"only rows genuinely at column 0 are skipped" distinction) plus one
+`shell::tests` integration test seeding a real `ShellState` and driving a
+real `Event::Text` through `process_events`. Live-verify not yet run by
+the user.
 
 **Phase 3 — block paste.** Clipboard text split on `\n`, row _i_ inserted
 at `(start_line + i, start_col)`; a row-count mismatch (fewer/more
@@ -750,8 +854,10 @@ work.
       wiring deferred until Track 22 — Build/run/test integration —
       lands, per the user's own call once the compiled-classes-directory
       blocker surfaced)
-- [ ] Track 6 — Auto-save
-- [ ] Track 7 — Rectangular (block) paste
+- [x] Track 6 — Auto-save (both phases shipped and live-verified)
+- [ ] Track 7 — Rectangular (block) paste (Phase 1/column-block selection
+      shipped and live-verified; Phase 2/block-scoped editing code green,
+      live-verify pending; Phase 3/block paste not started)
 
 ### Substantial tier
 

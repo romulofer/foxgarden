@@ -295,3 +295,164 @@ fn char_offset_for_pos_resolves_a_point_on_the_first_row_to_its_column() {
     let offset = char_offset_for_pos(&out, &buffer, out.content_origin);
     assert_eq!(offset, 0);
 }
+
+/// Same shape as `sized_raw_input`, but for a pointer-drag test: modifiers
+/// (`Alt`, here) have to be set explicitly since, unlike `sized_raw_input`,
+/// there's no `Event::Key` in these frames for it to derive them from.
+fn pointer_raw_input(events: Vec<Event>, modifiers: Modifiers) -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(800.0, 600.0),
+        )),
+        events,
+        modifiers,
+        ..Default::default()
+    }
+}
+
+/// Same shape as `frame`, but for `pointer_raw_input` — kept separate
+/// rather than adding a `modifiers` parameter to `frame` itself, since only
+/// a pointer-drag gesture needs a frame-level modifier with no accompanying
+/// `Event::Key`.
+fn pointer_frame(
+    ctx: &egui::Context,
+    id: egui::Id,
+    buffer: &Rope,
+    events: Vec<Event>,
+    modifiers: Modifiers,
+) -> ShellOutput {
+    let mut result = None;
+    let text = buffer.to_string();
+    let _ = ctx.run_ui(pointer_raw_input(events, modifiers), |ui| {
+        ui.memory_mut(|m| m.request_focus(id));
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            result = Some(show(
+                ui,
+                id,
+                buffer,
+                &text,
+                egui::FontId::monospace(14.0),
+                egui::Color32::WHITE,
+                false,
+                &[],
+                &[],
+                false,
+                true,
+            ));
+        });
+    });
+    result.expect("show ran inside the scroll area closure")
+}
+
+/// The Track 7 Phase 1 checkpoint test: a real Alt+drag gesture (press,
+/// then a small move so egui itself classifies it as a drag rather than a
+/// click — same distinction a real mouse gesture has — then a further move
+/// two rows down and well to the right) must produce a `BlockSelection`
+/// spanning every row the drag crossed, with real column width, and must
+/// leave the ordinary linear `Caret` completely untouched (`SPEC.md` §7:
+/// block selection is its own mode, not a reinterpretation of the existing
+/// one).
+#[test]
+fn alt_drag_produces_a_rectangular_block_selection_spanning_multiple_rows() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("alt_drag_block");
+    let buffer = Rope::from_str("aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\n");
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    };
+
+    // Frame 0: an event-free pass purely to learn this widget's real
+    // on-screen geometry (content origin, row height) — the same "derive
+    // real pixel positions from an actual layout pass rather than guessing
+    // them" approach the `char_offset_for_pos` test above already uses.
+    let geometry = frame(&ctx, id, &buffer, vec![], false).base;
+    let press_pos = geometry.content_origin + egui::vec2(0.0, geometry.row_height * 0.5);
+    // Just past the press point, past whatever pixel threshold egui uses to
+    // tell a click from a drag apart — small enough to still land on row 0.
+    let drag_start_pos = press_pos + egui::vec2(12.0, 0.0);
+    let drag_pos = geometry.content_origin + egui::vec2(60.0, geometry.row_height * 2.5);
+
+    // Frame 1: just the press — egui needs to see this land on its own
+    // frame before any later movement can be classified as a drag rather
+    // than folded into the same click.
+    pointer_frame(
+        &ctx,
+        id,
+        &buffer,
+        vec![Event::PointerButton {
+            pos: press_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: alt,
+        }],
+        alt,
+    );
+
+    // Frame 2: a small move while still down — the frame where egui itself
+    // first classifies this gesture as a drag (`drag_started()`), so
+    // *this* frame's position is what becomes the block's anchor corner.
+    pointer_frame(&ctx, id, &buffer, vec![Event::PointerMoved(drag_start_pos)], alt);
+
+    // Frame 3: the button's still down from frame 1 (egui tracks that
+    // across frames on the same `Context`, the same continuity
+    // `undo_restores_the_snapshot_from_before_two_frames_of_coalesced_
+    // typing` above already relies on for its own multi-frame flow) — this
+    // further move is a plain `dragged()` frame, extending the block's far
+    // corner while its anchor (set in frame 2) stays fixed.
+    let out = pointer_frame(&ctx, id, &buffer, vec![Event::PointerMoved(drag_pos)], alt);
+
+    let block = ctx
+        .data(|d| d.get_temp::<ShellState>(id))
+        .and_then(|s| s.block_selection)
+        .expect("Alt+drag across two rows must produce a block selection");
+    assert_eq!(*block.lines().start(), 0, "the drag started on row 0");
+    assert_eq!(*block.lines().end(), 2, "the drag ended on row 2");
+    assert!(
+        !block.cols().is_empty(),
+        "the drag moved well to the right, so the block must have real width"
+    );
+    assert_eq!(
+        out.caret,
+        Some(Caret::at(0)),
+        "block-select must never move the ordinary linear caret"
+    );
+}
+
+/// The Track 7 Phase 2 checkpoint test: with a block selection already
+/// active (seeded directly rather than re-driving the drag gesture — that
+/// path is `alt_drag_produces_a_rectangular_block_selection_spanning_
+/// multiple_rows`'s own job above), typing must edit every spanned row at
+/// the same column and must still leave the ordinary linear `Caret`
+/// completely alone, exactly like Phase 1's drag itself does.
+#[test]
+fn typing_over_an_active_block_selection_edits_every_spanned_row() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("block_type");
+    let buffer = Rope::from_str("aaaa\nbbbb\ncccc");
+
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            ShellState {
+                block_selection: Some(BlockSelection::at(0, 2).moved_to(2, 2)),
+                ..ShellState::default()
+            },
+        );
+    });
+
+    let out = frame(&ctx, id, &buffer, vec![Event::Text("X".into())], false);
+
+    assert_eq!(out.new_text.as_deref(), Some("aaXaa\nbbXbb\nccXcc"));
+    assert_eq!(
+        out.caret,
+        Some(Caret::at(0)),
+        "block-scoped typing must not move the ordinary linear caret"
+    );
+    let block = ctx
+        .data(|d| d.get_temp::<ShellState>(id))
+        .and_then(|s| s.block_selection)
+        .expect("the block selection stays active across the edit, so further typing keeps working");
+    assert_eq!(block.cols(), 3..3, "collapses right after the inserted char, same as every spanned row");
+}
