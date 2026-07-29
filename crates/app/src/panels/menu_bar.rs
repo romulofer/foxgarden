@@ -3,6 +3,7 @@ use syntax::{IncrementalParser, Scope};
 
 use super::side_panel::SidePanelState;
 use super::tabs;
+use crate::auto_save::{AutoSaveMode, AutoSaveSettings};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -64,6 +65,10 @@ pub struct MenuBarOutcome {
 const FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
 /// Clamp range for the Settings > Indentation width control.
 const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
+/// Clamp range for the Settings > Auto-save idle-seconds control — long
+/// enough to survive a brief pause without saving mid-thought, short enough
+/// to still count as "auto."
+const AUTO_SAVE_IDLE_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 5..=600;
 
 #[expect(
     clippy::too_many_arguments,
@@ -81,6 +86,7 @@ pub fn show(
     dark_mode: &mut bool,
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
+    auto_save_settings: &mut AutoSaveSettings,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
@@ -174,6 +180,36 @@ pub fn show(
                     ui.horizontal(|ui| {
                         ui.label("Width");
                         ui.add(egui::DragValue::new(&mut indent_settings.width).range(INDENT_WIDTH_RANGE));
+                    });
+                });
+            });
+            ui.menu_button("Auto-save", |ui| {
+                if ui.checkbox(&mut auto_save_settings.enabled, "Enabled").clicked() {
+                    ui.close();
+                }
+                ui.add_enabled_ui(auto_save_settings.enabled, |ui| {
+                    if ui
+                        .radio(auto_save_settings.mode == AutoSaveMode::OnFocusLoss, "On Focus Loss")
+                        .clicked()
+                    {
+                        auto_save_settings.mode = AutoSaveMode::OnFocusLoss;
+                        ui.close();
+                    }
+                    if ui
+                        .radio(auto_save_settings.mode == AutoSaveMode::AfterIdle, "After Idle")
+                        .clicked()
+                    {
+                        auto_save_settings.mode = AutoSaveMode::AfterIdle;
+                        ui.close();
+                    }
+                    ui.add_enabled_ui(auto_save_settings.mode == AutoSaveMode::AfterIdle, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Idle Seconds");
+                            ui.add(
+                                egui::DragValue::new(&mut auto_save_settings.idle_seconds)
+                                    .range(AUTO_SAVE_IDLE_SECONDS_RANGE),
+                            );
+                        });
                     });
                 });
             });

@@ -1,4 +1,5 @@
 mod app;
+mod auto_save;
 mod file_watch;
 mod panels;
 mod pty_session;

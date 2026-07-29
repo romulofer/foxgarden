@@ -6,6 +6,7 @@ use notify::Watcher;
 use ropey::Rope;
 use syntax::IncrementalParser;
 
+use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::panels::go_to_file::{self, GoToFileState};
 use crate::panels::menu_bar::{self, MenuBarState};
@@ -61,6 +62,15 @@ const PMD_RULESET_KEY: &str = "pmd_ruleset";
 const PMD_INSTALLED_VERSION_KEY: &str = "pmd_installed_version";
 const SPOTBUGS_BINARY_KEY: &str = "spotbugs_binary";
 const SPOTBUGS_INSTALLED_VERSION_KEY: &str = "spotbugs_installed_version";
+const AUTO_SAVE_ENABLED_KEY: &str = "auto_save_enabled";
+const AUTO_SAVE_MODE_KEY: &str = "auto_save_mode";
+const AUTO_SAVE_IDLE_SECONDS_KEY: &str = "auto_save_idle_seconds";
+/// `AUTO_SAVE_MODE_KEY`'s persisted value for `AutoSaveMode::OnFocusLoss` —
+/// an explicit string rather than `{:?}`, so a future `Debug` reformat
+/// (e.g. renaming the variant) can't silently change what's on disk and
+/// break restoring an existing install's choice.
+const AUTO_SAVE_MODE_ON_FOCUS_LOSS: &str = "on_focus_loss";
+const AUTO_SAVE_MODE_AFTER_IDLE: &str = "after_idle";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -233,6 +243,13 @@ pub struct FoxGardenApp {
     /// persisted the same way (see `restore_settings`/`persist_settings`),
     /// not under a project's `.foxgarden/`.
     external_tool_paths: ExternalToolPaths,
+    /// Settings > Auto-save — see `auto_save::AutoSaveSettings`.
+    auto_save_settings: AutoSaveSettings,
+    /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
+    /// runtime-only, never persisted (there's nothing meaningful to resume
+    /// across a restart: `was_focused` starts however the OS hands focus to
+    /// a freshly launched window, and the idle clock starts over anyway).
+    auto_save_state: AutoSaveState,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
@@ -619,6 +636,7 @@ fn restore_settings(
     side_panel_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
+    auto_save_settings: &mut AutoSaveSettings,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -700,6 +718,21 @@ fn restore_settings(
     if let Some(version) = storage.get_string(SPOTBUGS_INSTALLED_VERSION_KEY) {
         external_tool_paths.spotbugs_installed_version = version;
     }
+    if let Some(enabled) = storage.get_string(AUTO_SAVE_ENABLED_KEY) {
+        auto_save_settings.enabled = enabled == "true";
+    }
+    if let Some(mode) = storage.get_string(AUTO_SAVE_MODE_KEY) {
+        auto_save_settings.mode = match mode.as_str() {
+            AUTO_SAVE_MODE_AFTER_IDLE => AutoSaveMode::AfterIdle,
+            _ => AutoSaveMode::OnFocusLoss,
+        };
+    }
+    if let Some(idle_seconds) = storage
+        .get_string(AUTO_SAVE_IDLE_SECONDS_KEY)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        auto_save_settings.idle_seconds = idle_seconds;
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -718,6 +751,7 @@ fn persist_settings(
     side_panel_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
+    auto_save_settings: AutoSaveSettings,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -752,6 +786,16 @@ fn persist_settings(
     storage.set_string(PMD_INSTALLED_VERSION_KEY, external_tool_paths.pmd_installed_version.clone());
     storage.set_string(SPOTBUGS_BINARY_KEY, external_tool_paths.spotbugs_binary.clone());
     storage.set_string(SPOTBUGS_INSTALLED_VERSION_KEY, external_tool_paths.spotbugs_installed_version.clone());
+    storage.set_string(AUTO_SAVE_ENABLED_KEY, auto_save_settings.enabled.to_string());
+    storage.set_string(
+        AUTO_SAVE_MODE_KEY,
+        match auto_save_settings.mode {
+            AutoSaveMode::OnFocusLoss => AUTO_SAVE_MODE_ON_FOCUS_LOSS,
+            AutoSaveMode::AfterIdle => AUTO_SAVE_MODE_AFTER_IDLE,
+        }
+        .to_string(),
+    );
+    storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
 }
 
 impl FoxGardenApp {
@@ -768,6 +812,7 @@ impl FoxGardenApp {
         let mut side_panel_visible = true;
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
+        let mut auto_save_settings = AutoSaveSettings::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -782,6 +827,7 @@ impl FoxGardenApp {
                 &mut side_panel_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
+                &mut auto_save_settings,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -825,6 +871,8 @@ impl FoxGardenApp {
             externally_deleted: HashSet::new(),
             static_analysis: StaticAnalysisState::default(),
             external_tool_paths,
+            auto_save_settings,
+            auto_save_state: AutoSaveState::default(),
         }
     }
 }
@@ -895,6 +943,17 @@ impl eframe::App for FoxGardenApp {
             }
         }
 
+        // `i.time`/`i.focused`/`i.events` are read up front (frame-stable),
+        // but the actual auto-save trigger check happens *after*
+        // `process_file_events` below, so it sees this frame's freshest
+        // `external_conflicts` — a conflict banner that just appeared this
+        // very frame must already suppress it, not wait a frame.
+        let (now, focused, had_activity) = ui.input(|i| (i.time, i.focused, !i.events.is_empty()));
+        if had_activity {
+            self.auto_save_state.record_activity(now);
+        }
+        let auto_save_fired = self.auto_save_state.tick(self.auto_save_settings, focused, now);
+
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
         process_file_events(
             &self.file_event_rx,
@@ -903,6 +962,15 @@ impl eframe::App for FoxGardenApp {
             &mut self.external_conflicts,
             &mut self.externally_deleted,
         );
+
+        if auto_save_fired {
+            tabs::save_all_dirty_tabs(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &self.external_conflicts,
+            );
+        }
 
         // Resolved here, once per frame, ahead of `tabs::show` below so its
         // own `jump_to_char` reflects whatever a popup pick set last frame
@@ -932,6 +1000,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.dark_mode,
                         &mut self.indent_settings,
                         &mut self.view_settings,
+                        &mut self.auto_save_settings,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
@@ -1120,6 +1189,7 @@ impl eframe::App for FoxGardenApp {
             self.side_panel_visible,
             &self.custom_templates,
             &self.external_tool_paths,
+            self.auto_save_settings,
         );
     }
 }

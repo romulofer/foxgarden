@@ -3,6 +3,7 @@
 //! on the code under test. Behavior-identical to the inline module it replaced.
 
 use super::*;
+use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::widgets::editor::UserTemplate;
 use eframe::Storage as _;
 use std::collections::HashMap;
@@ -248,6 +249,11 @@ fn persisted_settings_round_trip() {
         spotbugs_binary: "/usr/bin/spotbugs".to_string(),
         spotbugs_installed_version: "4.10.3".to_string(),
     };
+    let saved_auto_save = AutoSaveSettings {
+        enabled: true,
+        mode: AutoSaveMode::AfterIdle,
+        idle_seconds: 45,
+    };
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -259,6 +265,7 @@ fn persisted_settings_round_trip() {
         false,
         &saved_templates,
         &saved_tools,
+        saved_auto_save,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -270,6 +277,7 @@ fn persisted_settings_round_trip() {
     let mut side_panel_visible = true;
     let mut custom_templates = UserTemplates::default();
     let mut external_tool_paths = ExternalToolPaths::default();
+    let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -281,6 +289,7 @@ fn persisted_settings_round_trip() {
         &mut side_panel_visible,
         &mut custom_templates,
         &mut external_tool_paths,
+        &mut auto_save_settings,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -301,6 +310,7 @@ fn persisted_settings_round_trip() {
     assert_eq!(external_tool_paths.pmd_installed_version, saved_tools.pmd_installed_version);
     assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
     assert_eq!(external_tool_paths.spotbugs_installed_version, saved_tools.spotbugs_installed_version);
+    assert_eq!(auto_save_settings, saved_auto_save);
 }
 
 #[test]
@@ -314,6 +324,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
 
+    let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -325,6 +336,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut side_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &mut auto_save_settings,
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -334,6 +346,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
     assert_eq!(view_settings, ViewSettings::default());
     assert_eq!(side_panel_width, DEFAULT_SIDE_PANEL_WIDTH);
     assert!(side_panel_visible);
+    assert_eq!(auto_save_settings, AutoSaveSettings::default());
 }
 
 #[test]
@@ -348,6 +361,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
 
+    let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -359,6 +373,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut side_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &mut auto_save_settings,
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -376,6 +391,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
 
+    let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -387,6 +403,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut side_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &mut auto_save_settings,
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);
@@ -534,4 +551,185 @@ fn resolve_pending_navigation_leaves_the_field_pending_if_the_document_isnt_open
     let mut pending = Some((PathBuf::from("/not/open.java"), 5));
     assert_eq!(resolve_pending_navigation(&state, &mut pending), None);
     assert!(pending.is_some(), "left pending for a later frame to retry");
+}
+
+#[test]
+fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
+    let mut storage = FakeStorage::default();
+    storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, "not-a-number".to_string());
+    let mut editor_font = EditorFont::default();
+    let mut font_size = DEFAULT_FONT_SIZE;
+    let mut dark_mode = DEFAULT_DARK_MODE;
+    let mut indent_settings = IndentSettings::default();
+    let mut view_settings = ViewSettings::default();
+    let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+    let mut side_panel_visible = true;
+    let mut auto_save_settings = AutoSaveSettings::default();
+
+    restore_settings(
+        &storage,
+        &mut editor_font,
+        &mut font_size,
+        &mut dark_mode,
+        &mut indent_settings,
+        &mut view_settings,
+        &mut side_panel_width,
+        &mut side_panel_visible,
+        &mut UserTemplates::default(),
+        &mut ExternalToolPaths::default(),
+        &mut auto_save_settings,
+    );
+
+    assert_eq!(auto_save_settings.idle_seconds, AutoSaveSettings::default().idle_seconds);
+}
+
+#[test]
+fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
+    let mut storage = FakeStorage::default();
+    storage.set_string(AUTO_SAVE_MODE_KEY, "not-a-real-mode".to_string());
+    let mut editor_font = EditorFont::default();
+    let mut font_size = DEFAULT_FONT_SIZE;
+    let mut dark_mode = DEFAULT_DARK_MODE;
+    let mut indent_settings = IndentSettings::default();
+    let mut view_settings = ViewSettings::default();
+    let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
+    let mut side_panel_visible = true;
+    let mut auto_save_settings = AutoSaveSettings {
+        enabled: true,
+        mode: AutoSaveMode::AfterIdle,
+        idle_seconds: 30,
+    };
+
+    restore_settings(
+        &storage,
+        &mut editor_font,
+        &mut font_size,
+        &mut dark_mode,
+        &mut indent_settings,
+        &mut view_settings,
+        &mut side_panel_width,
+        &mut side_panel_visible,
+        &mut UserTemplates::default(),
+        &mut ExternalToolPaths::default(),
+        &mut auto_save_settings,
+    );
+
+    assert_eq!(auto_save_settings.mode, AutoSaveMode::OnFocusLoss);
+}
+
+/// The Track 6 Phase 1 checkpoint test: a fake egui clock/focus signal
+/// (mirroring `FoxGardenApp::ui`'s own `ui.input(|i| (i.time, i.focused,
+/// ...))` read) driving `AutoSaveState::tick`, wired to the same
+/// `tabs::save_all_dirty_tabs` the app calls when it fires — proves the
+/// full path (not just `auto_save`'s own isolated trigger-logic unit
+/// tests) actually writes a dirty tab to disk at the right moment and
+/// leaves a clean one untouched.
+#[test]
+fn auto_save_focus_loss_trigger_saves_only_the_dirty_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let dirty_path = test_support::placeholder_java_file(dir.path(), "Dirty.java");
+    let clean_path = test_support::placeholder_java_file(dir.path(), "Clean.java");
+
+    let mut state = EditorState::new();
+    let dirty_index = state.open_tab(dirty_path.clone()).unwrap();
+    let clean_index = state.open_tab(clean_path.clone()).unwrap();
+    let mut parsers = vec![
+        tabs::open_parser_for(&mut state.open_tabs[dirty_index]),
+        tabs::open_parser_for(&mut state.open_tabs[clean_index]),
+    ];
+    state.open_tabs[dirty_index].buffer.insert(0, "// unsaved edit\n");
+    assert!(state.open_tabs[dirty_index].is_dirty());
+    assert!(!state.open_tabs[clean_index].is_dirty());
+
+    let settings = AutoSaveSettings {
+        enabled: true,
+        mode: AutoSaveMode::OnFocusLoss,
+        idle_seconds: 30,
+    };
+    let mut auto_save_state = AutoSaveState::default();
+    let mut last_error = None;
+
+    // Frame 1: app is focused — no trigger, nothing saved yet.
+    assert!(!auto_save_state.tick(settings, true, 0.0));
+    assert!(state.open_tabs[dirty_index].is_dirty(), "no trigger yet: still dirty");
+
+    // Frame 2: focus is lost — the edge fires, and the dirty tab (only) saves.
+    assert!(auto_save_state.tick(settings, false, 1.0));
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
+
+    assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
+    assert!(!state.open_tabs[dirty_index].is_dirty(), "focus loss must save the dirty tab");
+    assert_eq!(std::fs::read_to_string(&dirty_path).unwrap(), "// unsaved edit\nclass Dirty.java {}");
+    assert_eq!(
+        std::fs::read_to_string(&clean_path).unwrap(),
+        "class Clean.java {}",
+        "the already-clean tab must not be rewritten"
+    );
+}
+
+#[test]
+fn auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = test_support::placeholder_java_file(dir.path(), "Idle.java");
+
+    let mut state = EditorState::new();
+    let index = state.open_tab(path.clone()).unwrap();
+    let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
+    state.open_tabs[index].buffer.insert(0, "// idle edit\n");
+
+    let settings = AutoSaveSettings {
+        enabled: true,
+        mode: AutoSaveMode::AfterIdle,
+        idle_seconds: 10,
+    };
+    let mut auto_save_state = AutoSaveState::default();
+    auto_save_state.record_activity(0.0);
+    let mut last_error = None;
+
+    assert!(!auto_save_state.tick(settings, true, 5.0), "only 5s idle: no trigger yet");
+    assert!(state.open_tabs[index].is_dirty());
+
+    assert!(auto_save_state.tick(settings, true, 10.0), "10s idle: threshold reached");
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
+
+    assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
+    assert!(!state.open_tabs[index].is_dirty());
+}
+
+/// Track 6 Phase 2's own checkpoint: a tab currently showing the "changed
+/// on disk" conflict banner must not be silently overwritten by an
+/// auto-save trigger — `external_conflicts` is exactly what
+/// `show_external_change_banner` reads to decide whether that banner is
+/// showing (see `process_file_events_flags_a_conflict_for_a_dirty_tab`
+/// above for how a real conflict populates it).
+#[test]
+fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
+    let dir = tempfile::tempdir().unwrap();
+    let conflicted_path = test_support::placeholder_java_file(dir.path(), "Conflicted.java");
+    let plain_path = test_support::placeholder_java_file(dir.path(), "Plain.java");
+
+    let mut state = EditorState::new();
+    let conflicted_index = state.open_tab(conflicted_path.clone()).unwrap();
+    let plain_index = state.open_tab(plain_path.clone()).unwrap();
+    let mut parsers = vec![
+        tabs::open_parser_for(&mut state.open_tabs[conflicted_index]),
+        tabs::open_parser_for(&mut state.open_tabs[plain_index]),
+    ];
+    state.open_tabs[conflicted_index].buffer.insert(0, "// my local edit\n");
+    state.open_tabs[plain_index].buffer.insert(0, "// unconflicted edit\n");
+    let conflicted_buffer_before = state.open_tabs[conflicted_index].buffer.to_string();
+
+    let mut external_conflicts = HashSet::new();
+    external_conflicts.insert(conflicted_path.clone());
+    let mut last_error = None;
+
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &external_conflicts);
+
+    assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
+    assert!(
+        state.open_tabs[conflicted_index].is_dirty(),
+        "a conflicted tab must not be auto-saved out from under its banner"
+    );
+    assert_eq!(state.open_tabs[conflicted_index].buffer.to_string(), conflicted_buffer_before);
+    assert!(!state.open_tabs[plain_index].is_dirty(), "an unconflicted dirty tab still saves normally");
 }

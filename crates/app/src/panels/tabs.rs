@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
+
 use fg_core::{Document, EditorState};
 use syntax::IncrementalParser;
 
@@ -290,6 +293,27 @@ pub fn save_active_tab(
 ) {
     if let Some(active) = state.active_tab {
         save_tab(state, parsers, active, last_error);
+    }
+}
+
+/// Saves every dirty open tab, in tab order, except one currently showing
+/// the "changed on disk" conflict banner (`external_conflicts`) — auto-
+/// saving over an unresolved conflict would silently pick "my version
+/// wins" for the user instead of leaving that choice to the banner's own
+/// Reload/Keep Mine (`PLAN.md` Track 6 Phase 2). Unlike `save_active_tab`,
+/// not scoped to just the focused tab — auto-save's focus-loss/idle
+/// triggers fire at the app level, not the tab level, so any unsaved
+/// change anywhere (other than a conflicted one) should be caught.
+pub fn save_all_dirty_tabs(
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+    last_error: &mut Option<String>,
+    external_conflicts: &HashSet<PathBuf>,
+) {
+    for index in 0..state.open_tabs.len() {
+        if state.open_tabs[index].is_dirty() && !external_conflicts.contains(state.open_tabs[index].path()) {
+            save_tab(state, parsers, index, last_error);
+        }
     }
 }
 
