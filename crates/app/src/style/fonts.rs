@@ -1,7 +1,24 @@
 const JETBRAINS_MONO_KEY: &str = "JetBrainsMono";
+const NERD_FONT_SYMBOLS_KEY: &str = "NerdFontSymbols";
 
 /// Registers the bundled JetBrains Mono under its own font family, alongside
 /// egui's built-in families (left untouched, reachable as `EditorFont::Default`).
+/// Also registers the bundled Nerd Font "Symbols Only" font (the official
+/// `ryanoasis/nerd-fonts` release meant exactly for this — a fallback
+/// alongside any regular text font, not a full patched font family) as the
+/// *last* fallback on both `EditorFont` chains: the embedded terminal
+/// (`terminal_widget::show`) renders with whatever `EditorFont` the editor
+/// itself uses, and a real shell prompt (Powerlevel10k, Starship, Oh My
+/// Zsh's git plugin, ...) routinely emits Powerline/Nerd Font glyphs
+/// (U+E0A0–E0D4, U+E700–E7C5, U+F000–F2E0) that neither JetBrains Mono nor
+/// egui's own bundled Hack/Ubuntu-Light/NotoEmoji contain — without a font
+/// somewhere in the chain covering them, egui/epaint substitutes a literal
+/// `?` per missing glyph (confirmed: this is exactly what a user reported
+/// seeing in their own git-aware zsh prompt inside the terminal panel).
+/// `SymbolsNerdFontMono-Regular.ttf` specifically (not the proportional
+/// `SymbolsNerdFont-Regular.ttf` variant) — its glyphs are fixed-width,
+/// matching a monospace grid the way the terminal's own cell layout needs,
+/// where a variable-width icon glyph would misalign the grid.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -10,10 +27,21 @@ pub fn install(ctx: &egui::Context) {
             "../../assets/fonts/JetBrainsMono-Regular.ttf"
         ))),
     );
+    fonts.font_data.insert(
+        NERD_FONT_SYMBOLS_KEY.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
+        ))),
+    );
     fonts.families.insert(
         egui::FontFamily::Name(JETBRAINS_MONO_KEY.into()),
-        vec![JETBRAINS_MONO_KEY.to_owned(), "Hack".to_owned()],
+        vec![JETBRAINS_MONO_KEY.to_owned(), "Hack".to_owned(), NERD_FONT_SYMBOLS_KEY.to_owned()],
     );
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push(NERD_FONT_SYMBOLS_KEY.to_owned());
     ctx.set_fonts(fonts);
 }
 
