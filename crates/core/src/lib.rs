@@ -16,7 +16,10 @@ mod status;
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
 pub use diagnostic::{Diagnostic, Severity};
-pub use diff::{DiffHunk, DiffLineKind, GitDiffError, git_diff_hunks, parse_unified_diff};
+pub use diff::{
+    DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
+    hunk_patch, parse_file_diff, parse_unified_diff,
+};
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
 pub use gradle::{GradleClasspath, GradleDependency, GradleError, GradleProject, gradle_classpaths, gradle_projects};
@@ -29,6 +32,6 @@ pub use spring_config_metadata::{
 };
 pub use static_analysis::{StaticAnalysisError, checkstyle_diagnostics, pmd_diagnostics};
 pub use status::{
-    GitCommandError, GitStatusError, StatusEntry, git_add, git_commit, git_reset_paths, git_status,
-    git_user_first_name,
+    GitCommandError, GitStatusError, StatusEntry, git_add, git_apply_cached, git_commit, git_push, git_reset_paths,
+    git_status, git_user_first_name,
 };

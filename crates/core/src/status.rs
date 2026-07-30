@@ -211,6 +211,48 @@ pub fn git_commit(root: &Path, message: &str) -> Result<(), GitCommandError> {
     finish(output)
 }
 
+/// `git apply --cached` (`reverse` adds `--reverse`), fed `patch` over
+/// stdin the same way `git_commit` feeds its own message — this is Phase
+/// 4's per-hunk staging primitive: applying a standalone single-hunk patch
+/// (built by `fg_core::hunk_patch` from a real `git diff`/`git diff
+/// --cached` run) stages just that hunk without touching the working tree
+/// at all (`--cached`, not `--index`), and `--reverse` against the *staged*
+/// half's own patch un-stages it the same way `git reset` would for a whole
+/// file. Verified against a real repo, including the reverse direction (see
+/// this module's own tests) — `git apply --cached` needs no `index` line in
+/// the patch to succeed, unlike `--index`/a plain working-tree `git apply`.
+pub fn git_apply_cached(root: &Path, patch: &str, reverse: bool) -> Result<(), GitCommandError> {
+    let mut args = vec!["apply", "--cached"];
+    if reverse {
+        args.push("--reverse");
+    }
+    let mut child = Command::new("git")
+        .args(&args)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(GitCommandError::Spawn)?;
+    child.stdin.take().expect("stdin was piped").write_all(patch.as_bytes()).map_err(GitCommandError::Spawn)?;
+    let output = child.wait_with_output().map_err(GitCommandError::Spawn)?;
+    finish(output)
+}
+
+/// `git push` against the current branch's configured remote/upstream — no
+/// arguments beyond that, so it relies entirely on the repo's own push
+/// configuration (same "just shell out, don't second-guess the user's own
+/// git config" stance every other function here already takes). Real
+/// failure reasons (no configured push destination, auth, a rejected
+/// non-fast-forward push, ...) reach the caller as `GitCommandError::
+/// Failed`'s real stderr — verified against a real "no remote configured"
+/// repo and a real rejected push between two clones of the same bare repo
+/// (see this module's own tests), not assumed from `git push --help`.
+pub fn git_push(root: &Path) -> Result<(), GitCommandError> {
+    let output = Command::new("git").arg("push").current_dir(root).output().map_err(GitCommandError::Spawn)?;
+    finish(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +395,97 @@ mod tests {
         std::fs::write(root.join("f.txt"), "hello\n").unwrap();
 
         let err = git_commit(root, "nothing to commit").unwrap_err();
+        assert!(matches!(err, GitCommandError::Failed(_)));
+    }
+
+    #[test]
+    fn git_apply_cached_stages_a_single_hunk_leaving_the_other_unstaged() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_repo(root);
+        let file = root.join("f.txt");
+        let lines: Vec<String> = (1..=20).map(|n| format!("l{n}")).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+        Command::new("git").current_dir(root).args(["add", "."]).output().unwrap();
+        Command::new("git").current_dir(root).args(["commit", "-q", "-m", "init"]).output().unwrap();
+
+        let mut edited = lines.clone();
+        edited[1] = "CHANGED2".to_string();
+        edited[17] = "CHANGED18".to_string();
+        std::fs::write(&file, edited.join("\n") + "\n").unwrap();
+
+        let file_diff = crate::diff::git_file_diff(&file, root).expect("git ran");
+        assert_eq!(file_diff.hunks.len(), 2);
+        let patch = crate::diff::hunk_patch(&file_diff, 0).unwrap();
+
+        git_apply_cached(root, &patch, false).expect("apply --cached succeeds");
+
+        let cached = crate::diff::git_file_diff_cached(&file, root).expect("git ran");
+        assert_eq!(cached.hunks.len(), 1);
+        assert!(crate::diff::hunk_patch(&cached, 0).unwrap().contains("+CHANGED2"));
+
+        let remaining = crate::diff::git_file_diff(&file, root).expect("git ran");
+        assert_eq!(remaining.hunks.len(), 1);
+        assert!(crate::diff::hunk_patch(&remaining, 0).unwrap().contains("+CHANGED18"));
+    }
+
+    #[test]
+    fn git_apply_cached_reverse_unstages_a_single_hunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_repo(root);
+        let file = root.join("f.txt");
+        std::fs::write(&file, "l1\nl2\nl3\n").unwrap();
+        Command::new("git").current_dir(root).args(["add", "."]).output().unwrap();
+        Command::new("git").current_dir(root).args(["commit", "-q", "-m", "init"]).output().unwrap();
+
+        std::fs::write(&file, "l1\nCHANGED\nl3\n").unwrap();
+        Command::new("git").current_dir(root).args(["add", "."]).output().unwrap();
+
+        let cached = crate::diff::git_file_diff_cached(&file, root).expect("git ran");
+        let patch = crate::diff::hunk_patch(&cached, 0).unwrap();
+
+        git_apply_cached(root, &patch, true).expect("apply --cached --reverse succeeds");
+
+        assert!(crate::diff::git_file_diff_cached(&file, root).expect("git ran").hunks.is_empty());
+        assert_eq!(crate::diff::git_file_diff(&file, root).expect("git ran").hunks.len(), 1);
+    }
+
+    #[test]
+    fn git_push_with_no_configured_remote_fails_with_a_real_git_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_repo(root);
+        std::fs::write(root.join("f.txt"), "hello\n").unwrap();
+        Command::new("git").current_dir(root).args(["add", "."]).output().unwrap();
+        Command::new("git").current_dir(root).args(["commit", "-q", "-m", "init"]).output().unwrap();
+
+        let err = git_push(root).unwrap_err();
+        assert!(matches!(err, GitCommandError::Failed(_)));
+    }
+
+    #[test]
+    fn git_push_succeeds_against_a_real_bare_remote_then_fails_once_diverged() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("bare.git");
+        Command::new("git").args(["init", "-q", "--bare"]).arg(&bare).output().unwrap();
+
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        for clone_dir in [&a, &b] {
+            Command::new("git").args(["clone", "-q"]).arg(&bare).arg(clone_dir).output().unwrap();
+            init_repo(clone_dir);
+        }
+
+        std::fs::write(a.join("one.txt"), "one\n").unwrap();
+        Command::new("git").current_dir(&a).args(["add", "."]).output().unwrap();
+        Command::new("git").current_dir(&a).args(["commit", "-q", "-m", "one"]).output().unwrap();
+        git_push(&a).expect("first push to an empty bare remote succeeds");
+
+        std::fs::write(b.join("two.txt"), "two\n").unwrap();
+        Command::new("git").current_dir(&b).args(["add", "."]).output().unwrap();
+        Command::new("git").current_dir(&b).args(["commit", "-q", "-m", "two"]).output().unwrap();
+        let err = git_push(&b).unwrap_err();
         assert!(matches!(err, GitCommandError::Failed(_)));
     }
 }

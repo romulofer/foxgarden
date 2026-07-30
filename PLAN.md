@@ -720,7 +720,74 @@ reasons (auth, no upstream, rejected) through the existing error modal.
 
 **Checkpoint 4:** full suite green; live-verify staging a single hunk
 (not the whole file) reflects correctly in `git diff --cached`, and Push
-against a real (test) remote succeeds/fails with an accurate message.
+against a real (test) remote succeeds/fails with an accurate message —
+done: `fg_core::diff` gained `RawHunk`/`FileDiff` (a hunk's real header +
+content lines, verbatim — unlike Phase 1's own `DiffHunk`, which only keeps
+the *line range* a hunk covers, this keeps the full text a hand-built patch
+needs), `parse_file_diff`/`git_file_diff`/`git_file_diff_cached` (the
+latter two `git diff --no-color [--cached] -- <path>`, deliberately real
+default 3-line context rather than Phase 1's own `-U0` — a hand-built hunk
+patch needs surrounding context for `git apply` to locate it unambiguously,
+verified against a real repo), and `hunk_patch` (rebuilds one hunk, by
+index, into a standalone single-hunk patch: the file's shared preamble plus
+just that hunk's own header/lines). `fg_core::status` gained
+`git_apply_cached(root, patch, reverse)` (`git apply --cached[--reverse]`,
+patch piped over stdin the same way `git_commit` already feeds its own
+message) and `git_push` (bare `git push`, relying entirely on the repo's
+own configured upstream) — both verified against real repos: staging then
+unstaging a single hunk out of a real two-hunk file via a real `git apply
+--cached`/`--reverse` round trip, a real "no configured push destination"
+failure, and a real rejected push between two diverged clones of the same
+bare remote (confirmed real stderr text and exit codes first, per this
+project's own discipline, before writing any code against them).
+
+App-side, `panels::git_stage::GitStageState` gained `expanded: Option<
+PathBuf>` (one file's hunk breakdown open at a time, same "one detail view"
+shape a lot of this app's panels already use) with its own background
+fetch (`toggle_expand`/`refresh_expanded`, both unstaged *and* staged
+`FileDiff`s together — a single `StatusEntry` can carry both a staged and a
+further-unstaged change at once, git's own `MM`-shaped status, and this
+view's whole point is the complete real hunk picture for that file, not
+just whichever half its row happens to be sorted into) and `stage_hunk`/
+`unstage_hunk`/`push` (all through the same shared `op_rx` slot stage/
+unstage/commit already established — a hunk op or a push in flight disables
+the panel's checkboxes/Commit button exactly like the other three already
+do). `poll_op`'s existing "refresh on success" follow-up (in `app.rs`) now
+also calls `refresh_expanded` when a row is open, since a hunk stage/
+unstage changes precisely that view's own data and shifts every later
+hunk's own index.
+
+The panel itself gained a collapse/expand control per non-untracked row
+(clicking it shows a "Stage Hunk"/"Unstage Hunk" row per hunk, staged
+hunks first) and a Push button next to Refresh. Live click-through caught a
+real bug here: the expand control was first built as a `▸`/`▾` text-glyph
+`small_button`, which rendered as a tofu box — neither the app's own
+bundled fonts nor egui's built-ins cover those glyphs (the same *class* of
+bug the terminal panel's own missing-Nerd-Font-glyph fix addressed
+earlier this session, but a different spot: the default UI font, not the
+editor font), and the broken button was also silently failing to expand
+the row at all. Fixed by dropping the glyph entirely in favor of a
+vector-painted triangle via egui's own `collapsing_header::
+paint_default_icon` — the same drawing `CollapsingHeader` uses for itself,
+immune to font coverage since nothing is being shaped as text.
+
+18 new tests: 8 in `fg_core::diff` (`parse_file_diff`'s preamble/hunk
+split and empty-diff case, `hunk_patch`'s rebuild and out-of-range `None`,
+plus real end-to-end `git_file_diff`/`git_file_diff_cached` runs against a
+real two-hunk repo), 6 in `fg_core::status` (real `git_apply_cached`
+stage/reverse-unstage round trips, a real no-remote push failure, a real
+successful-then-rejected push between two diverged clones), and 6 in
+`panels::git_stage` (`poll_expanded`'s successful-result application,
+`toggle_expand`'s collapse-on-second-call, `stage_hunk`/`unstage_hunk`/
+`refresh_expanded`'s no-op-with-nothing-expanded guards, and a real
+expand-then-stage-hunk round trip against a real repo confirming the right
+hunk, out of the right half, gets staged). Live click-through (expanding a
+real modified file with two separate hunks, staging just one and
+confirming via a terminal `git diff --cached` that only it landed, the row
+correctly flipping that hunk to "Unstage Hunk" and reverting it back,
+Push's real error text surfacing through the existing error modal) — first
+pass caught the tofu-box/dead-expand-control bug above; re-verified working
+by the user after the vector-icon fix.
 
 ---
 
@@ -1536,10 +1603,9 @@ work.
 
 ### Substantial tier
 
-- [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
-      (Phases 1-3 — diff gutter, inline blame, stage/commit panel — all
-      shipped and live-verified; Phase 4/hunk-level staging + push not
-      started)
+- [x] Track 9 — Git diff gutter, inline blame, commit/stage/push UI (all 4
+      phases shipped and live-verified: diff gutter, inline blame, stage/
+      commit panel, and hunk-level staging + push)
 - [x] Track 10 — Code folding (Java: fold-range computation, gutter
       marker, fold state/toggle all pre-existing and already live-verified
       in an earlier session; Kotlin's own class/method/control-flow/

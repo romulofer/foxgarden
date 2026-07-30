@@ -117,6 +117,97 @@ fn parse_range(s: &str) -> Option<(usize, usize)> {
     }
 }
 
+/// One hunk's header line (`"@@ -a,b +c,d @@ trailing context"`) plus its
+/// content lines, each already carrying its own leading `' '`/`'+'`/`'-'` —
+/// captured verbatim from a real `git diff` run. Unlike `DiffHunk` (Phase
+/// 1, which only keeps the *line range* a hunk covers, for the gutter's own
+/// purposes), this keeps the hunk's full text, which is what `hunk_patch`
+/// needs to reassemble a standalone patch for `git apply --cached` (Phase
+/// 4's per-hunk staging).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawHunk {
+    pub header: String,
+    pub lines: Vec<String>,
+}
+
+/// One file's full diff, split into the file-level preamble every one of
+/// its hunks shares (the `diff --git`/`index`/`---`/`+++` lines, and
+/// `Binary files ... differ` for a binary file, which has no `@@` hunks
+/// of its own — `hunks` is simply empty then) and its individual hunks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDiff {
+    pub preamble: String,
+    pub hunks: Vec<RawHunk>,
+}
+
+/// Runs `git diff --no-color -- <path>` (real, default 3-line context —
+/// unlike `git_diff_hunks`'s own `-U0`, a hand-built hunk patch needs
+/// surrounding context lines for `git apply` to locate it unambiguously)
+/// and parses the result via `parse_file_diff`. This is the *unstaged*
+/// half — the working tree against the index.
+pub fn git_file_diff(path: &Path, root: &Path) -> Result<FileDiff, GitDiffError> {
+    let output = Command::new("git")
+        .args(["diff", "--no-color", "--"])
+        .arg(path)
+        .current_dir(root)
+        .output()
+        .map_err(GitDiffError::Spawn)?;
+    Ok(parse_file_diff(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Same as `git_file_diff`, but the *staged* half (`git diff --no-color
+/// --cached -- <path>` — the index against `HEAD`), for the "unstage this
+/// hunk" side of Phase 4's per-hunk staging.
+pub fn git_file_diff_cached(path: &Path, root: &Path) -> Result<FileDiff, GitDiffError> {
+    let output = Command::new("git")
+        .args(["diff", "--no-color", "--cached", "--"])
+        .arg(path)
+        .current_dir(root)
+        .output()
+        .map_err(GitDiffError::Spawn)?;
+    Ok(parse_file_diff(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Splits a real `git diff` file section into its shared preamble and
+/// individual `@@`-delimited hunks. Pure/no I/O, directly testable against
+/// a captured fixture. A hunk header is recognized by `"@@ "` at the start
+/// of a line — real content lines never start that way, since every one of
+/// them starts with `' '`/`'+'`/`'-'` instead.
+pub fn parse_file_diff(diff: &str) -> FileDiff {
+    let mut preamble = String::new();
+    let mut hunks: Vec<RawHunk> = Vec::new();
+
+    for line in diff.lines() {
+        if line.starts_with("@@ ") {
+            hunks.push(RawHunk { header: line.to_string(), lines: Vec::new() });
+        } else if let Some(hunk) = hunks.last_mut() {
+            hunk.lines.push(line.to_string());
+        } else {
+            preamble.push_str(line);
+            preamble.push('\n');
+        }
+    }
+    FileDiff { preamble, hunks }
+}
+
+/// Rebuilds hunk `index` of `file_diff` into a standalone, single-hunk
+/// unified diff — valid input for `git apply --cached` (staging that one
+/// hunk) or `git apply --cached --reverse` (unstaging it), verified
+/// against a real repo (see `status::tests`). `None` for an out-of-range
+/// index (the caller's own hunk list went stale — e.g. a concurrent
+/// refresh — rather than a real bug to panic on).
+pub fn hunk_patch(file_diff: &FileDiff, index: usize) -> Option<String> {
+    let hunk = file_diff.hunks.get(index)?;
+    let mut patch = file_diff.preamble.clone();
+    patch.push_str(&hunk.header);
+    patch.push('\n');
+    for line in &hunk.lines {
+        patch.push_str(line);
+        patch.push('\n');
+    }
+    Some(patch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +334,101 @@ mod tests {
 
         let hunks = git_diff_hunks(&file, root).expect("git still launches fine");
         assert_eq!(hunks, vec![]);
+    }
+
+    /// Captured verbatim from a real `git diff --no-color` run (default
+    /// 3-line context, not `-U0`) against a 20-line file with two edits far
+    /// enough apart to land in separate hunks — the shape `parse_file_diff`/
+    /// `hunk_patch` need to verify against, per this project's own
+    /// discipline for external tool output.
+    const TWO_HUNK_DIFF: &str = "diff --git a/f.txt b/f.txt\nindex 86bba90..25db50c 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -1,5 +1,5 @@\n l1\n-l2\n+CHANGED2\n l3\n l4\n l5\n@@ -15,6 +15,6 @@ l14\n l15\n l16\n l17\n-l18\n+CHANGED18\n l19\n l20\n";
+
+    #[test]
+    fn parse_file_diff_splits_the_shared_preamble_from_each_individual_hunk() {
+        let file_diff = parse_file_diff(TWO_HUNK_DIFF);
+        assert_eq!(
+            file_diff.preamble,
+            "diff --git a/f.txt b/f.txt\nindex 86bba90..25db50c 100644\n--- a/f.txt\n+++ b/f.txt\n"
+        );
+        assert_eq!(file_diff.hunks.len(), 2);
+        assert_eq!(file_diff.hunks[0].header, "@@ -1,5 +1,5 @@");
+        assert_eq!(file_diff.hunks[0].lines, vec![" l1", "-l2", "+CHANGED2", " l3", " l4", " l5"]);
+        assert_eq!(file_diff.hunks[1].header, "@@ -15,6 +15,6 @@ l14");
+        assert_eq!(file_diff.hunks[1].lines, vec![" l15", " l16", " l17", "-l18", "+CHANGED18", " l19", " l20"]);
+    }
+
+    #[test]
+    fn parse_file_diff_on_an_unchanged_file_has_no_hunks() {
+        let file_diff = parse_file_diff("");
+        assert!(file_diff.preamble.is_empty());
+        assert!(file_diff.hunks.is_empty());
+    }
+
+    #[test]
+    fn hunk_patch_rebuilds_a_standalone_single_hunk_patch() {
+        let file_diff = parse_file_diff(TWO_HUNK_DIFF);
+        let patch = hunk_patch(&file_diff, 1).unwrap();
+        assert_eq!(
+            patch,
+            "diff --git a/f.txt b/f.txt\nindex 86bba90..25db50c 100644\n--- a/f.txt\n+++ b/f.txt\n@@ -15,6 +15,6 @@ l14\n l15\n l16\n l17\n-l18\n+CHANGED18\n l19\n l20\n"
+        );
+    }
+
+    #[test]
+    fn hunk_patch_is_none_for_an_out_of_range_index() {
+        let file_diff = parse_file_diff(TWO_HUNK_DIFF);
+        assert!(hunk_patch(&file_diff, 5).is_none());
+    }
+
+    /// End-to-end against a real repo: two far-apart edits land in two real
+    /// hunks, and `hunk_patch`'s own rebuilt text for just the second one
+    /// matches what a real, independently-run `git diff` against only that
+    /// line range would produce.
+    #[test]
+    fn git_file_diff_runs_a_real_git_diff_and_splits_real_hunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("f.txt");
+        let lines: Vec<String> = (1..=20).map(|n| format!("l{n}")).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+
+        let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+
+        let mut edited = lines.clone();
+        edited[1] = "CHANGED2".to_string();
+        edited[17] = "CHANGED18".to_string();
+        std::fs::write(&file, edited.join("\n") + "\n").unwrap();
+
+        let file_diff = git_file_diff(&file, root).expect("git ran");
+        assert_eq!(file_diff.hunks.len(), 2);
+        assert!(hunk_patch(&file_diff, 0).unwrap().contains("+CHANGED2"));
+        assert!(hunk_patch(&file_diff, 1).unwrap().contains("+CHANGED18"));
+    }
+
+    #[test]
+    fn git_file_diff_cached_reads_only_the_staged_half() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("f.txt");
+        std::fs::write(&file, "l1\nl2\nl3\n").unwrap();
+
+        let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+
+        std::fs::write(&file, "l1\nCHANGED\nl3\n").unwrap();
+
+        assert!(git_file_diff_cached(&file, root).expect("git ran").hunks.is_empty());
+        run(&["add", "."]);
+        assert_eq!(git_file_diff_cached(&file, root).expect("git ran").hunks.len(), 1);
+        assert!(git_file_diff(&file, root).expect("git ran").hunks.is_empty());
     }
 }

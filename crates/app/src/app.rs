@@ -1277,17 +1277,27 @@ impl eframe::App for FoxGardenApp {
         }
         if let Some(result) = self.git_stage.poll_op() {
             match result {
-                // A stage/unstage/commit only ever changes what `git
-                // status` would report, never `diff_hunks`/`blame`
-                // directly, so a fresh `git_stage.refresh` (not
-                // `self.diff.run`) is the only follow-up needed here.
+                // A stage/unstage/commit/push/hunk-(un)stage only ever
+                // changes what `git status` would report, never `diff_
+                // hunks`/`blame` directly, so a fresh `git_stage.refresh`
+                // (not `self.diff.run`) is the only follow-up needed here —
+                // plus `refresh_expanded` for whichever row (if any) is
+                // currently showing its own hunk breakdown, since a hunk
+                // stage/unstage changes exactly that view's own data and
+                // shifts every later hunk's index.
                 Ok(()) => {
                     if let Some(root) = diff_root.clone() {
-                        self.git_stage.refresh(root);
+                        self.git_stage.refresh(root.clone());
+                        self.git_stage.refresh_expanded(root);
                     }
                 }
                 Err(err) => self.last_error = Some(format!("Git operation failed: {err}")),
             }
+        }
+        if let Some(result) = self.git_stage.poll_expanded()
+            && let Err(err) = result
+        {
+            self.last_error = Some(format!("git diff failed: {err}"));
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
