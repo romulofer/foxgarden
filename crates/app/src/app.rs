@@ -7,6 +7,7 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
+use crate::lsp_settings::LspSettings;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
@@ -77,6 +78,9 @@ const AUTO_SAVE_IDLE_SECONDS_KEY: &str = "auto_save_idle_seconds";
 /// break restoring an existing install's choice.
 const AUTO_SAVE_MODE_ON_FOCUS_LOSS: &str = "on_focus_loss";
 const AUTO_SAVE_MODE_AFTER_IDLE: &str = "after_idle";
+const LSP_ENABLED_KEY: &str = "lsp_enabled";
+const LSP_JDTLS_BINARY_KEY: &str = "lsp_jdtls_binary";
+const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -258,6 +262,13 @@ pub struct FoxGardenApp {
     external_tool_paths: ExternalToolPaths,
     /// Settings > Auto-save — see `auto_save::AutoSaveSettings`.
     auto_save_settings: AutoSaveSettings,
+    /// Settings > Language Server — see `lsp_settings::LspSettings`. Off by
+    /// default; `PLAN.md` Track 20 has no live consumer of this flag yet
+    /// (Phase 1 is just the client core, `lsp_client::LspSession`), but the
+    /// toggle exists now as the user's own guarantee that nothing here ever
+    /// launches an external `jdtls`/`kotlin-language-server` process
+    /// without it being turned on first.
+    lsp_settings: LspSettings,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
     /// runtime-only, never persisted (there's nothing meaningful to resume
     /// across a restart: `was_focused` starts however the OS hands focus to
@@ -706,6 +717,7 @@ fn restore_settings(
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
+    lsp_settings: &mut LspSettings,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -811,6 +823,15 @@ fn restore_settings(
     {
         auto_save_settings.idle_seconds = idle_seconds;
     }
+    if let Some(enabled) = storage.get_string(LSP_ENABLED_KEY) {
+        lsp_settings.enabled = enabled == "true";
+    }
+    if let Some(path) = storage.get_string(LSP_JDTLS_BINARY_KEY) {
+        lsp_settings.jdtls_binary = path;
+    }
+    if let Some(path) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY) {
+        lsp_settings.kotlin_language_server_binary = path;
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -832,6 +853,7 @@ fn persist_settings(
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
+    lsp_settings: &LspSettings,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -879,6 +901,9 @@ fn persist_settings(
         .to_string(),
     );
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
+    storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
+    storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
+    storage.set_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY, lsp_settings.kotlin_language_server_binary.clone());
 }
 
 impl FoxGardenApp {
@@ -898,6 +923,7 @@ impl FoxGardenApp {
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
+        let mut lsp_settings = LspSettings::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -915,6 +941,7 @@ impl FoxGardenApp {
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
+                &mut lsp_settings,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -962,6 +989,7 @@ impl FoxGardenApp {
             spring_config: SpringConfigState::default(),
             external_tool_paths,
             auto_save_settings,
+            lsp_settings,
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
         };
@@ -1132,6 +1160,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.indent_settings,
                         &mut self.view_settings,
                         &mut self.auto_save_settings,
+                        &mut self.lsp_settings,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
@@ -1394,6 +1423,7 @@ impl eframe::App for FoxGardenApp {
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,
+            &self.lsp_settings,
         );
     }
 }

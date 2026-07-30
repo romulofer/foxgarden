@@ -1,6 +1,8 @@
 mod app;
 mod auto_save;
 mod file_watch;
+mod lsp_client;
+mod lsp_settings;
 mod panels;
 mod pty_session;
 mod style;

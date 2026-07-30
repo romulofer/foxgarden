@@ -255,6 +255,11 @@ fn persisted_settings_round_trip() {
         mode: AutoSaveMode::AfterIdle,
         idle_seconds: 45,
     };
+    let saved_lsp = LspSettings {
+        enabled: true,
+        jdtls_binary: "/usr/bin/jdtls".to_string(),
+        kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
+    };
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -269,6 +274,7 @@ fn persisted_settings_round_trip() {
         &saved_templates,
         &saved_tools,
         saved_auto_save,
+        &saved_lsp,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -283,6 +289,7 @@ fn persisted_settings_round_trip() {
     let mut custom_templates = UserTemplates::default();
     let mut external_tool_paths = ExternalToolPaths::default();
     let mut auto_save_settings = AutoSaveSettings::default();
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -297,6 +304,7 @@ fn persisted_settings_round_trip() {
         &mut custom_templates,
         &mut external_tool_paths,
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -320,6 +328,7 @@ fn persisted_settings_round_trip() {
     assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
     assert_eq!(external_tool_paths.spotbugs_installed_version, saved_tools.spotbugs_installed_version);
     assert_eq!(auto_save_settings, saved_auto_save);
+    assert_eq!(lsp_settings, saved_lsp);
 }
 
 #[test]
@@ -336,6 +345,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
     let mut source_control_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -350,6 +360,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -377,6 +388,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
     let mut source_control_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -391,6 +403,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -411,6 +424,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
     let mut source_control_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -425,6 +439,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);
@@ -589,6 +604,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
     let mut source_control_visible = false;
     let mut auto_save_settings = AutoSaveSettings::default();
 
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -603,6 +619,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(auto_save_settings.idle_seconds, AutoSaveSettings::default().idle_seconds);
@@ -627,6 +644,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         idle_seconds: 30,
     };
 
+    let mut lsp_settings = LspSettings::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -641,6 +659,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut lsp_settings,
     );
 
     assert_eq!(auto_save_settings.mode, AutoSaveMode::OnFocusLoss);

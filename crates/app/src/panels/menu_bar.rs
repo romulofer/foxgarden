@@ -4,6 +4,7 @@ use syntax::{IncrementalParser, Scope};
 use super::side_panel::SidePanelState;
 use super::tabs;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings};
+use crate::lsp_settings::LspSettings;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -87,6 +88,7 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
     auto_save_settings: &mut AutoSaveSettings,
+    lsp_settings: &mut LspSettings,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
@@ -211,6 +213,25 @@ pub fn show(
                                     .range(AUTO_SAVE_IDLE_SECONDS_RANGE),
                             );
                         });
+                    });
+                });
+            });
+            ui.menu_button("Language Server", |ui| {
+                // Off by default (`LspSettings::default`) and, as of
+                // `PLAN.md` Track 20 Phase 1, nothing yet actually spawns
+                // `lsp_client::LspSession` when this is turned on — the
+                // toggle exists now as the user's own guarantee that it
+                // won't, until a later phase wires a real trigger, without
+                // ever launching an external process by surprise.
+                ui.checkbox(&mut lsp_settings.enabled, "Enabled");
+                ui.add_enabled_ui(lsp_settings.enabled, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("jdtls Binary");
+                        ui.text_edit_singleline(&mut lsp_settings.jdtls_binary);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Kotlin Language Server Binary");
+                        ui.text_edit_singleline(&mut lsp_settings.kotlin_language_server_binary);
                     });
                 });
             });

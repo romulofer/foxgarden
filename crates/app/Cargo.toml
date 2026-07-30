@@ -11,6 +11,7 @@ directories = "6.0.0"
 eframe = { version = "0.35.0", features = ["persistence"] }
 egui = "0.35.0"
 fg-core = { path = "../core" }
+lsp-types = "0.97.0"
 notify = "8.2.0"
 portable-pty = "0.9.0"
 rfd = "0.17.2"
