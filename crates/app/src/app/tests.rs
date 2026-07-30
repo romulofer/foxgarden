@@ -227,6 +227,7 @@ fn persisted_settings_round_trip() {
         show_sticky_scroll: true,
         cursor_blink: false,
         show_editor_outline: false,
+        show_inline_blame: false,
     };
     let saved_templates = UserTemplates {
         java: vec![UserTemplate {

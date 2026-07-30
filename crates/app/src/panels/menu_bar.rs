@@ -400,6 +400,13 @@ pub fn show(
             {
                 ui.close();
             }
+            if ui
+                .checkbox(&mut view_settings.show_inline_blame, "Inline Blame")
+                .on_hover_text("Dimmed author/date/summary annotation on the cursor's current line")
+                .changed()
+            {
+                ui.close();
+            }
             ui.separator();
             let has_active_tab = state.active_tab.is_some();
             if ui.add_enabled(has_active_tab, egui::Button::new("Fold All")).clicked() {

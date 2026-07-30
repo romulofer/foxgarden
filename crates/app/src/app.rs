@@ -50,6 +50,7 @@ const SHOW_INDENT_GUIDES_KEY: &str = "show_indent_guides";
 const SHOW_STICKY_SCROLL_KEY: &str = "show_sticky_scroll";
 const CURSOR_BLINK_KEY: &str = "cursor_blink";
 const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
+const SHOW_INLINE_BLAME_KEY: &str = "show_inline_blame";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
@@ -719,6 +720,9 @@ fn restore_settings(
     if let Some(show_editor_outline) = storage.get_string(SHOW_EDITOR_OUTLINE_KEY) {
         view_settings.show_editor_outline = show_editor_outline == "true";
     }
+    if let Some(show_inline_blame) = storage.get_string(SHOW_INLINE_BLAME_KEY) {
+        view_settings.show_inline_blame = show_inline_blame == "true";
+    }
     if let Some(width) = storage
         .get_string(SIDE_PANEL_WIDTH_KEY)
         .and_then(|s| s.parse::<f32>().ok())
@@ -807,6 +811,7 @@ fn persist_settings(
     storage.set_string(SHOW_STICKY_SCROLL_KEY, view_settings.show_sticky_scroll.to_string());
     storage.set_string(CURSOR_BLINK_KEY, view_settings.cursor_blink.to_string());
     storage.set_string(SHOW_EDITOR_OUTLINE_KEY, view_settings.show_editor_outline.to_string());
+    storage.set_string(SHOW_INLINE_BLAME_KEY, view_settings.show_inline_blame.to_string());
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
     storage.set_string(

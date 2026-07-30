@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ropey::Rope;
 
+use crate::blame::BlameLine;
 use crate::diagnostic::Diagnostic;
 use crate::diff::DiffHunk;
 use crate::language::Language;
@@ -60,6 +61,17 @@ pub struct Document {
     /// that) and wrong (it needs to reflect the *last saved* state versus
     /// git's index, not whatever's mid-edit in `buffer` right now).
     pub diff_hunks: Vec<DiffHunk>,
+    /// One `BlameLine` per line of the file, from an externally-run `git
+    /// blame --porcelain` (`fg_core::git_blame`, `PLAN.md` Track 9 Phase
+    /// 2) — dense and index-aligned with `buffer`'s own lines, refreshed on
+    /// the same open/save/reload lifecycle as `diff_hunks` (fetched
+    /// alongside it, by the same background scan — see `panels::git_diff`),
+    /// for the same reason: it reflects the last *saved* state versus git's
+    /// history, not whatever's mid-edit right now. Empty for an untracked
+    /// file, a file outside any repository, or before the first scan
+    /// completes — the cursor-line annotation simply has nothing to show
+    /// yet, not an error.
+    pub blame: Vec<BlameLine>,
     /// Secondary Ctrl+D cursors/selections, as **char** (not byte) index
     /// ranges into `buffer`. An empty range is a bare caret. The primary
     /// cursor/selection remains owned by the editor widget's own state;
@@ -131,6 +143,7 @@ impl Document {
             checkstyle_diagnostics: Vec::new(),
             pmd_diagnostics: Vec::new(),
             diff_hunks: Vec::new(),
+            blame: Vec::new(),
             extra_selections: Vec::new(),
             read_only: false,
             folded_lines: HashSet::new(),

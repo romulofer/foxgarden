@@ -1,3 +1,4 @@
+mod blame;
 mod boilerplate;
 mod diagnostic;
 mod diff;
@@ -8,6 +9,7 @@ mod project;
 mod run_config;
 mod static_analysis;
 
+pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{DiffHunk, DiffLineKind, GitDiffError, git_diff_hunks, parse_unified_diff};

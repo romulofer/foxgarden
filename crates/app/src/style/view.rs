@@ -24,6 +24,12 @@ pub struct ViewSettings {
     /// Whether the focused/unfocused border `widgets::editor::widget::show`
     /// paints around the active editor pane is shown at all.
     pub show_editor_outline: bool,
+    /// Whether the dimmed cursor-line blame annotation (`PLAN.md` Track 9
+    /// Phase 2, `widgets::editor::painting::paint_blame_annotation`) is
+    /// painted at all — `Document::blame` itself keeps being fetched either
+    /// way (it's cheap, and shares the diff gutter's own background scan),
+    /// this only gates whether the annotation is drawn.
+    pub show_inline_blame: bool,
 }
 
 impl Default for ViewSettings {
@@ -35,6 +41,7 @@ impl Default for ViewSettings {
             show_sticky_scroll: false,
             cursor_blink: true,
             show_editor_outline: true,
+            show_inline_blame: true,
         }
     }
 }

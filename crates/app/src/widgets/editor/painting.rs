@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use egui::text::CCursor;
 use egui::{Align2, Color32, FontId, Shape, Stroke};
-use fg_core::Diagnostic;
+use fg_core::{BlameLine, Diagnostic};
 use ropey::Rope;
 
 use super::text_area::TextAreaOutput;
@@ -132,6 +132,83 @@ pub(super) fn paint_line_numbers(
         );
     }
 }
+
+/// A blame-porcelain all-zero sha marks a line that only exists in the
+/// working tree, not any real commit (`fg_core::blame`'s own doc comment) —
+/// git's own generated `summary`/`author` for that case ("Version of X from
+/// X", "Not Committed Yet") is accurate but reads as clutter next to every
+/// other, real commit's summary, so it gets a plain, deliberately shorter
+/// label instead.
+const UNCOMMITTED_SHA: &str = "0000000000000000000000000000000000000000";
+
+/// One line's worth of blame, formatted for the cursor-line annotation:
+/// `"<author> • <relative time> • <summary>"`, or a short "uncommitted"
+/// label for a line with local, not-yet-committed edits (see
+/// `UNCOMMITTED_SHA`).
+pub(super) fn blame_annotation_text(line: &BlameLine, now_unix: i64) -> String {
+    if line.sha == UNCOMMITTED_SHA {
+        return "Uncommitted change".to_string();
+    }
+    format!("{} • {} • {}", line.author, relative_time(now_unix, line.author_time), line.summary)
+}
+
+/// A coarse, bucketed "how long ago" string — no date/time dependency
+/// needed for this, just integer division on the two already-Unix-second
+/// timestamps `git blame --porcelain`'s own `author-time` and `SystemTime::
+/// now()` give. `then_unix` in the future (a clock skew edge case, not a
+/// real one for a commit that's already landed) clamps to "just now" rather
+/// than printing a negative duration.
+pub(super) fn relative_time(now_unix: i64, then_unix: i64) -> String {
+    let secs = (now_unix - then_unix).max(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else if secs < 30 * 86_400 {
+        format!("{}d ago", secs / 86_400)
+    } else if secs < 365 * 86_400 {
+        format!("{}mo ago", secs / (30 * 86_400))
+    } else {
+        format!("{}y ago", secs / (365 * 86_400))
+    }
+}
+
+/// Paints a dimmed blame annotation just past the end of `cursor_line`'s own
+/// rendered text (`PLAN.md` Track 9 Phase 2) — the same `theme::line_number`
+/// color the gutter's own line numbers use, since that's already this
+/// palette's dimmest text-like color and an inline annotation shouldn't
+/// outcompete the code itself for attention. A no-op when `cursor_line`
+/// isn't currently shaped (out of the virtualized viewport, or past the end
+/// of `blame` — e.g. before the first scan has completed).
+pub(super) fn paint_blame_annotation(
+    ui: &egui::Ui,
+    out: &TextAreaOutput,
+    blame: &[BlameLine],
+    cursor_line: usize,
+    now_unix: i64,
+    font_id: FontId,
+    dark_mode: bool,
+) {
+    let Some(line) = blame.get(cursor_line) else { return };
+    let Some(i) = out.row_galleys.iter().position(|(logical, _)| *logical == cursor_line) else { return };
+    let (_, galley) = &out.row_galleys[i];
+    let y = out.content_origin.y + (out.row_offsets[i] as f32 + 0.5) * out.row_height;
+    let x = out.content_origin.x + galley.rect.width() + BLAME_ANNOTATION_PADDING;
+    ui.painter().text(
+        egui::pos2(x, y),
+        Align2::LEFT_CENTER,
+        blame_annotation_text(line, now_unix),
+        font_id,
+        theme::line_number(dark_mode),
+    );
+}
+
+/// Horizontal gap between a line's own last character and its blame
+/// annotation — enough to read as a separate, secondary piece of text
+/// rather than a continuation of the code itself.
+const BLAME_ANNOTATION_PADDING: f32 = 24.0;
 
 /// Paints the Ctrl+D secondary cursors/selections: a thin caret for a bare
 /// position, or a translucent rect for a claimed occurrence.
@@ -424,5 +501,36 @@ mod tests {
     fn char_offsets_for_handles_empty_text() {
         let offsets = char_offsets_for("", &[0]);
         assert_eq!(offsets[&0], 0);
+    }
+
+    #[test]
+    fn relative_time_buckets_span_seconds_to_years() {
+        assert_eq!(relative_time(1000, 990), "just now");
+        assert_eq!(relative_time(1000, 400), "10m ago");
+        assert_eq!(relative_time(10_000, 3_600), "1h ago");
+        assert_eq!(relative_time(200_000, 100_000), "1d ago");
+        assert_eq!(relative_time(10_000_000, 5_000_000), "1mo ago");
+        assert_eq!(relative_time(100_000_000, 10_000_000), "2y ago");
+    }
+
+    #[test]
+    fn relative_time_clamps_a_timestamp_in_the_future_to_just_now() {
+        assert_eq!(relative_time(1000, 2000), "just now");
+    }
+
+    fn line(sha: &str, author: &str, author_time: i64, summary: &str) -> BlameLine {
+        BlameLine { sha: sha.to_string(), author: author.to_string(), author_time, summary: summary.to_string() }
+    }
+
+    #[test]
+    fn blame_annotation_text_joins_author_relative_time_and_summary() {
+        let l = line("abc123abc123abc123abc123abc123abc123abcd", "Ada", 400, "Fix the thing");
+        assert_eq!(blame_annotation_text(&l, 1000), "Ada • 10m ago • Fix the thing");
+    }
+
+    #[test]
+    fn blame_annotation_text_shows_a_short_label_for_an_uncommitted_line() {
+        let l = line(UNCOMMITTED_SHA, "Not Committed Yet", 900, "Version of f.txt from f.txt");
+        assert_eq!(blame_annotation_text(&l, 1000), "Uncommitted change");
     }
 }

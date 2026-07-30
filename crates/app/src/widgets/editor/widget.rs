@@ -23,8 +23,8 @@ use super::diff_gutter;
 use super::folding;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
-    paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides, paint_line_numbers,
-    paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
+    paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
+    paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
@@ -1761,6 +1761,24 @@ pub fn show(
         ui.visuals().dark_mode,
     );
     diff_gutter::paint_diff_gutter(ui, &shell_out.base, &doc.diff_hunks, gutter_left + gutter_width, dark_mode);
+    if view_settings.show_inline_blame
+        && let Some(primary_caret) = shell_out.caret
+    {
+        let cursor_line = doc.buffer.char_to_line(primary_caret.primary.min(doc.buffer.len_chars()));
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        paint_blame_annotation(
+            ui,
+            &shell_out.base,
+            &doc.blame,
+            cursor_line,
+            now_unix,
+            FontId::new(font_size, editor_font.family()),
+            dark_mode,
+        );
+    }
     folding::show_fold_gutter(
         ui,
         &shell_out.base,

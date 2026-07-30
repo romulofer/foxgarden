@@ -1,14 +1,17 @@
-//! Git diff gutter (`PLAN.md` Track 9 Phase 1) — app-side wiring: kicks off
-//! a background `git diff` per document and applies each completed result
-//! to the matching open tab's `Document::diff_hunks`. Running the diff
-//! itself lives in `fg_core::git_diff_hunks`; this module only owns the
-//! background-thread plumbing and result routing, mirroring `static_
-//! analysis`'s own `spawn_scan`/`poll_scan` shape (see that module's doc
-//! comment) — except keyed per-path (`HashMap`, not a single `Option`
-//! slot), since a diff run is triggered per-document from several
-//! independent points (open/save/reload) rather than one project-wide
-//! action at a time, and more than one can legitimately be in flight at
-//! once (e.g. two files saved in quick succession).
+//! Git diff gutter + inline blame (`PLAN.md` Track 9 Phases 1-2) — app-side
+//! wiring: kicks off a background `git diff` **and** `git blame` per
+//! document (one thread, two shell-outs — they share every trigger point,
+//! so there's no reason to run them on separate threads or track them as
+//! separate in-flight scans) and applies each completed result to the
+//! matching open tab's `Document::diff_hunks`/`Document::blame`. Running
+//! either command itself lives in `fg_core` (`git_diff_hunks`/`git_blame`);
+//! this module only owns the background-thread plumbing and result
+//! routing, mirroring `static_analysis`'s own `spawn_scan`/`poll_scan` shape
+//! (see that module's doc comment) — except keyed per-path (`HashMap`, not
+//! a single `Option` slot), since a scan is triggered per-document from
+//! several independent points (open/save/reload) rather than one
+//! project-wide action at a time, and more than one can legitimately be in
+//! flight at once (e.g. two files saved in quick succession).
 //!
 //! Unlike Checkstyle/PMD, nothing here is menu-triggered — `PLAN.md`
 //! Phase 1 wants this to run automatically, so `check_for_saves` (see its
@@ -23,13 +26,20 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::{DiffHunk, EditorState};
+use fg_core::{BlameLine, DiffHunk, EditorState};
 
-type DiffResult = Result<Vec<DiffHunk>, String>;
+/// The diff and blame halves are kept as independent `Result`s, not one
+/// combined `Result<(Vec<DiffHunk>, Vec<BlameLine>), String>` — each of
+/// `git_diff_hunks`/`git_blame` can only fail if `git` itself couldn't be
+/// launched at all (vanishingly rare, and the same failure mode for both),
+/// but keeping them separate means that hypothetical failure on one side
+/// still lets the other side's still-good result land, instead of one
+/// `Err` silently discarding both.
+type ScanResult = (Result<Vec<DiffHunk>, String>, Result<Vec<BlameLine>, String>);
 
 #[derive(Default)]
 pub struct DiffState {
-    scans: HashMap<PathBuf, Receiver<DiffResult>>,
+    scans: HashMap<PathBuf, Receiver<ScanResult>>,
     /// Each currently-open tab's dirty state as of the last `check_for_
     /// saves` call — compared against this frame's fresh `Document::
     /// is_dirty()` to detect a `true` -> `false` transition (a save, by
@@ -41,31 +51,34 @@ pub struct DiffState {
 }
 
 impl DiffState {
-    /// Kicks off a `git diff` for `path` on a background thread, replacing
-    /// any still-running scan already in flight for the same path (a rapid
-    /// save-then-save only needs the latest result, not every intermediate
-    /// one — dropping the old `Receiver` here drops its still-running
-    /// thread's *send* target, not the thread itself, but nothing is left
-    /// waiting on it either way).
+    /// Kicks off a `git diff` **and** `git blame` for `path` on one
+    /// background thread, replacing any still-running scan already in
+    /// flight for the same path (a rapid save-then-save only needs the
+    /// latest result, not every intermediate one — dropping the old
+    /// `Receiver` here drops its still-running thread's *send* target, not
+    /// the thread itself, but nothing is left waiting on it either way).
     pub fn run(&mut self, path: PathBuf, root: PathBuf) {
         let (tx, rx) = channel();
         let path_for_thread = path.clone();
         std::thread::spawn(move || {
-            let result = fg_core::git_diff_hunks(&path_for_thread, &root).map_err(|e| e.to_string());
-            let _ = tx.send(result);
+            let hunks = fg_core::git_diff_hunks(&path_for_thread, &root).map_err(|e| e.to_string());
+            let blame = fg_core::git_blame(&path_for_thread, &root).map_err(|e| e.to_string());
+            let _ = tx.send((hunks, blame));
         });
         self.scans.insert(path, rx);
     }
 
     /// Drains every scan that's finished since the last poll, applying each
-    /// straight to its matching open tab's `diff_hunks` — called once a
-    /// frame from `FoxGardenApp::ui`. A result for a path that's since
-    /// closed, or that failed (including "not a git repository," which
-    /// `fg_core::git_diff_hunks` deliberately doesn't distinguish from "no
-    /// changes" — see its own doc comment), is just dropped rather than
-    /// surfaced through `last_error`: this is an automatic background
-    /// refresh, not a user-requested action, so silently showing no marks
-    /// is the right degrade, not an error toast on every non-git file.
+    /// half straight to its matching open tab's `diff_hunks`/`blame` —
+    /// called once a frame from `FoxGardenApp::ui`. A result for a path
+    /// that's since closed is dropped entirely; a failed half (including
+    /// "not a git repository," which `fg_core::git_diff_hunks`/`git_blame`
+    /// deliberately don't distinguish from "no changes"/"no blame info" —
+    /// see their own doc comments) is dropped on its own without touching
+    /// the other, still-good half, rather than surfaced through
+    /// `last_error`: this is an automatic background refresh, not a
+    /// user-requested action, so silently showing no marks is the right
+    /// degrade, not an error toast on every non-git file.
     pub fn poll(&mut self, state: &mut EditorState) {
         let mut done = Vec::new();
         for (path, rx) in &self.scans {
@@ -77,9 +90,14 @@ impl DiffState {
         }
         for (path, result) in done {
             self.scans.remove(&path);
-            let Some(Ok(hunks)) = result else { continue };
+            let Some((hunks, blame)) = result else { continue };
             if let Some(doc) = state.open_tabs.iter_mut().find(|d| d.path == path) {
-                doc.diff_hunks = hunks;
+                if let Ok(hunks) = hunks {
+                    doc.diff_hunks = hunks;
+                }
+                if let Ok(blame) = blame {
+                    doc.blame = blame;
+                }
             }
         }
     }
@@ -127,9 +145,10 @@ mod tests {
 
         let mut diff = DiffState::default();
         // A nonexistent root still exercises the real spawn-and-send path —
-        // `git_diff_hunks` degrades to an empty result rather than an
-        // error, so this exercises "a completed scan with zero hunks is
-        // still applied," not just the happy path.
+        // `git_diff_hunks`/`git_blame` both degrade to an empty result
+        // rather than an error, so this exercises "a completed scan with
+        // zero hunks/blame lines is still applied," not just the happy
+        // path.
         diff.run(path.clone(), PathBuf::from("/nonexistent/root"));
 
         loop {
@@ -139,6 +158,35 @@ mod tests {
             }
         }
         assert!(state.open_tabs[0].diff_hunks.is_empty());
+        assert!(state.open_tabs[0].blame.is_empty());
+    }
+
+    #[test]
+    fn run_then_poll_applies_real_blame_lines_to_the_matching_open_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let file = root.join("A.java");
+        std::fs::write(&file, "class A {}\n").unwrap();
+        let run = |args: &[&str]| std::process::Command::new("git").current_dir(&root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+
+        let doc = fg_core::Document::open(file.clone()).unwrap();
+        let mut state = EditorState { open_tabs: vec![doc], ..Default::default() };
+
+        let mut diff = DiffState::default();
+        diff.run(file.clone(), root);
+        loop {
+            diff.poll(&mut state);
+            if !diff.scans.contains_key(&file) {
+                break;
+            }
+        }
+        assert_eq!(state.open_tabs[0].blame.len(), 1);
+        assert_eq!(state.open_tabs[0].blame[0].summary, "init");
     }
 
     #[test]
