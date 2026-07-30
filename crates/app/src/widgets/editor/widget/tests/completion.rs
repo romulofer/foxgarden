@@ -507,3 +507,48 @@ fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor
         "only the next segment under the reconstructed server. ancestor, not the full dotted name"
     );
 }
+
+#[test]
+fn accepting_a_spring_annotation_inserts_it_and_adds_the_import_alphabetically() {
+    let before = "package com.example;\n\nimport java.util.List;\n\nclass Foo {\n    ";
+    let after = "\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir, mut doc) = open_fixture(&source, "Foo.java");
+    let mut parser = parsed(Language::Java, &source);
+    let mut completion = None;
+    let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
+
+    let initial_caret = before.len();
+    let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    frames.push(vec![key_event(egui::Key::Enter)]);
+
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, initial_caret, frames);
+
+    assert!(completion.is_none(), "accepting the completion should close the popup");
+    let text = doc.buffer.to_string();
+    assert_eq!(
+        text,
+        "package com.example;\n\nimport java.util.List;\nimport org.springframework.stereotype.Component;\n\nclass Foo {\n    @Component\n}\n"
+    );
+}
+
+#[test]
+fn accepting_a_spring_annotation_already_imported_does_not_duplicate_the_import() {
+    let before =
+        "package com.example;\n\nimport org.springframework.stereotype.Component;\n\n@Component\nclass Foo {\n    ";
+    let after = "\n}\n";
+    let source = format!("{before}{after}");
+    let (_dir, mut doc) = open_fixture(&source, "Foo.java");
+    let mut parser = parsed(Language::Java, &source);
+    let mut completion = None;
+    let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
+
+    let initial_caret = before.len();
+    let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    frames.push(vec![key_event(egui::Key::Enter)]);
+
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, initial_caret, frames);
+
+    let text = doc.buffer.to_string();
+    assert_eq!(text.matches("import org.springframework.stereotype.Component;").count(), 1);
+}

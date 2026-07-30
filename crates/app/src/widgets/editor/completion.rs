@@ -22,6 +22,10 @@ pub enum CompletionKind {
     /// bundled `spring-configuration-metadata.json` rather than anything
     /// parsed from the open project's own source.
     Property,
+    /// A Spring framework annotation (`@Component`, `@Autowired`, ...) —
+    /// accepting one also inserts a matching `import`, unlike every other
+    /// kind here (see `widget.rs`'s accept handler).
+    Annotation,
 }
 
 /// One candidate in the popup's list.

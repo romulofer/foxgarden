@@ -4,7 +4,7 @@ use std::sync::Arc;
 use egui::{Event, FontId, Key};
 use fg_core::{Diagnostic, Document, Language, Project};
 use ropey::Rope;
-use syntax::{IncrementalParser, Tree};
+use syntax::{IncrementalParser, Scope, Tree};
 
 use super::auto_edit::{
     CaseConversion, apply_auto_indent, apply_auto_pair, apply_auto_pair_delete, convert_selection_case,
@@ -26,6 +26,7 @@ use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
     paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
+use super::spring_annotation_completion;
 use super::spring_config_completion;
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
@@ -566,6 +567,28 @@ pub fn show(
                                 &item.label,
                             )
                             .map(|body| expand(&old_text, anchor_char..cursor_char, body))
+                        } else if item.kind == CompletionKind::Annotation {
+                            // Accepting a Spring annotation also inserts a
+                            // matching `import`, if the file doesn't
+                            // already have one — computed against the
+                            // *pre*-completion `old_text`/`tree` (see
+                            // `apply_with_import`'s own doc comment for why
+                            // that's the safe coordinate space to splice
+                            // against).
+                            let (completed_text, cursor_after_label) =
+                                insert_completion(&old_text, anchor_char, cursor_char, &item);
+                            match (doc.language, parser.as_ref().and_then(|p| p.tree())) {
+                                (Some(language), Some(tree)) => Some(spring_annotation_completion::apply_with_import(
+                                    &old_text,
+                                    tree,
+                                    language,
+                                    &item.label,
+                                    anchor_byte,
+                                    completed_text,
+                                    cursor_after_label,
+                                )),
+                                _ => Some((completed_text, cursor_after_label)),
+                            }
                         } else {
                             Some(insert_completion(&old_text, anchor_char, cursor_char, &item))
                         };
@@ -1399,6 +1422,39 @@ pub fn show(
                     let anchor_byte = char_to_byte(&old_text, cursor_char);
                     *completion = Some(CompletionState::open(anchor_byte, candidates));
                 }
+            }
+        }
+    }
+
+    // Spring annotation completion: typing `@` in a Java/Kotlin file opens
+    // the popup unfiltered, anchored right after the `@` — same "open
+    // immediately, let the ordinary prefix filter narrow it as more is
+    // typed" shape dot-completion's own trigger just above uses. Guarded
+    // against firing inside a comment/string (a stray `@` in `// see
+    // user@example.com`, say) via the same real `syntax::highlight_spans`
+    // scope data the editor's own syntax highlighting already computes
+    // from the tree — recomputed fresh here rather than reusing the
+    // frame's cached, already-color-resolved `HighlightSpan`s (those threw
+    // away which `Scope` each span was, only keeping the resolved paint
+    // color), but this only runs the one frame `@` is actually typed, not
+    // every frame, so the extra pass is cheap.
+    if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
+        let typed_at = ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(s) if s == "@")));
+        if typed_at
+            && matches!(doc.language, Some(Language::Java) | Some(Language::Kotlin))
+            && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
+            && let Some(language) = doc.language
+            && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        {
+            let anchor_byte = char_to_byte(&old_text, cursor_char);
+            let at_byte = anchor_byte.saturating_sub(1);
+            let inside_comment_or_string = syntax::highlight_spans(tree, &old_text, language).iter().any(|(range, scope)| {
+                range.contains(&at_byte) && matches!(scope, Scope::Comment | Scope::DocComment | Scope::String)
+            });
+
+            if !inside_comment_or_string {
+                let candidates = spring_annotation_completion::spring_annotation_candidates();
+                *completion = Some(CompletionState::open(anchor_byte, candidates));
             }
         }
     }

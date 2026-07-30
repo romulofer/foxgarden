@@ -946,6 +946,67 @@ popup with real candidates and their type/default shown; a scratch
 `.yml` file typing `server:` then a nested `po` correctly offered just
 `port`) confirmed working by the user.
 
+**Addendum — Spring annotation completion + auto-import (not in the
+original per-phase plan above; a second Spring-flavored completion source
+added alongside property autocomplete, sharing this track since both are
+"complete a Spring thing, backed by a fixed candidate table" in shape).**
+Typing `@` in a `.java`/`.kt` file opens the completion popup unfiltered
+(same "open immediately, let the ordinary prefix filter narrow it" trigger
+shape property autocomplete's own `.properties`/`.yml` trigger already
+uses), offering every annotation in a fixed `SPRING_ANNOTATIONS` table
+(`crates/app/src/widgets/editor/spring_annotation_completion.rs`, new) —
+scoped to genuine `org.springframework.*` packages only, verified against
+real jars on this machine (`spring-context`/`spring-beans`/`spring-web`/
+`spring-tx`/`spring-boot-autoconfigure`). JSR-250 annotations
+(`@PostConstruct`/`@PreDestroy` and similar) are deliberately excluded even
+though they're routinely used in Spring code: their real package is
+`javax.annotation.*` pre-Spring-Boot-3 or `jakarta.annotation.*` for
+Spring Boot 3+, and there's no reliable signal yet for which namespace a
+given project is on — inserting the wrong one would be a silent
+correctness bug, not just an incomplete list. The trigger itself is
+guarded against firing inside a comment/string (a stray `@` in `//
+user@example.com`) via `syntax::highlight_spans`, recomputed fresh only on
+the frame `@` is actually typed.
+
+Accepting a candidate also inserts a matching `import`, if the file
+doesn't already have one — `crates/syntax/src/imports.rs` (new) is the
+shared primitive: `existing_imports` walks the root node's direct
+`import_declaration`/`import` children (both languages' own grammars keep
+imports un-nested, so no recursive walk is needed) into an ordered
+`Vec<ExistingImport>`, and `import_insertion` does a pure string
+comparison against a new path to decide `AlreadyImported` / `Before(byte)`
+/ `AfterLast(byte)` — a real gap disclosed rather than hidden: an existing
+wildcard import (`import org.springframework.stereotype.*;`) covering the
+new path isn't detected as "already imported." `spring_annotation_
+completion::apply_with_import` splices the import into the already-
+completed text (computed from the *pre*-completion tree/text, since
+`import_insertion`'s byte offsets are only valid against that coordinate
+space) and shifts the cursor by the inserted text's own length; a file
+with no imports yet lands the first one right after the `package`
+declaration (`package_declaration`/`package_header`, Java/Kotlin), or at
+the very top of the file if there's no package declaration either. Kotlin
+imports omit the trailing `;` Java's own get.
+
+`CompletionKind` gained an `Annotation` variant; the popup's `detail`
+shows the annotation's own import path so the popup doubles as a reminder
+of which package it comes from before accepting.
+
+15 new tests: 9 in `crates::imports` (path-stripping for a plain and a
+`static` Java import, Kotlin's no-terminator case, a language with no
+import vocabulary, and the `Before`/`AfterLast`/`AlreadyImported`/no-
+existing-imports branches of `import_insertion`), 6 in `spring_annotation_
+completion` (candidate labeling/detail, an unrecognized name, an
+already-imported name, first-import-after-package, first-import-with-no-
+package, alphabetical bracketing among existing imports, append-after-
+last, and Kotlin's terminator-free insertion), plus 2 real multi-frame
+integration tests in `widget/tests/completion.rs` via `typing_session`
+(accepting `@Compo` → `Component` inserts both the annotation and the
+import at the correct alphabetical slot; accepting it again when already
+imported does not duplicate the import). Live click-through (typing `@`
+in a real `.java` file, accepting a candidate, confirming the annotation
+and a correctly-placed `import` both land, and that an already-imported
+annotation doesn't duplicate its import) confirmed working by the user.
+
 ---
 
 ## Track 13 — Code coverage overlay
@@ -1488,7 +1549,9 @@ work.
 - [ ] Track 11 — Multi-window / split-pane editing
 - [x] Track 12 — Spring config property autocomplete (unblocked by Track
       21 this session; Phase 1 shipped and live-verified against a real
-      Gradle/Kotlin/Spring Boot project, both `.properties` and `.yml`)
+      Gradle/Kotlin/Spring Boot project, both `.properties` and `.yml`;
+      Addendum — Spring annotation completion + auto-import — shipped and
+      live-verified)
 - [ ] Track 13 — Code coverage overlay
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions

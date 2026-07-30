@@ -18,6 +18,7 @@ mod diff_gutter;
 mod folding;
 mod multi_cursor;
 mod painting;
+mod spring_annotation_completion;
 mod spring_config_completion;
 mod spring_scan;
 mod templates;

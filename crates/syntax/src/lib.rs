@@ -5,6 +5,7 @@ mod document_parser;
 mod fields;
 mod folding;
 mod highlight;
+mod imports;
 mod kotlin_members;
 mod language;
 mod methods;
@@ -20,6 +21,7 @@ pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use fields::{ClassFields, FieldInfo, fields_in_type, java_classes_with_fields};
 pub use folding::{FoldRange, foldable_ranges};
 pub use highlight::{Scope, highlight_spans};
+pub use imports::{ExistingImport, ImportInsertion, existing_imports, import_insertion};
 pub use kotlin_members::{
     all_kotlin_functions_in_type, kotlin_enclosing_class, kotlin_functions_in_type, kotlin_properties_in_class_body,
     kotlin_properties_in_type, kotlin_superclass_name,
