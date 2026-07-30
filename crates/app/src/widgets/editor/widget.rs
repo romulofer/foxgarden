@@ -861,8 +861,12 @@ pub fn show(
     // `TextEdit` would otherwise move the cursor to column 0 unconditionally
     // via its native Home handling, which this needs to override. Doesn't
     // call `apply_edit` — Home never changes the buffer, only where the
-    // cursor points into it.
-    if !multi_cursor_active_at_start {
+    // cursor points into it. Deliberately skipped for Ctrl+Home
+    // (`modifiers.command`): that's "go to the very start of the document,"
+    // not "go to this line's start," and must fall through untouched to
+    // `text_area::shell`'s own `Key::Home` handling, which is what actually
+    // knows how to do that.
+    if !multi_cursor_active_at_start && !ui.input(|i| i.modifiers.command) {
         let home_pressed = ui.input(|i| {
             i.events.iter().any(|e| {
                 matches!(

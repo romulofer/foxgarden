@@ -19,8 +19,8 @@ use ropey::Rope;
 use super::history::{EditKind, History, Snapshot};
 use super::input::{
     BlockSelection, Caret, LineIndex, backspace, block_backspace, block_delete_forward, block_paste,
-    block_selection_text, clamp_out_of_hidden, column_of, delete_forward, move_down, move_end, move_home, move_left,
-    move_right, move_up, replace_block_selection, replace_selection,
+    block_selection_text, clamp_out_of_hidden, column_of, delete_forward, move_document_end, move_document_start,
+    move_down, move_end, move_home, move_left, move_right, move_up, replace_block_selection, replace_selection,
 };
 use super::render::{
     HighlightSpan, TextAreaOutput, layout_visible, layout_visible_wrapped, paint_rows, shape_line_range, shape_range,
@@ -629,7 +629,16 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_home(index, state.caret, modifiers.shift);
+                // Ctrl+Home: the very start of the document, not just this
+                // line's start — `widget.rs`'s own "smart home" pre-apply
+                // interception (which owns plain/Shift+Home) deliberately
+                // skips itself while `modifiers.command` is held, so this is
+                // the only place that ever sees a Ctrl+Home event.
+                state.caret = if modifiers.command {
+                    move_document_start(state.caret, modifiers.shift)
+                } else {
+                    move_home(index, state.caret, modifiers.shift)
+                };
                 state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }
@@ -639,7 +648,14 @@ fn process_events(
                 modifiers,
                 ..
             } => {
-                state.caret = move_end(index, state.caret, modifiers.shift);
+                // Ctrl+End: the very end of the document — plain End has no
+                // separate pre-apply interception layered on top the way
+                // Home does, so this arm alone covers both cases.
+                state.caret = if modifiers.command {
+                    move_document_end(index, state.caret, modifiers.shift)
+                } else {
+                    move_end(index, state.caret, modifiers.shift)
+                };
                 state.preferred_col = column_of(index, state.caret.primary);
                 state.history.break_run();
             }

@@ -158,6 +158,29 @@ fn select_all_then_typing_replaces_the_whole_buffer() {
 }
 
 #[test]
+fn ctrl_home_goes_to_the_very_start_of_the_document_not_just_the_current_line() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("ctrl_home");
+    let buffer = Rope::from_str("aaa\nbbb\nccc");
+    let ctrl_home = command_key_event(Key::Home, Modifiers::COMMAND);
+    // End first, on the last line, so a plain Home (line-start) and Ctrl+Home
+    // (document-start) would land at genuinely different offsets — proving
+    // this reaches `move_document_start`, not `move_home`.
+    let out = frame(&ctx, id, &buffer, vec![key_event(Key::End), ctrl_home], false);
+    assert_eq!(out.caret, Some(Caret::at(0)));
+}
+
+#[test]
+fn ctrl_end_goes_to_the_very_end_of_the_document_not_just_the_current_line() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("ctrl_end");
+    let buffer = Rope::from_str("aaa\nbbb\nccc");
+    let ctrl_end = command_key_event(Key::End, Modifiers::COMMAND);
+    let out = frame(&ctx, id, &buffer, vec![ctrl_end], false);
+    assert_eq!(out.caret, Some(Caret::at(buffer.len_chars())));
+}
+
+#[test]
 fn undo_restores_the_snapshot_from_before_two_frames_of_coalesced_typing() {
     let ctx = egui::Context::default();
     let id = egui::Id::new("undo");

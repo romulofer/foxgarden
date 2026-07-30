@@ -51,6 +51,7 @@ const SHOW_STICKY_SCROLL_KEY: &str = "show_sticky_scroll";
 const CURSOR_BLINK_KEY: &str = "cursor_blink";
 const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
 const SHOW_INLINE_BLAME_KEY: &str = "show_inline_blame";
+const TERMINAL_PANEL_VISIBLE_KEY: &str = "terminal_panel_visible";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
@@ -152,11 +153,14 @@ pub struct FoxGardenApp {
     side_panel_visible: bool,
     /// Whether the terminal panel is docked open at the bottom — toggled by
     /// the View menu's "Terminal Panel" checkbox or `Ctrl+\``, same
-    /// "one flag, two triggers" shape as `side_panel_visible`. Not
-    /// persisted across restarts (unlike `side_panel_visible`): a dead
-    /// shell process has no scrollback/state worth resuming (`SPEC.md`
-    /// §8's own non-goal), so there's nothing left to show the panel
-    /// open *for* on a fresh launch.
+    /// "one flag, two triggers" shape as `side_panel_visible`. Persisted
+    /// across restarts just like `side_panel_visible` — a dead shell
+    /// process has no scrollback/state worth resuming (`SPEC.md` §8's own
+    /// non-goal), but the *panel being open* is itself a preference worth
+    /// remembering; `FoxGardenApp::new` spawns a fresh session for it right
+    /// after restoring this flag, the same "opening the terminal starts a
+    /// shell" convention `Ctrl+\``'s own handler already established, so a
+    /// relaunch resumes to a working terminal rather than an empty panel.
     terminal_panel_visible: bool,
     /// Kept index-aligned with `state.terminal_tabs`, same shape as
     /// `parsers`/`open_tabs`: each session's real pty child process/writer/
@@ -678,6 +682,7 @@ fn restore_settings(
     view_settings: &mut ViewSettings,
     side_panel_width: &mut f32,
     side_panel_visible: &mut bool,
+    terminal_panel_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
@@ -731,6 +736,9 @@ fn restore_settings(
     }
     if let Some(visible) = storage.get_string(SIDE_PANEL_VISIBLE_KEY) {
         *side_panel_visible = visible == "true";
+    }
+    if let Some(visible) = storage.get_string(TERMINAL_PANEL_VISIBLE_KEY) {
+        *terminal_panel_visible = visible == "true";
     }
     if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
         custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
@@ -796,6 +804,7 @@ fn persist_settings(
     view_settings: ViewSettings,
     side_panel_width: f32,
     side_panel_visible: bool,
+    terminal_panel_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
@@ -814,6 +823,7 @@ fn persist_settings(
     storage.set_string(SHOW_INLINE_BLAME_KEY, view_settings.show_inline_blame.to_string());
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
+    storage.set_string(TERMINAL_PANEL_VISIBLE_KEY, terminal_panel_visible.to_string());
     storage.set_string(
         CUSTOM_JAVA_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.java),
@@ -858,6 +868,7 @@ impl FoxGardenApp {
         let mut view_settings = ViewSettings::default();
         let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
         let mut side_panel_visible = true;
+        let mut terminal_panel_visible = false;
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
@@ -873,6 +884,7 @@ impl FoxGardenApp {
                 &mut view_settings,
                 &mut side_panel_width,
                 &mut side_panel_visible,
+                &mut terminal_panel_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
@@ -883,7 +895,7 @@ impl FoxGardenApp {
         let (file_event_tx, file_event_rx) = std::sync::mpsc::channel();
         let file_watcher = notify::recommended_watcher(file_event_tx).ok();
 
-        Self {
+        let mut app = Self {
             state,
             parsers,
             pending_close: None,
@@ -897,7 +909,7 @@ impl FoxGardenApp {
             side_panel: SidePanelState::default(),
             side_panel_width,
             side_panel_visible,
-            terminal_panel_visible: false,
+            terminal_panel_visible,
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -922,7 +934,17 @@ impl FoxGardenApp {
             auto_save_settings,
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
+        };
+
+        // A resumed-open terminal panel has no session of its own yet (a
+        // real child process can't be persisted/restored) — spawn one right
+        // away, the same "opening the terminal starts a shell" convention
+        // `Ctrl+\``'s own handler already uses, so the panel resumes to a
+        // working terminal instead of the empty "No terminal session" state.
+        if app.terminal_panel_visible {
+            new_terminal_session(&mut app.state, &mut app.terminal_sessions, &cc.egui_ctx, &mut app.last_error);
         }
+        app
     }
 }
 
@@ -1262,6 +1284,7 @@ impl eframe::App for FoxGardenApp {
             self.view_settings,
             self.side_panel_width,
             self.side_panel_visible,
+            self.terminal_panel_visible,
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,

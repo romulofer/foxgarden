@@ -143,6 +143,38 @@ fn move_end_goes_to_the_line_end_not_past_the_newline() {
 }
 
 #[test]
+fn move_document_start_goes_to_char_zero_from_any_line() {
+    let index = idx(GRID);
+    let start = index.line_col_to_char(2, 2); // deep into the last line
+    let c = move_document_start(Caret::at(start), false);
+    assert_eq!(c, Caret::at(0));
+}
+
+#[test]
+fn move_document_start_with_extend_keeps_the_anchor_in_place() {
+    let index = idx(GRID);
+    let start = index.line_col_to_char(2, 2);
+    let c = move_document_start(Caret::at(start), true);
+    assert_eq!(c.anchor, start, "extend must keep the selection's anchor where it was");
+    assert_eq!(c.primary, 0);
+}
+
+#[test]
+fn move_document_end_goes_to_the_last_char_from_any_line() {
+    let index = idx(GRID);
+    let c = move_document_end(&index, Caret::at(0), false);
+    assert_eq!(c.primary, index.char_len());
+}
+
+#[test]
+fn move_document_end_with_extend_keeps_the_anchor_in_place() {
+    let index = idx(GRID);
+    let c = move_document_end(&index, Caret::at(0), true);
+    assert_eq!(c.anchor, 0, "extend must keep the selection's anchor where it was");
+    assert_eq!(c.primary, index.char_len());
+}
+
+#[test]
 fn column_of_reports_within_line_column() {
     let index = idx(GRID);
     assert_eq!(column_of(&index, 0), 0);

@@ -264,6 +264,7 @@ fn persisted_settings_round_trip() {
         saved_view,
         275.0,
         false,
+        true,
         &saved_templates,
         &saved_tools,
         saved_auto_save,
@@ -276,6 +277,7 @@ fn persisted_settings_round_trip() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
     let mut custom_templates = UserTemplates::default();
     let mut external_tool_paths = ExternalToolPaths::default();
     let mut auto_save_settings = AutoSaveSettings::default();
@@ -288,6 +290,7 @@ fn persisted_settings_round_trip() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut custom_templates,
         &mut external_tool_paths,
         &mut auto_save_settings,
@@ -300,6 +303,7 @@ fn persisted_settings_round_trip() {
     assert_eq!(view_settings, saved_view);
     assert_eq!(side_panel_width, 275.0);
     assert!(!side_panel_visible);
+    assert!(terminal_panel_visible);
     assert_eq!(custom_templates.java, saved_templates.java);
     assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
     assert_eq!(custom_templates.global, saved_templates.global);
@@ -324,6 +328,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
@@ -335,6 +340,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
@@ -361,6 +367,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
@@ -372,6 +379,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
@@ -391,6 +399,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
 
     let mut auto_save_settings = AutoSaveSettings::default();
     restore_settings(
@@ -402,6 +411,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
@@ -565,6 +575,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
     let mut auto_save_settings = AutoSaveSettings::default();
 
     restore_settings(
@@ -576,6 +587,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
@@ -595,6 +607,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
     let mut view_settings = ViewSettings::default();
     let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
     let mut side_panel_visible = true;
+    let mut terminal_panel_visible = false;
     let mut auto_save_settings = AutoSaveSettings {
         enabled: true,
         mode: AutoSaveMode::AfterIdle,
@@ -610,6 +623,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut view_settings,
         &mut side_panel_width,
         &mut side_panel_visible,
+        &mut terminal_panel_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,

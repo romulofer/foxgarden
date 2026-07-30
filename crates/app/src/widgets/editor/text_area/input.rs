@@ -463,6 +463,18 @@ pub fn move_home(index: &LineIndex, caret: Caret, extend: bool) -> Caret {
     caret.moved_to(index.line_col_to_char(line, 0), extend)
 }
 
+/// Ctrl+Home: to the very start of the document, regardless of which line
+/// the caret was on.
+pub fn move_document_start(caret: Caret, extend: bool) -> Caret {
+    caret.moved_to(0, extend)
+}
+
+/// Ctrl+End: to the very end of the document, regardless of which line the
+/// caret was on.
+pub fn move_document_end(index: &LineIndex, caret: Caret, extend: bool) -> Caret {
+    caret.moved_to(index.char_len(), extend)
+}
+
 /// If `char_off`'s line falls inside any of `hidden`'s line ranges, returns
 /// the char offset at the end of the line just above that range (a folded
 /// region's marker line) instead — the pure half of PLAN.md 3d's "caret

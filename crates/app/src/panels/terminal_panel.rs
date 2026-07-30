@@ -124,6 +124,30 @@ pub fn show(
                 grid_response.request_focus();
             }
             if grid_response.has_focus() {
+                // Without this, egui's own default keyboard-navigation
+                // treats Tab and the arrow keys as "move focus to the next/
+                // directional widget" and never delivers them as a `Key`
+                // event at all — so shell-completion Tab, command-history
+                // Up/Down, or in-line cursor movement via Left/Right would
+                // silently defocus the terminal instead of reaching
+                // `key_event_to_bytes` (which already maps all of them to
+                // their real terminal byte sequences, see `terminal_input`).
+                // `Memory::set_focus_lock_filter`'s own doc comment requires
+                // focus to already be held as of *last* frame, so this only
+                // takes effect one frame after `request_focus()` above — the
+                // same frame the event loop below would otherwise start
+                // losing these keys anyway.
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(
+                        focus_id,
+                        egui::EventFilter {
+                            tab: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            ..Default::default()
+                        },
+                    )
+                });
                 ui.painter().rect_stroke(
                     grid_response.rect,
                     0.0,
@@ -144,6 +168,24 @@ pub fn show(
                         // this phase's scope (the byte-sequence table).
                         egui::Event::Paste(text) => {
                             let _ = session.write(text.as_bytes());
+                            interacted = true;
+                        }
+                        // egui-winit translates a bare Ctrl+C (`modifiers.
+                        // command`, matched before it ever becomes a real
+                        // `Key` event — see `is_copy_command` in egui-winit's
+                        // own `lib.rs`) straight into this semantic `Copy`
+                        // event instead, so `key_event_to_bytes`'s own
+                        // `Ctrl+C -> 0x03` mapping below is never actually
+                        // reachable from a real keypress; this is the only
+                        // place that ever sees it. This grid has no text
+                        // selection to copy in the first place (`Sense::
+                        // click()` only, no drag-to-select), so treating a
+                        // Copy while focused as "send the interrupt byte" —
+                        // every real terminal emulator's own convention for
+                        // plain Ctrl+C — is unambiguous here, not a
+                        // narrowing of some other behavior this loses.
+                        egui::Event::Copy => {
+                            let _ = session.write(&[0x03]);
                             interacted = true;
                         }
                         egui::Event::Key {
