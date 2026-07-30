@@ -90,6 +90,7 @@ pub fn show(
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
+    source_control_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
     checkstyle_running: bool,
@@ -362,6 +363,9 @@ pub fn show(
                 ui.close();
             }
             if checkbox_with_shortcut(ui, terminal_panel_visible, "Terminal Panel", "Ctrl+`").changed() {
+                ui.close();
+            }
+            if ui.checkbox(source_control_visible, "Source Control").changed() {
                 ui.close();
             }
             ui.separator();

@@ -188,21 +188,23 @@ impl Drop for PtySession {
 mod tests {
     use super::*;
 
+    // One test, not two: `cargo test` runs tests in parallel threads by
+    // default, and both cases mutate the same process-global `SHELL` env
+    // var — as two separate `#[test]`s this was a genuine, observed race
+    // (whichever ran last "won" and could flip the other's assertion),
+    // despite an earlier claim here that no other test in this crate reads/
+    // writes `SHELL`. Sequential within one test is the actual fix, not a
+    // workaround.
     #[test]
     #[cfg(not(windows))]
-    fn shell_command_falls_back_to_bin_sh_when_shell_unset() {
-        // SAFETY: test-only, single-threaded within this process's own env
-        // mutation; no other test in this crate reads/writes `SHELL`.
+    fn shell_command_reflects_the_shell_env_var_with_a_bin_sh_fallback() {
+        // SAFETY: test-only env mutation; sequential within this one test,
+        // which is what makes it safe now.
         unsafe {
             std::env::remove_var("SHELL");
         }
         assert_eq!(shell_command().get_argv()[0], std::ffi::OsString::from("/bin/sh"));
-    }
 
-    #[test]
-    #[cfg(not(windows))]
-    fn shell_command_uses_shell_env_var_when_set() {
-        // SAFETY: see above.
         unsafe {
             std::env::set_var("SHELL", "/bin/definitely-not-a-real-shell");
         }

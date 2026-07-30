@@ -2,6 +2,7 @@
 //! tab bar (which also owns tab/parser lifecycle — see `tabs::open_parser_for`).
 
 pub mod git_diff;
+pub mod git_stage;
 pub mod go_to_file;
 pub mod menu_bar;
 pub mod quick_switcher;

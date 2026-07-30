@@ -9,6 +9,7 @@ use syntax::IncrementalParser;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::panels::git_diff::DiffState;
+use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
 use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
@@ -52,6 +53,7 @@ const CURSOR_BLINK_KEY: &str = "cursor_blink";
 const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
 const SHOW_INLINE_BLAME_KEY: &str = "show_inline_blame";
 const TERMINAL_PANEL_VISIBLE_KEY: &str = "terminal_panel_visible";
+const SOURCE_CONTROL_PANEL_VISIBLE_KEY: &str = "source_control_panel_visible";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
@@ -262,6 +264,18 @@ pub struct FoxGardenApp {
     /// fresh diff for every reopened tab rather than trying to resume
     /// anything.
     diff: DiffState,
+    /// Whether the Source Control (stage/commit) panel is docked open on
+    /// the right — toggled by the View menu's "Source Control" checkbox,
+    /// same "one flag, one menu toggle" shape as `side_panel_visible`/
+    /// `terminal_panel_visible`. Persisted across restarts the same way —
+    /// unlike the terminal, there's no session to spawn on resume, just an
+    /// empty panel that refreshes itself once a project's open.
+    source_control_visible: bool,
+    /// The Source Control panel's own status list plus any in-flight
+    /// `git status`/add/reset/commit — see `panels::git_stage::GitStageState`.
+    /// Runtime-only, same as `diff`: a fresh launch just runs a fresh
+    /// `git status` once the panel's shown rather than resuming anything.
+    git_stage: GitStageState,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
@@ -683,6 +697,7 @@ fn restore_settings(
     side_panel_width: &mut f32,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
+    source_control_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
@@ -739,6 +754,9 @@ fn restore_settings(
     }
     if let Some(visible) = storage.get_string(TERMINAL_PANEL_VISIBLE_KEY) {
         *terminal_panel_visible = visible == "true";
+    }
+    if let Some(visible) = storage.get_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY) {
+        *source_control_visible = visible == "true";
     }
     if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
         custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
@@ -805,6 +823,7 @@ fn persist_settings(
     side_panel_width: f32,
     side_panel_visible: bool,
     terminal_panel_visible: bool,
+    source_control_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
@@ -824,6 +843,7 @@ fn persist_settings(
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
     storage.set_string(TERMINAL_PANEL_VISIBLE_KEY, terminal_panel_visible.to_string());
+    storage.set_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY, source_control_visible.to_string());
     storage.set_string(
         CUSTOM_JAVA_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.java),
@@ -869,6 +889,7 @@ impl FoxGardenApp {
         let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
         let mut side_panel_visible = true;
         let mut terminal_panel_visible = false;
+        let mut source_control_visible = false;
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
@@ -885,6 +906,7 @@ impl FoxGardenApp {
                 &mut side_panel_width,
                 &mut side_panel_visible,
                 &mut terminal_panel_visible,
+                &mut source_control_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
@@ -910,6 +932,8 @@ impl FoxGardenApp {
             side_panel_width,
             side_panel_visible,
             terminal_panel_visible,
+            source_control_visible,
+            git_stage: GitStageState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -943,6 +967,20 @@ impl FoxGardenApp {
         // working terminal instead of the empty "No terminal session" state.
         if app.terminal_panel_visible {
             new_terminal_session(&mut app.state, &mut app.terminal_sessions, &cc.egui_ctx, &mut app.last_error);
+        }
+        // Same "resumed already open" gap the terminal panel above just
+        // fixed, for the Source Control panel: `FoxGardenApp::ui`'s own
+        // `!source_control_was_visible` transition check only fires when
+        // the panel goes from closed to open *during* a run, so a session
+        // that starts with it already open (restored from `persist_
+        // settings` below) would otherwise sit there showing a stale empty
+        // list until the user manually hit Refresh — a real bug reported
+        // against the very first version of this panel.
+        if app.source_control_visible
+            && let Some(root) = app.state.project.as_ref().map(|p| p.root.clone())
+        {
+            app.git_stage.refresh(root.clone());
+            app.git_stage.load_committer_first_name(&root);
         }
         app
     }
@@ -1063,6 +1101,14 @@ impl eframe::App for FoxGardenApp {
         let mut outcome = side_panel::SidePanelOutcome::default();
         let mut menu_outcome = menu_bar::MenuBarOutcome::default();
         let mut terminal_outcome = terminal_panel::TerminalPanelOutcome::default();
+        // Compared against `self.source_control_visible` after `menu_bar::
+        // show` runs (which mutates it directly, same "one flag, two
+        // triggers" shape every other View checkbox here already uses) to
+        // detect a false -> true transition — the panel has no saved
+        // status to resume (unlike the terminal panel's session), so
+        // opening it needs an explicit first `git status` to have anything
+        // to show at all.
+        let source_control_was_visible = self.source_control_visible;
 
         if !self.zen_mode {
             menu_outcome = egui::Panel::top("menu_bar")
@@ -1083,6 +1129,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
+                        &mut self.source_control_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
@@ -1119,6 +1166,21 @@ impl eframe::App for FoxGardenApp {
                             self.dark_mode,
                             self.view_settings.cursor_blink,
                         );
+                    });
+            }
+
+            if self.source_control_visible
+                && let Some(root) = diff_root.clone()
+            {
+                if !source_control_was_visible {
+                    self.git_stage.refresh(root.clone());
+                    self.git_stage.load_committer_first_name(&root);
+                }
+                egui::Panel::right("source_control_panel")
+                    .resizable(true)
+                    .default_size(280.0)
+                    .show(ui, |ui| {
+                        git_stage::show(ui, &mut self.git_stage, &root);
                     });
             }
         }
@@ -1200,6 +1262,26 @@ impl eframe::App for FoxGardenApp {
             self.static_analysis.record_latest_version(tool, result);
         }
         self.diff.poll(&mut self.state);
+
+        if let Some(result) = self.git_stage.poll_status()
+            && let Err(err) = result
+        {
+            self.last_error = Some(format!("git status failed: {err}"));
+        }
+        if let Some(result) = self.git_stage.poll_op() {
+            match result {
+                // A stage/unstage/commit only ever changes what `git
+                // status` would report, never `diff_hunks`/`blame`
+                // directly, so a fresh `git_stage.refresh` (not
+                // `self.diff.run`) is the only follow-up needed here.
+                Ok(()) => {
+                    if let Some(root) = diff_root.clone() {
+                        self.git_stage.refresh(root);
+                    }
+                }
+                Err(err) => self.last_error = Some(format!("Git operation failed: {err}")),
+            }
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             show_external_change_banner(
@@ -1285,6 +1367,7 @@ impl eframe::App for FoxGardenApp {
             self.side_panel_width,
             self.side_panel_visible,
             self.terminal_panel_visible,
+            self.source_control_visible,
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,

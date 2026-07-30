@@ -575,7 +575,52 @@ user.
 shown as a dimmed cursor-line annotation.
 
 **Checkpoint 2:** full suite green; live-verify the annotation updates as
-the cursor moves between lines with different blame authors/dates.
+the cursor moves between lines with different blame authors/dates — code
+done: `fg_core::blame` (new) has `git_blame(path, root)` (`git blame
+--porcelain -- <path>`, same "only needs to be inside the working tree"
+contract as `git_diff_hunks`) and the pure `parse_porcelain_blame`,
+producing one dense, 0-indexed `BlameLine { sha, author, author_time,
+summary }` per line of the file. Same "empty stdout, no `Err`" degrade for
+"not a git repository"/"untracked file" that `git_diff_hunks` already
+established — only a failed `git` launch is a real `Err`. `panels::
+git_diff` (renamed in spirit, not in module path, to cover both halves) now
+runs `git diff` **and** `git blame` on the same background thread per
+document (one `ScanResult` tuple of two independent `Result`s, so a failure
+on one half never discards the other's still-good result), applying each
+half to the matching open tab's `Document::diff_hunks`/`Document::blame`
+respectively — same trigger points (open/save/reload/`check_for_saves`)
+Phase 1 already wired, no new trigger plumbing needed since both scans ride
+together.
+
+`widgets::editor::painting` gained `paint_blame_annotation` (paints just
+past the cursor line's own shaped text, in `theme::line_number`'s color —
+already the palette's dimmest text-like color, so the annotation doesn't
+outcompete the code itself), `blame_annotation_text` (`"<author> •
+<relative time> • <summary>"`), and `relative_time` (coarse bucketed
+"Xm/h/d/mo/y ago" via integer division on two Unix-second timestamps, no
+date/time crate needed; a future timestamp — clock skew — clamps to "just
+now" rather than a negative duration). A blame-porcelain all-zero sha marks
+an uncommitted working-tree line; rather than surface git's own generated
+"Not Committed Yet"/"Version of X from X" text (accurate but reads as
+clutter next to a real commit's summary), `UNCOMMITTED_SHA` gets a short
+"Uncommitted change" label instead. View > Inline Blame (new
+`ViewSettings::show_inline_blame` checkbox, same "one flag, one menu
+toggle" shape as every other View submenu entry) lets it be turned off.
+
+8 new tests: 6 in `fg_core::blame` (porcelain-parser table tests against
+real captured `git blame --porcelain` output — a first-seen commit, a
+repeated commit reusing an earlier header, an uncommitted working-tree
+line — plus a real end-to-end run against a real temp repo) and 4 in
+`widgets::editor::painting` (`relative_time`'s bucket boundaries and
+future-clamp, `blame_annotation_text`'s normal and uncommitted-line cases),
+plus one `panels::git_diff` integration test (`run_then_poll_applies_real_
+blame_lines_to_the_matching_open_tab`, a real temp repo with one real
+commit) alongside the existing diff-scan test now also asserting the blame
+half degrades to empty the same way. Live click-through (moving the cursor
+across lines with different real commit authors/dates updates the
+annotation accordingly, an uncommitted edited line shows "Uncommitted
+change," View > Inline Blame hides/shows it) confirmed working by the
+user.
 
 **Phase 3 — stage/commit panel.** A dockable panel listing `git status
 --porcelain` as a checkbox tree, a commit-message box + Commit button
@@ -583,7 +628,90 @@ the cursor moves between lines with different blame authors/dates.
 
 **Checkpoint 3:** full suite green; live-verify staging a file and
 committing it via the panel produces a real commit matching what `git
-log` shows afterward.
+log` shows afterward — code done, not yet live-verified: `fg_core::status`
+(new) has `git_status(root)` (`git status --porcelain -uall` — `-uall` so
+an entirely-new directory lists each file individually rather than
+collapsing to one `?? dir/` line, verified against a real run this
+session), the pure `parse_porcelain_status` (one `StatusEntry { path,
+index_status, worktree_status }` per line; a rename's `"old -> new"` keeps
+only `new`, since the panel only ever displays/toggles a file's *current*
+path), plus `git_add`/`git_reset_paths`/`git_commit` (the last piping the
+message over stdin via `git commit -F -`, sidestepping shell-escaping/
+argv-length concerns a multi-line message typed into the panel would
+otherwise raise). Unlike `diff`/`blame` (Phases 1-2, silent auto-refreshes
+where even "not a git repository" degrades to empty output), the three
+mutating calls are real user-triggered actions — a new `GitCommandError::
+Failed(String)` (real stderr, not just "`git` didn't launch") exists
+specifically so a real failure (nothing staged, no `user.name`/`user.email`
+configured, ...) reaches the user instead of silently degrading.
+
+`panels::git_stage::GitStageState` (new) mirrors `static_analysis`'s own
+`spawn_scan`/`poll_scan` background-thread shape (one status slot, one
+shared add/reset/commit slot — the panel disables every checkbox and the
+Commit button while any of the three is in flight, so there's never more
+than one to track), applying a successful `git_status` result to its own
+`entries` directly (purely local book-keeping, unlike `static_analysis`'s
+findings, which have to route into `EditorState`'s open documents) rather
+than through `app.rs`. `poll_op` tracks whether the just-finished op was
+specifically a commit (`committing: bool`, set only by `commit()`) so a
+successful commit also clears `commit_message`, without `app.rs` needing
+to tell it which of the three ops just finished. The panel (`panels::
+git_stage::show`) kicks off stage/unstage/commit directly from the
+relevant click or checkbox toggle — same "already owns `&mut
+GitStageState`, no need to bubble a `menu_bar`-style outcome flag" reasoning
+`static_analysis::show_install_row` uses for its own Install/Check for
+Updates buttons — grouped into "Staged Changes"/"Changes" sections (not one
+flat mixed list) with a `ui.checkbox` per file (checking stages via `git
+add`, unchecking unstages via `git reset --`), a `[A]/[D]/[M]/[R]/[C]/[U]`
+badge per row, and a multi-line commit-message box + Commit button
+(disabled with nothing staged, an empty message, or an op already
+running).
+
+Dock/persistence follows `terminal_panel_visible`'s own exact shape: View >
+"Source Control" checkbox (no keyboard shortcut added — none of Track 9's
+own spec calls for one, and every existing Ctrl-combo is already spoken
+for), `source_control_visible` persisted the same way (`SOURCE_CONTROL_
+PANEL_VISIBLE_KEY`), docked via `egui::Panel::right`. Unlike the terminal
+panel there's no session to resume, so `app.rs` instead detects a `false ->
+true` visibility transition each frame and fires one `git_stage.refresh`
+right then — the panel would otherwise open to a stale/empty list until the
+user found the Refresh button. A completed stage/unstage/commit
+(`poll_op`, alongside `app.rs`'s existing `poll_checkstyle`/`poll_pmd`/
+`diff.poll` calls) triggers a fresh `git_stage.refresh` on success, or
+writes `last_error` on failure — the same pattern Checkstyle/PMD already
+use for their own user-triggered runs, not `git_diff`'s silent one.
+
+23 new tests: 9 in `fg_core::status` (porcelain-parser table tests
+covering every status-line kind — modify, staged-add, rename-with-follow-
+up-edit, untracked — against a real captured `-uall` fixture, plus five
+real end-to-end tests against a real temp repo: `git_status` itself, a
+full stage-then-commit round trip verified against `git log --format=%s`
+afterward, unstage reverting a file back to untracked, and a real "nothing
+staged" commit failure producing a real `GitCommandError::Failed`) and 5 in
+`panels::git_stage` (successful/failed `poll_status`, `poll_op`'s
+committing-clears-message/failed-commit-leaves-it-alone/stage-or-unstage-
+never-marked-as-committing cases). One unrelated flaky test fixed in
+passing while getting the full suite green for this checkpoint:
+`pty_session`'s `shell_command_falls_back_to_bin_sh_when_shell_unset`/
+`shell_command_uses_shell_env_var_when_set` were two separate `#[test]`s
+both mutating the same process-global `SHELL` env var — a genuine,
+observed race under `cargo test`'s default parallel execution (whichever
+ran last "won"), despite an existing comment claiming no other test in the
+crate touched `SHELL`; merged into one sequential test
+(`shell_command_reflects_the_shell_env_var_with_a_bin_sh_fallback`), which
+is the actual fix, not a rerun-until-green workaround.
+
+Live click-through caught a real bug: staging/unstaging via the checkbox
+felt like it hung — the op itself finishes almost instantly on its
+background thread, but this app runs in egui's reactive (not continuous)
+repaint mode, and `git_stage::show` wasn't calling `ctx.request_repaint()`
+while a scan/op was in flight, so nothing redrew the panel to show the
+result until some unrelated input event (a mouse move elsewhere) happened
+to trigger the next frame. Fixed the same way `spring_endpoints::show`
+already handles its own background scan: `show` now calls `ui.ctx().
+request_repaint()` whenever `status_running() || op_running()`. Full suite
+re-confirmed green after the fix; awaiting a re-verify click-through to
+confirm the perceived delay is actually gone.
 
 **Phase 4 — hunk-level staging + push.** Per-hunk stage via a hand-built
 patch + `git apply --cached`; a Push button surfacing real failure
@@ -963,8 +1091,9 @@ work.
 ### Substantial tier
 
 - [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
-      (Phase 1/diff gutter shipped and live-verified; Phases 2-4 not
-      started)
+      (Phase 1/diff gutter and Phase 2/inline blame both shipped and
+      live-verified; Phase 3/stage-commit panel code done, awaiting live
+      click-through; Phase 4 not started)
 - [ ] Track 10 — Code folding
 - [ ] Track 11 — Multi-window / split-pane editing
 - [ ] Track 12 — Spring config property autocomplete

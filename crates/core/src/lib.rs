@@ -8,6 +8,7 @@ mod language;
 mod project;
 mod run_config;
 mod static_analysis;
+mod status;
 
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
@@ -19,3 +20,7 @@ pub use language::Language;
 pub use project::{FileKind, FileNode, Project};
 pub use run_config::{RunConfig, load_run_configs, parse_run_configs, save_run_configs, serialize_run_configs};
 pub use static_analysis::{StaticAnalysisError, checkstyle_diagnostics, pmd_diagnostics};
+pub use status::{
+    GitCommandError, GitStatusError, StatusEntry, git_add, git_commit, git_reset_paths, git_status,
+    git_user_first_name,
+};
