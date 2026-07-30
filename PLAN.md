@@ -1154,7 +1154,75 @@ side-by-side or inline colored rows, via the editor's own font/theme.
 
 **Checkpoint 1:** `cargo test -p app` green (known old/new pairs producing
 expected diff ops, headless); live-verify both `DiffMode`s render legibly
-against a real changed file.
+against a real changed file — done: `crates/app/src/widgets/diff_view.rs`
+(new) has `diff_line_ops` (the `similar` crate — verified current/actively
+maintained on crates.io this session before pinning `3.1.1`, per this
+project's own discipline for external dependencies — `TextDiff::from_lines`'s
+`ops()` mapped 1:1 into this module's own `DiffLineOp::{Equal,Delete,Insert,
+Replace}`, each carrying 0-based line-*index* ranges verified to match
+`old.lines()`/`new.lines()` directly, no further translation needed) and
+`show_diff(ui, old, new, mode, editor_font, font_size, dark_mode)` — the
+font/theme parameters `SPEC.md`'s own minimal shape didn't spell out but
+every other font-aware widget here already takes, following that existing
+convention rather than the doc's own illustrative signature literally.
+`SideBySide` (an `egui::Grid`, two columns, a `Replace`'s uneven old/new
+line counts padding the shorter side with blank rows so both columns stay
+aligned) and `Inline` (one column, unified-style `+`/`-`/`  `-prefixed rows,
+a `Replace`'s old lines immediately followed by its new lines per `SPEC.md`
+§18's own "paired red/green row" wording) both build from the same pure,
+independently-tested `side_by_side_rows`/`inline_rows` row-builder functions
+— `theme::diff_added`/`diff_removed` (`PLAN.md` Track 9 Phase 1's own diff
+gutter colors) reused as a translucent row-background wash rather than the
+gutter's own full-opacity bar, since a full-strength fill behind text would
+overwhelm it; the text itself stays `theme::default_text` throughout, the
+background alone carrying the added/removed distinction (the same
+convention every mainstream diff view already uses).
+
+Live click-through (a real changed file, both `DiffMode`s) surfaced a real
+follow-up ask: a long untouched stretch showed every single line rather
+than being abridged the way a real `git diff`'s own limited context already
+is. Fixed by making `side_by_side_rows`/`inline_rows` collapse the middle
+of any `Equal` run longer than `2 * context` lines to a single `Collapsed`
+placeholder (both row-builder return types became small enums —
+`SideBySideRow::{Line, Collapsed}`/`InlineRow::{Line, Collapsed}` — rather
+than adding an `Option` field to what had been plain structs), keeping
+`DEFAULT_CONTEXT_LINES = 3` lines bordering each side — git's own `-U3`
+default, already this codebase's own choice for `fg_core::git_file_diff`'s
+real context (Track 9 Phase 4), so a long unchanged stretch now reads the
+same "abridged" way here as it already does in a real `git diff`. The
+collapsed marker's own label (`"... N unchanged lines ..."`) is
+deliberately plain ASCII, not a Unicode ellipsis/box-drawing glyph — this
+session's own live-verified tofu-box bug (the Source Control panel's
+`▸`/`▾` expand arrow, Track 9 Phase 4) confirmed neither this app's bundled
+fonts nor egui's built-ins can be trusted to cover an arbitrary glyph in
+the default UI font, and a small text label like this is exactly where
+that bug would silently recur.
+
+A second live follow-up ask: stage a hunk directly from inside the diff
+window, rather than needing to close it and use the row's own separate
+inline hunk list. `panels::git_stage`'s "Full Diff" window (`open_full_diff`/
+`show_full_diff_window`, `DiffMode` toggle above a `show_diff` render of
+the file's `HEAD`-vs-disk content) gained a "Hunks" section below the
+abridged overview, reusing `show_hunks` — the *exact* same function, and
+critically the exact same underlying `expanded_diffs` data (from `fg_core::
+git_file_diff`/`git_file_diff_cached`, a real `git diff`/`git diff --cached`
+run), the row's own inline expand arrow already renders. `open_full_diff`
+now also calls a new `ensure_expanded` (factored out of `toggle_expand`,
+which never collapses, unlike the toggle) so both entry points populate the
+same `expanded_diffs` rather than each fetching an independent copy. This
+was a deliberate design choice, not a shortcut: `show_diff`'s own diff is
+computed by the `similar` crate, a *different* diffing algorithm than git's
+own, and while both would very likely group the same two texts' changes
+identically in the common case, "very likely" isn't a safe foundation for
+deriving a `git apply --cached` patch — a mismatched hunk boundary could
+stage the wrong lines. Sourcing the stage/unstage action from `expanded_
+diffs`' real, git-sourced hunks instead (already the exact mechanism Track
+9 Phase 4 built and live-verified) sidesteps that risk entirely rather than
+trying to reconcile two independent diff engines. Live click-through (a
+real large file with one small change abridged correctly in both `DiffMode`s;
+opening the Hunks section inside the same window and staging/unstaging a
+hunk from there, confirmed via `git diff --cached`) confirmed working by
+the user.
 
 ---
 
@@ -1622,7 +1690,8 @@ work.
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions
 - [ ] Track 17 — Peek definition
-- [ ] Track 18 — Inline diff viewer widget
+- [x] Track 18 — Inline diff viewer widget (shipped and live-verified,
+      including abridged-context and in-window hunk-staging follow-ups)
 
 ### Major tier
 

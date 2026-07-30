@@ -17,6 +17,9 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use fg_core::{FileDiff, StatusEntry};
 
+use crate::style::fonts::EditorFont;
+use crate::widgets::diff_view::{self, DiffMode};
+
 type StatusResult = Result<Vec<StatusEntry>, String>;
 type OpResult = Result<(), String>;
 /// The currently-expanded file's unstaged (`git diff`) and staged (`git
@@ -25,6 +28,10 @@ type OpResult = Result<(), String>;
 /// doc comment).
 type ExpandedDiffs = (FileDiff, FileDiff);
 type ExpandedResult = Result<ExpandedDiffs, String>;
+/// A full file's `HEAD` content and current on-disk content — `widgets::
+/// diff_view::show_diff`'s own `old`/`new` — for the "Full Diff" window
+/// (`PLAN.md` Track 18's first real consumer).
+type FullDiffResult = Result<(String, String), String>;
 
 fn spawn<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Receiver<T> {
     let (tx, rx) = channel();
@@ -84,6 +91,13 @@ pub struct GitStageState {
     /// view's whole point is showing the complete, real hunk picture for
     /// that file, not just the half its row happens to be sorted into.
     expanded_diffs: Option<ExpandedDiffs>,
+    /// The file (if any) currently showing its own "Full Diff" window
+    /// (`PLAN.md` Track 18), plus the `DiffMode` its toggle is set to —
+    /// only one at a time, same "one detail view" shape `expanded` above
+    /// already uses.
+    full_diff: Option<(PathBuf, DiffMode)>,
+    full_diff_rx: Option<Receiver<FullDiffResult>>,
+    full_diff_content: Option<(String, String)>,
 }
 
 impl GitStageState {
@@ -164,16 +178,28 @@ impl GitStageState {
     }
 
     /// Toggles `path`'s own hunk breakdown: collapses it if it's already
-    /// the expanded row, otherwise expands it and kicks off a fresh fetch
-    /// of both its unstaged and staged diffs on a background thread (a
-    /// working-tree `git diff` with real context lines, not the gutter's
-    /// own `-U0` one — see `fg_core::git_file_diff`'s own doc comment for
-    /// why hunk staging needs the difference).
+    /// the expanded row, otherwise expands it (`ensure_expanded`).
     pub fn toggle_expand(&mut self, root: PathBuf, path: PathBuf) {
         if self.expanded.as_ref() == Some(&path) {
             self.expanded = None;
             self.expanded_rx = None;
             self.expanded_diffs = None;
+            return;
+        }
+        self.ensure_expanded(root, path);
+    }
+
+    /// Expands `path`'s own hunk breakdown if it isn't already the expanded
+    /// row, kicking off a fresh fetch of both its unstaged and staged diffs
+    /// on a background thread (a working-tree `git diff` with real context
+    /// lines, not the gutter's own `-U0` one — see `fg_core::git_file_diff`'s
+    /// own doc comment for why hunk staging needs the difference). Unlike
+    /// `toggle_expand`, never collapses — both the row's own expand arrow
+    /// and the "Full Diff" window's own Hunks section (`PLAN.md` Track 18's
+    /// "stage a hunk from inside the diff" addition) call this so opening
+    /// either one populates the same `expanded_diffs` both read from.
+    fn ensure_expanded(&mut self, root: PathBuf, path: PathBuf) {
+        if self.expanded.as_ref() == Some(&path) {
             return;
         }
         self.expanded = Some(path.clone());
@@ -233,6 +259,61 @@ impl GitStageState {
         let Some(patch) = fg_core::hunk_patch(staged, hunk_index) else { return };
         self.op_rx = Some(spawn(move || fg_core::git_apply_cached(&root, &patch, true).map_err(|e| e.to_string())));
     }
+
+    /// Opens `path`'s own "Full Diff" window (`PLAN.md` Track 18): fetches
+    /// its `HEAD` content (`fg_core::git_show_head`) and current on-disk
+    /// content for the read-only abridged overview at the top (the
+    /// working-tree file, not any unsaved live buffer, matching the same
+    /// "reflects the last save, not every keystroke" convention the diff
+    /// gutter/inline blame — Phases 1-2 — already established, for the same
+    /// reason: the panel only knows `root`, not the app's open tabs), and
+    /// also `ensure_expanded`s the same path so the window's own Hunks
+    /// section (below the overview) has real, stageable hunk data to show —
+    /// the two share `expanded_diffs` rather than each fetching their own
+    /// copy. Defaults to `DiffMode::SideBySide`; re-opening while already
+    /// open for the same path leaves the mode toggle wherever the user left
+    /// it rather than resetting it.
+    pub fn open_full_diff(&mut self, root: PathBuf, path: PathBuf) {
+        let mode = match &self.full_diff {
+            Some((existing, mode)) if existing == &path => *mode,
+            _ => DiffMode::SideBySide,
+        };
+        self.full_diff = Some((path.clone(), mode));
+        self.full_diff_content = None;
+        self.ensure_expanded(root.clone(), path.clone());
+        self.full_diff_rx = Some(spawn(move || {
+            let old = fg_core::git_show_head(&path, &root).map_err(|e| e.to_string())?;
+            let new = std::fs::read_to_string(root.join(&path)).map_err(|e| e.to_string())?;
+            Ok((old, new))
+        }));
+    }
+
+    pub fn close_full_diff(&mut self) {
+        self.full_diff = None;
+        self.full_diff_rx = None;
+        self.full_diff_content = None;
+    }
+
+    pub fn set_full_diff_mode(&mut self, mode: DiffMode) {
+        if let Some(full_diff) = &mut self.full_diff {
+            full_diff.1 = mode;
+        }
+    }
+
+    pub fn full_diff_running(&self) -> bool {
+        self.full_diff_rx.is_some()
+    }
+
+    /// Drains a completed "Full Diff" content fetch, applying a successful
+    /// result to `full_diff_content` directly — mirrors `poll_expanded`'s
+    /// own shape.
+    pub fn poll_full_diff(&mut self) -> Option<FullDiffResult> {
+        let result = poll(&mut self.full_diff_rx)?;
+        if let Ok(content) = &result {
+            self.full_diff_content = Some(content.clone());
+        }
+        Some(result)
+    }
 }
 
 /// Draws the panel body. Kicks off stage/unstage/commit directly from the
@@ -241,16 +322,23 @@ impl GitStageState {
 /// `static_analysis::show_install_row` uses for its own buttons) — `app.rs`
 /// only needs to poll `poll_status`/`poll_op` each frame and surface a
 /// failure via `last_error`.
-pub fn show(ui: &mut egui::Ui, git_stage: &mut GitStageState, root: &Path) {
-    if git_stage.status_running() || git_stage.op_running() || git_stage.expanded_running() {
+pub fn show(
+    ui: &mut egui::Ui,
+    git_stage: &mut GitStageState,
+    root: &Path,
+    editor_font: EditorFont,
+    font_size: f32,
+    dark_mode: bool,
+) {
+    if git_stage.status_running() || git_stage.op_running() || git_stage.expanded_running() || git_stage.full_diff_running() {
         // Nothing else drives a repaint while a background `git status`/
-        // add/reset/commit/push/hunk-fetch is in flight — this app runs in
-        // egui's reactive (not continuous) repaint mode, so without this
-        // the op finishes almost instantly on its own thread, but the
-        // checkbox/panel wouldn't visibly reflect it until some unrelated
-        // input event (a mouse move, a keystroke elsewhere) happened to
-        // trigger the next frame. Same fix `spring_endpoints::show` already
-        // applies to its own background scan.
+        // add/reset/commit/push/hunk-fetch/full-diff-fetch is in flight —
+        // this app runs in egui's reactive (not continuous) repaint mode,
+        // so without this the op finishes almost instantly on its own
+        // thread, but the checkbox/panel wouldn't visibly reflect it until
+        // some unrelated input event (a mouse move, a keystroke elsewhere)
+        // happened to trigger the next frame. Same fix `spring_endpoints::
+        // show` already applies to its own background scan.
         ui.ctx().request_repaint();
     }
 
@@ -299,6 +387,7 @@ pub fn show(ui: &mut egui::Ui, git_stage: &mut GitStageState, root: &Path) {
         Some(RowAction::ToggleExpand(path)) => git_stage.toggle_expand(root.to_path_buf(), path),
         Some(RowAction::StageHunk(index)) => git_stage.stage_hunk(root.to_path_buf(), index),
         Some(RowAction::UnstageHunk(index)) => git_stage.unstage_hunk(root.to_path_buf(), index),
+        Some(RowAction::OpenFullDiff(path)) => git_stage.open_full_diff(root.to_path_buf(), path),
         None => {}
     }
 
@@ -314,6 +403,8 @@ pub fn show(ui: &mut egui::Ui, git_stage: &mut GitStageState, root: &Path) {
     if ui.add_enabled(can_commit, egui::Button::new("Commit")).clicked() {
         git_stage.commit(root.to_path_buf(), git_stage.commit_message.clone());
     }
+
+    show_full_diff_window(ui.ctx(), git_stage, root, editor_font, font_size, dark_mode);
 }
 
 /// Every click a file row (or its own expanded hunk list) can produce in
@@ -328,6 +419,73 @@ enum RowAction {
     StageHunk(usize),
     /// Index into the *expanded* file's own staged `FileDiff::hunks`.
     UnstageHunk(usize),
+    /// Opens the "Full Diff" window (`PLAN.md` Track 18) for this file.
+    OpenFullDiff(PathBuf),
+}
+
+/// The floating "Full Diff" window (`PLAN.md` Track 18) — a `SideBySide`/
+/// `Inline` toggle above a scrollable, abridged render of `git_stage.
+/// full_diff_content` (`widgets::diff_view::show_diff`), followed by a
+/// "Hunks" section reusing `show_hunks` against the *same* `expanded_diffs`
+/// the row's own inline expand arrow shows — staging a hunk from inside
+/// this window (the addition prompted by the user's own request) goes
+/// through the exact same real `git apply --cached` path either way, never
+/// through this widget's own `similar`-based diff (a different diffing
+/// algorithm than git's, which could in principle group changed lines
+/// differently — reusing `expanded_diffs`' real `git diff`-sourced hunks
+/// for the stage action, rather than trying to derive one from `show_diff`'s
+/// own rendering, is what keeps every hunk staged here byte-identical to
+/// what a real `git diff`/`git apply` would produce).
+///
+/// `content`/`loading` are cloned out of `git_stage` up front (rather than
+/// borrowed across the whole closure) purely to sidestep the borrow-checker
+/// friction of mutating `git_stage` both before and after `Window::show`'s
+/// own closure in the same call — a no-op with nothing open.
+fn show_full_diff_window(
+    ctx: &egui::Context,
+    git_stage: &mut GitStageState,
+    root: &Path,
+    editor_font: EditorFont,
+    font_size: f32,
+    dark_mode: bool,
+) {
+    let Some((path, mut mode)) = git_stage.full_diff.clone() else { return };
+    let loading = git_stage.full_diff_running() && git_stage.full_diff_content.is_none();
+    let content = git_stage.full_diff_content.clone();
+    let mut open = true;
+    let mut hunk_action: Option<RowAction> = None;
+
+    egui::Window::new(format!("Diff: {}", path.display()))
+        .id(egui::Id::new("git_stage_full_diff_window"))
+        .open(&mut open)
+        .default_size([700.0, 500.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut mode, DiffMode::SideBySide, "Side by Side");
+                ui.selectable_value(&mut mode, DiffMode::Inline, "Inline");
+            });
+            ui.separator();
+            egui::ScrollArea::both().show(ui, |ui| {
+                if loading {
+                    ui.label(egui::RichText::new("Loading…").weak());
+                } else if let Some((old, new)) = &content {
+                    diff_view::show_diff(ui, old, new, mode, editor_font, font_size, dark_mode);
+                }
+                ui.separator();
+                ui.strong("Hunks");
+                show_hunks(ui, git_stage, &mut hunk_action);
+            });
+        });
+
+    git_stage.set_full_diff_mode(mode);
+    if !open {
+        git_stage.close_full_diff();
+    }
+    match hunk_action {
+        Some(RowAction::StageHunk(index)) => git_stage.stage_hunk(root.to_path_buf(), index),
+        Some(RowAction::UnstageHunk(index)) => git_stage.unstage_hunk(root.to_path_buf(), index),
+        _ => {}
+    }
 }
 
 /// A small clickable collapse/expand triangle, vector-painted via egui's
@@ -361,6 +519,9 @@ fn show_entry_row(ui: &mut egui::Ui, git_stage: &GitStageState, entry: &StatusEn
         let label = format!("{} {}", status_badge(entry), entry.path.display());
         if ui.checkbox(&mut staged, label).changed() {
             *action = Some(RowAction::Toggle(entry.path.clone(), staged));
+        }
+        if ui.small_button("Diff").clicked() {
+            *action = Some(RowAction::OpenFullDiff(entry.path.clone()));
         }
     });
 

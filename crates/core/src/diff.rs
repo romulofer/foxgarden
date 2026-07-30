@@ -190,6 +190,30 @@ pub fn parse_file_diff(diff: &str) -> FileDiff {
     FileDiff { preamble, hunks }
 }
 
+/// Runs `git show HEAD:./<path>` (`root` as cwd) and returns its stdout
+/// verbatim — the file's content as of `HEAD`, for feeding `widgets::
+/// diff_view::show_diff` against the current working-tree content. The
+/// `./`-prefixed form is deliberate: a bare `HEAD:<path>` resolves `path`
+/// relative to the git repository's *top level*, not `root`/cwd — wrong
+/// whenever `root` is a subdirectory (a Maven/Gradle multi-module project
+/// root, say) — while `HEAD:./<path>` resolves relative to cwd exactly the
+/// way every other function in this module already treats `root`+`path`
+/// (verified against a real multi-directory repo, not assumed). Same
+/// "empty output either way" degrade as `git_diff_hunks`/`git_blame`: a
+/// path that doesn't exist in `HEAD` yet (a genuinely new/untracked file)
+/// fails with real stderr but empty stdout — indistinguishable from "no
+/// content," which is exactly the right answer for a diff against nothing.
+/// Only a failure to launch `git` at all is a real `Err`.
+pub fn git_show_head(path: &Path, root: &Path) -> Result<String, GitDiffError> {
+    let output = Command::new("git")
+        .arg("show")
+        .arg(format!("HEAD:./{}", path.display()))
+        .current_dir(root)
+        .output()
+        .map_err(GitDiffError::Spawn)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Rebuilds hunk `index` of `file_diff` into a standalone, single-hunk
 /// unified diff — valid input for `git apply --cached` (staging that one
 /// hunk) or `git apply --cached --reverse` (unstaging it), verified
@@ -430,5 +454,58 @@ mod tests {
         run(&["add", "."]);
         assert_eq!(git_file_diff_cached(&file, root).expect("git ran").hunks.len(), 1);
         assert!(git_file_diff(&file, root).expect("git ran").hunks.is_empty());
+    }
+
+    #[test]
+    fn git_show_head_returns_the_committed_content_not_the_working_tree_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("f.txt");
+        std::fs::write(&file, "l1\n").unwrap();
+
+        let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+
+        std::fs::write(&file, "l1\nCHANGED\n").unwrap();
+
+        assert_eq!(git_show_head(Path::new("f.txt"), root).expect("git ran"), "l1\n");
+    }
+
+    #[test]
+    fn git_show_head_resolves_a_subdirectory_path_relative_to_root_not_the_git_top_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/f.txt"), "l1\n").unwrap();
+
+        let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+
+        // `root` passed as `sub/` itself (a subdirectory of the git repo,
+        // mirroring a multi-module project root) — the `./`-prefixed form
+        // must still resolve `f.txt` relative to *this* cwd, not the real
+        // git top level one directory up.
+        assert_eq!(git_show_head(Path::new("f.txt"), &root.join("sub")).expect("git ran"), "l1\n");
+    }
+
+    #[test]
+    fn git_show_head_on_a_file_thats_never_been_committed_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "a@b.com"]);
+        run(&["config", "user.name", "test"]);
+        std::fs::write(root.join("new.txt"), "brand new\n").unwrap();
+
+        assert_eq!(git_show_head(Path::new("new.txt"), root).expect("git still launches fine"), "");
     }
 }

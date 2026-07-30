@@ -1186,7 +1186,7 @@ impl eframe::App for FoxGardenApp {
                     .resizable(true)
                     .default_size(280.0)
                     .show(ui, |ui| {
-                        git_stage::show(ui, &mut self.git_stage, &root);
+                        git_stage::show(ui, &mut self.git_stage, &root, self.editor_font, self.font_size, self.dark_mode);
                     });
             }
         }
@@ -1295,6 +1295,11 @@ impl eframe::App for FoxGardenApp {
             }
         }
         if let Some(result) = self.git_stage.poll_expanded()
+            && let Err(err) = result
+        {
+            self.last_error = Some(format!("git diff failed: {err}"));
+        }
+        if let Some(result) = self.git_stage.poll_full_diff()
             && let Err(err) = result
         {
             self.last_error = Some(format!("git diff failed: {err}"));

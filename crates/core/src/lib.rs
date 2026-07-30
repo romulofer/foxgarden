@@ -18,7 +18,7 @@ pub use boilerplate::generate as generate_boilerplate;
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
-    hunk_patch, parse_file_diff, parse_unified_diff,
+    git_show_head, hunk_patch, parse_file_diff, parse_unified_diff,
 };
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
