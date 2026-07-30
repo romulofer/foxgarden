@@ -159,6 +159,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             render_node(
                 ui,
                 &project.tree,
+                "/",
                 &mut panel.rename_draft,
                 should_focus_rename,
                 &panel.clipboard,
@@ -588,10 +589,64 @@ fn show_rename_field(ui: &mut egui::Ui, name: &mut String, should_focus: bool, a
     });
 }
 
+/// Directory names that mark a Java/Kotlin source root (`src/main/java`,
+/// `src/test/kotlin`, a multi-module project's own nested equivalents, …).
+/// Everything single-child *beneath* one of these is package structure, so
+/// `render_node`/`collapse_chain` join it with `.` instead of the generic
+/// `/` every other single-child directory chain uses — matching IntelliJ's
+/// own "Compact Middle Packages" convention. The source-root directory
+/// itself is never folded into a chain (see `collapse_chain`) — it's
+/// always its own row, exactly like the real screenshot this feature was
+/// built from: a "java" row, then "br.ufsc.bridge.pec.backend" as its own
+/// single child row below it.
+const SOURCE_ROOT_DIR_NAMES: &[&str] = &["java", "kotlin"];
+
+/// One or more consecutive single-child directories collapsed into a
+/// single visual tree row — most real Java/Kotlin package hierarchies are
+/// otherwise a long, mostly-empty scroll of one folder per row before
+/// reaching anything with real siblings. `terminal` (the chain's last
+/// node) is what the row's actions — select/rename/delete/new-file/paste/
+/// expand — actually operate on/reveal; a rename, in particular,
+/// deliberately only ever renames `terminal` itself, not the whole
+/// collapsed chain (editing "br.ufsc.bridge.pec.backend" as one string and
+/// restructuring several real directories from it is real IntelliJ
+/// behavior this doesn't attempt to replicate). `label` is purely the
+/// display text — just `start.name` if nothing collapsed.
+struct CollapsedDir<'a> {
+    label: String,
+    terminal: &'a FileNode,
+}
+
+/// Walks forward from `start` through single-child directory descendants,
+/// joining each segment's name with `sep`, stopping at the first node with
+/// zero or 2+ children, whose only child is a file, or whose only child is
+/// itself a source root (`SOURCE_ROOT_DIR_NAMES`) — a source root always
+/// starts its own row, never gets folded into a generic parent chain.
+/// `start` itself is also never folded into a chain if it's a source root:
+/// it's a boundary all on its own, so `render_node` can restart compaction
+/// with `.` for everything beneath it (see that function's `child_sep`).
+fn collapse_chain<'a>(start: &'a FileNode, sep: &str) -> CollapsedDir<'a> {
+    if SOURCE_ROOT_DIR_NAMES.contains(&start.name.as_str()) {
+        return CollapsedDir { label: start.name.clone(), terminal: start };
+    }
+    let mut label = start.name.clone();
+    let mut terminal = start;
+    while let [only] = terminal.children.as_slice()
+        && only.kind == FileKind::Dir
+        && !SOURCE_ROOT_DIR_NAMES.contains(&only.name.as_str())
+    {
+        label.push_str(sep);
+        label.push_str(&only.name);
+        terminal = only;
+    }
+    CollapsedDir { label, terminal }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_node(
     ui: &mut egui::Ui,
     node: &FileNode,
+    sep: &'static str,
     rename_draft: &mut Option<(PathBuf, String)>,
     should_focus_rename: bool,
     clipboard: &Option<(Vec<PathBuf>, ClipboardOp)>,
@@ -599,19 +654,33 @@ fn render_node(
     visible_order: &mut Vec<PathBuf>,
     actions: &mut TreeActions,
 ) {
-    visible_order.push(node.path.clone());
+    // A chain of single-child directories collapses into one visual row
+    // (see `collapse_chain`) — `effective_path` is whichever real node this
+    // row's own actions apply to: the chain's last node for a directory, or
+    // `node` itself for a file (files never collapse).
+    let collapsed = (node.kind == FileKind::Dir).then(|| collapse_chain(node, sep));
+    let effective_path = collapsed.as_ref().map_or(&node.path, |c| &c.terminal.path);
+    visible_order.push(effective_path.clone());
 
-    let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == &node.path);
+    let is_being_renamed = rename_draft.as_ref().is_some_and(|(p, _)| p == effective_path);
     if is_being_renamed {
         let (_, name) = rename_draft.as_mut().expect("checked above");
         show_rename_field(ui, name, should_focus_rename, actions);
         return;
     }
 
-    let is_selected = selected.contains(&node.path);
+    let is_selected = selected.contains(effective_path);
 
-    match node.kind {
-        FileKind::Dir => {
+    match collapsed {
+        Some(collapsed) => {
+            let terminal = collapsed.terminal;
+            // Once a chain has passed through a Java/Kotlin source root,
+            // everything beneath it is package structure for the rest of
+            // that subtree — `.` from here on, never reverting to `/`
+            // (package structure never "un-nests" back into arbitrary
+            // folders beneath a source root).
+            let child_sep = if SOURCE_ROOT_DIR_NAMES.contains(&terminal.name.as_str()) { "." } else { sep };
+
             // Split into the disclosure-triangle icon (toggles expand/
             // collapse, entirely on its own) and a custom label rendered as
             // a `selectable_label` (this node's own Cmd/Ctrl/Shift-click
@@ -622,19 +691,19 @@ fn render_node(
             // label *also* toggles expand (preserving today's "click
             // anywhere on the row" ergonomics for the common case) — only
             // a Cmd/Ctrl/Shift-click is select-only.
-            let collapsing_id = ui.make_persistent_id(&node.path);
+            let collapsing_id = ui.make_persistent_id(&terminal.path);
             let collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
-            let header = collapsing.show_header(ui, |ui| ui.selectable_label(is_selected, format!("📁 {}", node.name)));
+            let header = collapsing.show_header(ui, |ui| ui.selectable_label(is_selected, format!("📁 {}", collapsed.label)));
             let (_, header_response, _) = header.body(|ui| {
-                for child in &node.children {
-                    render_node(ui, child, rename_draft, should_focus_rename, clipboard, selected, visible_order, actions);
+                for child in &terminal.children {
+                    render_node(ui, child, child_sep, rename_draft, should_focus_rename, clipboard, selected, visible_order, actions);
                 }
             });
             let label_response = header_response.inner;
 
             if label_response.clicked() {
                 let modifiers = ui.input(|i| i.modifiers);
-                actions.select_click = Some((node.path.clone(), modifiers));
+                actions.select_click = Some((terminal.path.clone(), modifiers));
                 if !modifiers.command && !modifiers.shift {
                     let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
                     collapsing.toggle(ui);
@@ -652,27 +721,27 @@ fn render_node(
                     .add_enabled(single_target, egui::Button::new("New File"))
                     .clicked()
                 {
-                    actions.start_new_file = Some(node.path.clone());
+                    actions.start_new_file = Some(terminal.path.clone());
                     ui.close();
                 }
                 if ui
                     .add_enabled(single_target, egui::Button::new("Rename"))
                     .clicked()
                 {
-                    actions.start_rename = Some(node.path.clone());
+                    actions.start_rename = Some(terminal.path.clone());
                     ui.close();
                 }
                 if ui.button("Delete").clicked() {
-                    actions.delete_request = Some(node.path.clone());
+                    actions.delete_request = Some(terminal.path.clone());
                     ui.close();
                 }
                 ui.separator();
                 if ui.button("Copy").clicked() {
-                    actions.copy_request = Some(node.path.clone());
+                    actions.copy_request = Some(terminal.path.clone());
                     ui.close();
                 }
                 if ui.button("Cut").clicked() {
-                    actions.cut_request = Some(node.path.clone());
+                    actions.cut_request = Some(terminal.path.clone());
                     ui.close();
                 }
                 // Only a directory is a meaningful paste *target* — pasting
@@ -683,12 +752,12 @@ fn render_node(
                     .add_enabled(clipboard.is_some(), egui::Button::new("Paste"))
                     .clicked()
                 {
-                    actions.paste_request = Some(node.path.clone());
+                    actions.paste_request = Some(terminal.path.clone());
                     ui.close();
                 }
             });
         }
-        FileKind::File => {
+        None => {
             let extension = node.path.extension().and_then(|ext| ext.to_str());
             // A bare `Dockerfile` has no extension at all for the `match`
             // below to key off, and a suffixed variant (`Dockerfile.dev`)

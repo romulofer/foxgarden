@@ -342,3 +342,75 @@ fn action_targets_uses_the_whole_selection_even_if_a_different_node_was_right_cl
 
     assert_eq!(targets, vec![PathBuf::from("a"), PathBuf::from("b")]);
 }
+
+fn dir(name: &str, children: Vec<FileNode>) -> FileNode {
+    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::Dir, children }
+}
+
+fn file(name: &str) -> FileNode {
+    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::File, children: Vec::new() }
+}
+
+#[test]
+fn collapse_chain_with_no_children_returns_just_the_start_node() {
+    let node = dir("empty", vec![]);
+    let collapsed = collapse_chain(&node, "/");
+    assert_eq!(collapsed.label, "empty");
+    assert_eq!(collapsed.terminal.name, "empty");
+}
+
+#[test]
+fn collapse_chain_stops_immediately_when_there_are_multiple_children() {
+    let node = dir("backend", vec![dir("app", vec![]), dir("async", vec![])]);
+    let collapsed = collapse_chain(&node, "/");
+    assert_eq!(collapsed.label, "backend");
+    assert_eq!(collapsed.terminal.path, node.path);
+}
+
+#[test]
+fn collapse_chain_joins_a_run_of_single_child_directories() {
+    let node = dir(
+        "br",
+        vec![dir(
+            "ufsc",
+            vec![dir("bridge", vec![dir("pec", vec![dir("backend", vec![dir("app", vec![]), dir("async", vec![])])])])],
+        )],
+    );
+    let collapsed = collapse_chain(&node, "/");
+    assert_eq!(collapsed.label, "br/ufsc/bridge/pec/backend");
+    assert_eq!(collapsed.terminal.name, "backend");
+}
+
+#[test]
+fn collapse_chain_stops_before_a_single_child_that_is_a_file() {
+    let node = dir("only", vec![file("Main.java")]);
+    let collapsed = collapse_chain(&node, "/");
+    assert_eq!(collapsed.label, "only");
+    assert_eq!(collapsed.terminal.name, "only");
+}
+
+#[test]
+fn collapse_chain_never_folds_a_source_root_into_its_parent_chain() {
+    // "main" has exactly one child ("java"), which would otherwise extend
+    // the chain — but since that one child is a recognized source root, the
+    // chain must stop at "main" instead of swallowing "java" into it.
+    let node = dir("src", vec![dir("main", vec![dir("java", vec![dir("br", vec![])])])]);
+    let collapsed = collapse_chain(&node, "/");
+    assert_eq!(collapsed.label, "src/main");
+    assert_eq!(collapsed.terminal.name, "main");
+}
+
+#[test]
+fn collapse_chain_never_folds_a_source_root_itself_even_with_one_child() {
+    let node = dir("java", vec![dir("br", vec![dir("ufsc", vec![])])]);
+    let collapsed = collapse_chain(&node, ".");
+    assert_eq!(collapsed.label, "java");
+    assert_eq!(collapsed.terminal.name, "java");
+}
+
+#[test]
+fn collapse_chain_uses_the_given_separator() {
+    let node = dir("br", vec![dir("ufsc", vec![dir("x", vec![]), dir("y", vec![])])]);
+    assert_eq!(collapse_chain(&node, ".").label, "br.ufsc");
+    assert_eq!(collapse_chain(&node, "/").label, "br/ufsc");
+}
