@@ -49,6 +49,18 @@ pub(crate) fn foldable_kinds(language: Language) -> &'static [&'static str] {
             "block", // method and control-flow bodies
             "block_comment",
         ],
+        // Verified against `tree-sitter-kotlin-ng` 1.1.0's real parse output
+        // (not assumed from the Java grammar, per `TECHNICAL_DEBT.md` #3):
+        // `class_body` covers class/interface/object bodies alike (Kotlin's
+        // grammar has no separate `interface_body`/`enum_body` node kinds —
+        // `interface`/`object` declarations reuse `class_declaration`/
+        // `class_body`, distinguished only by keyword), `enum_class_body` is
+        // the one exception with its own kind, `block` is method *and*
+        // control-flow bodies alike (a `function_body` node wraps a `block`
+        // at the exact same span, so folding `block` alone already covers
+        // both without a second, redundant entry), and `block_comment` is
+        // shared with regular comments and KDoc (`/** */`) alike.
+        Language::Kotlin => &["class_body", "enum_class_body", "block", "block_comment"],
         _ => &[],
     }
 }

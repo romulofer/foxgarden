@@ -16,6 +16,7 @@ use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
+use crate::panels::spring_config::SpringConfigState;
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
@@ -246,6 +247,10 @@ pub struct FoxGardenApp {
     /// Settings > External Tools… dialog state and any in-flight Checkstyle
     /// scan — see `panels::static_analysis`.
     static_analysis: StaticAnalysisState,
+    /// The current project's own scanned Spring config properties (Track
+    /// 12), lazily scanned the first time a `.properties`/`.yml` file's
+    /// completion trigger actually needs them — see `panels::spring_config`.
+    spring_config: SpringConfigState,
     /// Settings > External Tools — binary/config paths for Checkstyle/PMD/
     /// SpotBugs, a personal per-machine preference like `editor_font`, so
     /// persisted the same way (see `restore_settings`/`persist_settings`),
@@ -954,6 +959,7 @@ impl FoxGardenApp {
             external_conflicts: HashSet::new(),
             externally_deleted: HashSet::new(),
             static_analysis: StaticAnalysisState::default(),
+            spring_config: SpringConfigState::default(),
             external_tool_paths,
             auto_save_settings,
             auto_save_state: AutoSaveState::default(),
@@ -1252,6 +1258,7 @@ impl eframe::App for FoxGardenApp {
                 Err(err) => self.last_error = Some(format!("PMD failed: {err}")),
             }
         }
+        self.spring_config.poll();
         for result in self.static_analysis.tool_manager.poll_installs() {
             match result {
                 Ok(installed) => self.external_tool_paths.apply_installed(&installed),
@@ -1318,6 +1325,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.cached_clipboard_text,
                 jump_target.as_ref().map(|(_, char_offset)| *char_offset),
                 &self.custom_templates,
+                &mut self.spring_config,
             );
         });
 

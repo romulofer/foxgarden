@@ -316,7 +316,15 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
     let initial_caret = before.len();
     let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
 
-    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        Some(&project),
+        &mut completion,
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        initial_caret,
+        frames,
+    );
 
     let state = completion
         .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
@@ -340,7 +348,15 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
     let initial_caret = before.len();
     let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
 
-    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        Some(&project),
+        &mut completion,
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        initial_caret,
+        frames,
+    );
 
     let state = completion
         .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
@@ -367,7 +383,15 @@ fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
     let initial_caret = before.len();
     let frames = vec![vec![egui::Event::Text(".".to_string())]];
 
-    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        Some(&project),
+        &mut completion,
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        initial_caret,
+        frames,
+    );
 
     let state = completion.expect("typing \".\" right after an already-present \"b\" should open dot-completion");
     let text = doc.buffer.to_string();
@@ -395,10 +419,91 @@ fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
     let initial_caret = before.len();
     let frames = vec![vec![egui::Event::Text(".".to_string())]];
 
-    typing_session(&mut doc, &mut parser, Some(&project), &mut completion, initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        Some(&project),
+        &mut completion,
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        initial_caret,
+        frames,
+    );
 
     let state = completion.expect("typing \".\" right after an already-present \"b\" should open dot-completion");
     let text = doc.buffer.to_string();
     let cursor_byte = initial_caret + 1;
     assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["baz"]);
+}
+
+fn spring_prop(name: &str) -> fg_core::SpringConfigProperty {
+    fg_core::SpringConfigProperty { name: name.to_string(), type_name: None, description: None, default_value: None }
+}
+
+#[test]
+fn typing_a_partial_key_in_application_properties_opens_spring_config_completion() {
+    let (_dir, mut doc) = open_fixture("", "application.properties");
+    let mut parser = parsed(Language::Properties, "");
+    let mut completion = None;
+    let mut spring_config = crate::panels::spring_config::SpringConfigState::with_properties(vec![
+        spring_prop("server.port"),
+        spring_prop("server.address"),
+        spring_prop("spring.application.name"),
+    ]);
+
+    let initial_caret = 0;
+    let frames: Vec<Vec<egui::Event>> = "server.po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, initial_caret, frames);
+
+    let state = completion.expect("typing a partial dotted key in a .properties file should open Spring config completion");
+    let text = doc.buffer.to_string();
+    let cursor_byte = "server.po".len();
+    assert_eq!(
+        visible_labels(&state, &text, cursor_byte),
+        vec!["server.port"],
+        "filtered against the whole typed line, offering the full dotted name"
+    );
+}
+
+#[test]
+fn typing_past_the_equals_sign_in_application_properties_does_not_open_completion() {
+    let (_dir, mut doc) = open_fixture("server.port=", "application.properties");
+    let mut parser = parsed(Language::Properties, "server.port=");
+    let mut completion = None;
+    let mut spring_config =
+        crate::panels::spring_config::SpringConfigState::with_properties(vec![spring_prop("server.port")]);
+
+    let initial_caret = "server.port=".len();
+    let frames = vec![vec![egui::Event::Text("8".to_string())], vec![egui::Event::Text("0".to_string())]];
+
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, initial_caret, frames);
+
+    assert!(completion.is_none(), "typing a value after '=' must not open key completion");
+}
+
+#[test]
+fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor() {
+    let before = "server:\n  ";
+    let (_dir, mut doc) = open_fixture(before, "application.yml");
+    let mut parser = parsed(Language::Yaml, before);
+    let mut completion = None;
+    let mut spring_config = crate::panels::spring_config::SpringConfigState::with_properties(vec![
+        spring_prop("server.port"),
+        spring_prop("server.servlet.jsp.class-name"),
+        spring_prop("spring.application.name"),
+    ]);
+
+    let initial_caret = before.len();
+    let frames: Vec<Vec<egui::Event>> = "po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, initial_caret, frames);
+
+    let state = completion.expect("typing a partial key nested under server: in a .yml file should open completion");
+    let text = doc.buffer.to_string();
+    let cursor_byte = before.len() + "po".len();
+    assert_eq!(
+        visible_labels(&state, &text, cursor_byte),
+        vec!["port"],
+        "only the next segment under the reconstructed server. ancestor, not the full dotted name"
+    );
 }

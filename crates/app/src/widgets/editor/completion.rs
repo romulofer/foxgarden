@@ -17,6 +17,11 @@ pub enum CompletionKind {
     Method,
     Keyword,
     Template,
+    /// A Spring config property key (`application.properties`/`.yml` —
+    /// `PLAN.md` Track 12), sourced from a scanned dependency jar's own
+    /// bundled `spring-configuration-metadata.json` rather than anything
+    /// parsed from the open project's own source.
+    Property,
 }
 
 /// One candidate in the popup's list.
@@ -167,11 +172,30 @@ impl CompletionState {
                     for (i, item) in visible.iter().enumerate() {
                         // Click-to-accept lands with the rest of §0's mouse
                         // handling; for now the row just renders highlighted.
-                        let _ = ui.selectable_label(i == selected, &item.label);
+                        let _ = ui.selectable_label(i == selected, row_text(item, ui));
                     }
                 });
             });
     }
+}
+
+/// One popup row's own text: `item.label`, plus `item.detail` (if any) in
+/// the theme's dimmed/weak color right after it — e.g. a Spring config
+/// property's own `"java.lang.Integer = 8080"`. `weak_text_color` rather
+/// than threading a `dark_mode` bool into `paint` just for this: egui's own
+/// theme-aware "de-emphasized but still legible" color already exists for
+/// exactly this, no new parameter needed.
+fn row_text(item: &CompletionItem, ui: &egui::Ui) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&item.label, 0.0, egui::TextFormat::simple(egui::FontId::default(), ui.visuals().text_color()));
+    if let Some(detail) = &item.detail {
+        job.append(
+            &format!("  {detail}"),
+            0.0,
+            egui::TextFormat::simple(egui::FontId::default(), ui.visuals().weak_text_color()),
+        );
+    }
+    job
 }
 
 /// Case-insensitive prefix filter over `candidates` (`SPEC.md` §2), ordered

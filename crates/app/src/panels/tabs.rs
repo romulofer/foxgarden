@@ -131,6 +131,7 @@ pub fn show(
     cached_clipboard_text: &mut Option<String>,
     jump_to_char: Option<usize>,
     custom_templates: &UserTemplates,
+    spring_config: &mut crate::panels::spring_config::SpringConfigState,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -280,6 +281,7 @@ pub fn show(
             pending_editor_input,
             cached_clipboard_text,
             custom_templates,
+            spring_config,
         );
     });
 }

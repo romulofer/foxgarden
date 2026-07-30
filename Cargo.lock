@@ -1139,6 +1139,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "test-support",
+ "zip",
 ]
 
 [[package]]

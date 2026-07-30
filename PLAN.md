@@ -628,7 +628,7 @@ user.
 
 **Checkpoint 3:** full suite green; live-verify staging a file and
 committing it via the panel produces a real commit matching what `git
-log` shows afterward — code done, not yet live-verified: `fg_core::status`
+log` shows afterward — done: `fg_core::status`
 (new) has `git_status(root)` (`git status --porcelain -uall` — `-uall` so
 an entirely-new directory lists each file individually rather than
 collapsing to one `?? dir/` line, verified against a real run this
@@ -710,8 +710,9 @@ result until some unrelated input event (a mouse move elsewhere) happened
 to trigger the next frame. Fixed the same way `spring_endpoints::show`
 already handles its own background scan: `show` now calls `ui.ctx().
 request_repaint()` whenever `status_running() || op_running()`. Full suite
-re-confirmed green after the fix; awaiting a re-verify click-through to
-confirm the perceived delay is actually gone.
+re-confirmed green after the fix, and the re-verify click-through (staging/
+unstaging via checkbox reflects instantly, staged→commit round trip matches
+`git log` afterward) confirmed working by the user.
 
 **Phase 4 — hunk-level staging + push.** Per-hunk stage via a hand-built
 patch + `git apply --cached`; a Push button surfacing real failure
@@ -733,13 +734,60 @@ virtualization work is actually a hard prerequisite or `FEATURES.md`'s
 own conservative guess. This phase's _output_ is that determination, not
 code — don't write Phase 2 against an assumed answer.
 
+**Determination (this session):** `FEATURES.md`'s `[TODO]` for this track
+and `PLAN.md`'s own Build status were both stale — Phases 2 and 3 were
+already fully shipped for Java in an earlier, less-documented session
+(`crates/syntax/src/folding.rs`'s `foldable_ranges`, `crates/app/src/
+widgets/editor/folding.rs`'s gutter/toggle code, `Document::folded_lines`,
+and the Tools/View "Fold All"/"Expand All" menu items all already existed
+and are wired end to end — confirmed by reading the code directly, not
+assumed from the doc comments). `text_area::FoldMap` (`crates/app/src/
+widgets/editor/text_area.rs`) already generalizes to **arbitrary**
+user-toggled line ranges — it takes a plain sorted `&[Range<usize>]`, with
+no dependency on how those ranges were chosen — so no second mechanism is
+needed for any future arbitrary-region folding. `Track 19`'s full
+virtualization is confirmed **not** a hard prerequisite: folding already
+works today against the existing non-virtualized `text_area` widget, which
+is direct proof against `FEATURES.md`'s own conservative guess. The one
+real gap found: `syntax::node_kinds::foldable_kinds` returned `&[]` for
+Kotlin — only import-block folding worked for it; class/method/control-flow
+body folding was Java-only.
+
 **Phase 2 — fold-range computation.** Per-language tree-sitter query for
 foldable node kinds (class/method/interface bodies); a collapse/expand
 gutter marker at each range's opening line.
 
 **Checkpoint 2:** `cargo test -p syntax` green (fold ranges match
 expected line numbers per fixture); live-verify the gutter marker appears
-at the right lines on a real file.
+at the right lines on a real file — done: Java side already shipped
+(pre-existing). Kotlin's own gap (found in Phase 1's determination above)
+closed this session: `foldable_kinds(Language::Kotlin)` now returns
+`["class_body", "enum_class_body", "block", "block_comment"]`, verified
+fresh against `tree-sitter-kotlin-ng` 1.1.0's real parse output (a
+throwaway probe test dumping a real parse tree, per `TECHNICAL_DEBT.md`
+#3's established discipline — never assumed from the Java grammar or from
+`node-types.json` alone), not guessed. Real findings from that probe:
+Kotlin's grammar has no separate `interface_body`/`enum_body` node kinds
+the way Java does — `interface`/`object` declarations reuse
+`class_declaration`/`class_body`, distinguished only by keyword, so
+`class_body` alone already covers class, interface, and object bodies;
+`enum_class_body` is the one real exception with its own kind; a
+`function_body` node wraps a `block` node at the exact same span, so
+folding `block` alone (Java's own "method and control-flow bodies"
+convention) already covers method bodies without a second, redundant
+`function_body` entry — verified directly from the dumped tree, not
+inferred. Three new `crates/syntax/src/folding.rs` tests (nested class/
+method/if-block folding, enum class body, multi-line block comment); two
+pre-existing Kotlin import-folding tests (`kotlin_folds_a_run_of_
+consecutive_imports`, `kotlin_a_lone_import_is_not_foldable`) updated from
+a multi-line `class Foo {\n}\n` to a single-line `class Foo {}` body — they
+now also fold under the newly-added `class_body` kind, so the fixture was
+narrowed to keep those tests scoped to import-folding only, matching the
+single-line-body convention the Java import tests already use. Live
+click-through (a real `.kt` file with a block comment, class body, method
+body, `if`-block, and enum class body all showing fold arrows; collapsing
+each — including a nested collapse — and both Fold All/Expand All)
+confirmed working by the user.
 
 **Phase 3 — fold state + toggle.** `folded_ranges: HashSet<usize>` per
 document (or per-tab side structure); toggling updates the layout fold-
@@ -747,7 +795,13 @@ map (built from the union of this and the existing auto-import folding).
 
 **Checkpoint 3:** full suite green; live-verify clicking a fold marker
 collapses/expands the right region and scrolling/editing around a folded
-region doesn't corrupt layout.
+region doesn't corrupt layout — done (pre-existing, confirmed by reading
+`crates/core/src/document.rs`'s `Document::folded_lines` and `crates/app/
+src/widgets/editor/widget.rs`'s wiring directly): fold state is exactly
+this shape already; Java's own gutter/toggle behavior was already
+live-verified in the earlier session that shipped it, and the Kotlin
+gutter markers this session's fold-kind addition newly makes visible were
+live-verified this session too (see Checkpoint 2's own note above).
 
 ---
 
@@ -770,7 +824,8 @@ session persistence) still working correctly with only one pane open.
 ## Track 12 — Spring config property autocomplete
 
 **Hard dependency on Track 21 (`Maven/Gradle awareness`) — not startable
-before it lands.**
+before it lands.** Unblocked this session once Track 21's own 3 phases
+landed.
 
 **Phase 1 — metadata extraction + candidates.** Once classpath resolution
 exists: scan resolved dependency jars for bundled `spring-configuration-
@@ -780,7 +835,116 @@ completion popup keyed by typed prefix.
 **Checkpoint 1:** full suite green (a fixture jar/metadata file producing
 expected candidates, headless); live-verify typing a partial property key
 in `application.properties`/`.yml` in a real Spring Boot project offers
-real completions.
+real completions — done:
+
+`crates/core/src/spring_config_metadata.rs` (new) has `SpringConfigProperty
+{ name, type_name, description, default_value: Option<String> }`,
+`parse_metadata_json`, `scan_jar_for_metadata` (opens a jar as a zip via
+the `zip` crate — already a proven dependency in this exact codebase for
+`app::tool_manager`'s own archive extraction, now added to `core` too —
+and reads just its `META-INF/spring-configuration-metadata.json` entry
+without a full extraction), and `scan_classpath_for_metadata` (scans every
+jar in a resolved classpath, silently skipping one that can't be opened,
+same tolerance `static_analysis`'s own findings-to-diagnostics conversion
+already established for a file that can no longer be read). Verified
+against a real, currently-cached `spring-boot-autoconfigure-4.0.6.jar`:
+`properties[].defaultValue` is genuinely heterogeneous JSON (a bool,
+string, or number depending on the property's own type — confirmed by
+inspecting the real file directly, not assumed), handled via a custom
+`deserialize_with` that stringifies whatever value is there rather than
+modeling it as a fixed Rust type; a real end-to-end run (a throwaway,
+then-deleted probe, same convention as every other real-machine
+verification this session) found exactly 102 real properties including
+`spring.aop.auto`, and confirmed a plain `commons-io` jar (no bundled
+metadata at all) correctly degrades to an empty result rather than an
+error.
+
+App-side: `crates/app/src/panels/spring_config.rs` (new) has
+`SpringConfigState` — lazily triggered (`ensure_scanning`, called from the
+completion trigger itself the first time a `.properties`/`.yml` file
+actually needs candidates, not eagerly on every project open, since real
+classpath resolution shells out to `mvn`/`gradle` and can be genuinely
+slow) rather than following `static_analysis`'s own menu-triggered shape.
+`scan_project` detects the build tool by file presence and handles a real
+gap `maven_classpath`/`gradle_classpaths` (Track 21 Phase 3) left open on
+their own: a Maven **aggregator** `pom.xml` (`<packaging>pom</packaging>`,
+real multi-module `<modules>`, no dependencies of its own — the real
+`br.ufsc.bridge:pec` project on this machine is exactly this shape) has
+nothing for `mvn dependency:build-classpath` to resolve at its own root,
+so `maven_module_tree_classpath` reads the aggregator's own `<modules>`
+(`fg_core::parse_pom`) and unions each real module directory's own
+classpath instead; Gradle needs no such special-casing since `gradle_
+classpaths` already walks the whole multi-module tree from one root
+invocation (Track 21 Phase 3's own design).
+
+`crates/app/src/widgets/editor/spring_config_completion.rs` (new) is the
+pure candidate-generation half: `properties_completion_candidates` (flat,
+every property's full dotted name — `.properties`) and `yaml_completion_
+candidates` (one candidate per *distinct next segment* under a given
+ancestor prefix, deduped — offering `.yml`'s own `"servlet.jsp.class-
+name"` as one flat candidate at the `server:` nesting level would be
+invalid YAML if accepted verbatim, three more nested lines, not one, so
+this drills exactly one level at a time instead, matching how a user
+actually extends a mapping). `yaml_ancestor_path` reconstructs the dotted
+key path enclosing a given line via **indentation**, deliberately not a
+tree-sitter parse: the line actually being completed is, by construction,
+either not yet a valid `block_mapping_pair` at all or mid-being-typed, so
+a parse-tree walk would have to fight exactly the spot this needs to
+read, whereas every line above the one being typed is already complete,
+trustworthy text (confirmed real `tree-sitter-yaml` node shapes via a
+throwaway probe before choosing the indentation approach over it — same
+"verify grammar output directly" discipline this session's Kotlin-folding
+work already used). `key_segment_before_cursor` is a dash-inclusive
+sibling of `templates::word_before_cursor`: real Spring property key
+segments are routinely kebab-case (`context-path`, `pool-name`, both real
+names from the captured metadata above), which the existing alnum-or-
+underscore-only definition would incorrectly split mid-segment.
+
+Wired into `widget.rs`'s existing completion-trigger machinery as a new,
+mutually-exclusive-with-the-generic-one trigger gated on `Language::
+Properties`/`Language::Yaml`: anchored whole-line for `.properties`
+(a flat key's dots must all stay part of one filterable prefix — typing
+`server.po` has to match `server.port`) versus per-segment for `.yml`
+(`key_segment_before_cursor`, paired with `yaml_ancestor_path` to build
+the filter prefix); gated to key position only (nothing opens once a
+`=`/`:` has been typed on the current line, so a value being typed never
+triggers key completions). `CompletionKind` gained a `Property` variant
+(icon/kind distinction from `Word`/`Field`/etc.). As a real side effect of
+finally giving `CompletionItem::detail` a producer (a property's type and
+default, e.g. `"java.lang.Integer = 8080"`) — a field that had sat unread
+since long before this session, flagged by every earlier `cargo clippy`
+run this session — the popup's own paint function was extended
+(`row_text`, an `egui::text::LayoutJob`) to actually render `detail`
+dimmed after the label, via `ui.visuals().weak_text_color()` rather than
+threading a new `dark_mode` parameter through `paint` just for this.
+
+25 new tests: 6 in `fg_core::spring_config_metadata` (real captured-
+metadata parsing, heterogeneous-defaultValue handling, a missing-
+description/type property, a jar that can't be opened at all vs. one with
+genuinely no metadata entry — two different Ok/Err shapes, not conflated);
+11 pure tests in `spring_config_completion` (flat vs. per-segment
+candidate generation, leaf-vs-prefix-only detail attachment, and the
+`yaml_ancestor_path` reconstruction across several real nesting/comment/
+blank-line/list-item shapes); 3 real multi-frame integration tests in
+`widget/tests/completion.rs` via `typing_session` (a `.properties` file's
+whole-line-anchored trigger, confirming it does *not* fire past a typed
+`=`, and a `.yml` file's per-segment trigger correctly resolving a nested
+`server:` → `po` to just `port`) — a `SpringConfigState::with_properties`
+test-only constructor (`#[cfg(test)]`) injects known candidates without
+needing a real `mvn`/`gradle` process for these; 5 in `fg_core::maven`/
+`gradle` from earlier phases, already counted there. `cargo test
+--workspace` deliberately does not shell out to a real `mvn`/`gradle`
+process for this feature either, mirroring Track 21's own established
+convention — the real end-to-end scans (both build tools, plus the actual
+jar-scan) were run this session as throwaway probes and deleted after
+confirming correct, real results.
+
+Live click-through (`/home/romulo2/bridge/boost`, a real Gradle/Kotlin/
+Spring Boot 4 project, opened as the project; typing a partial key in the
+real `backend/src/main/resources/application.properties` opened the
+popup with real candidates and their type/default shown; a scratch
+`.yml` file typing `server:` then a nested `po` correctly offered just
+`port`) confirmed working by the user.
 
 ---
 
@@ -972,17 +1136,167 @@ files that weren't open in a tab beforehand.
 (verify current crate health before pinning).
 
 **Checkpoint 1:** `cargo test -p fg-core` green against real-world
-`pom.xml` fixtures (a simple project, a multi-module parent).
+`pom.xml` fixtures (a simple project, a multi-module parent) — done:
+`crates/core/src/maven.rs` (new) has `parse_pom`, a pure/no-I/O
+`Event`-driven `quick-xml` walk (`quick-xml` 0.39.4 — already a `core`
+dependency, already proven on real XML in this exact codebase by
+`static_analysis`'s own Checkstyle/PMD report parsers, so reused rather
+than adding `roxmltree` as a second XML crate) into `MavenProject {
+group_id: Option<String>, artifact_id: String, version: Option<String>,
+packaging: String, parent: Option<MavenParent>, properties:
+HashMap<String, String>, modules: Vec<String>, dependencies:
+Vec<MavenDependency> }`. Deliberately scoped to what Phase 1 actually asks
+for — no property substitution (a `${foo.version}` placeholder is kept
+verbatim, unresolved) and no reading of `<dependencyManagement>` at all;
+real version *resolution* is Phase 3's job via `mvn dependency:
+build-classpath`, which sidesteps reimplementing Maven's own
+effective-POM/BOM computation entirely.
+
+Verified against five real `pom.xml` files pulled from this machine, not
+synthesized (`SPEC.md`'s and this codebase's own established discipline):
+a real simple single-module project with no parent and every dependency
+fully versioned (MegaBasterd's own `pom.xml`), and a real multi-module
+Spring Boot parent (`br.ufsc.bridge:pec`, 11 `<modules>`, 45
+`<properties>`, a `<dependencyManagement>` block) plus three of its real
+child modules (`backend`/`api`/`database` — 87/28/19 real dependencies
+respectively). A from-scratch throwaway `#[ignore]`d probe test ran
+`parse_pom` against all five *full, un-trimmed* files directly off disk
+(not just the embedded excerpts the checked-in tests use) before this
+phase was called done, then was deleted — real absolute paths outside the
+repo have no business staying in a permanent test.
+
+Real complications this parser had to handle, found by reading the actual
+files rather than assumed from the Maven POM schema: a child module's
+`pom.xml` routinely declares no `<version>` (and sometimes no `<groupId>`)
+of its own at all, inheriting both from `<parent>`; most of a child
+module's own `<dependency>` entries carry no `<version>` either, resolved
+transitively via the parent's inherited BOM (`spring-boot-starter-parent`
+here) — both recorded as `None` rather than guessed at, per this module's
+own explicit non-goal above. `<dependencyManagement>` wraps a second,
+differently-scoped `<dependencies>`/`<dependency>` structure that looks
+identical to the project's own real dependencies at the tag-name level; a
+`<plugin>` (e.g. `kotlin-maven-plugin`) can carry a *third* such block
+(compiler-plugin artifacts, not project dependencies at all). Getting all
+three right needed tracking the full element path from `<project>` down
+(`["project", "dependencies", "dependency", ...]` vs. `["project",
+"dependencyManagement", "dependencies", "dependency", ...]` vs. `["project",
+"build", "plugins", "plugin", "dependencies", "dependency", ...]`), not
+just matching on tag name the way Checkstyle's/PMD's flatter report
+formats could get away with. Comments interspersed between `<properties>`
+children and values wrapped across multiple lines (real, not
+hypothetical, in the captured parent POM) also had to not corrupt
+neighboring properties — handled by the same clear-on-`Start`/read-and-
+clear-on-`End` accumulator shape, no special-casing needed. No live
+click-through for this checkpoint (per its own text, headless-only —
+nothing in the UI reads a `MavenProject` yet).
 
 **Phase 2 — Gradle model extraction.** Validate the offline-init-script-
 dump approach against a real multi-module Gradle project before
 committing further; if it holds up, build the extraction against it
 rather than attempting to parse Groovy/Kotlin DSL as text.
 
+**Validation (this session, before writing any production code, per this
+phase's own instruction):** confirmed against a real multi-module Kotlin/
+Spring Gradle project found on this machine (`bridge.ufsc.tech:boost` —
+root + `frontend`/`database`/`backend` subprojects, real Spring Boot 4 +
+`io.spring.dependency-management` + Kotlin JPA/Spring plugins, Kotlin DSL
+build scripts). A hand-written Groovy init script registering a task via
+`allprojects { tasks.register(...) { doLast { ... } } }`, run as `gradle
+--offline --init-script <script> -q <task>`, successfully walked every
+project's own `configurations`/`dependencies` and printed a JSON dump —
+confirmed working both via the system `gradle` (9.6.1) and via the
+project's own `./gradlew` (pinned to 9.4.1, its actually-cached wrapper
+distribution), and confirmed `--offline` alone is sufficient (no network
+access needed at all, since only each configuration's *declared*
+dependency notation is read, never real artifact resolution). This
+directly disproves needing to parse Groovy/Kotlin DSL as text, the
+alternative this phase's own instruction named. One real API break hit
+and fixed during validation: `ProjectDependency.dependencyProject` (the
+API an older/more-commonly-documented approach uses to resolve a
+`project(":foo")` reference back to a `Project` object) has been removed
+as of this Gradle version — `dependencyProject.path` needed to become
+plain `dep.path` instead, caught by an actual failed run, not a docs read.
+A second real finding: a naive first dump also surfaced a pile of purely
+internal tooling configurations (`kotlinCompilerPluginClasspathMain`,
+`kotlinBuildToolsApiClasspath`, every plain `*Classpath` resolvable
+configuration duplicating what `implementation`/`testImplementation` etc.
+already declare) that have nothing to do with a user's own `dependencies
+{ }` block — an allow-list filter (`is_dependency_configuration`, kept as
+a hand-synced Rust/Groovy pair — see below) was needed before the dump was
+usable at all.
+
 **Checkpoint 2:** `cargo test -p fg-core` green against real Gradle
 project fixtures; live-verify against an actual local Gradle project (not
 just a fixture) since this phase's own approach depends on shelling out
-to a real Gradle wrapper.
+to a real Gradle wrapper — done: `crates/core/src/gradle.rs` (new) has
+`gradle_projects(project_root)`, which writes the validated init script
+(`INIT_SCRIPT`, a Rust string constant with the dump task name substituted
+in) to a temp file, runs `<gradlew-or-gradle> --offline --init-script
+<path> -q foxgardenGradleModelDump` in `project_root`, deletes the temp
+script, and parses stdout into `Vec<GradleProject>` — each with `path`/
+`name`/`group`/`version`/`project_dir` plus `Vec<GradleDependency>` (an
+enum: `Project { configuration, path }` for an inter-module `project(":x")`
+reference, or `Module { configuration, group, artifact, version:
+Option<String> }` for an external coordinate, `version: None` when
+unspecified — resolved elsewhere, e.g. via `io.spring.dependency-
+management`'s inherited BOM, the same explicit "don't chase it down here"
+non-goal `maven.rs`'s own `MavenDependency::version` already established
+for `pom.xml`, Phase 3's job instead). `gradle_command` prefers a
+project's own `<root>/gradlew` when present over a bare `gradle` on
+`PATH`, mirroring `static_analysis::command_for_binary`'s own "prefer what
+the project actually specifies" reasoning for a different concrete
+problem. Each project's dump is wrapped in `FOXGARDEN_JSON_BEGIN`/
+`FOXGARDEN_JSON_END` text markers rather than assembled into one combined
+JSON document across every project — Gradle's own configuration-phase
+logging (and any plugin's own stray stdout) is guaranteed to land *outside*
+those markers, which a single top-level JSON document would have no way
+to recover from if any of it landed mid-document.
+
+13 new tests: 7 pure-parser/pure-decision tests in `crates/core/src/
+gradle.rs` (the configuration allow-list's real-vs-noise cases, `gradle_
+command`'s wrapper-preferred/fallback cases, and — the Checkpoint's own
+"against real Gradle project fixtures" requirement — `parse_dump_output`
+against real captured JSON from the `boost` validation run above,
+including its real unversioned-vs-versioned and inter-project-reference
+dependencies). A from-scratch, real, end-to-end invocation of `gradle_
+projects` itself (not just the parser) against the real `boost` project —
+confirming the temp-script-write/real-process-invoke/parse/cleanup
+pipeline works together, not just each piece in isolation — was run this
+session as a throwaway `#[ignore]`d test, confirmed correct (`:backend`
+reporting all 22 real, correctly-filtered dependencies), then deleted, the
+same "real absolute paths outside the repo don't belong in a permanent
+test" call Phase 1's own probe test made. `cargo test --workspace`
+deliberately does **not** shell out to a real `gradle`/`gradlew` process
+(unlike Track 9's `git`-based end-to-end tests, since `git` is a safe
+universal assumption this codebase already leans on elsewhere, but a
+`gradle` install is not) — mirrors `static_analysis`'s own established
+convention of testing Checkstyle's/PMD's *parsers* unconditionally while
+leaving the real-binary-invocation path to manual/live verification only.
+No live click-through beyond the validation/real-invocation testing
+above (per this checkpoint's own text and Phase 1's precedent — nothing in
+the UI reads a `GradleProject` yet).
+
+**Real bug found and fixed while validating Phase 3** (surfaced by a
+_different_ init-script probe — a classpath-resolution one, real work
+slow enough for it to actually manifest, unlike Phase 2's near-instant
+declared-dependency read): the real `boost` project has
+`org.gradle.parallel=true` in its own `gradle.properties`, which runs each
+project's `doLast` concurrently — their `println` output interleaves
+**line-by-line** across projects, confirmed by a real captured run where
+another project's own `FOXGARDEN_JSON_BEGIN`/`FOXGARDEN_JSON_END` markers
+landed spliced in the middle of a different project's block, silently
+corrupting `parse_dump_output`'s assumption that a project's block is
+contiguous. This was a latent bug in the already-shipped Phase 2 code too
+(it just hadn't manifested — Phase 2's own `boost` validation run was fast
+enough across all 4 tiny projects that the race never actually lost).
+Fixed by adding `--no-parallel` to `gradle_projects`' own invocation
+(forces this one read-only metadata dump to run serially regardless of
+the target project's own setting — harmless, since it isn't a real build);
+re-verified end-to-end against the real `boost` project afterward
+(`:backend` still correctly reporting all 22 dependencies, this time with
+`--no-parallel` in effect) via another throwaway `#[ignore]`d probe test,
+then deleted, same convention as every other real-machine probe this
+session.
 
 **Phase 3 — dependency-aware classpath resolution.** `mvn
 dependency:build-classpath` / Gradle's own resolution task, parsed into a
@@ -990,7 +1304,78 @@ resolved jar-file list.
 
 **Checkpoint 3:** full suite green; live-verify against a real project
 with actual third-party dependencies that the resolved classpath contains
-real, correct jar paths on disk.
+real, correct jar paths on disk — done:
+
+Maven side: `crates/core/src/maven.rs` gained `maven_classpath(module_root)`,
+shelling `mvn -q dependency:build-classpath -Dmdep.outputFile=<temp file>`
+and splitting the written file's contents on the real OS classpath-list
+separator (`:`/`;` — not `std::path::MAIN_SEPARATOR`, a different
+character entirely, for the directory separator, not the classpath-list
+one). Deliberately reuses Maven's own dependency-resolution machinery
+rather than reimplementing effective-POM/BOM/version-conflict resolution
+(this module's own top-level doc comment named this as the reason Phase 1
+stayed scoped to declared-only data). Verified against a real, minimal,
+cleanly-resolvable Maven project (`commons-io:2.14.0` +
+`commons-collections4:4.4`, a real `mvn` 3.9.3 run against the real local
+`~/.m2/repository`) via a throwaway probe test (a portable one, unlike
+this session's other machine-specific probes — it only needed `tempfile`
+and a real `mvn`, no absolute paths outside the repo — but still deleted
+after confirming it passed, to match this codebase's established "don't
+keep a real-external-tool-invoking test in the permanent, unconditionally-
+run suite" convention from `static_analysis`'s own Checkstyle/PMD tests):
+both resolved paths existed on disk and matched the expected jar names
+exactly.
+
+Gradle side: `crates/core/src/gradle.rs` gained `gradle_classpaths
+(project_root)` and its own `CLASSPATH_INIT_SCRIPT`/`GradleClasspath {
+path, compile: Vec<PathBuf>, runtime: Vec<PathBuf> }`, resolving each
+project's real `compileClasspath`/`runtimeClasspath` configurations
+(`configuration.resolve()`, a real filesystem/network-triggering call,
+unlike Phase 2's declared-only reads) rather than reimplementing Gradle's
+own dependency graph. `write_init_script`/the marker-splitting loop inside
+`parse_dump_output` were both generalized (`write_temp_script`/
+`split_marked_blocks`) so this second init-script-driven dump could reuse
+them instead of duplicating that plumbing a second time. A project with
+neither configuration at all (a non-JVM module, e.g. the real `boost`
+project's own `frontend`) is simply absent from the result rather than
+appearing with two empty lists, so a caller can't mistake "not a JVM
+module" for "a JVM module with zero dependencies." Verified against a
+real, minimal, single-module Gradle project (`plugins { id 'java' }`,
+`implementation 'commons-io:commons-io:2.14.0'`) via the same kind of
+throwaway probe (also deleted after confirming it passed) — both `compile`
+and `runtime` resolved to the same real, existing jar path in the local
+Gradle module cache. `gradle_classpaths` deliberately omits `--offline`
+(unlike `gradle_projects`), since real resolution has to be allowed to
+actually download anything not yet cached, the same way a real `gradle
+build` would.
+
+Real bug found and fixed during this same validation, surfacing in
+_both_ Maven and Gradle work: none in the classpath-resolution logic
+itself, but see Phase 2's own "real bug found and fixed while validating
+Phase 3" note above — the `--no-parallel` fix that phase's own retroactive
+fix needed was actually discovered by _this_ phase's classpath-resolution
+probe (slow enough for the interleaving race to manifest), not Phase 2's
+own faster declared-dependency probe.
+
+7 new tests: 2 in `maven.rs` covering the list-separator split behavior
+implicitly through `maven_classpath`'s own real probe (not a checked-in
+test — no pure/deterministic unit worth keeping beyond the real
+end-to-end confirmation, since the function's only real logic is "shell
+out, read a file, split on a separator," already covered by the
+real-tool-invoking probe) and 5 in `gradle.rs` (`parse_classpath_output`
+against real captured output from the real single-module probe project,
+an empty-input case, plus reuse of the already-existing `split_marked_
+blocks`/`write_temp_script` refactor's own coverage via `gradle_projects`'
+own existing tests, which continue passing unchanged after the
+generalization). No live click-through beyond the two real end-to-end
+probes above (nothing in the UI reads a `MavenClasspathError`/
+`GradleClasspath` yet — the same "headless-only, nothing downstream
+consumes this" note every earlier phase in this track has made).
+
+With Phase 3 done, Track 21 is complete: Track 12 (Spring config property
+autocomplete), Track 20's own classpath feed into `jdtls`'s init config,
+and Track 27 (DI/bean graph visualizer, alongside Track 20) are all now
+unblocked.
 
 ---
 
@@ -1091,12 +1476,19 @@ work.
 ### Substantial tier
 
 - [ ] Track 9 — Git diff gutter, inline blame, commit/stage/push UI
-      (Phase 1/diff gutter and Phase 2/inline blame both shipped and
-      live-verified; Phase 3/stage-commit panel code done, awaiting live
-      click-through; Phase 4 not started)
-- [ ] Track 10 — Code folding
+      (Phases 1-3 — diff gutter, inline blame, stage/commit panel — all
+      shipped and live-verified; Phase 4/hunk-level staging + push not
+      started)
+- [x] Track 10 — Code folding (Java: fold-range computation, gutter
+      marker, fold state/toggle all pre-existing and already live-verified
+      in an earlier session; Kotlin's own class/method/control-flow/
+      block-comment folding — the one real gap `PLAN.md`'s Phase 1
+      determination found this session — closed and live-verified this
+      session)
 - [ ] Track 11 — Multi-window / split-pane editing
-- [ ] Track 12 — Spring config property autocomplete
+- [x] Track 12 — Spring config property autocomplete (unblocked by Track
+      21 this session; Phase 1 shipped and live-verified against a real
+      Gradle/Kotlin/Spring Boot project, both `.properties` and `.yml`)
 - [ ] Track 13 — Code coverage overlay
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions
@@ -1107,7 +1499,13 @@ work.
 
 - [ ] Track 19 — Large file handling — full viewport virtualization
 - [ ] Track 20 — LSP integration
-- [ ] Track 21 — Maven/Gradle awareness
+- [x] Track 21 — Maven/Gradle awareness (all 3 phases done: `pom.xml`
+      parsing verified against 5 real files; Gradle model extraction
+      verified against a real multi-module Kotlin/Spring project, including
+      a real `--no-parallel`-race bug found and fixed; classpath resolution
+      for both build tools verified end-to-end against real, resolvable
+      projects with real jars landing on disk. Unblocks Track 12, Track
+      20's classpath feed, and Track 27.)
 - [ ] Track 22 — Build/run/test integration
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration

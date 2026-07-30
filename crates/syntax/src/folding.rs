@@ -310,14 +310,18 @@ class Foo {}
     #[test]
     fn kotlin_folds_a_run_of_consecutive_imports() {
         let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        // `class Foo {}` is a single-line (empty) body, same "not foldable on
+        // its own" convention the Java import-run tests use above — keeps
+        // this test focused on import-block folding, not class-body folding
+        // (covered separately by `kotlin_folds_a_class_body_a_method_body_
+        // and_a_control_flow_block` below).
         let source = "\
 package com.example
 
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 
-class Foo {
-}
+class Foo {}
 ";
         let tree = parser.parse(source).clone();
         let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
@@ -329,8 +333,55 @@ class Foo {
     #[test]
     fn kotlin_a_lone_import_is_not_foldable() {
         let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
-        let source = "import org.springframework.web.bind.annotation.GetMapping\n\nclass Foo {\n}\n";
+        let source = "import org.springframework.web.bind.annotation.GetMapping\n\nclass Foo {}\n";
         let tree = parser.parse(source).clone();
         assert!(foldable_ranges(&tree, source, fg_core::Language::Kotlin).is_empty());
+    }
+
+    #[test]
+    fn kotlin_folds_a_class_body_a_method_body_and_a_control_flow_block() {
+        let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        let source = "\
+class Foo {
+    fun bar(): Int {
+        if (true) {
+            return 1
+        }
+        return 0
+    }
+}
+";
+        let tree = parser.parse(source).clone();
+        let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
+
+        // class body (0), method body (1), if-block (2) — three nested folds.
+        assert_eq!(ranges.iter().map(|r| r.marker_line).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert!(hidden(source, &ranges[0]).contains("fun bar"));
+        assert!(hidden(source, &ranges[1]).contains("if (true)"));
+        assert!(hidden(source, &ranges[2]).contains("return 1"));
+        assert!(!hidden(source, &ranges[2]).contains("return 0"));
+    }
+
+    #[test]
+    fn kotlin_folds_an_enum_class_body() {
+        let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        let source = "enum class Color {\n    RED, GREEN\n}\n";
+        let tree = parser.parse(source).clone();
+        let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].marker_line, 0);
+        assert!(hidden(source, &ranges[0]).contains("RED"));
+    }
+
+    #[test]
+    fn kotlin_folds_a_multi_line_block_comment() {
+        let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+        let source = "/*\n * docs\n */\nclass Foo {}\n";
+        let tree = parser.parse(source).clone();
+        let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
+        // The block comment folds; `class Foo {}` is one line, so it doesn't.
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].marker_line, 0);
+        assert!(hidden(source, &ranges[0]).contains("docs"));
     }
 }

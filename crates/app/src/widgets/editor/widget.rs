@@ -26,6 +26,7 @@ use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
     paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
 };
+use super::spring_config_completion;
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
 use super::text_offset::{byte_to_char, char_to_byte};
@@ -361,6 +362,7 @@ pub fn show(
     pending_input: &mut Vec<Event>,
     cached_clipboard_text: &mut Option<String>,
     custom_templates: &UserTemplates,
+    spring_config: &mut crate::panels::spring_config::SpringConfigState,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1270,7 +1272,14 @@ pub fn show(
     // rules out a frame with no edit at all — e.g. the popup already open,
     // consuming its own Enter/Tab this same frame — that wouldn't have a
     // real character to react to here regardless.
-    if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
+    let is_spring_config_language = matches!(doc.language, Some(Language::Properties) | Some(Language::Yaml));
+
+    if !multi_cursor_active_at_start
+        && !doc.read_only
+        && completion.is_none()
+        && text_changed_this_frame
+        && !is_spring_config_language
+    {
         let typed_identifier_char = ui.input(|i| {
             i.events.iter().any(|e| {
                 matches!(e, Event::Text(s) if s.chars().count() == 1
@@ -1285,6 +1294,75 @@ pub fn show(
                 let current_run = &old_text[anchor_byte..char_to_byte(&old_text, word_range.end)];
                 let candidates = word_completion_candidates(&old_text, current_run, doc.language, custom_templates);
                 *completion = Some(CompletionState::open(anchor_byte, candidates));
+            }
+        }
+    }
+
+    // Spring config property completion (`PLAN.md` Track 12): a dedicated
+    // trigger for `.properties`/`.yml` rather than routing through
+    // `word_completion_candidates` above (guarded out of that block just
+    // above) — dots and dashes are both real, common characters inside a
+    // Spring property key segment (`context-path`, `pool-name`, real names
+    // straight out of a captured `spring-configuration-metadata.json`, see
+    // `fg_core::spring_config_metadata`'s own tests), neither of which
+    // `word_before_cursor`'s plain alnum-or-underscore definition treats as
+    // part of the same run, and a `.properties` key's dots specifically
+    // must stay part of one filterable prefix (`server.po` should match
+    // `server.port`), which only this dedicated path's own anchor choice —
+    // whole-line for `.properties`, single-segment for `.yml` (`SPEC.md`'s
+    // hierarchical-drill-down design, see `spring_config_completion`'s own
+    // module doc) — gets right.
+    if !multi_cursor_active_at_start
+        && !doc.read_only
+        && completion.is_none()
+        && text_changed_this_frame
+        && is_spring_config_language
+        && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
+    {
+        let typed_key_char = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, Event::Text(s) if s.chars().count() == 1
+                    && s.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-'))
+            })
+        });
+
+        if typed_key_char {
+            let cursor_byte = char_to_byte(&old_text, cursor_char);
+            let line_start_byte = old_text[..cursor_byte].rfind('\n').map_or(0, |i| i + 1);
+            let line_before_cursor = &old_text[line_start_byte..cursor_byte];
+            // Key position only: once a `=`/`:` delimiter has been typed on
+            // this line, everything after it is a value, not a key — no
+            // completions there.
+            let in_key_position = !line_before_cursor.contains('=') && !line_before_cursor.contains(':');
+
+            if in_key_position {
+                if let Some(project) = project {
+                    spring_config.ensure_scanning(&project.root);
+                }
+                let properties = spring_config.properties();
+
+                match doc.language {
+                    Some(Language::Properties) => {
+                        let indent = line_before_cursor.len() - line_before_cursor.trim_start().len();
+                        if line_before_cursor.trim().chars().count() >= 2 {
+                            let anchor_byte = line_start_byte + indent;
+                            let candidates = spring_config_completion::properties_completion_candidates(properties);
+                            *completion = Some(CompletionState::open(anchor_byte, candidates));
+                        }
+                    }
+                    Some(Language::Yaml) => {
+                        let segment_range = spring_config_completion::key_segment_before_cursor(&old_text, cursor_char);
+                        if segment_range.len() >= 2 {
+                            let anchor_byte = char_to_byte(&old_text, segment_range.start);
+                            let current_line = old_text[..line_start_byte].matches('\n').count();
+                            let indent = line_before_cursor.len() - line_before_cursor.trim_start().len();
+                            let ancestor = spring_config_completion::yaml_ancestor_path(&old_text, current_line, indent);
+                            let candidates = spring_config_completion::yaml_completion_candidates(properties, &ancestor);
+                            *completion = Some(CompletionState::open(anchor_byte, candidates));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
