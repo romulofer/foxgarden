@@ -278,6 +278,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -319,6 +320,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -377,6 +379,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -417,6 +420,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -469,6 +473,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -510,6 +515,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 

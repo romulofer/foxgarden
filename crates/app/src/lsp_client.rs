@@ -208,7 +208,13 @@ impl LspSession {
         let (tx, rx) = mpsc::channel();
         self.pending.lock().unwrap().insert(id, tx);
         let message = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        write_message(&mut self.stdin, &message)?;
+        if let Err(error) = write_message(&mut self.stdin, &message) {
+            // A failed write has no possible response. Leaving its sender in
+            // `pending` would turn a broken server pipe into an unbounded
+            // request leak for any later caller that retries.
+            self.pending.lock().unwrap().remove(&id);
+            return Err(error);
+        }
         Ok(rx)
     }
 
@@ -239,6 +245,27 @@ impl LspSession {
         self.send_notification(lsp_types::notification::Initialized::METHOD, params)
     }
 
+    /// Begins LSP's orderly shutdown sequence. The caller owns the returned
+    /// receiver and must wait for the successful `shutdown` response before
+    /// calling [`Self::exit`]; doing both here would make `exit` race ahead
+    /// of the server's response and violate the protocol.
+    pub fn shutdown(&mut self) -> std::io::Result<Receiver<Result<Value, ResponseError>>> {
+        self.send_request("shutdown", Value::Null)
+    }
+
+    /// The final notification in an orderly shutdown, sent only after the
+    /// receiver from [`Self::shutdown`] has completed.
+    pub fn exit(&mut self) -> std::io::Result<()> {
+        self.send_notification("exit", Value::Null)
+    }
+
+    /// Whether the child process has exited. This is deliberately polled by
+    /// the UI-thread owner rather than waited on: a stalled language server
+    /// must never hold up input or painting.
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
+    }
+
     /// Drains every notification/request the server itself has sent since
     /// the last poll — called once a frame, same shape as every other
     /// background op this app already polls. No client-side handler exists
@@ -251,12 +278,19 @@ impl LspSession {
 
 impl Drop for LspSession {
     /// Closing a session kills the real server process outright — no
-    /// graceful `shutdown`/`exit` handshake yet. Not this phase's scope:
-    /// nothing spawns a real, long-lived session outside a test today, so
-    /// there's no real project-close/app-quit path yet for a graceful
-    /// shutdown to matter against.
+    /// graceful `shutdown`/`exit` handshake yet (`lsp_state::LspState` owns
+    /// that sequence for its own long-lived sessions before ever dropping
+    /// one). `wait()` after `kill()` is mandatory, not optional cleanup: the
+    /// standard library never reaps a child on its own, so a killed-but-
+    /// unwaited process stays a zombie in the process table until this
+    /// app's own exit — real cost given `lsp_state::LspState` spawns/kills
+    /// sessions repeatedly over one run (settings changes, doc close/
+    /// reopen, crash-restarts). `wait()` returns essentially immediately
+    /// after a `kill()`, so this stays effectively non-blocking in
+    /// practice.
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

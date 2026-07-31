@@ -1,12 +1,10 @@
 /// Settings > Language Server — off by default (`PLAN.md` Track 20 is
-/// still Phase 1, no user-visible feature wired up yet, and even once
-/// later phases add one, spawning an external JVM process per open Java/
-/// Kotlin project is real enough cost that it should be an explicit
-/// opt-in, the same "off by default, opt in" stance `AutoSaveSettings`
-/// already takes). Every later phase that actually calls `lsp_client::
-/// LspSession::spawn` must check `enabled` first — this flag exists
-/// specifically as the user's own guarantee that nothing here launches an
-/// external process unless they've turned it on.
+/// still Phase 1: the current app-owned lifecycle only establishes a
+/// handshake, while later phases add visible language features. Spawning an
+/// external JVM process per open Java/Kotlin project is real enough cost
+/// that it remains explicit opt-in, the same stance `AutoSaveSettings`
+/// already takes. `lsp_state::LspState` checks `enabled` before every spawn,
+/// so no external process launches until the user turns this on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LspSettings {
     pub enabled: bool,

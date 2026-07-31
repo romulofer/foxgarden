@@ -132,6 +132,7 @@ pub fn show(
     jump_to_char: Option<usize>,
     custom_templates: &UserTemplates,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
+    lsp: &mut crate::lsp_state::LspState,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -282,6 +283,7 @@ pub fn show(
             cached_clipboard_text,
             custom_templates,
             spring_config,
+            lsp,
         );
     });
 }

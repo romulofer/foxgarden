@@ -52,6 +52,15 @@ pub struct Document {
     /// "static analysis" bucket, so re-running one tool doesn't clear the
     /// other's still-valid findings.
     pub pmd_diagnostics: Vec<Diagnostic>,
+    /// Semantic diagnostics published by the opt-in language server. Kept
+    /// separate from syntax and batch-tool findings because each source has
+    /// its own replacement/staleness lifecycle.
+    pub lsp_diagnostics: Vec<Diagnostic>,
+    /// LSP's per-document monotonically increasing text version.
+    pub lsp_version: i32,
+    /// Set only by a real buffer mutation; the app consumes it to send a
+    /// `didChange` without rescanning full document contents every frame.
+    pub lsp_sync_pending: bool,
     /// Per-line added/removed/modified marks from an externally-run `git
     /// diff` (`fg_core::git_diff_hunks`, `PLAN.md` Track 9 Phase 1) — a
     /// batch result refreshed wholesale on open/save/reload, the same
@@ -142,6 +151,9 @@ impl Document {
             diagnostics: Vec::new(),
             checkstyle_diagnostics: Vec::new(),
             pmd_diagnostics: Vec::new(),
+            lsp_diagnostics: Vec::new(),
+            lsp_version: 0,
+            lsp_sync_pending: false,
             diff_hunks: Vec::new(),
             blame: Vec::new(),
             extra_selections: Vec::new(),
@@ -160,7 +172,12 @@ impl Document {
     /// (derived from `buffer != saved_buffer`) doesn't flip back to `true`
     /// right after a save because the two silently diverged.
     pub fn save(&mut self) -> std::io::Result<()> {
-        let trimmed = trim_trailing_whitespace(&self.buffer.to_string());
+        let original = self.buffer.to_string();
+        let trimmed = trim_trailing_whitespace(&original);
+        if trimmed != original {
+            self.lsp_version += 1;
+            self.lsp_sync_pending = true;
+        }
         self.buffer = Rope::from_str(&trimmed);
         std::fs::write(&self.path, &trimmed)?;
         self.saved_buffer = self.buffer.clone();

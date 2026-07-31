@@ -92,6 +92,7 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -109,6 +110,7 @@ pub(super) fn typing_session(
     project: Option<&fg_core::Project>,
     completion: &mut Option<CompletionState>,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
+    lsp: &mut crate::lsp_state::LspState,
     initial_caret: usize,
     frames_events: Vec<Vec<egui::Event>>,
 ) {
@@ -145,6 +147,7 @@ pub(super) fn typing_session(
                 &mut None,
                 &UserTemplates::default(),
                 spring_config,
+                lsp,
             );
         });
     };
@@ -232,6 +235,7 @@ pub(super) fn focused_frame_with_selection(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -289,6 +293,7 @@ pub(super) fn focused_frame_with_selection(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -335,6 +340,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -387,6 +393,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -443,6 +450,7 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -488,6 +496,7 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -538,6 +547,7 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -581,6 +591,7 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -630,6 +641,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -682,6 +694,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -786,6 +799,7 @@ pub(super) fn run_frame_reading_selection(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::peek_caret(ctx, id)
@@ -912,6 +926,7 @@ pub(super) fn focused_frame_with_generate_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     last_error
@@ -962,6 +977,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -1015,6 +1031,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     last_error
@@ -1064,6 +1081,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -1104,6 +1122,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 }
@@ -1178,6 +1197,7 @@ pub(super) fn focused_frame_with_generate_method_request(
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     last_error

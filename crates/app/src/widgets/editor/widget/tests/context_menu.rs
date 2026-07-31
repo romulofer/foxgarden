@@ -67,6 +67,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 &mut None,
                 &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
             );
         });
     };

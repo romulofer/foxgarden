@@ -265,6 +265,8 @@ fn occurrences_for(
 /// pattern too).
 pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
     doc.buffer = Rope::from_str(new_text);
+    doc.lsp_version += 1;
+    doc.lsp_sync_pending = true;
     if let Some(parser) = parser.as_mut() {
         let edit = syntax::diff_edit(old_text, new_text);
         parser.reparse(new_text, edit);
@@ -364,6 +366,7 @@ pub fn show(
     cached_clipboard_text: &mut Option<String>,
     custom_templates: &UserTemplates,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
+    lsp: &mut crate::lsp_state::LspState,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1275,7 +1278,18 @@ pub fn show(
     // finishing "super" then typing "." both empties the old popup and
     // should open dot-completion; the old timing missed that, requiring an
     // erase-and-retype to get a clean frame.
-    if let Some(state) = completion.as_ref() {
+    //
+    // `has_pending_lsp` (`PLAN.md` Track 20 Phase 5) guards this the same
+    // way it guards the later paint-time check below: a dot-completion
+    // popup that opened with zero local candidates, waiting on a real
+    // language server's own reply, is empty on every frame until that
+    // reply lands — without this guard, *this* check (which runs on every
+    // frame, not just the one the trigger fired on) would close it one
+    // frame after it opened, before `poll_lsp` (called much later, near
+    // painting) ever got a chance to merge the response in.
+    if let Some(state) = completion.as_ref()
+        && !state.has_pending_lsp()
+    {
         let cursor_byte = shell_out.caret.map(|c| char_to_byte(&old_text, c.primary));
         if !cursor_byte.is_some_and(|b| !state.visible(&old_text, b).is_empty()) {
             *completion = None;
@@ -1398,11 +1412,16 @@ pub fn show(
     // already reparsed to include the just-typed `.` by this point,
     // `apply_edit` having run synchronously earlier this frame). Resolving
     // the receiver's type and failing to find an in-project source file
-    // for it (`dot_completion_candidates` returning `None`) is a silent
-    // no-op — the popup just doesn't open, and word-completion's own
-    // trigger above still applies once enough identifier characters follow
-    // (`SPEC.md` §3's documented degrade-gracefully case, e.g. typing `.`
-    // after a JDK-typed local).
+    // for it (`dot_completion_candidates` returning `None`) no longer ends
+    // the story on its own (`PLAN.md` Track 20 Phase 5): a real language
+    // server has no such limitation (a JDK/stdlib-typed receiver like
+    // `array.`/`list.` resolves for it fine), so the popup still opens as
+    // long as *either* source has something, and an LSP-only response gets
+    // merged in asynchronously once it lands (`CompletionState::poll_lsp`,
+    // above). Only when neither source is available at all (LSP off/not
+    // `Ready`, non-Java/Kotlin, *and* no local candidates) does the popup
+    // stay closed, same "degrade gracefully" fallback to word-completion's
+    // own trigger above `SPEC.md` §3 already documents.
     if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
         let typed_dot = ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(s) if s == ".")));
         if typed_dot
@@ -1416,11 +1435,18 @@ pub fn show(
                 let receiver_start = char_to_byte(&old_text, word_range.start);
                 let receiver_end = char_to_byte(&old_text, word_range.end);
                 let receiver = old_text[receiver_start..receiver_end].to_string();
-                if let Some(candidates) =
-                    dot_completion_candidates(language, tree, &old_text, receiver_end, &receiver, project)
-                {
-                    let anchor_byte = char_to_byte(&old_text, cursor_char);
-                    *completion = Some(CompletionState::open(anchor_byte, candidates));
+                let local_candidates =
+                    dot_completion_candidates(language, tree, &old_text, receiver_end, &receiver, project);
+                let anchor_byte = char_to_byte(&old_text, cursor_char);
+                let lsp_rx = matches!(language, Language::Java | Language::Kotlin)
+                    .then(|| lsp.request_completion(doc, anchor_byte))
+                    .flatten();
+                if local_candidates.is_some() || lsp_rx.is_some() {
+                    let mut state = CompletionState::open(anchor_byte, local_candidates.unwrap_or_default());
+                    if let Some(rx) = lsp_rx {
+                        state.set_pending_lsp(rx);
+                    }
+                    *completion = Some(state);
                 }
             }
         }
@@ -1810,6 +1836,15 @@ pub fn show(
     // it happens, rather than one frame late. `editor_rect` (the gutter+
     // text row captured above) stands in for "the editor pane" `popup_
     // position` clamps against.
+    // A `textDocument/completion` reply (`PLAN.md` Track 20 Phase 5) can
+    // land at any time while the popup is open, not just in reaction to a
+    // keystroke — polled here, before the "is there anything to show"
+    // check right below, so a response arriving this exact frame can turn
+    // an until-now-empty popup (a JDK-typed receiver with no local
+    // candidates) non-empty without waiting an extra frame.
+    if let Some(state) = completion.as_mut() {
+        state.poll_lsp();
+    }
     if let Some(state) = completion.as_ref() {
         match shell_out.caret.map(|c| char_to_byte(&old_text, c.primary)) {
             Some(cursor_byte) if !state.visible(&old_text, cursor_byte).is_empty() => {
@@ -1824,6 +1859,13 @@ pub fn show(
                     editor_rect,
                 );
             }
+            // Empty right now, but an in-flight `textDocument/completion`
+            // reply could still populate it (this is exactly the JDK/
+            // stdlib-typed-receiver case that has no local candidates at
+            // all until the server answers) — stay open with nothing
+            // painted this frame instead of closing before that reply ever
+            // had a chance to arrive.
+            Some(_) if state.has_pending_lsp() => {}
             _ => *completion = None,
         }
     }
@@ -1882,6 +1924,7 @@ pub fn show(
         .iter()
         .chain(doc.checkstyle_diagnostics.iter())
         .chain(doc.pmd_diagnostics.iter())
+        .chain(doc.lsp_diagnostics.iter())
         .cloned()
         .collect();
     paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);

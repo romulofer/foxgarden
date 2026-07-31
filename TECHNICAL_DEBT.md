@@ -36,6 +36,8 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 18 | `[OPEN]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
+| 17 | `[OPEN]` | The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file |
 | 16 | `[OPEN]` | Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other |
 | 15 | `[OPEN]` | Spring endpoint map jump-to-handler doesn't land the cursor correctly |
 | 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
@@ -56,6 +58,168 @@ rewritten or removed, not blindly executed.
 ---
 
 # Open
+
+## 18. [OPEN] Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin
+
+**Where:** `crates/app/src/widgets/editor/widget.rs`'s dot-completion
+trigger + `crates/app/src/lsp_state.rs`'s `request_completion` — the same
+code path already live-verified correct against a real `jdtls` (Java:
+`list.`/`array.` on `List<String>`/`int[]` show real, correctly-named JDK
+members). Not a known bug — an unresolved observation from this session's
+own live-verify that a future pass should chase down before trusting
+Kotlin completion works as well as Java's.
+
+**Status:** Open. Found while live-verifying `PLAN.md` Track 20 Phase 5
+in the real GUI (Xvfb + a real `kotlin-language-server` process, mirroring
+the same setup Phase 1/2's own live-verify already used).
+
+### What was found
+
+A raw JSON-RPC probe (a standalone script, bypassing FoxGarden entirely —
+same technique that root-caused #17) sent `didOpen` for a `MutableList<
+String>` receiver, waited 3 real seconds, then `textDocument/completion`,
+and got back correct, well-formed members (`add`, `get`, `size`, `clear`,
+...) — proving the server itself, and this session's `bare_label_and_has_
+params`/kind-mapping decode logic, both handle Kotlin's response shape
+correctly (`add(element: String)`-style labels parse to a bare `add` name
+with `has_params: true` exactly as designed).
+
+The equivalent action *through the actual FoxGarden GUI* (type `list.`
+after a real `val list = mutableListOf<String>()`) did not show `list`'s
+own members — it showed a generic, top-level-scope-shaped set of
+candidates (bare Kotlin keywords like `by`/`get`/`out`/`set`, plus a
+couple of unrelated importable-symbol suggestions), as if the completion
+request had actually been evaluated at a different position than where
+the popup was visually anchored, or against stale/not-yet-reprocessed
+buffer content. The buffer itself was confirmed correct after the fact
+(`list.` really did land on the right line) — so this isn't the
+"click landed in the wrong place" explanation it might first look like.
+
+### Why it wasn't chased further
+
+Time ran out this session before a repeat, more targeted probe (e.g.
+artificially delaying `request_completion`'s own request by a frame or
+two, to see if the discrepancy is a real "the server hasn't reprocessed
+this document's just-typed `.` yet" race specific to `kotlin-language-
+server`'s own internal indexing latency — plausible, since the raw probe
+that *did* work waited a full 3 seconds after `didOpen` before requesting
+completion, while the GUI path sends `didChange`+the completion request
+back-to-back in the same call with no settling time) could be run and
+compared against a repeat of the exact same GUI steps. Recorded rather
+than guessed at blind.
+
+### Proposed fix
+
+Next time this is picked up: reproduce the exact GUI steps again first
+(open a fresh Kotlin file, type `list.` after a `mutableListOf<String>()`
+receiver) and capture what the real wire traffic looks like this time —
+either by temporarily logging `request_completion`'s own request
+params/position and the raw response value, or by re-running the same
+raw-protocol probe but shaping its timing to match the GUI path exactly
+(a `didChange` immediately followed by the completion request, no
+artificial delay) to see if the *probe itself* reproduces the same
+degraded result under that timing — that would confirm the "the server
+needs a moment after a `didChange`" theory cleanly, independent of any
+FoxGarden-side bug. If confirmed, the fix is almost certainly on
+FoxGarden's own side despite being a server-timing issue: either debounce
+completion requests by a frame or two after a `didChange` specifically
+for a just-opened/just-edited document, or accept the first response as
+provisional and let a quick follow-up keystroke naturally re-request
+(worth checking whether that already happens for free, given `poll_lsp`
+already merges async).
+
+### Trigger condition
+
+Next time Track 20's Kotlin side is touched for any reason, or before
+ever documenting Kotlin-side Phase 5 completion as fully working — Java's
+own live-verify should not be read as covering Kotlin too.
+
+---
+
+## 17. [OPEN] The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file
+
+**Where:** Dev/test tooling for `PLAN.md` Track 20 (LSP integration), not
+this repo's own source — specifically whichever binary a developer points
+`LspSettings::kotlin_language_server_binary` at (`crates/app/src/
+lsp_settings.rs`, set via Settings > Language Server in `menu_bar.rs`). On
+this machine that's the build bundled with the locally available
+`pulsar-ide-kotlin` addon
+(`.../pulsar-ide-kotlin/install/server/bin/kotlin-language-server`, whose
+own `CLASSPATH` bundles `kotlin-compiler-2.1.0.jar`), versus this
+machine's SDKMAN-managed system Kotlin (`~/.sdkman/candidates/kotlin/
+current` → 2.4.10).
+
+**Status:** Open. Found live during Track 20 Checkpoint 2's own
+Kotlin-side manual verification (Java's own live-verify, recorded in
+`PLAN.md` under Track 20, was unaffected — this is Kotlin-only).
+
+### What was found
+
+Reproduced directly against the raw JSON-RPC protocol, bypassing
+FoxGarden's own `lsp_client`/`lsp_state` entirely (a standalone script
+sending `initialize`/`initialized`/`didOpen` and printing
+`publishDiagnostics` verbatim), to rule out a bug in this codebase's own
+UTF-16→byte decoding before looking anywhere else. `kotlin-language-
+server` resolves the analyzed file's stdlib classpath from the system's
+`kotlin`/`kotlinc` (SDKMAN's `current` symlink → 2.4.10), but its own
+bundled analysis compiler can only read class-file metadata up to version
+2.2.0; the 2.4.10 stdlib jar carries metadata version 2.4.0. Every symbol
+resolved from the stdlib — `println`, `Random`, `IntArray.lastIndex`,
+`contentToString`, even `kotlin.Unit` itself — comes back as
+`INCOMPATIBLE_CLASS`/`UNRESOLVED_REFERENCE`, on completely valid Kotlin
+code with nothing wrong in it. Confirmed live through FoxGarden too:
+opening a real, correct `Exercise.kt` (a Fisher–Yates shuffle) rendered
+roughly ten false-positive squiggles, initially indistinguishable from a
+real bug in this session's own `lsp_state.rs` diagnostics work until the
+raw-protocol probe isolated it to the server/SDK pairing itself.
+
+This is not a bug in FoxGarden's own code — `lsp_state.rs` is correctly
+relaying exactly what the server reports, the same code path Track 20
+Checkpoint 2's Java-side live-verify (`PLAN.md`) already confirmed
+correct against a real semantic error. But as long as it stands:
+- Kotlin-side live-verification of every later Track 20 phase (hover,
+  go-to-definition, completion, rename) is unusable — any Kotlin file
+  touching the stdlib will be wall-to-wall false positives.
+- A real regression in this codebase's own diagnostic handling could hide
+  behind this noise, or vice versa, unless the environment mismatch is
+  fixed (or at least confirmed still present) before trusting a Kotlin
+  live-verify's result.
+
+### Why it wasn't fixed on the spot
+
+Purely an environment/tooling mismatch on the developer's own machine —
+which Kotlin SDK version SDKMAN defaults to, which `kotlin-language-
+server` build happens to be locally available — not a line of this
+repo's own source to patch. Recording it here so the mismatch and its
+root cause aren't rediscovered from scratch next time Kotlin-side
+live-verification is attempted.
+
+### Proposed fix
+
+Before any future Kotlin-side Track 20 checkpoint live-verify, either:
+- Point SDKMAN's default `kotlin` at a version whose stdlib metadata is
+  at or below 2.2.0 (roughly Kotlin 2.0.x or earlier) for the duration of
+  the live-verify, or
+- Obtain/build a `kotlin-language-server` release whose own bundled
+  compiler is new enough to read 2.4.x metadata (the fwcd/kotlin-
+  language-server upstream project may already have a newer release than
+  the 2.1.0-compiler build available locally here — not checked this
+  session).
+
+Whichever is chosen, confirm it with the same raw-JSON-RPC-probe approach
+used to find this (skip FoxGarden, send `didOpen` for a known-good file,
+inspect `publishDiagnostics` directly) before trusting any FoxGarden-side
+Kotlin live-verify again — that isolation is what made this cleanly
+diagnosable instead of looking like a regression in this session's own
+diagnostics work.
+
+### Trigger condition
+
+Next time a Track 20 phase (3 and onward) needs a Kotlin-side
+live-verify, or sooner if a user reports bogus Kotlin squiggles on
+otherwise-correct code again.
+
+---
 
 ## 16. [OPEN] Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other
 

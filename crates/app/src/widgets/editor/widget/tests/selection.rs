@@ -43,6 +43,7 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -133,6 +134,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(

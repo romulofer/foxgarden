@@ -45,6 +45,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
@@ -97,6 +98,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -160,6 +162,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     let widget_rect = ctx
@@ -206,6 +209,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 &mut None,
                 &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
             );
         });
     }
@@ -268,6 +272,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     let widget_rect = ctx
@@ -308,6 +313,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -372,6 +378,7 @@ fn triple_click_selects_the_whole_line() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
     let widget_rect = ctx
@@ -412,6 +419,7 @@ fn triple_click_selects_the_whole_line() {
             &mut None,
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
         );
     });
 

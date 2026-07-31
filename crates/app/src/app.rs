@@ -8,6 +8,7 @@ use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::lsp_settings::LspSettings;
+use crate::lsp_state::LspState;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
@@ -263,12 +264,14 @@ pub struct FoxGardenApp {
     /// Settings > Auto-save — see `auto_save::AutoSaveSettings`.
     auto_save_settings: AutoSaveSettings,
     /// Settings > Language Server — see `lsp_settings::LspSettings`. Off by
-    /// default; `PLAN.md` Track 20 has no live consumer of this flag yet
-    /// (Phase 1 is just the client core, `lsp_client::LspSession`), but the
-    /// toggle exists now as the user's own guarantee that nothing here ever
-    /// launches an external `jdtls`/`kotlin-language-server` process
-    /// without it being turned on first.
+    /// default; `lsp_state::LspState` is its Phase 1 consumer and launches
+    /// an external `jdtls`/`kotlin-language-server` process only after the
+    /// user enables it and opens a matching project document.
     lsp_settings: LspSettings,
+    /// Runtime-only owner of the opt-in Java/Kotlin server processes. Kept
+    /// beside the persisted settings, but never persisted itself: a fresh
+    /// launch performs a fresh handshake against the current project.
+    lsp: LspState,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
     /// runtime-only, never persisted (there's nothing meaningful to resume
     /// across a restart: `was_focused` starts however the OS hands focus to
@@ -472,6 +475,8 @@ fn reload_tab_from_disk(
     let doc = &mut state.open_tabs[index];
     doc.buffer = Rope::from_str(new_content);
     doc.saved_buffer = doc.buffer.clone();
+    doc.lsp_version += 1;
+    doc.lsp_sync_pending = true;
     parsers[index] = tabs::open_parser_for(doc);
     if let Some(root) = diff_root {
         diff.run(doc.path.clone(), root);
@@ -990,6 +995,7 @@ impl FoxGardenApp {
             external_tool_paths,
             auto_save_settings,
             lsp_settings,
+            lsp: LspState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
         };
@@ -1113,6 +1119,26 @@ impl eframe::App for FoxGardenApp {
             &mut self.diff,
             diff_root.as_deref(),
         );
+
+        // The process owner only polls channels/child state here; it never
+        // waits. This keeps an unavailable or slow external language server
+        // completely off the editor's keystroke-to-pixels path.
+        let lsp_errors = self.lsp.sync(
+            &self.lsp_settings,
+            self.state.project.as_ref().map(|project| project.root.as_path()),
+            &mut self.state.open_tabs,
+        );
+        if self.last_error.is_none() {
+            self.last_error = lsp_errors.into_iter().next();
+        }
+        // A handshake response or an unprompted `publishDiagnostics` can
+        // land on the background reader thread at any time, not just in
+        // reply to a keystroke — without this, a session sitting between
+        // user input events would have its own replies sit unread in the
+        // channel until some unrelated repaint happened to come along.
+        if self.lsp.wants_repaint() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
 
         if auto_save_fired {
             tabs::save_all_dirty_tabs(
@@ -1370,6 +1396,7 @@ impl eframe::App for FoxGardenApp {
                 jump_target.as_ref().map(|(_, char_offset)| *char_offset),
                 &self.custom_templates,
                 &mut self.spring_config,
+                &mut self.lsp,
             );
         });
 

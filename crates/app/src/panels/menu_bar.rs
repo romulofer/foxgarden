@@ -217,12 +217,10 @@ pub fn show(
                 });
             });
             ui.menu_button("Language Server", |ui| {
-                // Off by default (`LspSettings::default`) and, as of
-                // `PLAN.md` Track 20 Phase 1, nothing yet actually spawns
-                // `lsp_client::LspSession` when this is turned on — the
-                // toggle exists now as the user's own guarantee that it
-                // won't, until a later phase wires a real trigger, without
-                // ever launching an external process by surprise.
+                // Off by default (`LspSettings::default`). Phase 1's
+                // `lsp_state::LspState` launches only after this is enabled,
+                // an open project has a Java/Kotlin document, and that
+                // language's binary path is non-empty.
                 ui.checkbox(&mut lsp_settings.enabled, "Enabled");
                 ui.add_enabled_ui(lsp_settings.enabled, |ui| {
                     ui.horizontal(|ui| {

@@ -1279,7 +1279,19 @@ stdio JSON-RPC framing read/write loop on a background thread per server
 **Checkpoint 1:** `cargo test -p app` green (a fake-server-process
 handshake test, headless where possible); live-verify a real `jdtls`
 process launches and completes its handshake against a real Java project
-(inspectable via logging, not yet any visible feature).
+(inspectable via logging, not yet any visible feature) — done:
+`lsp_client::LspSession` (JSON-RPC-over-stdio framing, a background reader
+thread routing responses/server-originated messages, `initialize`/
+`initialized`) plus `lsp_state::LspState`, the app-owned lifecycle
+deciding whether/when a session should exist at all — at most one
+`jdtls`/`kotlin-language-server` process for the one open project,
+strictly behind `LspSettings::enabled`, retried/retired as the project's
+open documents or the settings themselves change. Live-verified against a
+real `jdtls` 1.43.0 (Eclipse JDT Language Server, Java 17) launched with
+no extra args beyond its own auto-derived `-data` workspace, against a
+real single-file Java project with no build file — its own
+`.metadata/.log` recorded the full `>> initialize` → `Workspace
+initialized` → `>> initialized` sequence completing against this client.
 
 **Phase 2 — diagnostics.** `textDocument/publishDiagnostics` feeds the
 existing `Diagnostic`/squiggle pipeline as a second source.
@@ -1287,7 +1299,30 @@ existing `Diagnostic`/squiggle pipeline as a second source.
 **Checkpoint 2:** full suite green; live-verify a real semantic error
 (not just a syntax error) shows a squiggle, with a message
 `javac`/`kotlinc` — not just this codebase's own parser — actually
-produced.
+produced. Done: `textDocument/didOpen`/`didChange`/`didClose` (full-text
+sync; `Document::lsp_version`/`lsp_sync_pending` track which open document
+still needs a resend) and `textDocument/publishDiagnostics` (UTF-16
+position → byte range via `lsp_state::utf16_range_to_bytes`) feed
+`Document::lsp_diagnostics`, chained into the existing squiggle-paint
+pipeline (`widgets/editor/widget.rs`) right alongside
+`checkstyle_diagnostics`/`pmd_diagnostics`. Live-verified: a real `jdtls`
+process against a real `Main.java` calling an undefined method
+(`undefinedHelper()` — valid syntax, so this codebase's own tree-sitter
+parser reports nothing there) rendered a real squiggle whose hover tooltip
+reads "The method undefinedHelper() is undefined for the type Main" —
+genuine ECJ output, not this codebase's own diagnostics.
+
+One real bug this same live-verify surfaced and fixed: nothing requested
+a repaint after handing work to `LspState::sync`, so a real server's own
+*unprompted* `publishDiagnostics` (`jdtls` validates and reports right
+after `didOpen`, with no further client action to react to) sat unread on
+the background channel until some unrelated input event happened to
+repaint the window — confirmed live (the squiggle only appeared after a
+synthetic mouse nudge) and fixed by `LspState::wants_repaint` plus
+`ui.ctx().request_repaint_after(...)` in `app.rs`'s own update loop, the
+same throttled-polling shape `pty_session`/`terminal_widget` already use
+for their own background work; re-verified afterward with the squiggle
+appearing on its own, no synthetic input at all.
 
 **Phase 3 — hover docs.** `textDocument/hover` feeds a tooltip,
 structurally mirroring the existing syntax-error hover.
@@ -1308,7 +1343,36 @@ candidate source merged into the existing completion popup.
 
 **Checkpoint 5:** full suite green; live-verify LSP candidates and this
 codebase's own existing candidates appear together, sensibly ranked, with
-no visible duplication.
+no visible duplication. Done (Java side): `LspState::request_completion`
+(`lsp_state.rs`) sends `textDocument/completion`, flushing the
+document's own pending edit first via a new `sync_one_document` (split
+out of `sync_documents` so a single-document flush doesn't misdetect
+every *other* open document of that language as closed) — necessary
+because this frame's `sync()` already ran *before* the keystroke that
+both lands the triggering `.` and calls `request_completion`, so without
+an explicit flush the request would race ahead of its own `didChange` on
+the same ordered stdin pipe. Decode/merge (`completion.rs`) derives a
+bare insertable name and a real `has_params` signal straight from the
+server's own `label` text (`bare_label_and_has_params`) rather than
+trusting `insertText`/`textEdit`, since real servers (jdtls) routinely
+signature-decorate `label` and may format `insertText` as an unsupported
+`Snippet` — this sidesteps ever inserting broken `$1`/`${1:x}` syntax.
+Two real bugs surfaced and fixed during live-verify, not just unit tests:
+(1) a JDK-typed receiver's popup opened empty (no local candidates) and
+was then closed the same or next frame by *two* separate "close if empty"
+checks that predate this phase, neither of which knew an async LSP reply
+could still populate it — both gained a `has_pending_lsp()` guard;
+(2) confirmed via `jdtls` 1.43.0 (already running this session) that
+`list.`/`array.` on `List<String>`/`int[]` now show real JDK members
+(`add`, `get`, `size`, `clone`, `length`, ...) with clean names, not
+signature-decorated garbage. Kotlin side: a raw JSON-RPC probe (bypassing
+FoxGarden entirely) confirmed `kotlin-language-server` itself returns
+correct, well-formed completions for `MutableList<String>` — but the
+in-app GUI check for the same case was inconclusive (real completions
+never appeared in the popup); recorded as `TECHNICAL_DEBT.md` #18 rather
+than assumed fixed, since the root cause (likely a request-vs-indexing
+timing race specific to a just-opened document, not a message-ordering
+bug) wasn't confirmed before time ran out this session.
 
 **Phase 6 — find-references.** `textDocument/references`, a results-list
 UI (popup or panel depending on typical result count observed live).
@@ -1648,6 +1712,102 @@ work.
 
 ---
 
+## Track 28 — Language Server settings modal + jdtls/kotlin-language-server installer
+
+Not started — approved plan only, recorded here so the real research
+already done isn't lost before implementation begins. Two things land
+together: moving today's inline "Settings > Language Server" menu-bar
+submenu (`crates/app/src/panels/menu_bar.rs`, an Enabled checkbox plus two
+raw binary-path text fields) into a proper modal, and adding a
+self-service installer/updater for the `jdtls`/`kotlin-language-server`
+binaries themselves — mirroring the existing Checkstyle/PMD/SpotBugs
+installer (`crates/app/src/tool_manager.rs`, surfaced via
+`static_analysis.rs`'s "External Tools…" modal) exactly.
+
+**Phase 1 — the installer + modal.** Real research already done this
+session (downloads/diffs actually run, not assumed — same discipline
+`tool_manager.rs`'s own header comment already holds itself to):
+
+- `eclipse-jdtls/eclipse.jdt.ls` has **no GitHub Releases** (`gh api
+  repos/eclipse-jdtls/eclipse.jdt.ls/releases/latest` → 404). It publishes
+  milestone builds to `https://download.eclipse.org/jdtls/milestones/
+  <version>/` instead — a date-stamped `.tar.gz` whose exact filename
+  isn't derivable from the version alone, but each version directory also
+  has a `latest.txt` naming it. Verified by actually downloading and
+  extracting milestone `1.60.0`: the tar.gz is flat (no versioned
+  top-level folder, unlike PMD/SpotBugs's own zips) — `bin/`,
+  `config_<os>/`, `features/`, `plugins/` directly at the root — and
+  `bin/jdtls`/`bin/jdtls.py` (the official Python launcher wrapper) is
+  genuinely part of the upstream release, not a third-party addition from
+  the `pulsar-ide-java` packaging this session's own live-verify used (a
+  byte-diff confirmed they're the same file, just different versions).
+  The installer can extract-and-point at `bin/jdtls`, same shape as PMD/
+  SpotBugs — no custom launcher generation needed.
+- **Real, verified version-compatibility finding, the reason not to just
+  install "latest":** `jdtls`'s own Python wrapper hard-checks the running
+  JVM's major version and refuses to start below its own minimum.
+  Diffing `org.eclipse.jdt.ls.product/scripts/jdtls.py` across tags (`gh
+  api repos/.../contents/...?ref=<tag>`) found the exact boundary:
+  **`v1.44.0` is the last milestone requiring only Java 17; `v1.45.0`
+  bumped the hard-coded minimum to Java 21.** This machine's (and this
+  project's own already-verified, per `tool_manager.rs`'s Checkstyle pin)
+  baseline JVM is Java 17. Confirmed live: downloaded, extracted, and
+  launched `1.44.0`'s real `bin/jdtls` under this machine's real Java
+  17.0.4 — clean OSGi bootstrap logs, no version-gate exception (the same
+  failure mode Checkstyle's own 13.x line hit under Java 17, which is
+  exactly why that tool is pinned too). **`1.44.0` is the version to pin**
+  as `recommended_version` — `check_latest` can still separately report
+  whatever the real newest milestone is (`1.60.0` as of this session).
+- `fwcd/kotlin-language-server` **does** have normal GitHub Releases and
+  fits the existing `Tool` pattern almost verbatim: latest tag `1.3.13`,
+  one asset `server.zip`, extracts to `server/bin/kotlin-language-server`
+  — verified by downloading and listing the real zip. Pin to `1.3.13`
+  explicitly (already what's verified working this session), even though
+  it happens to equal GitHub's own latest right now.
+- Installing/updating kotlin-language-server via this tool will **not**
+  fix `TECHNICAL_DEBT.md` #17 (the stdlib-version-mismatch false
+  diagnostics) — that's caused by *this machine's* installed Kotlin SDK
+  vs. kotlin-language-server's own bundled analysis compiler, baked into
+  every 1.3.13 build regardless of when it's (re)installed. Don't assume
+  this phase fixes #17.
+- New Cargo dependencies needed: `tar` (absent from the workspace
+  entirely) + `flate2` (currently only a transitive dep via `ureq`/`zip`,
+  needs promoting to direct, pinned to whatever version is already
+  transitively resolved in `Cargo.lock` so promoting it doesn't silently
+  bump anything else).
+
+Design shape (full detail in the approved plan from this session, not
+reproduced here — re-derive from this section plus a fresh read of
+`tool_manager.rs`/`static_analysis.rs` if that plan file is gone by the
+time this is picked up): extend `tool_manager::Tool` with `Jdtls`/
+`KotlinLanguageServer` variants (`KotlinLanguageServer` fits the existing
+generic GitHub-releases method table directly; `Jdtls` needs its own
+`install_sync`/`check_latest_sync` branch for the two-step `latest.txt`-
+then-tarball fetch and the Eclipse download-server directory-listing
+parse, since neither fits the existing per-tool method shape). `LspSettings`
+gains `jdtls_installed_version`/`kotlin_language_server_installed_version`
+fields + matching storage keys. `FoxGardenApp` gains its own
+`lsp_tool_manager: ToolManagerState` (a second, independent instance of
+the already-generic type — keep it separate from `StaticAnalysisState`'s
+own instance, different concern) and an `LspSettings::apply_installed`
+mirroring `ExternalToolPaths::apply_installed`. The modal itself
+(`lsp_settings.rs` gains a `show_settings`) mirrors `static_analysis.rs`'s
+`show_settings`/`show_install_row` almost exactly, plus a help line
+covering jdtls's own extra runtime requirement (a `python3` on PATH,
+beyond the JVM every other tool here already needs).
+
+**Checkpoint 1:** `cargo test --workspace` green (new tests: `Tool::
+KotlinLanguageServer`'s URL construction; a tar.gz-extraction test
+mirroring the existing zip one, built against jdtls's real flat layout;
+a pure parser test for "highest `X.Y.Z` in a milestones directory
+listing"); live-verify the modal renders, Install actually lands a
+working binary in the cache dir and auto-populates the path field for
+both servers, and a real project still gets working diagnostics/
+completions against the freshly-*installed* (not just the pre-existing
+`pulsar-ide-java`) jdtls afterward.
+
+---
+
 ## Build status (live)
 
 ### Moderate tier
@@ -1696,7 +1856,11 @@ work.
 ### Major tier
 
 - [ ] Track 19 — Large file handling — full viewport virtualization
-- [ ] Track 20 — LSP integration
+- [ ] Track 20 — LSP integration (Phases 1/2/5 shipped and live-verified
+      on the Java side against a real `jdtls`; Kotlin-side Phase 5 has a
+      real server-level pass via a raw protocol probe but an inconclusive
+      in-app GUI check — see `TECHNICAL_DEBT.md` #18. Phases 3/4/6/7 not
+      started.)
 - [x] Track 21 — Maven/Gradle awareness (all 3 phases done: `pom.xml`
       parsing verified against 5 real files; Gradle model extraction
       verified against a real multi-module Kotlin/Spring project, including
@@ -1707,3 +1871,6 @@ work.
 - [ ] Track 22 — Build/run/test integration
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
+- [ ] Track 28 — Language Server settings modal + jdtls/kotlin-language-
+      server installer (not started; real download-mechanism/version-pin
+      research already done and recorded in this track's own Phase 1)

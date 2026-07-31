@@ -2,11 +2,15 @@
 //! shared by every trigger path (word-completion, dot-completion) so they
 //! end at one popup instead of drifting into subtly different UIs.
 
+use std::collections::HashSet;
+use std::sync::mpsc::{Receiver, TryRecvError};
+
 use ropey::Rope;
 
 use super::templates::CURSOR_MARKER;
 use super::text_area::TextAreaOutput;
 use super::text_offset::{byte_to_char, char_to_byte};
+use crate::lsp_client::ResponseError;
 
 /// What kind of thing a `CompletionItem` represents — drives both its icon
 /// (once rendered) and how `insert_completion` (`SPEC.md` §5) applies it.
@@ -52,6 +56,13 @@ pub struct CompletionState {
     anchor_byte: usize,
     candidates: Vec<CompletionItem>,
     selected: usize,
+    /// A `textDocument/completion` request in flight (`PLAN.md` Track 20
+    /// Phase 5), attached by the dot-completion trigger right after
+    /// `open`/`set_pending_lsp`. `None` once its response has been merged
+    /// in (or it failed) — polled once a frame by `poll_lsp`, same
+    /// non-blocking `try_recv` shape every other background op in this
+    /// app already uses.
+    pending_lsp: Option<Receiver<Result<serde_json::Value, ResponseError>>>,
 }
 
 /// Where the popup's `egui::Area` should anchor: one row below
@@ -82,7 +93,51 @@ impl CompletionState {
             anchor_byte,
             candidates,
             selected: 0,
+            pending_lsp: None,
         }
+    }
+
+    /// Attaches an in-flight `textDocument/completion` request — its
+    /// result gets merged into `candidates` once `poll_lsp` sees it land.
+    pub(super) fn set_pending_lsp(&mut self, rx: Receiver<Result<serde_json::Value, ResponseError>>) {
+        self.pending_lsp = Some(rx);
+    }
+
+    /// Non-blocking poll of `pending_lsp`, called once a frame. A real
+    /// response gets decoded and merged into `candidates` (deduped by
+    /// exact label against what's already there — `SPEC.md` §20's own "no
+    /// visible duplication" ask). A request error or a disconnected
+    /// channel (the server exited mid-request) just clears `pending_lsp`
+    /// silently — this is a best-effort second source; whatever local
+    /// candidates already opened the popup with (possibly none) are a
+    /// perfectly fine result on their own, so nothing here is surfaced as
+    /// a user-facing error.
+    pub(super) fn poll_lsp(&mut self) {
+        let Some(rx) = &self.pending_lsp else { return };
+        match rx.try_recv() {
+            Ok(Ok(value)) => {
+                self.merge_candidates(from_lsp_response(value));
+                self.pending_lsp = None;
+            }
+            Ok(Err(_)) | Err(TryRecvError::Disconnected) => self.pending_lsp = None,
+            Err(TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Whether an LSP response could still land and populate `candidates`
+    /// — the caller's own "close the popup if there's nothing to show"
+    /// check must not treat *currently* empty the same as *permanently*
+    /// empty while this is true.
+    pub(super) fn has_pending_lsp(&self) -> bool {
+        self.pending_lsp.is_some()
+    }
+
+    fn merge_candidates(&mut self, new_items: Vec<CompletionItem>) {
+        // Owned, not borrowed: `self.candidates.extend(...)` below can
+        // reallocate the very `Vec` a borrowed `&str` set would still be
+        // pointing into mid-iteration.
+        let existing: HashSet<String> = self.candidates.iter().map(|c| c.label.clone()).collect();
+        self.candidates.extend(new_items.into_iter().filter(|item| !existing.contains(&item.label)));
     }
 
     pub(super) fn anchor_byte(&self) -> usize {
@@ -257,6 +312,63 @@ pub(super) fn insert_completion(
     let new_text = format!("{}{expansion}{}", &text[..anchor_byte], &text[cursor_byte..]);
     let new_cursor = anchor_char + cursor_offset;
     (new_text, new_cursor)
+}
+
+/// Decodes a raw `textDocument/completion` response (`PLAN.md` Track 20
+/// Phase 5) into this popup's own `CompletionItem`s. `None`/a parse
+/// failure (a malformed or absent response) is just an empty `Vec` — one
+/// missing/broken source is never a reason to fail the whole popup, same
+/// spirit as every other LSP source in this app degrading silently.
+fn from_lsp_response(value: serde_json::Value) -> Vec<CompletionItem> {
+    let items = match serde_json::from_value::<Option<lsp_types::CompletionResponse>>(value) {
+        Ok(Some(lsp_types::CompletionResponse::Array(items))) => items,
+        Ok(Some(lsp_types::CompletionResponse::List(list))) => list.items,
+        Ok(None) | Err(_) => Vec::new(),
+    };
+    items.into_iter().map(completion_item_from_lsp).collect()
+}
+
+fn completion_item_from_lsp(item: lsp_types::CompletionItem) -> CompletionItem {
+    let kind = match item.kind {
+        Some(lsp_types::CompletionItemKind::METHOD | lsp_types::CompletionItemKind::FUNCTION | lsp_types::CompletionItemKind::CONSTRUCTOR) => {
+            CompletionKind::Method
+        }
+        Some(
+            lsp_types::CompletionItemKind::FIELD
+            | lsp_types::CompletionItemKind::PROPERTY
+            | lsp_types::CompletionItemKind::VARIABLE
+            | lsp_types::CompletionItemKind::CONSTANT
+            | lsp_types::CompletionItemKind::ENUM_MEMBER,
+        ) => CompletionKind::Field,
+        Some(lsp_types::CompletionItemKind::KEYWORD) => CompletionKind::Keyword,
+        _ => CompletionKind::Word,
+    };
+    let (label, has_params) = bare_label_and_has_params(&item.label);
+    CompletionItem { label, kind, detail: item.detail, has_params }
+}
+
+/// Extracts a bare, insertable identifier from a raw LSP `label` — real
+/// servers routinely decorate it with a signature/return type (e.g.
+/// `"add(E e) : boolean"`), which `insert_completion` (this file, above)
+/// must never see as-is: it treats `Method`'s own `label` as bare, adding
+/// `()`/a cursor marker itself, so an undecorated label would come out as
+/// `"add(E e) : boolean()"` in the buffer. Rather than trusting `insert_
+/// text`/`text_edit` instead (either of which may be `Snippet`-formatted
+/// with `$1`/`${1:name}` tab-stop syntax this popup has no way to
+/// navigate — inserting *that* verbatim would be worse, not better),
+/// this reads only `label`, which the protocol never allows to itself be
+/// a snippet. Also recovers a real `has_params` signal from the same
+/// text (`"add(E e)"` → `true`, `"length"` → `false`) instead of a blind
+/// kind-based guess.
+fn bare_label_and_has_params(raw: &str) -> (String, bool) {
+    let name_end = raw.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(raw.len());
+    let name = raw[..name_end].to_string();
+    let rest = raw[name_end..].trim_start();
+    let has_params = rest
+        .strip_prefix('(')
+        .and_then(|after_open| after_open.find(')').map(|close| !after_open[..close].trim().is_empty()))
+        .unwrap_or(false);
+    (name, has_params)
 }
 
 #[cfg(test)]
@@ -435,5 +547,133 @@ mod tests {
         let (text, cursor) = insert_completion("foo.co", 4, 6, &method_item("compute", true));
         assert_eq!(text, "foo.compute()");
         assert_eq!(&text[..cursor], "foo.compute(");
+    }
+
+    #[test]
+    fn bare_label_and_has_params_strips_a_signature_decorated_label() {
+        let (name, has_params) = bare_label_and_has_params("add(E e) : boolean");
+        assert_eq!(name, "add");
+        assert!(has_params);
+    }
+
+    #[test]
+    fn bare_label_and_has_params_a_zero_arg_method_has_no_params() {
+        let (name, has_params) = bare_label_and_has_params("run() : void");
+        assert_eq!(name, "run");
+        assert!(!has_params);
+    }
+
+    #[test]
+    fn bare_label_and_has_params_a_plain_field_label_is_unchanged() {
+        let (name, has_params) = bare_label_and_has_params("length");
+        assert_eq!(name, "length");
+        assert!(!has_params);
+    }
+
+    #[test]
+    fn from_lsp_response_maps_kind_strips_signatures_and_reads_detail() {
+        let value = serde_json::json!([
+            { "label": "add(E e) : boolean", "kind": 2, "detail": "boolean" },
+            { "label": "length", "kind": 5, "detail": "int" },
+            { "label": "class", "kind": 14 },
+            { "label": "SomeInterface", "kind": 8 }
+        ]);
+        let items = from_lsp_response(value);
+        assert_eq!(items[0].label, "add");
+        assert_eq!(items[0].kind, CompletionKind::Method);
+        assert!(items[0].has_params);
+        assert_eq!(items[0].detail.as_deref(), Some("boolean"));
+        assert_eq!(items[1].label, "length");
+        assert_eq!(items[1].kind, CompletionKind::Field);
+        assert_eq!(items[2].kind, CompletionKind::Keyword);
+        // CLASS (7)/INTERFACE (8)/... aren't in the explicit mapping table —
+        // fall back to the neutral `Word` kind rather than inventing a new
+        // `CompletionKind` variant for every LSP kind this popup has no
+        // special insertion/rendering behavior for.
+        assert_eq!(items[3].kind, CompletionKind::Word);
+    }
+
+    #[test]
+    fn from_lsp_response_never_trusts_a_snippet_formatted_insert_text() {
+        // A real server may send `insertText: "add($0)"`/`insertTextFormat:
+        // Snippet` for a method; this decode step must never use that
+        // field at all (only `label`, which the protocol never allows to
+        // be a snippet itself) — otherwise raw `$0` tab-stop syntax would
+        // land in the user's own buffer.
+        let value = serde_json::json!([
+            { "label": "add(E e) : boolean", "kind": 2, "insertText": "add($0)", "insertTextFormat": 2 }
+        ]);
+        let items = from_lsp_response(value);
+        assert_eq!(items[0].label, "add");
+        assert!(!items[0].label.contains('$'));
+    }
+
+    #[test]
+    fn from_lsp_response_handles_the_completion_list_wrapper_shape() {
+        let value = serde_json::json!({
+            "isIncomplete": false,
+            "items": [{ "label": "size", "kind": 2 }]
+        });
+        let items = from_lsp_response(value);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "size");
+    }
+
+    #[test]
+    fn from_lsp_response_a_null_response_is_an_empty_list() {
+        assert!(from_lsp_response(serde_json::Value::Null).is_empty());
+    }
+
+    #[test]
+    fn merge_candidates_dedups_by_exact_label() {
+        let mut state = CompletionState::open(0, vec![item("add"), item("size")]);
+        state.merge_candidates(vec![item("add"), item("get")]);
+        let labels: Vec<&str> = state.candidates.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["add", "size", "get"]);
+    }
+
+    #[test]
+    fn poll_lsp_merges_a_successful_response_and_clears_the_pending_request() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut state = CompletionState::open(0, vec![item("add")]);
+        state.set_pending_lsp(rx);
+        tx.send(Ok(serde_json::json!([{ "label": "size", "kind": 2 }]))).unwrap();
+        state.poll_lsp();
+        assert!(state.pending_lsp.is_none());
+        let labels: Vec<&str> = state.candidates.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["add", "size"]);
+    }
+
+    #[test]
+    fn poll_lsp_a_disconnected_channel_clears_pending_without_panicking() {
+        let mut state = CompletionState::open(0, vec![item("add")]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        state.set_pending_lsp(rx);
+        state.poll_lsp();
+        assert!(state.pending_lsp.is_none());
+        assert_eq!(state.candidates.len(), 1);
+    }
+
+    #[test]
+    fn has_pending_lsp_is_true_until_a_response_is_polled() {
+        // Regression coverage for a real bug this popup's own live-verify
+        // hit: a dot-completion popup opened with zero *local* candidates
+        // (a JDK/stdlib-typed receiver) stays empty for however many
+        // frames a real server takes to reply — `widget.rs`'s own two
+        // "close the popup if its filtered list is empty" checks both key
+        // off this method specifically so neither one closes a popup an
+        // async reply could still populate.
+        let mut state = CompletionState::open(0, Vec::new());
+        assert!(!state.has_pending_lsp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.set_pending_lsp(rx);
+        assert!(state.has_pending_lsp());
+        // Still nothing sent — still pending after a poll.
+        state.poll_lsp();
+        assert!(state.has_pending_lsp());
+        tx.send(Ok(serde_json::json!([]))).unwrap();
+        state.poll_lsp();
+        assert!(!state.has_pending_lsp());
     }
 }
