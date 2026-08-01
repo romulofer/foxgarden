@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -139,13 +139,14 @@ fn write_message<W: Write>(writer: &mut W, value: &Value) -> std::io::Result<()>
 
 type PendingResponses = Arc<Mutex<HashMap<i64, Sender<Result<Value, ResponseError>>>>>;
 
-/// A running language server: its child process, stdin writer half, and
-/// the background reader thread's parsed messages routed either to a
-/// pending request's own one-shot `Receiver` (a `Response`) or to `server_
-/// messages_rx` (a notification/request the server originated).
+/// A running language server: its background writer thread's send half,
+/// the child process itself, and the background reader thread's parsed
+/// messages routed either to a pending request's own one-shot `Receiver`
+/// (a `Response`) or to `server_messages_rx` (a notification/request the
+/// server originated).
 pub struct LspSession {
     child: Child,
-    stdin: ChildStdin,
+    writer_tx: Sender<Value>,
     next_id: i64,
     pending: PendingResponses,
     server_messages_rx: Receiver<(String, Value)>,
@@ -153,12 +154,13 @@ pub struct LspSession {
 
 impl LspSession {
     /// Spawns `binary` (`args`, `cwd` if given — the project root) as a
-    /// language server and starts its background reader thread. The
-    /// server's own stderr is inherited (not piped) — `jdtls`/`kotlin-
-    /// language-server` both log real diagnostics there, and this phase has
-    /// no UI to surface it through yet (`PLAN.md` Phase 1's own "inspectable
-    /// via logging" checkpoint wording), so letting it flow straight to
-    /// this app's own stderr is the simplest way to actually inspect it.
+    /// language server and starts its background reader *and* writer
+    /// threads. The server's own stderr is inherited (not piped) — `jdtls`/
+    /// `kotlin-language-server` both log real diagnostics there, and this
+    /// phase has no UI to surface it through yet (`PLAN.md` Phase 1's own
+    /// "inspectable via logging" checkpoint wording), so letting it flow
+    /// straight to this app's own stderr is the simplest way to actually
+    /// inspect it.
     pub fn spawn(binary: &Path, args: &[String], cwd: Option<&Path>) -> std::io::Result<Self> {
         let mut command = Command::new(binary);
         command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
@@ -166,7 +168,7 @@ impl LspSession {
             command.current_dir(cwd);
         }
         let mut child = command.spawn()?;
-        let stdin = child.stdin.take().expect("stdin was piped");
+        let mut stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
 
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
@@ -195,25 +197,53 @@ impl LspSession {
             }
         });
 
-        Ok(Self { child, stdin, next_id: 0, pending, server_messages_rx })
+        // A dedicated writer thread, mirroring the reader thread above, is
+        // what actually makes `send_request`/`send_notification`'s own
+        // "never blocks" doc comment true rather than aspirational: a
+        // *single* small JSON-RPC message essentially never fills the OS
+        // pipe buffer on its own, but a server that stalls reading its own
+        // stdin (busy indexing, or — the real case this was caught against,
+        // Track 20 Phase 3's own hover live-verify — seemingly wedged
+        // handling a `textDocument/hover` against a project with no
+        // attached JDK sources) lets every subsequent full-buffer
+        // `didChange` (sent on nearly every keystroke) queue up until the
+        // buffer *does* fill, at which point a direct `write_all` on the
+        // caller's own thread — the UI thread — blocks for as long as the
+        // server stays stuck, freezing the whole editor. Routing every
+        // write through this channel instead means the caller's `send`
+        // only ever pushes onto an unbounded in-process queue (which
+        // cannot block), while this thread absorbs whatever blocking the
+        // real pipe write needs.
+        let (writer_tx, writer_rx) = mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            for message in writer_rx {
+                if write_message(&mut stdin, &message).is_err() {
+                    break; // server exited or its stdin pipe broke
+                }
+            }
+        });
+
+        Ok(Self { child, writer_tx, next_id: 0, pending, server_messages_rx })
     }
 
     /// Sends a JSON-RPC request, returning a `Receiver` for its eventual
-    /// response — never blocks, so a caller polls the returned `Receiver`
-    /// from wherever it already polls everything else (this module's own
-    /// doc comment).
+    /// response — never blocks (queues onto the writer thread's channel
+    /// rather than writing to the pipe directly — see `spawn`'s own doc
+    /// comment on why that distinction matters), so a caller polls the
+    /// returned `Receiver` from wherever it already polls everything else.
     pub fn send_request(&mut self, method: &str, params: Value) -> std::io::Result<Receiver<Result<Value, ResponseError>>> {
         let id = self.next_id;
         self.next_id += 1;
         let (tx, rx) = mpsc::channel();
         self.pending.lock().unwrap().insert(id, tx);
         let message = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        if let Err(error) = write_message(&mut self.stdin, &message) {
-            // A failed write has no possible response. Leaving its sender in
-            // `pending` would turn a broken server pipe into an unbounded
-            // request leak for any later caller that retries.
+        if self.writer_tx.send(message).is_err() {
+            // The writer thread only ever exits after a real write failure
+            // (spawn's own loop) — the server is already dead or dying.
+            // Leaving this request's sender in `pending` would turn that
+            // into an unbounded leak for any later caller that retries.
             self.pending.lock().unwrap().remove(&id);
-            return Err(error);
+            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "language server's writer thread has exited"));
         }
         Ok(rx)
     }
@@ -222,7 +252,9 @@ impl LspSession {
     /// protocol itself), so no `Receiver` to hand back.
     pub fn send_notification(&mut self, method: &str, params: Value) -> std::io::Result<()> {
         let message = serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params });
-        write_message(&mut self.stdin, &message)
+        self.writer_tx
+            .send(message)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "language server's writer thread has exited"))
     }
 
     /// The `initialize` request, via `lsp_types::request::Initialize`'s own

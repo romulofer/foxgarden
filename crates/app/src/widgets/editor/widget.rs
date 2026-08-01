@@ -21,6 +21,7 @@ use super::context_menu;
 use super::context_menu::synthetic_shortcut;
 use super::diff_gutter;
 use super::folding;
+use super::hover::HoverState;
 use super::multi_cursor::{self, MultiEditOp};
 use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
@@ -356,6 +357,7 @@ pub fn show(
     override_method_request: bool,
     override_method_dialog: &mut Option<OverrideMethodDialog>,
     completion: &mut Option<CompletionState>,
+    hover: &mut HoverState,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -1868,6 +1870,31 @@ pub fn show(
             Some(_) if state.has_pending_lsp() => {}
             _ => *completion = None,
         }
+    }
+
+    // Hover docs (`PLAN.md` Track 20 Phase 3): tracks the pointer's dwell
+    // time over whatever identifier it's currently sitting on and fires a
+    // `textDocument/hover` request once it's rested there long enough (see
+    // `hover::HoverState::update`'s own doc comment). Skipped entirely
+    // while the completion popup is open — the two would otherwise
+    // visually collide over the same screen area for no useful combination,
+    // the same reasoning `SPEC.md` never has both a completion popup and a
+    // hover tooltip open at once for any real editor. `hover_pos()` (not
+    // `interact_pointer_pos()`) is what egui's own tooltips key off too:
+    // `None` while a drag (a text selection) is in progress, which is
+    // exactly when a hover popup would be the most unwelcome.
+    if completion.is_some() {
+        hover.clear();
+    } else {
+        let raw_hover_pos = shell_out.base.response.hover_pos();
+        let pointer_char_offset =
+            raw_hover_pos.map(|pos| text_area::char_offset_for_pos(&shell_out.base, &doc.buffer, pos));
+        if raw_hover_pos.is_some() {
+            eprintln!("[hover-debug] hover_pos = {raw_hover_pos:?} -> char_offset = {pointer_char_offset:?}");
+        }
+        hover.update(doc, pointer_char_offset, lsp);
+        let hover_id = egui::Id::new(("hover_popup", widget_id));
+        hover.paint(ui, hover_id, &shell_out.base, &doc.buffer, editor_rect);
     }
 
     // Passive, read-only highlight of every occurrence of the word under

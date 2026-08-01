@@ -57,6 +57,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 false,
                 &mut None,
                 &mut None,
+                &mut HoverState::default(),
                 None,
                 false,
                 false,

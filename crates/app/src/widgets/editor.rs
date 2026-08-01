@@ -3,7 +3,8 @@
 //! rendering (`painting`), Ctrl+D multi-cursor support (`multi_cursor`),
 //! Java getter/setter and constructor/toString/equals+hashCode generation
 //! (`codegen`), live templates (`templates`), the completion popup
-//! (`completion`), the right-click context menu (`context_menu`), the
+//! (`completion`), the hover-docs popup (`hover`), the right-click context
+//! menu (`context_menu`), the
 //! Spring endpoint map's whole-project scan (`spring_scan`), the git diff
 //! gutter (`diff_gutter`), and shared byte↔char offset conversion
 //! (`text_offset`). `show` and the
@@ -16,6 +17,7 @@ mod completion;
 mod context_menu;
 mod diff_gutter;
 mod folding;
+mod hover;
 mod multi_cursor;
 mod painting;
 mod spring_annotation_completion;
@@ -31,6 +33,7 @@ pub use codegen::{
     AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
 };
 pub use completion::CompletionState;
+pub use hover::HoverState;
 pub use spring_scan::{EndpointCache, scan_project_endpoints_cached};
 pub use templates::{
     GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,

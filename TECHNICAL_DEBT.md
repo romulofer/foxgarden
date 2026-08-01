@@ -36,6 +36,8 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 20 | `[OPEN]` | Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols |
+| 19 | `[RESOLVED]` | `LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin |
 | 18 | `[OPEN]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
 | 17 | `[OPEN]` | The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file |
 | 16 | `[OPEN]` | Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other |
@@ -58,6 +60,71 @@ rewritten or removed, not blindly executed.
 ---
 
 # Open
+
+## 20. [OPEN] Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols
+
+**Where:** `crates/app/src/widgets/editor/hover.rs` (`HoverState::update`,
+`hover_text_from_response`) and `crates/app/src/lsp_state.rs`
+(`request_hover`) — Track 20 Phase 3's own implementation, built this
+session. Also touches `crates/app/src/lsp_client.rs` (see #19, found and
+fixed in the same session while chasing this).
+
+**Status:** Open — mid live-verify, paused to resume another day.
+Temporary `eprintln!("[hover-debug] ...")` diagnostic lines are still in
+place at both call sites above; remove them once this entry closes.
+
+### What was found
+
+Live-verifying Checkpoint 3 ("hovering a real symbol shows real
+documentation") against a real `jdtls` surfaced two distinct issues, only
+one of which is this codebase's own bug (see #19 for that one — a genuine
+UI-freeze fix, already shipped). Once #19 was fixed, hover's actual
+request/response round trip was confirmed working end to end via the
+debug logging: a `textDocument/hover` request fires correctly after the
+pointer dwells on an identifier, reaches jdtls, and a real reply comes
+back and gets parsed correctly. But the one reply captured this session,
+for what was almost certainly a JDK type (`List`/`ArrayList` — the same
+symbols the live-verify steps ask to hover), was `{"contents":""}` — jdtls
+answered, but had nothing to show. `hover_text_from_response` correctly
+treats blank content as "nothing to show" (no tooltip), matching this
+codebase's own established silent-degrade convention elsewhere — so
+*if* this is jdtls genuinely having no Javadoc for JDK types (plausible:
+this jdtls install may have no JDK sources/Javadoc attached, unlike a
+full IDE install that bundles or downloads them), there is no bug here to
+fix, just an environment limitation like #17's Kotlin one. That's
+unconfirmed, though — the live-verify was paused before testing hover on
+a symbol the *project itself* defines (a local method/field/class),
+which would come back from ECJ's own resolved bindings without needing
+any external sources at all, and should show real content if hover is
+genuinely working end to end.
+
+### Why it wasn't fixed (or confirmed) on the spot
+
+Ran out of session time chasing #19 (a real, higher-priority freeze) first;
+by the time that was fixed and hover's transport was confirmed working,
+the live-verify itself hadn't yet been pointed at a project-owned symbol.
+
+### Proposed fix / next step
+
+Next session: hover over a symbol defined in the open project itself (not
+`List`/`ArrayList` or any other JDK type) and check the `[hover-debug]`
+output.
+- Real, non-empty `contents` → hover genuinely works; Checkpoint 3 is
+  satisfied for Java. Remove the debug `eprintln!`s, add the normal
+  `PLAN.md` Track 20 "done" writeup, and separately decide whether the
+  JDK-blank-response case is worth a fix (e.g. checking whether a
+  JDK sources jar can be attached to this jdtls install) or is fine to
+  leave as a known, documented limitation.
+- Still blank/no reply even for a project-owned symbol → a real remaining
+  bug in `request_hover`/`hover_text_from_response`/`identifier_span` to
+  chase, not an environment limitation — the debug logging already in
+  place (raw response, decoded content, fired-span) is the starting point.
+
+### Trigger condition
+
+Next time Track 20 Phase 3 is picked back up.
+
+---
 
 ## 18. [OPEN] Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin
 
@@ -887,6 +954,65 @@ this exact symptom.
 ---
 
 # Resolved
+
+## 19. [RESOLVED] ~~`LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin~~
+
+**Where:** `crates/app/src/lsp_client.rs` (`LspSession::spawn`,
+`send_request`, `send_notification`).
+
+**Status:** Fixed. Reported live as "Ctrl+Z stops responding" while
+chasing Track 20 Phase 3's (hover) own live-verify (see #20).
+
+### What was found
+
+`send_request`/`send_notification` wrote directly to the child process's
+`ChildStdin` on the caller's own thread — the UI thread, since every LSP
+call in this app (`lsp_state.rs`) runs synchronously inside a frame. The
+module's own doc comment claimed this "never blocks," but that's only
+true as long as the OS pipe buffer never fills, which itself only holds
+as long as the server keeps draining its stdin promptly. Hovering a JDK
+type apparently pushed the locally available `jdtls` into a slow or
+stalled state (plausibly attempting real work against missing JDK
+sources — see #20), during which it stopped reading its stdin; this
+app's own full-buffer `didChange` notification (sent on nearly every
+keystroke, per Phase 2's "full-text synchronization" design) then queued
+up until the pipe genuinely filled, and the next `write_all` blocked the
+calling thread — the entire UI — indefinitely. Confirmed by an A/B test:
+reverting to the pre-hover commit made the freeze disappear even while
+reproducing the exact same "type `list.`, then Ctrl+Z" steps, isolating
+the trigger to whatever hover's own extra LSP traffic provoked in the
+server, not to Ctrl+Z/undo itself.
+
+### Why it wasn't caught earlier
+
+Every LSP call site before hover (Phase 2's diagnostics sync, Phase 5's
+completion) happened to only ever talk to a `jdtls` that stayed responsive
+during those exchanges, so the pipe never filled and the blocking write
+never mattered in practice — the risk was already latent in the code, not
+introduced by hover, just never exercised until hover's own request
+pattern (or its effect on the server) hit it.
+
+### What was done
+
+Added a second background thread per `LspSession` (mirroring the existing
+reader thread) owning the real `ChildStdin` and draining an unbounded
+`mpsc::Sender<Value>` channel, doing the actual (potentially blocking)
+`write_message` there instead. `send_request`/`send_notification` now
+just push onto that channel — an operation that cannot block — so a
+stalled server can no longer freeze the UI thread no matter how long it
+takes to resume reading. `send_request`'s `pending` bookkeeping and
+`send_notification`'s error contract are otherwise unchanged; a channel
+send failing (writer thread already exited, meaning the server is already
+dead) maps to the same `io::Error` shape callers already handled.
+
+### Trigger condition
+
+N/A — fixed. Kept as historical record per this file's own convention, in
+case a similar synchronous-I/O-on-the-UI-thread shape resurfaces
+elsewhere (e.g. a future debug-adapter or build-tool integration that
+also shells out to a long-lived child process).
+
+---
 
 ## 1. [RESOLVED] ~~Considered and rejected: moving `display_path` computation into the `Err` arm~~
 

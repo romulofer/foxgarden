@@ -9,7 +9,7 @@ use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
     self, AccessorKind, CaseConversion, CompletionState, GenerateAccessorsDialog, GenerateMethodDialog,
-    GenerateMethodKind, OverrideMethodDialog, UserTemplates,
+    GenerateMethodKind, HoverState, OverrideMethodDialog, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -121,6 +121,7 @@ pub fn show(
     override_method_request: bool,
     override_method_dialog: &mut Option<OverrideMethodDialog>,
     completion: &mut Option<CompletionState>,
+    hover: &mut HoverState,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -186,6 +187,7 @@ pub fn show(
         // the same way it would if the file itself changed out from under
         // an open dialog.
         *completion = None;
+        hover.clear();
     }
 
     if let Some(index) = close_request {
@@ -273,6 +275,7 @@ pub fn show(
             override_method_request,
             override_method_dialog,
             completion,
+            hover,
             case_conversion_request,
             sort_lines_request,
             unique_lines_request,

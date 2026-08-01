@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fg_core::{Diagnostic, Document, Language, Severity};
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics};
-use lsp_types::request::Completion;
+use lsp_types::request::{Completion, HoverRequest};
 use lsp_types::{DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem, Uri, WorkspaceFolder};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
@@ -197,6 +197,37 @@ impl LspState {
             }),
         };
         session.send_request(Completion::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends a `textDocument/hover` request at `byte_offset` in `doc` — same
+    /// session-lookup/flush-then-send shape as `request_completion` above
+    /// (including the same pre-request `sync_one_document` flush, for the
+    /// same reason: whichever frame first hovers a just-edited position
+    /// must not race ahead of that edit's own `didChange` on the session's
+    /// single ordered stdin pipe), just a different LSP method and no
+    /// completion-specific trigger context.
+    pub fn request_hover(&mut self, doc: &mut Document, byte_offset: usize) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let kind = match doc.language {
+            Some(Language::Java) => ServerKind::Java,
+            Some(Language::Kotlin) => ServerKind::Kotlin,
+            _ => return None,
+        };
+        let slot = match kind {
+            ServerKind::Java => &mut self.java,
+            ServerKind::Kotlin => &mut self.kotlin,
+        };
+        let mut errors = Vec::new();
+        if !sync_one_document(slot, kind, doc, &mut errors) {
+            return None;
+        }
+        let Slot::Ready { session, .. } = slot else { return None };
+        let uri = file_uri(&doc.path).ok()?;
+        let position = byte_to_utf16_position(&doc.buffer.to_string(), byte_offset);
+        let params = lsp_types::HoverParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri }, position },
+            work_done_progress_params: Default::default(),
+        };
+        session.send_request(HoverRequest::METHOD, serde_json::to_value(params).ok()?).ok()
     }
 
     fn poll_retiring(&mut self) -> Vec<String> {
