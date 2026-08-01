@@ -5,8 +5,6 @@
 
 # Checkpoint planning docs (local only, not tracked on main — PLAN.md/
 # SPEC.md are tracked on the ide-henshin branch for the IDE pivot)
-FEATURES.md
-IMPLEMENTED_FEATURES.md
 
 # Claude Code local (personal) settings
 .claude/settings.local.json
