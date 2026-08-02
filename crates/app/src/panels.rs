@@ -4,6 +4,7 @@
 pub mod git_diff;
 pub mod git_stage;
 pub mod go_to_file;
+pub mod lsp_servers;
 pub mod menu_bar;
 pub mod quick_switcher;
 pub mod run_configs;

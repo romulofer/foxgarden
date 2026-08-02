@@ -1886,14 +1886,31 @@ pub fn show(
     if completion.is_some() {
         hover.clear();
     } else {
-        let raw_hover_pos = shell_out.base.response.hover_pos();
-        let pointer_char_offset =
-            raw_hover_pos.map(|pos| text_area::char_offset_for_pos(&shell_out.base, &doc.buffer, pos));
-        if raw_hover_pos.is_some() {
-            eprintln!("[hover-debug] hover_pos = {raw_hover_pos:?} -> char_offset = {pointer_char_offset:?}");
-        }
-        hover.update(doc, pointer_char_offset, lsp);
         let hover_id = egui::Id::new(("hover_popup", widget_id));
+        // The tooltip is anchored directly beneath the identifier the
+        // pointer is on (`completion::popup_position`), so a couple of
+        // pixels of downward drift puts the pointer inside the tooltip's
+        // own `Order::Foreground` area — at which point egui stops
+        // reporting the text area underneath as hovered at all, `update`
+        // below would drop the tracked hover, and the tooltip the user was
+        // reaching for would vanish and only come back after another full
+        // `HOVER_DELAY`. Freezing the whole hover state while the pointer
+        // is over the tooltip breaks that flicker loop. Gated on
+        // `has_content` because `area_rect` keeps answering with the last
+        // rect an id was shown at, which would otherwise let a stale
+        // rectangle from an already-dismissed tooltip freeze this forever.
+        let pointer_over_tooltip = hover.has_content()
+            && ui.ctx().pointer_hover_pos().is_some_and(|pos| {
+                ui.ctx().memory(|mem| mem.area_rect(hover_id)).is_some_and(|rect| rect.contains(pos))
+            });
+        if !pointer_over_tooltip {
+            let hovered = shell_out
+                .base
+                .response
+                .hover_pos()
+                .and_then(|pos| super::hover::hovered_span(&shell_out.base, &doc.buffer, pos));
+            hover.update(doc, hovered, lsp);
+        }
         hover.paint(ui, hover_id, &shell_out.base, &doc.buffer, editor_rect);
     }
 

@@ -2,6 +2,7 @@ mod app;
 mod auto_save;
 mod file_watch;
 mod lsp_client;
+mod lsp_manager;
 mod lsp_settings;
 mod lsp_state;
 mod panels;

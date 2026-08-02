@@ -258,7 +258,9 @@ fn persisted_settings_round_trip() {
     let saved_lsp = LspSettings {
         enabled: true,
         jdtls_binary: "/usr/bin/jdtls".to_string(),
+        jdtls_installed_version: "1.60.0".to_string(),
         kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
+        kotlin_language_server_installed_version: "1.3.13".to_string(),
     };
     persist_settings(
         &mut storage,

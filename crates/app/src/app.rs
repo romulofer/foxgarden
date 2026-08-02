@@ -19,6 +19,7 @@ use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::spring_config::SpringConfigState;
+use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
@@ -82,7 +83,9 @@ const AUTO_SAVE_MODE_ON_FOCUS_LOSS: &str = "on_focus_loss";
 const AUTO_SAVE_MODE_AFTER_IDLE: &str = "after_idle";
 const LSP_ENABLED_KEY: &str = "lsp_enabled";
 const LSP_JDTLS_BINARY_KEY: &str = "lsp_jdtls_binary";
+const LSP_JDTLS_INSTALLED_VERSION_KEY: &str = "lsp_jdtls_installed_version";
 const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
+const LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY: &str = "lsp_kotlin_language_server_installed_version";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -278,6 +281,12 @@ pub struct FoxGardenApp {
     /// beside the persisted settings, but never persisted itself: a fresh
     /// launch performs a fresh handshake against the current project.
     lsp: LspState,
+    /// Settings > Language Servers… — the dialog that edits `lsp_settings`
+    /// above, plus the background installs/update checks behind it
+    /// (`lsp_manager`). Runtime-only: what an install produced is persisted
+    /// through `lsp_settings`, and a job in flight at shutdown is simply
+    /// gone, not resumed.
+    lsp_servers: LspServersState,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
     /// runtime-only, never persisted (there's nothing meaningful to resume
     /// across a restart: `was_focused` starts however the OS hands focus to
@@ -840,8 +849,14 @@ fn restore_settings(
     if let Some(path) = storage.get_string(LSP_JDTLS_BINARY_KEY) {
         lsp_settings.jdtls_binary = path;
     }
+    if let Some(version) = storage.get_string(LSP_JDTLS_INSTALLED_VERSION_KEY) {
+        lsp_settings.jdtls_installed_version = version;
+    }
     if let Some(path) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY) {
         lsp_settings.kotlin_language_server_binary = path;
+    }
+    if let Some(version) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY) {
+        lsp_settings.kotlin_language_server_installed_version = version;
     }
 }
 
@@ -914,7 +929,12 @@ fn persist_settings(
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
+    storage.set_string(LSP_JDTLS_INSTALLED_VERSION_KEY, lsp_settings.jdtls_installed_version.clone());
     storage.set_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY, lsp_settings.kotlin_language_server_binary.clone());
+    storage.set_string(
+        LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,
+        lsp_settings.kotlin_language_server_installed_version.clone(),
+    );
 }
 
 impl FoxGardenApp {
@@ -1003,6 +1023,7 @@ impl FoxGardenApp {
             auto_save_settings,
             lsp_settings,
             lsp: LspState::default(),
+            lsp_servers: LspServersState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
         };
@@ -1193,7 +1214,6 @@ impl eframe::App for FoxGardenApp {
                         &mut self.indent_settings,
                         &mut self.view_settings,
                         &mut self.auto_save_settings,
-                        &mut self.lsp_settings,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
@@ -1282,6 +1302,9 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.open_external_tools_settings_request {
             self.static_analysis.open_settings();
         }
+        if menu_outcome.open_lsp_servers_settings_request {
+            self.lsp_servers.open_settings();
+        }
         if menu_outcome.run_checkstyle_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
@@ -1329,6 +1352,23 @@ impl eframe::App for FoxGardenApp {
         }
         for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
             self.static_analysis.record_latest_version(tool, result);
+        }
+        // A language-server install runs for minutes (jdt.ls is built from
+        // source — see `lsp_manager`'s own header), reporting progress from
+        // a background thread with no input event to ride in on, so its
+        // dialog needs repaints requested for it the same way `lsp_state`'s
+        // own background replies do.
+        for result in self.lsp_servers.manager.poll_installs() {
+            match result {
+                Ok(installed) => self.lsp_settings.apply_installed(&installed),
+                Err(err) => self.last_error = Some(format!("Language server install failed: {err}")),
+            }
+        }
+        for (server, result) in self.lsp_servers.manager.poll_checks() {
+            self.lsp_servers.record_latest_version(server, result);
+        }
+        if self.lsp_servers.manager.busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         self.diff.poll(&mut self.state);
 
@@ -1438,6 +1478,7 @@ impl eframe::App for FoxGardenApp {
             run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);
         }
         static_analysis::show_settings(ui, &mut self.static_analysis, &mut self.external_tool_paths);
+        lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
 
         show_error_modal(ui, &mut self.last_error);
     }

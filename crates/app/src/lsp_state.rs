@@ -567,11 +567,24 @@ fn initialize_params(kind: ServerKind, root: &Path) -> Result<InitializeParams, 
         // snippet; declaring this lets a compliant server send `PlainText`-
         // formatted items itself rather than relying solely on this
         // client's own defensive label-parsing to undo a `Snippet` one.
+        //
+        // `hover.content_format` is `[PlainText, Markdown]` — the order is
+        // the client's own stated *preference*, per the protocol, and this
+        // client's tooltip is a plain `ui.label` (`hover::HoverState::
+        // paint`) with no markdown renderer behind it, so a server left to
+        // its own default (JDTLS picks Markdown) would have its `**bold**`
+        // and fenced code blocks painted as literal punctuation. Markdown
+        // stays listed as the accepted fallback for servers that only
+        // speak it.
         capabilities: lsp_types::ClientCapabilities {
             text_document: Some(lsp_types::TextDocumentClientCapabilities {
                 completion: Some(lsp_types::CompletionClientCapabilities {
                     completion_item: Some(lsp_types::CompletionItemCapability { snippet_support: Some(false), ..Default::default() }),
                     ..Default::default()
+                }),
+                hover: Some(lsp_types::HoverClientCapabilities {
+                    dynamic_registration: Some(false),
+                    content_format: Some(vec![lsp_types::MarkupKind::PlainText, lsp_types::MarkupKind::Markdown]),
                 }),
                 ..Default::default()
             }),
@@ -606,7 +619,7 @@ mod tests {
 
     #[test]
     fn desired_config_requires_opt_in_root_language_and_binary() {
-        let settings = LspSettings { enabled: true, jdtls_binary: "jdtls".to_string(), kotlin_language_server_binary: String::new() };
+        let settings = LspSettings { enabled: true, jdtls_binary: "jdtls".to_string(), ..Default::default() };
         let root = Path::new(".");
         assert!(desired_config(ServerKind::Java, &settings, Some(root), true).is_some());
         assert!(desired_config(ServerKind::Java, &settings, Some(root), false).is_none());
@@ -618,6 +631,21 @@ mod tests {
         let params = initialize_params(ServerKind::Java, Path::new(".")).unwrap();
         assert_eq!(params.workspace_folders.as_ref().unwrap().len(), 1);
         assert_eq!(params.initialization_options.unwrap()["extendedClientCapabilities"]["classFileContentsSupport"], true);
+    }
+
+    /// A server picks its hover content format from what the client says
+    /// it prefers; with no `hover` capability declared at all, JDTLS
+    /// defaults to Markdown and the tooltip paints raw `**`/``` ``` ```
+    /// punctuation (`HoverState::paint` is a plain label, not a markdown
+    /// renderer). PlainText must therefore be *first*, not merely present.
+    #[test]
+    fn initialize_params_prefers_plain_text_hover_content() {
+        let params = initialize_params(ServerKind::Java, Path::new(".")).unwrap();
+        let hover = params.capabilities.text_document.unwrap().hover.unwrap();
+        assert_eq!(
+            hover.content_format,
+            Some(vec![lsp_types::MarkupKind::PlainText, lsp_types::MarkupKind::Markdown])
+        );
     }
 
     #[test]

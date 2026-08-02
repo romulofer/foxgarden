@@ -35,6 +35,13 @@ struct Tracked {
     /// practice means the request never gets a full `HOVER_DELAY` of
     /// stillness to actually fire.
     span: Range<usize>,
+    /// `doc.lsp_version` as of the request this content came from. Part of
+    /// what identifies "the same hover" alongside `doc_path`/`span`: a
+    /// stationary pointer over a buffer that's being *typed* into keeps the
+    /// same path and (until the edit reaches it) the same span, so without
+    /// this the tooltip would keep painting a resolved answer computed
+    /// against text that no longer exists.
+    version: i32,
     since: Instant,
     fired: bool,
     pending: Option<Receiver<Result<serde_json::Value, ResponseError>>>,
@@ -51,23 +58,26 @@ pub struct HoverState {
 }
 
 impl HoverState {
-    /// Called once a frame with the pointer's current char offset over
-    /// `doc`'s text (`None` when the pointer isn't hovering the text area
-    /// at all this frame, e.g. it's elsewhere in the UI or a drag is in
-    /// progress) — advances the dwell timer, fires a request once
-    /// `HOVER_DELAY` elapses, and polls whatever request is already in
+    /// Called once a frame with whichever identifier the pointer is
+    /// currently resting on (`hovered_span`; `None` when it isn't on one at
+    /// all this frame — elsewhere in the UI, over whitespace, past the end
+    /// of a line, or mid-drag) — advances the dwell timer, fires a request
+    /// once `HOVER_DELAY` elapses, and polls whatever request is already in
     /// flight.
-    pub(super) fn update(&mut self, doc: &mut Document, pointer_char_offset: Option<usize>, lsp: &mut LspState) {
-        let Some(pointer_char_offset) = pointer_char_offset else {
+    pub(super) fn update(&mut self, doc: &mut Document, hovered: Option<Range<usize>>, lsp: &mut LspState) {
+        let Some(span) = hovered else {
             self.tracked = None;
             return;
         };
-        let span = identifier_span(&doc.buffer, pointer_char_offset);
-        let stays = self.tracked.as_ref().is_some_and(|t| t.doc_path == doc.path && t.span == span);
+        let stays = self
+            .tracked
+            .as_ref()
+            .is_some_and(|t| t.doc_path == doc.path && t.span == span && t.version == doc.lsp_version);
         if !stays {
             self.tracked = Some(Tracked {
                 doc_path: doc.path.clone(),
                 span: span.clone(),
+                version: doc.lsp_version,
                 since: Instant::now(),
                 fired: false,
                 pending: None,
@@ -78,31 +88,18 @@ impl HoverState {
         if !tracked.fired && tracked.since.elapsed() >= HOVER_DELAY {
             tracked.fired = true;
             let text = doc.buffer.to_string();
-            let byte_offset = char_to_byte(&text, span.start);
-            tracked.pending = lsp.request_hover(doc, byte_offset);
-            eprintln!(
-                "[hover-debug] fired at span {:?} byte {} -> request sent: {}",
-                span,
-                byte_offset,
-                tracked.pending.is_some()
-            );
+            tracked.pending = lsp.request_hover(doc, char_to_byte(&text, span.start));
         }
         if let Some(rx) = &tracked.pending {
             match rx.try_recv() {
                 Ok(Ok(value)) => {
-                    eprintln!("[hover-debug] raw response: {value}");
                     tracked.content = hover_text_from_response(value);
-                    eprintln!("[hover-debug] decoded content: {:?}", tracked.content);
                     tracked.pending = None;
                 }
-                Ok(Err(error)) => {
-                    eprintln!("[hover-debug] server returned an error: {error:?}");
-                    tracked.pending = None;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    eprintln!("[hover-debug] request channel disconnected with no response");
-                    tracked.pending = None;
-                }
+                // A rejected request or a server that exited mid-request
+                // both degrade the same way every other best-effort LSP
+                // path in this app does: no tooltip, nothing surfaced.
+                Ok(Err(_)) | Err(TryRecvError::Disconnected) => tracked.pending = None,
                 Err(TryRecvError::Empty) => {}
             }
         }
@@ -116,6 +113,14 @@ impl HoverState {
     /// both of those call sites sit outside `widgets::editor`.
     pub fn clear(&mut self) {
         self.tracked = None;
+    }
+
+    /// Whether there's resolved content being painted right now — read by
+    /// `widget.rs` to decide whether the tooltip's own `egui::Area` rect is
+    /// meaningful this frame (see its "pointer over the tooltip" guard).
+    /// `pub(super)`: that call site is inside `widgets::editor`.
+    pub(super) fn has_content(&self) -> bool {
+        self.tracked.as_ref().is_some_and(|t| t.content.is_some())
     }
 
     /// Whether a `textDocument/hover` reply could still land — same
@@ -151,14 +156,51 @@ impl HoverState {
     }
 }
 
+/// Which identifier — if any — the pointer at `pointer` is actually
+/// resting on. Two gates, both needed, because `char_offset_for_pos`
+/// answers "which text position is *nearest* this point", never "is this
+/// point on any text at all":
+///
+/// * an empty `identifier_span` (whitespace, punctuation, a blank line, the
+///   indentation to the left of a line's first character) is nothing to
+///   look up, so it never arms a request in the first place;
+/// * a point past the end of a line resolves to that line's last position,
+///   which `identifier_span` then happily extends *leftward* into the final
+///   token — so pointing at the blank space to the right of `foo();`, or
+///   anywhere in the empty area below the last line, used to pop up docs
+///   for a symbol the pointer plainly wasn't on. `pointer_is_on_span`
+///   rejects those by measuring the identifier's real painted extent.
+pub(super) fn hovered_span(out: &TextAreaOutput, buffer: &Rope, pointer: egui::Pos2) -> Option<Range<usize>> {
+    let span = identifier_span(buffer, super::text_area::char_offset_for_pos(out, buffer, pointer));
+    if span.is_empty() {
+        return None;
+    }
+    let start = out.char_rect(buffer, span.start)?;
+    let end = out.char_rect(buffer, span.end)?;
+    pointer_is_on_span(start, end, pointer).then_some(span)
+}
+
+/// Whether `pointer` lies on the glyphs between `start` and `end` — the
+/// caret rects (`TextAreaOutput::char_rect`, one pixel wide by one row
+/// tall) at an identifier's first char and at the position just past its
+/// last, so `end.left()` is the identifier's own right edge.
+fn pointer_is_on_span(start: egui::Rect, end: egui::Rect, pointer: egui::Pos2) -> bool {
+    if pointer.y < start.top() || pointer.y >= start.bottom() || pointer.x < start.left() {
+        return false;
+    }
+    // `end` on a lower row means word wrap split this identifier and the
+    // part on *this* row runs to the row's own end — there's no right
+    // bound left to test against here.
+    end.top() > start.top() || pointer.x < end.left()
+}
+
 /// Extends `char_offset` to the full run of identifier characters
 /// (alphanumeric, `_`, `$` — valid in both Java and Kotlin identifiers) it
 /// sits inside or touches, so the popup's own anchor and `HoverState`'s
 /// dwell tracking both key off "which symbol" rather than "which exact
 /// char". A `char_offset` that isn't inside any identifier (whitespace,
-/// punctuation) yields an empty span at that exact point — hovering there
-/// just never accumulates enough dwell time to fire, since the span (and so
-/// `stays`) changes on almost every pointer move across non-identifier text.
+/// punctuation) yields an empty span at that exact point, which
+/// `hovered_span` above treats as "nothing hovered".
 fn identifier_span(buffer: &Rope, char_offset: usize) -> Range<usize> {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     let len = buffer.len_chars();
@@ -246,12 +288,51 @@ mod tests {
         assert_eq!(identifier_span(&r, 2), 0..4);
     }
 
+    /// A one-row-tall, one-pixel-wide caret rect at `x`, the exact shape
+    /// `TextAreaOutput::char_rect` hands `pointer_is_on_span`.
+    fn caret(x: f32, y: f32) -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(1.0, 18.0))
+    }
+
     #[test]
-    fn update_with_no_pointer_position_clears_any_tracked_hover() {
+    fn pointer_is_on_span_accepts_a_point_between_the_two_carets() {
+        assert!(pointer_is_on_span(caret(10.0, 0.0), caret(40.0, 0.0), egui::pos2(25.0, 9.0)));
+    }
+
+    #[test]
+    fn pointer_is_on_span_rejects_a_point_past_the_end_of_the_identifier() {
+        // The whole point of this gate: `char_offset_for_pos` resolves the
+        // blank space to the right of a line to that line's last position,
+        // which `identifier_span` then extends back into the final token.
+        assert!(!pointer_is_on_span(caret(10.0, 0.0), caret(40.0, 0.0), egui::pos2(300.0, 9.0)));
+    }
+
+    #[test]
+    fn pointer_is_on_span_rejects_a_point_before_the_identifier_starts() {
+        assert!(!pointer_is_on_span(caret(10.0, 0.0), caret(40.0, 0.0), egui::pos2(2.0, 9.0)));
+    }
+
+    #[test]
+    fn pointer_is_on_span_rejects_a_point_on_another_row() {
+        // The empty area below the last line resolves to the end of the
+        // buffer the same way, and must be rejected the same way.
+        assert!(!pointer_is_on_span(caret(10.0, 0.0), caret(40.0, 0.0), egui::pos2(25.0, 200.0)));
+    }
+
+    #[test]
+    fn pointer_is_on_span_applies_no_right_bound_when_word_wrap_split_the_identifier() {
+        // `end` on a lower row: this row holds only the identifier's first
+        // half, which runs to the row's own end, so anything right of
+        // `start` on this row is still on it.
+        assert!(pointer_is_on_span(caret(10.0, 0.0), caret(6.0, 18.0), egui::pos2(500.0, 9.0)));
+    }
+
+    #[test]
+    fn update_with_nothing_hovered_clears_any_tracked_hover() {
         let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
         let mut state = HoverState::default();
         let mut lsp = LspState::default();
-        state.update(&mut doc, Some(0), &mut lsp);
+        state.update(&mut doc, Some(0..5), &mut lsp);
         assert!(state.tracked.is_some());
         state.update(&mut doc, None, &mut lsp);
         assert!(state.tracked.is_none());
@@ -262,11 +343,11 @@ mod tests {
         let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
         let mut state = HoverState::default();
         let mut lsp = LspState::default();
-        // Character 6 sits inside "Foo" — no language server is running (a
-        // fresh `LspState::default()`), so `request_hover` itself would
-        // return `None` regardless; this only asserts the *timer* gate:
-        // `fired` stays false immediately after the first sighting.
-        state.update(&mut doc, Some(6), &mut lsp);
+        // Chars 6..9 are "Foo" — no language server is running (a fresh
+        // `LspState::default()`), so `request_hover` itself would return
+        // `None` regardless; this only asserts the *timer* gate: `fired`
+        // stays false immediately after the first sighting.
+        state.update(&mut doc, Some(6..9), &mut lsp);
         let tracked = state.tracked.as_ref().unwrap();
         assert!(!tracked.fired);
         assert!(tracked.pending.is_none());
@@ -277,13 +358,42 @@ mod tests {
         let (_dir, mut doc) = test_support::temp_document("Foo.java", "aaa bbb");
         let mut state = HoverState::default();
         let mut lsp = LspState::default();
-        state.update(&mut doc, Some(1), &mut lsp);
+        state.update(&mut doc, Some(0..3), &mut lsp);
         let first_since = state.tracked.as_ref().unwrap().since;
-        state.update(&mut doc, Some(5), &mut lsp);
+        state.update(&mut doc, Some(4..7), &mut lsp);
         let tracked = state.tracked.as_ref().unwrap();
         assert_eq!(tracked.span, 4..7);
         assert!(!tracked.fired);
         assert!(tracked.since >= first_since);
+    }
+
+    #[test]
+    fn update_editing_the_document_re_arms_the_same_hovered_span() {
+        // A stationary pointer over a buffer being typed into: same path,
+        // same span, but the resolved content (and the position it was
+        // resolved at) belong to a version of the text that's gone.
+        let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
+        let mut state = HoverState::default();
+        let mut lsp = LspState::default();
+        state.update(&mut doc, Some(6..9), &mut lsp);
+        state.tracked.as_mut().unwrap().content = Some("stale docs".to_string());
+        doc.lsp_version += 1;
+        state.update(&mut doc, Some(6..9), &mut lsp);
+        let tracked = state.tracked.as_ref().unwrap();
+        assert_eq!(tracked.version, doc.lsp_version);
+        assert!(tracked.content.is_none());
+        assert!(!state.has_content());
+    }
+
+    #[test]
+    fn update_an_unchanged_hover_keeps_its_resolved_content() {
+        let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
+        let mut state = HoverState::default();
+        let mut lsp = LspState::default();
+        state.update(&mut doc, Some(6..9), &mut lsp);
+        state.tracked.as_mut().unwrap().content = Some("class Foo".to_string());
+        state.update(&mut doc, Some(6..9), &mut lsp);
+        assert!(state.has_content());
     }
 
     #[test]

@@ -4,7 +4,6 @@ use syntax::{IncrementalParser, Scope};
 use super::side_panel::SidePanelState;
 use super::tabs;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings};
-use crate::lsp_settings::LspSettings;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -55,6 +54,10 @@ pub struct MenuBarOutcome {
     /// than `MenuBarState`, same "the feature's own state, not menu_bar's"
     /// shape `open_run_configs_request` already established for `RunConfigsDialogState`.
     pub open_external_tools_settings_request: bool,
+    /// Settings > Language Servers… — opens `panels::lsp_servers`' dialog,
+    /// which owns the enable/binary-path settings that used to live in a
+    /// nested Settings submenu, plus installing the servers themselves.
+    pub open_lsp_servers_settings_request: bool,
     /// Tools > Run Checkstyle.
     pub run_checkstyle_request: bool,
     /// Tools > Run PMD.
@@ -88,7 +91,6 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
     auto_save_settings: &mut AutoSaveSettings,
-    lsp_settings: &mut LspSettings,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
@@ -216,23 +218,10 @@ pub fn show(
                     });
                 });
             });
-            ui.menu_button("Language Server", |ui| {
-                // Off by default (`LspSettings::default`). Phase 1's
-                // `lsp_state::LspState` launches only after this is enabled,
-                // an open project has a Java/Kotlin document, and that
-                // language's binary path is non-empty.
-                ui.checkbox(&mut lsp_settings.enabled, "Enabled");
-                ui.add_enabled_ui(lsp_settings.enabled, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("jdtls Binary");
-                        ui.text_edit_singleline(&mut lsp_settings.jdtls_binary);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Kotlin Language Server Binary");
-                        ui.text_edit_singleline(&mut lsp_settings.kotlin_language_server_binary);
-                    });
-                });
-            });
+            if ui.button("Language Servers…").clicked() {
+                outcome.open_lsp_servers_settings_request = true;
+                ui.close();
+            }
             if ui.button("External Tools…").clicked() {
                 outcome.open_external_tools_settings_request = true;
                 ui.close();
