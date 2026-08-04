@@ -1,39 +1,60 @@
 //! Installs and updates the two language servers Settings > Language
-//! Servers… configures (`PLAN.md` Track 20), straight from each project's
-//! own upstream GitHub repository, into a per-user cache directory — so
-//! neither has to be found, downloaded and unpacked by hand before
+//! Servers… configures (`PLAN.md` Track 20) into a per-user cache directory
+//! — so neither has to be found, downloaded and unpacked by hand before
 //! FoxGarden can use it.
 //!
-//! The two servers need genuinely different treatment, and that difference
-//! is upstream's, not a choice made here:
+//! Both servers' archives are bundled straight into the FoxGarden binary
+//! (`vendor/lsp-servers/`, tracked via Git LFS — see `include_bytes!` below),
+//! not fetched over the network at install time:
 //!
 //! * **Kotlin Language Server** (`fwcd/kotlin-language-server`) publishes a
-//!   ready-to-run `server.zip` on every GitHub release. Download, extract,
-//!   point at `server/bin/kotlin-language-server`. Same shape as
+//!   ready-to-run `server.zip` on every GitHub release — vendored verbatim.
+//!   Extract, point at `server/bin/kotlin-language-server`. Same shape as
 //!   `tool_manager`'s own PMD/SpotBugs installs.
 //! * **Eclipse JDT Language Server** (`eclipse-jdtls/eclipse.jdt.ls`) does
-//!   **not** publish build artifacts on GitHub at all — its releases page
-//!   holds exactly one unrelated 2016 hackathon `.vsix` (verified against
-//!   the real API this session), with the actual milestone tarballs living
-//!   on `download.eclipse.org` instead. Installing it from its own repo
-//!   therefore means building it: shallow-clone the release tag and run the
-//!   project's own bundled Maven wrapper, exactly as its README documents
-//!   (`JAVA_HOME=/path/to/java/21 ./mvnw clean verify`, producing
-//!   `org.eclipse.jdt.ls.product/target/repository`). That build takes
-//!   several minutes and needs `git` plus a JDK 21+, which is why installs
-//!   report progress rather than just a spinner.
+//!   not publish build artifacts on GitHub at all — its releases page holds
+//!   exactly one unrelated 2016 hackathon `.vsix` (verified against the real
+//!   API this session). The real prebuilt distribution instead lives on
+//!   `download.eclipse.org/jdtls/milestones/<version>/`, as a self-contained
+//!   tarball (`bin/jdtls`, a Python launcher, plus the Equinox jars and
+//!   per-platform `config_*` dirs it needs) — vendored from there rather
+//!   than built from source. Building it from source instead (the previous
+//!   approach here) meant a `git clone` plus the project's own Maven/Tycho
+//!   build, which resolves its target-platform dependencies straight off
+//!   Maven Central; behind a corporate mirror that doesn't proxy every
+//!   artifact that build touches, it fails outright (e.g. `com.jetbrains.
+//!   intellij.java:java-decompiler-engine` unresolvable) — a failure mode
+//!   that has nothing to do with FoxGarden and no fix on this end. Vendoring
+//!   the official prebuilt tarball sidesteps that whole class of failure:
+//!   no Maven, no git, no network at install time at all.
 //!
-//! Every URL, tag shape, archive layout and build command in this file was
-//! checked against the real repositories/release assets this session rather
-//! than assumed — see each function's own doc comment.
+//! jdt.ls' own README states its **runtime** minimum is Java 21 (not just a
+//! build-time requirement) — `resolve_jdtls_java` resolves and verifies that
+//! JVM once, and `lsp_state` pins every jdt.ls spawn to that exact
+//! executable via `bin/jdtls`'s own `--java-executable` flag, rather than
+//! letting its launcher fall back to whatever `java` PATH happens to resolve
+//! to at that later moment.
+//!
+//! Every archive layout and version in this file was checked against the
+//! real vendored artifacts this session rather than assumed — see each
+//! function's own doc comment.
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use directories::ProjectDirs;
+
+/// The two servers' own release archives, embedded directly into the
+/// FoxGarden binary at compile time — every build carries a working
+/// language server with it, so installing one never depends on network
+/// access, `git`, or a JDK capable of building jdt.ls' own Tycho product.
+/// Tracked via Git LFS (`vendor/lsp-servers/.gitattributes`) so the plain
+/// git history stays small despite the ~135 MB combined size.
+const JDTLS_ARCHIVE: &[u8] = include_bytes!("../../../vendor/lsp-servers/jdtls-1.60.0.tar.gz");
+const KOTLIN_LANGUAGE_SERVER_ARCHIVE: &[u8] =
+    include_bytes!("../../../vendor/lsp-servers/kotlin-language-server-1.3.13.zip");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Server {
@@ -45,9 +66,8 @@ pub enum Server {
 /// settings dialog lists them.
 pub const ALL_SERVERS: [Server; 2] = [Server::Jdtls, Server::KotlinLanguageServer];
 
-/// The JDK jdt.ls' own build requires — its README's build instructions
-/// name Java 21 explicitly (`JAVA_HOME=/path/to/java/21 ./mvnw clean
-/// verify`).
+/// The JVM jdt.ls itself requires to *run* — its README states this
+/// explicitly as a runtime minimum, not just a build-time one.
 const JDTLS_MINIMUM_JDK: u32 = 21;
 
 impl Server {
@@ -65,13 +85,11 @@ impl Server {
         }
     }
 
-    /// The version "Install" uses when the user hasn't picked a specific
-    /// one — a pinned release verified to exist this session, not whatever
-    /// is newest at click time, for the same reproducibility reason
-    /// `tool_manager::Tool::recommended_version` documents for the static-
-    /// analysis tools. `check_latest` separately reports what upstream
-    /// currently publishes, and the dialog offers *that* version as an
-    /// explicit one-click update.
+    /// The version bundled with this build of FoxGarden — the only one
+    /// `install` can actually install (see `vendor/lsp-servers/` and the
+    /// `include_bytes!` constants above). `check_latest` separately reports
+    /// what upstream currently publishes, purely as an FYI: a newer version
+    /// isn't installable until it's vendored into a FoxGarden release.
     pub fn recommended_version(self) -> &'static str {
         match self {
             Server::Jdtls => "1.60.0",
@@ -79,67 +97,36 @@ impl Server {
         }
     }
 
-    /// What this server costs to install, for the dialog to warn about
-    /// before the user commits to it.
+    /// What this server costs to install, for the dialog to show.
     pub fn install_note(self) -> &'static str {
         match self {
-            // Not a guess at build times: this is a full Tycho/Maven build
-            // of the whole Eclipse product.
             Server::Jdtls => {
-                "Built from source (upstream publishes no binaries on GitHub). Needs git, a JDK 21+ and Python 3.9+ \
-                 on PATH, and takes several minutes."
+                "Bundled with FoxGarden (Eclipse's own prebuilt distribution) — installs instantly, no network or \
+                 build required. Needs a JDK 21+ on PATH or JAVA_HOME to run (jdt.ls' own stated minimum)."
             }
-            Server::KotlinLanguageServer => "Prebuilt release download (~87 MB). Needs a JDK on PATH to run.",
+            Server::KotlinLanguageServer => {
+                "Bundled with FoxGarden — installs instantly, no network required. Needs a JDK on PATH to run."
+            }
         }
     }
 
-    /// The GitHub tag for `version`. Real tag shapes, read off each repo's
-    /// own tag/release listing: jdt.ls prefixes with `v`, kotlin-language-
-    /// server uses a bare version.
-    fn tag_for(self, version: &str) -> String {
+    /// This server's own archive bytes, embedded at compile time.
+    fn bundled_archive(self) -> &'static [u8] {
         match self {
-            Server::Jdtls => format!("v{version}"),
-            Server::KotlinLanguageServer => version.to_string(),
-        }
-    }
-
-    fn clone_url(self) -> String {
-        format!("https://github.com/{}.git", self.github_repo())
-    }
-
-    /// The prebuilt release asset to download, for servers that publish
-    /// one — `None` for jdt.ls, which is what sends it down the
-    /// build-from-source path instead.
-    fn release_asset(self, version: &str) -> Option<String> {
-        match self {
-            Server::Jdtls => None,
-            Server::KotlinLanguageServer => Some(format!(
-                "https://github.com/{}/releases/download/{}/server.zip",
-                self.github_repo(),
-                self.tag_for(version)
-            )),
+            Server::Jdtls => JDTLS_ARCHIVE,
+            Server::KotlinLanguageServer => KOTLIN_LANGUAGE_SERVER_ARCHIVE,
         }
     }
 
     /// Where the installed launcher ends up, relative to this server's own
-    /// directory under the cache: the path inside the extracted archive
-    /// (Kotlin) or inside the built Maven product (jdt.ls). Both are real
-    /// paths verified against the actual artifact — `server/bin/kotlin-
-    /// language-server` read out of the release zip's own central
-    /// directory, `bin/jdtls` from the layout jdt.ls' README documents its
-    /// build producing.
+    /// directory under the cache — the path inside the extracted archive.
+    /// Both are real paths verified against the actual vendored artifact:
+    /// `server/bin/kotlin-language-server` read out of the release zip's own
+    /// central directory, `bin/jdtls` (a Python launcher) out of the
+    /// official jdt.ls milestone tarball.
     fn launcher_path(self) -> PathBuf {
         match self {
-            Server::Jdtls => [
-                "source",
-                "org.eclipse.jdt.ls.product",
-                "target",
-                "repository",
-                "bin",
-                "jdtls",
-            ]
-            .iter()
-            .collect(),
+            Server::Jdtls => ["bin", "jdtls"].iter().collect(),
             Server::KotlinLanguageServer => ["server", "bin", "kotlin-language-server"].iter().collect(),
         }
     }
@@ -204,17 +191,6 @@ fn install_dir(server: Server, version: &str) -> Result<PathBuf, String> {
     Ok(cache_dir()?.join(install_dir_name(server, version)))
 }
 
-fn download(url: &str) -> Result<Vec<u8>, String> {
-    let mut response = ureq::get(url).call().map_err(|e| format!("download failed: {e}"))?;
-    let mut bytes = Vec::new();
-    response
-        .body_mut()
-        .as_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("download failed: {e}"))?;
-    Ok(bytes)
-}
-
 /// Marks `path` executable on Unix. Both launchers *should* already carry
 /// the bit (Gradle's `distZip` stores Unix permissions; Maven's assembly
 /// sets them), but an archive repacked anywhere along the way loses it
@@ -234,64 +210,35 @@ fn ensure_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs `command` to completion, mapping a non-zero exit into an error that
-/// actually says what went wrong: the tail of the combined output rather
-/// than a bare status code, since a failed Maven build's real cause is
-/// always in its last few lines and nowhere else this app can show it.
-fn run_command(command: &mut Command, what: &str) -> Result<(), String> {
-    let output = command
-        .output()
-        .map_err(|e| format!("couldn't run {what}: {e} — is it installed and on PATH?"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
-    combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    let tail: Vec<&str> = combined.lines().rev().take(15).collect();
-    let tail: Vec<&str> = tail.into_iter().rev().collect();
-    Err(format!("{what} failed ({}):\n{}", output.status, tail.join("\n")))
-}
-
-/// Downloads and unpacks a prebuilt release archive (the Kotlin Language
-/// Server's own `server.zip`). The launcher's location inside the archive
-/// is checked rather than assumed — if upstream ever restructures it, this
-/// fails loudly here instead of writing a path that doesn't exist into the
-/// settings.
-fn install_prebuilt(
-    server: Server,
-    version: &str,
-    dir: &Path,
-    url: &str,
-    report: &dyn Fn(String),
-) -> Result<PathBuf, String> {
-    report(format!("Downloading {} {version}…", server.display_name()));
-    let downloaded = download(url)?;
-
-    report("Extracting…".to_string());
+/// Extracts a `.zip` archive's bytes (Kotlin Language Server's own
+/// `server.zip`, vendored verbatim) into `dir`.
+fn extract_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
     let mut archive =
-        zip::ZipArchive::new(std::io::Cursor::new(&downloaded)).map_err(|e| format!("not a valid zip: {e}"))?;
-    archive
-        .extract(dir)
-        .map_err(|e| format!("failed to extract archive: {e}"))?;
-
-    let launcher = dir.join(server.launcher_path());
-    if !launcher.exists() {
-        return Err(format!(
-            "{}'s archive didn't contain the expected launcher at {}",
-            server.display_name(),
-            launcher.display()
-        ));
-    }
-    ensure_executable(&launcher)?;
-    Ok(launcher)
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("not a valid zip: {e}"))?;
+    archive.extract(dir).map_err(|e| format!("failed to extract archive: {e}"))
 }
 
-/// Which `java` a source build will actually use: `JAVA_HOME`'s if set
-/// (Maven's own rule, so this reports on the same JVM the build will run
-/// under), otherwise whatever is on `PATH`.
-fn java_command() -> PathBuf {
-    match std::env::var_os("JAVA_HOME") {
-        Some(home) => PathBuf::from(home).join("bin").join("java"),
+/// Extracts a gzipped tarball's bytes (jdt.ls' own milestone distribution,
+/// vendored verbatim) into `dir`.
+fn extract_tar_gz(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    archive.unpack(dir).map_err(|e| format!("failed to extract archive: {e}"))
+}
+
+/// Which `java` `jdt.ls` will actually run under: `java_home`'s if given
+/// (Settings > Language Servers…'s own explicit override — for the common
+/// case of a system default `java` that isn't Java 21, e.g. an sdkman/asdf-
+/// managed install that isn't the active one), else `JAVA_HOME`'s if set,
+/// else whatever is on `PATH` — the same fallback rule `jdt.ls`' own
+/// `bin/jdtls` launcher applies internally.
+fn java_command(java_home: &str) -> PathBuf {
+    let home = if java_home.trim().is_empty() {
+        std::env::var_os("JAVA_HOME").map(PathBuf::from)
+    } else {
+        Some(PathBuf::from(java_home.trim()))
+    };
+    match home {
+        Some(home) => home.join("bin").join("java"),
         None => PathBuf::from("java"),
     }
 }
@@ -311,16 +258,16 @@ fn java_major_version(version_output: &str) -> Option<u32> {
     }
 }
 
-/// Fails early — before a clone and a multi-minute build — when the JVM
-/// that build would use is too old. Without this the same problem still
-/// surfaces, but as a Maven stack trace several minutes in, which is a much
-/// worse thing to hand a user than one sentence naming the actual version
-/// they have.
-fn check_java(minimum_major: u32) -> Result<(), String> {
-    let java = java_command();
+/// Verifies the JVM `java_command(java_home)` resolves to is at least
+/// `minimum_major` — called both at install time (fail fast with one plain
+/// sentence, rather than a confusing crash the first time a session tries to
+/// start) and by `resolve_jdtls_java` (to pin every jdt.ls spawn to a
+/// verified JVM rather than trusting whatever `java` PATH resolves to later).
+fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
+    let java = java_command(java_home);
     let output = Command::new(&java).arg("-version").output().map_err(|e| {
         format!(
-            "couldn't run {}: {e} — install a JDK {minimum_major}+ or set JAVA_HOME",
+            "couldn't run {}: {e} — install a JDK {minimum_major}+, or set it in Settings > Language Servers…",
             java.display()
         )
     })?;
@@ -329,62 +276,52 @@ fn check_java(minimum_major: u32) -> Result<(), String> {
     match java_major_version(&banner) {
         Some(major) if major >= minimum_major => Ok(()),
         Some(major) => Err(format!(
-            "this build needs a JDK {minimum_major} or newer, but {} is Java {major} — install a newer JDK or point \
-             JAVA_HOME at one",
+            "jdt.ls needs a JDK {minimum_major} or newer to run, but {} is Java {major} — install a newer JDK, or \
+             point Settings > Language Servers… at one",
             java.display()
         )),
         None => Err(format!("couldn't read a version out of `{} -version`", java.display())),
     }
 }
 
-/// Clones `server`'s release tag and builds it with the project's own
-/// bundled Maven wrapper — the install path for a server that publishes no
-/// binaries on GitHub (jdt.ls). The command is the one its README
-/// documents, with `-DskipTests=true` (also the README's own suggestion):
-/// this is building a known-good release tag, not validating a change, and
-/// its full test suite roughly doubles an already long build.
-fn install_from_source(server: Server, version: &str, dir: &Path, report: &dyn Fn(String)) -> Result<PathBuf, String> {
-    report("Checking prerequisites…".to_string());
-    check_java(JDTLS_MINIMUM_JDK)?;
+/// Resolves and verifies the exact JVM jdt.ls will run under — `lsp_state`
+/// pins every jdt.ls spawn to this path via `bin/jdtls`'s own
+/// `--java-executable` flag (`SPEC.md`/`PLAN.md` Track 20), rather than
+/// letting its launcher fall back to whatever `java` PATH resolves to at
+/// that later moment, which may not meet jdt.ls' Java 21 runtime minimum at
+/// all. `java_home` is `LspSettings::jdtls_java_home` — empty means "auto-
+/// detect from JAVA_HOME/PATH", same as an unset override always has.
+pub fn resolve_jdtls_java(java_home: &str) -> Result<PathBuf, String> {
+    check_java(JDTLS_MINIMUM_JDK, java_home)?;
+    Ok(java_command(java_home))
+}
 
-    let source = dir.join("source");
-    if source.exists() {
-        std::fs::remove_dir_all(&source)
-            .map_err(|e| format!("couldn't clear a previous build at {}: {e}", source.display()))?;
+/// Extracts `server`'s bundled archive into `dir` and returns the launcher's
+/// path — the only install path there is now (see this module's own
+/// header): both servers' bytes are embedded in the FoxGarden binary itself.
+fn install_bundled(server: Server, dir: &Path, report: &dyn Fn(String)) -> Result<PathBuf, String> {
+    if matches!(server, Server::Jdtls) {
+        // Ambient `JAVA_HOME`/`PATH` only — a soft pre-flight sanity check,
+        // not the exact JVM a session actually runs under later (that's
+        // `resolve_jdtls_java`, which honors `LspSettings::jdtls_java_home`
+        // too). Extraction doesn't otherwise need Java at all; this exists
+        // purely so a missing/too-old JDK surfaces here in one sentence
+        // instead of only once a session tries and fails to start.
+        report("Checking prerequisites…".to_string());
+        check_java(JDTLS_MINIMUM_JDK, "")?;
     }
 
-    report(format!("Cloning {} {version}…", server.github_repo()));
-    run_command(
-        Command::new("git").args([
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            &server.tag_for(version),
-            &server.clone_url(),
-            &source.display().to_string(),
-        ]),
-        "git clone",
-    )?;
-
-    report("Building with Maven — this takes several minutes…".to_string());
-    // An absolute path, not `./mvnw`: `std::process::Command` explicitly
-    // documents a relative program path as ambiguous (parent's working
-    // directory or the `current_dir` set below, platform-dependent), and
-    // getting that wrong here is a confusing "not found" for a file that's
-    // plainly right there.
-    let wrapper = source.join(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" });
-    run_command(
-        Command::new(&wrapper)
-            .args(["clean", "verify", "-DskipTests=true"])
-            .current_dir(&source),
-        "the Maven build",
-    )?;
+    report(format!("Extracting bundled {}…", server.display_name()));
+    match server {
+        Server::Jdtls => extract_tar_gz(server.bundled_archive(), dir)?,
+        Server::KotlinLanguageServer => extract_zip(server.bundled_archive(), dir)?,
+    }
 
     let launcher = dir.join(server.launcher_path());
     if !launcher.exists() {
         return Err(format!(
-            "the build finished but produced no launcher at {} — upstream's build layout may have changed",
+            "{}'s bundled archive didn't contain the expected launcher at {}",
+            server.display_name(),
             launcher.display()
         ));
     }
@@ -394,16 +331,21 @@ fn install_from_source(server: Server, version: &str, dir: &Path, report: &dyn F
 
 /// Installs one specific `version` of `server`, reporting each step through
 /// `report`. Runs entirely on a background thread (see
-/// `LspManagerState::install`) — nothing here is safe to do on the UI
-/// thread, least of all a multi-minute Maven build.
+/// `LspManagerState::install`) so extraction never blocks the UI thread.
+/// Only the bundled version can actually be installed — see
+/// `Server::recommended_version`'s own doc comment.
 fn install_sync(server: Server, version: &str, report: &dyn Fn(String)) -> InstallResult {
+    if version != server.recommended_version() {
+        return Err(format!(
+            "only the version bundled with this FoxGarden build ({}) can be installed — {version} isn't vendored",
+            server.recommended_version()
+        ));
+    }
+
     let dir = install_dir(server, version)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {}: {e}", dir.display()))?;
 
-    let binary = match server.release_asset(version) {
-        Some(url) => install_prebuilt(server, version, &dir, &url, report)?,
-        None => install_from_source(server, version, &dir, report)?,
-    };
+    let binary = install_bundled(server, &dir, report)?;
 
     Ok(Installed {
         server,
@@ -559,39 +501,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kotlin_language_server_downloads_the_real_release_asset_verified_this_session() {
-        assert_eq!(
-            Server::KotlinLanguageServer.release_asset("1.3.13").as_deref(),
-            Some("https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip")
-        );
-    }
-
-    /// jdt.ls publishes no build artifacts on GitHub at all (its releases
-    /// page holds one unrelated 2016 `.vsix`), which is exactly what routes
-    /// it to the build-from-source path — so "no asset" is a load-bearing
-    /// fact here, not an omission.
-    #[test]
-    fn jdtls_has_no_prebuilt_asset_and_so_builds_from_source() {
-        assert!(Server::Jdtls.release_asset("1.60.0").is_none());
-    }
-
-    #[test]
-    fn tags_match_each_repos_real_convention() {
-        assert_eq!(Server::Jdtls.tag_for("1.60.0"), "v1.60.0");
-        assert_eq!(Server::KotlinLanguageServer.tag_for("1.3.13"), "1.3.13");
-    }
-
-    #[test]
     fn launcher_paths_match_each_artifacts_real_layout() {
         assert_eq!(
             Server::KotlinLanguageServer.launcher_path(),
             Path::new("server").join("bin").join("kotlin-language-server")
         );
-        assert!(
-            Server::Jdtls
-                .launcher_path()
-                .ends_with(Path::new("repository").join("bin").join("jdtls"))
-        );
+        assert_eq!(Server::Jdtls.launcher_path(), Path::new("bin").join("jdtls"));
+    }
+
+    /// Only the vendored version can actually be installed — asking for
+    /// anything else must fail loudly rather than silently installing the
+    /// wrong bytes under the requested version's label.
+    #[test]
+    fn install_sync_rejects_a_version_that_is_not_the_bundled_one() {
+        let error = install_sync(Server::Jdtls, "1.59.0", &|_| {}).expect_err("not vendored");
+        assert!(error.contains("1.60.0"), "{error}");
+        assert!(error.contains("1.59.0"), "{error}");
     }
 
     #[test]
@@ -635,17 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn run_command_reports_the_failing_output_not_just_the_status() {
-        let error = run_command(
-            Command::new("sh").args(["-c", "echo boom >&2; exit 3"]),
-            "the test command",
-        )
-        .expect_err("a non-zero exit is an error");
-        assert!(error.contains("the test command failed"), "{error}");
-        assert!(error.contains("boom"), "{error}");
-    }
-
-    #[test]
     fn java_major_version_reads_a_modern_jvm_banner() {
         assert_eq!(
             java_major_version("openjdk version \"21.0.2\" 2024-01-16 LTS\n"),
@@ -671,38 +585,34 @@ mod tests {
         assert!(java_major_version("version \"nonsense\"").is_none());
     }
 
+    /// End-to-end against the real vendored archives — no network, no
+    /// `#[ignore]` needed, since the bytes are already embedded in the test
+    /// binary: extracts each server's bundled archive and proves the
+    /// launcher lands exactly where `launcher_path` claims, executable.
+    /// Goes through `extract_zip`/`extract_tar_gz` directly rather than
+    /// `install_bundled` — this proves the *archive layout*, which doesn't
+    /// depend on this machine happening to have a JDK 21 on it (a separate
+    /// concern `java_major_version`'s own tests already cover with synthetic
+    /// banners).
     #[test]
-    fn run_command_reports_a_missing_executable_actionably() {
-        let error = run_command(&mut Command::new("definitely-not-a-real-binary-xyz"), "git clone")
-            .expect_err("a missing binary is an error");
-        assert!(error.contains("on PATH"), "{error}");
-    }
+    fn bundled_archives_extract_with_the_launcher_at_its_documented_path() {
+        for server in ALL_SERVERS {
+            let dir = test_support::tempdir();
+            match server {
+                Server::Jdtls => extract_tar_gz(server.bundled_archive(), dir.path()),
+                Server::KotlinLanguageServer => extract_zip(server.bundled_archive(), dir.path()),
+            }
+            .expect("extracts");
 
-    /// The one end-to-end check against the real release asset: downloads
-    /// `server.zip` (~87 MB) and proves the whole prebuilt path — archive
-    /// layout, extraction, and the launcher landing exactly where
-    /// `launcher_path` claims, executable. `#[ignore]`d because it needs
-    /// the network and moves real bytes; run it with
-    /// `cargo test -p foxgarden --ignored` when touching this path.
-    #[test]
-    #[ignore = "downloads ~87 MB from GitHub"]
-    fn install_prebuilt_really_installs_the_kotlin_language_server() {
-        let server = Server::KotlinLanguageServer;
-        let version = server.recommended_version();
-        let dir = test_support::tempdir();
-        let url = server
-            .release_asset(version)
-            .expect("this server publishes a prebuilt asset");
-
-        let launcher = install_prebuilt(server, version, dir.path(), &url, &|_| {}).expect("installs");
-
-        assert_eq!(launcher, dir.path().join(server.launcher_path()));
-        assert!(launcher.is_file());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&launcher).unwrap().permissions().mode();
-            assert!(mode & 0o111 != 0, "the launcher must be executable, got {mode:o}");
+            let launcher = dir.path().join(server.launcher_path());
+            assert!(launcher.is_file(), "{}", launcher.display());
+            #[cfg(unix)]
+            {
+                ensure_executable(&launcher).expect("chmod");
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&launcher).unwrap().permissions().mode();
+                assert!(mode & 0o111 != 0, "the launcher must be executable, got {mode:o}");
+            }
         }
     }
 

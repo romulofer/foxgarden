@@ -259,6 +259,7 @@ fn persisted_settings_round_trip() {
         enabled: true,
         jdtls_binary: "/usr/bin/jdtls".to_string(),
         jdtls_installed_version: "1.60.0".to_string(),
+        jdtls_java_home: "/usr/lib/jvm/java-21".to_string(),
         kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
         kotlin_language_server_installed_version: "1.3.13".to_string(),
     };

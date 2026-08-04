@@ -1714,43 +1714,63 @@ work.
 
 ## Track 28 — Language Server settings modal + jdtls/kotlin-language-server installer
 
-**Landed, with one deliberate deviation from the plan below.** Both halves
-shipped: the inline "Settings > Language Server" menu-bar submenu became a
-modal (`crates/app/src/panels/lsp_servers.rs`), and a self-service
-installer/updater landed alongside it (`crates/app/src/lsp_manager.rs`),
-mirroring the Checkstyle/PMD/SpotBugs installer (`crates/app/src/
-tool_manager.rs` via `static_analysis.rs`'s "External Tools…" modal).
+**Landed, revised twice since.** Both halves shipped: the inline "Settings
+> Language Server" menu-bar submenu became a modal (`crates/app/src/panels/
+lsp_servers.rs`), and a self-service installer/updater landed alongside it
+(`crates/app/src/lsp_manager.rs`), mirroring the Checkstyle/PMD/SpotBugs
+installer (`crates/app/src/tool_manager.rs` via `static_analysis.rs`'s
+"External Tools…" modal).
 
-The deviation: this track's Phase 1 research below settled on fetching
-jdtls' prebuilt milestone tarball from `download.eclipse.org`. The
-implemented version instead **builds jdtls from its own GitHub repository**
-— shallow-clone the release tag, run the project's bundled `./mvnw clean
+**Revision 2 (current): both servers are vendored, not fetched at all.**
+Revision 1 (below) built jdtls from source on demand; in practice that
+build resolves its Tycho target-platform dependencies straight off Maven
+Central, and behind a corporate mirror that doesn't proxy every artifact it
+touches (e.g. `com.jetbrains.intellij.java:java-decompiler-engine`), it
+fails outright — a failure with nothing to do with FoxGarden and no fix on
+this end. The fix: vendor both servers' real release archives directly into
+`vendor/lsp-servers/` (tracked via Git LFS — plain git history would
+otherwise carry their ~135 MB combined weight forever) and `include_bytes!`
+them into the FoxGarden binary itself (`lsp_manager.rs`'s own header). This
+is exactly revision 1's own Phase 1 research below, just landed rather than
+deviated from: jdtls' official prebuilt milestone tarball from
+`download.eclipse.org/jdtls/milestones/<version>/`, `bin/jdtls` and all.
+Installing now means extracting embedded bytes — no network, no `git`, no
+Maven, no Python — for either server. `Server::recommended_version` is now
+also the *only* installable version (whatever's vendored); `check_latest`
+still pings each project's real upstream as an FYI, but "Update to X" no
+longer offers a version this app doesn't have the bytes for.
+
+`recommended_version` for jdtls stays pinned at **1.60.0** (not the
+**1.44.0** revision 1's research flagged as the last milestone runnable
+under Java 17 — see that finding below) — a deliberate choice to require
+Java 21 rather than pin to an older runtime, since jdt.ls 1.60.0 is the
+version actually vendored and Java 21 is what it needs to run.
+`lsp_manager::resolve_jdtls_java` resolves and verifies that JVM, and
+`lsp_state::start_session` pins every jdt.ls spawn to it via `bin/jdtls`'s
+own `--java-executable` flag — rather than trusting whatever `java`
+`JAVA_HOME`/`PATH` happens to resolve to at that moment, which is Java 17 on
+this project's own dev machine. `LspSettings::jdtls_java_home` (Settings >
+Language Servers…'s new "Java Home" field, empty = auto-detect) exists
+precisely for that case: pointing jdt.ls at a specific JDK 21 install (e.g.
+an sdkman-managed one) without touching the system default `java`.
+
+**Revision 1 (superseded): built jdtls from its own GitHub repository** —
+shallow-clone the release tag, run the project's bundled `./mvnw clean
 verify -DskipTests=true`, take `org.eclipse.jdt.ls.product/target/
 repository/bin/jdtls` — because installing from each server's official
 GitHub repo, compiling where no binary is published, was the explicitly
-requested shape. Everything the research below establishes about
-eclipse.jdt.ls having no GitHub release artifacts still holds; that fact is
-precisely *why* this path compiles rather than downloads. kotlin-language-
-server is unchanged from the plan: its real `server.zip` release asset,
-extracted to `server/bin/kotlin-language-server`.
+requested shape at the time. Two follow-ups that revision left open, both
+resolved by revision 2 above rather than by revisiting the build itself:
 
-Two follow-ups this leaves open, both recorded rather than assumed away:
+- `recommended_version` 1.60.0 (not 1.44.0) needs a JDK 21 to run, which
+  this project's own dev machine (Java 17) doesn't have by default —
+  resolved by `jdtls_java_home` above, not by downgrading the pin.
+- The jdtls source build itself was never run end-to-end (this machine's
+  Java 17 correctly refused the pre-flight check every time). Moot now:
+  there's no source build left to run.
 
-- The implemented `recommended_version` for jdtls is **1.60.0**, not the
-  **1.44.0** this track's own research pins as the last milestone that runs
-  under Java 17 (see the version-compatibility finding below). Installing
-  1.60.0 therefore needs a JDK 21 — `lsp_manager::check_java` refuses
-  before cloning and says so, rather than failing several minutes into the
-  Maven build, but on a Java 17 machine the install simply can't proceed.
-  Revisit the pin against that finding.
-- The jdtls source build itself has not been run end-to-end (this machine
-  has Java 17, so the pre-flight correctly refuses). The clone URL, tag,
-  build command and output layout are each verified against upstream; the
-  build execution is not. The kotlin-language-server path *is* verified
-  end-to-end, by an `#[ignore]`d test that really downloads and extracts
-  the release asset.
-
-The original plan follows, unchanged.
+The original research (still accurate — it's what revision 2 above actually
+implements) follows, unchanged.
 
 **Phase 1 — the installer + modal.** Real research already done this
 session (downloads/diffs actually run, not assumed — same discipline

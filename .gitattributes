@@ -1,0 +1,2 @@
+vendor/lsp-servers/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+vendor/lsp-servers/*.zip filter=lfs diff=lfs merge=lfs -text

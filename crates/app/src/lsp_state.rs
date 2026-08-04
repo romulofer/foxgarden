@@ -20,6 +20,7 @@ use lsp_types::request::Request as _;
 use serde_json::json;
 
 use crate::lsp_client::{LspSession, ResponseError};
+use crate::lsp_manager;
 use crate::lsp_settings::LspSettings;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -75,6 +76,13 @@ impl ServerKind {
 struct SessionConfig {
     root: PathBuf,
     binary: PathBuf,
+    /// `LspSettings::jdtls_java_home` at the time this config was built —
+    /// `""` for `ServerKind::Kotlin`, which has no such setting. Part of the
+    /// config (not read fresh at spawn time) so editing it in Settings >
+    /// Language Servers… changes this, `slot_matches` sees a different
+    /// `SessionConfig`, and the running session restarts under the newly
+    /// chosen JVM the same way changing the binary path already does.
+    java_home: String,
 }
 
 struct RunningSession {
@@ -265,7 +273,15 @@ fn desired_config(kind: ServerKind, settings: &LspSettings, root: Option<&Path>,
     }
     let binary = kind.configured_binary(settings).trim();
     let root = root?;
-    (!binary.is_empty()).then(|| SessionConfig { root: root.to_path_buf(), binary: PathBuf::from(binary) })
+    let java_home = match kind {
+        ServerKind::Java => settings.jdtls_java_home.trim().to_string(),
+        ServerKind::Kotlin => String::new(),
+    };
+    (!binary.is_empty()).then(|| SessionConfig {
+        root: root.to_path_buf(),
+        binary: PathBuf::from(binary),
+        java_home,
+    })
 }
 
 fn reconcile_slot(
@@ -541,7 +557,20 @@ fn retire_slot(slot: Slot, retiring: &mut Vec<RetiringSession>) {
 }
 
 fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSession, String> {
-    let mut session = LspSession::spawn(&config.binary, &[], Some(&config.root))
+    // jdt.ls' own `bin/jdtls` launcher otherwise falls back to whatever
+    // `java` its own `JAVA_HOME`/`PATH` resolves to at spawn time, which may
+    // not meet its Java 21 runtime minimum at all — pinning it here via its
+    // own documented `--java-executable` flag makes every JDTLS session use
+    // the exact JVM `lsp_manager::resolve_jdtls_java` already verified,
+    // rather than risking a second, unverified resolution.
+    let args = match kind {
+        ServerKind::Java => {
+            let java = lsp_manager::resolve_jdtls_java(&config.java_home)?;
+            vec!["--java-executable".to_string(), java.display().to_string()]
+        }
+        ServerKind::Kotlin => Vec::new(),
+    };
+    let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root))
         .map_err(|error| format!("failed to start {} at {}: {error}", kind.name(), config.binary.display()))?;
     let params = initialize_params(kind, &config.root)?;
     let initialize_rx = session
@@ -780,7 +809,11 @@ sys.stdin.buffer.read()
         let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
         let root = doc.path.parent().unwrap().to_path_buf();
         let mut state = LspState {
-            java: Slot::Ready { config: SessionConfig { root, binary: PathBuf::from("python3") }, session, open_documents: HashSet::new() },
+            java: Slot::Ready {
+                config: SessionConfig { root, binary: PathBuf::from("python3"), java_home: String::new() },
+                session,
+                open_documents: HashSet::new(),
+            },
             kotlin: Slot::Empty,
             retiring: Vec::new(),
         };

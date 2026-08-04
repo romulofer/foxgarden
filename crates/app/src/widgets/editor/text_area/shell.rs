@@ -23,8 +23,10 @@ use super::input::{
     move_down, move_end, move_home, move_left, move_right, move_up, replace_block_selection, replace_selection,
 };
 use super::render::{
-    HighlightSpan, TextAreaOutput, layout_visible, layout_visible_wrapped, paint_rows, shape_line_range, shape_range,
+    HighlightSpan, TextAreaOutput, cached_row_counts, layout_visible, layout_visible_wrapped, paint_rows,
+    shape_line_range, shape_range,
 };
+use super::{FoldMap, prefix_rows};
 
 /// Per-widget state persisted across frames (`egui::Context`'s temp storage,
 /// the same mechanism `widget.rs` already uses for its own per-widget state
@@ -392,8 +394,45 @@ pub fn show(
     // case). Without this a click would leave the caret starting mid-blink
     // (possibly invisible) instead of visible right where the user just
     // looked.
-    if (!had_focus_at_frame_start && has_focus) || state.caret != caret_at_frame_start || new_text.is_some() {
+    let caret_moved = state.caret != caret_at_frame_start;
+    if (!had_focus_at_frame_start && has_focus) || caret_moved || new_text.is_some() {
         state.last_interaction = ui.input(|i| i.time);
+    }
+
+    // Keyboard motion (arrow/Home/End/Ctrl+D, …) can land the caret outside
+    // the rows this frame's own virtualized shaping covered — `layout_
+    // visible{,_wrapped}` only ever shape what's inside `ui.clip_rect()`,
+    // which is exactly the stale viewport a moved-off-screen caret needs to
+    // scroll *past* — so this can't reuse `final_out.char_rect` (`None` for
+    // any row it didn't shape) and instead computes the target row directly
+    // from the buffer: `FoldMap::to_visual` in the no-wrap case (row ==
+    // line, folds aside), or the same row-count/prefix-sum accounting
+    // `layout_visible_wrapped` already builds (and caches) for itself in the
+    // word-wrap case. A click/drag is never affected (it only ever lands on
+    // an already-visible row), so this only ever fires for genuinely
+    // off-screen keyboard motion.
+    if has_focus && caret_moved {
+        let line = final_buffer.char_to_line(state.caret.primary.min(final_buffer.len_chars()));
+        let visual_row = if word_wrap {
+            let total_lines = final_buffer.len_lines().max(1);
+            let counts = cached_row_counts(ui, id, final_buffer, &font_id, wrap_width, hidden, total_lines);
+            prefix_rows(&counts).get(line).copied()
+        } else {
+            FoldMap::new(hidden).to_visual(line)
+        };
+        if let Some(visual_row) = visual_row {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    final_out.content_origin.x,
+                    final_out.content_origin.y + visual_row as f32 * final_out.row_height,
+                ),
+                egui::vec2(1.0, final_out.row_height),
+            );
+            // An instant jump, not egui's own default eased-over-a-few-
+            // frames scroll: every real editor snaps the viewport straight
+            // to a keyboard-moved caret rather than animating toward it.
+            ui.scroll_to_rect_animation(rect, None, egui::style::ScrollAnimation::none());
+        }
     }
 
     paint_rows(ui, &final_out, text_color);

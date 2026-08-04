@@ -33,6 +33,72 @@ use crate::style::theme;
 /// via memory that this call itself only updates afterward) — whether to
 /// paint the cursor at all.
 #[allow(clippy::too_many_arguments)]
+/// A click-and-drag text selection over the cell grid, in `(row, col)`
+/// coordinates — persisted across frames the same way `text_area::shell::
+/// ShellState` persists the editor's own caret, keyed by the caller's stable
+/// `id` (so it survives a session switch landing on a different tab's own
+/// widget without leaking between them). `anchor` is where the drag started,
+/// `current` is the latest cell the pointer's over (or was, when the drag
+/// last ended) — both `None` outside of "there is a selection right now."
+#[derive(Clone, Copy, PartialEq, Default)]
+struct Selection {
+    anchor: Option<(u16, u16)>,
+    current: Option<(u16, u16)>,
+}
+
+impl Selection {
+    /// `(start, end)` in top-to-bottom, left-to-right reading order —
+    /// painting and copy both walk forward through this range, so a drag
+    /// that went from bottom-right to top-left needs the same normalized
+    /// order a drag the other way already has.
+    fn ordered(&self) -> Option<((u16, u16), (u16, u16))> {
+        let (a, b) = (self.anchor?, self.current?);
+        Some(if a <= b { (a, b) } else { (b, a) })
+    }
+}
+
+/// The `(row, col)` grid cell under `pos`, clamped to the grid's own bounds
+/// — a drag that's since left the widget's rect (dragging past the last row
+/// while the mouse button is still down, say) still resolves to *some* real
+/// cell rather than an out-of-range one callers would need to guard against
+/// separately.
+fn cell_at(rect: egui::Rect, col_width: f32, row_height: f32, rows: u16, cols: u16, pos: egui::Pos2) -> (u16, u16) {
+    let row = ((pos.y - rect.top()) / row_height).floor().clamp(0.0, f32::from(rows.max(1) - 1)) as u16;
+    let col = ((pos.x - rect.left()) / col_width).floor().clamp(0.0, f32::from(cols.max(1) - 1)) as u16;
+    (row, col)
+}
+
+/// The selected text, read straight off `screen`'s current cell contents —
+/// same source `shape_row` paints from, so what gets copied always matches
+/// what's on screen. Each row's trailing blank cells are trimmed before its
+/// own newline (a terminal row is padded to the grid's full width; keeping
+/// that padding would turn every copy into a block of trailing spaces).
+fn selection_text(screen: &vt100::Screen, start: (u16, u16), end: (u16, u16), cols: u16) -> String {
+    let mut text = String::new();
+    for row in start.0..=end.0 {
+        let col_start = if row == start.0 { start.1 } else { 0 };
+        let col_end = if row == end.0 { end.1 } else { cols.saturating_sub(1) };
+        let mut line = String::new();
+        for col in col_start..=col_end {
+            let Some(cell) = screen.cell(row, col) else { break };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            if cell.has_contents() {
+                line.push_str(&cell.contents());
+            } else {
+                line.push(' ');
+            }
+        }
+        text.push_str(line.trim_end());
+        if row != end.0 {
+            text.push('\n');
+        }
+    }
+    text
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -69,8 +135,52 @@ pub fn show(
 
     let desired_size = egui::vec2(col_width * f32::from(cols), row_height * f32::from(rows));
     let (_, rect) = ui.allocate_space(desired_size);
-    let response = ui.interact(rect, id, egui::Sense::click());
+    // `click_and_drag()`, not `click()`: a plain click still needs to keep
+    // claiming focus exactly as before (`terminal_panel::show`'s own
+    // `grid_response.clicked()` check), but a drag is now how the user
+    // selects text — the one thing this grid genuinely couldn't do before
+    // (it painted straight through `painter.galley`, never through a
+    // selectable `egui::Label`/`TextEdit`).
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
+
+    let mut selection = ui.ctx().data_mut(|d| d.get_temp::<Selection>(id).unwrap_or_default());
+    if let Some(pos) = response.interact_pointer_pos() {
+        let cell = cell_at(rect, col_width, row_height, rows, cols, pos);
+        if response.drag_started() {
+            selection = Selection { anchor: Some(cell), current: Some(cell) };
+        } else if response.dragged() {
+            selection.current = Some(cell);
+        } else if response.clicked() {
+            // A plain click (no drag) repositions focus, not a selection —
+            // matches every real terminal emulator's own "click to place
+            // the cursor, drag to select" split.
+            selection = Selection::default();
+        }
+    }
+    if let Some((start, end)) = selection.ordered() {
+        for row in start.0..=end.0 {
+            let col_start = if row == start.0 { start.1 } else { 0 };
+            let col_end = if row == end.0 { end.1 } else { cols.saturating_sub(1) };
+            let x0 = rect.left() + f32::from(col_start) * col_width;
+            let x1 = rect.left() + f32::from(col_end + 1) * col_width;
+            let y = rect.top() + f32::from(row) * row_height;
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + row_height)),
+                0.0,
+                ui.visuals().selection.bg_fill,
+            );
+        }
+        // Auto-copy on mouse-up, same convention xterm/most Linux terminals
+        // already use — the selection itself is the copy action, with no
+        // separate keystroke needed (plain Ctrl+C stays the interrupt byte
+        // regardless of an active selection, see the `Event::Copy` handler
+        // in `terminal_panel::show`).
+        if response.drag_stopped() {
+            ui.ctx().copy_text(selection_text(screen, start, end, cols));
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, selection));
 
     // A concrete stand-in for "the panel's own background" — only needed
     // when an inverse-video cell has no explicit background of its own to
@@ -237,5 +347,53 @@ mod grid_size_tests {
     #[test]
     fn a_wider_font_yields_fewer_columns_for_the_same_width() {
         assert_eq!(grid_size(egui::vec2(800.0, 480.0), 20.0, 16.0), (24, 50));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn screen(rows: u16, cols: u16, text: &str) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(text.replace('\n', "\r\n").as_bytes());
+        parser
+    }
+
+    #[test]
+    fn cell_at_resolves_a_point_inside_the_grid() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(80.0, 40.0));
+        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(34.0, 25.0)), (0, 3));
+        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(34.0, 35.0)), (1, 3));
+    }
+
+    #[test]
+    fn cell_at_clamps_a_point_outside_the_grid_to_its_nearest_edge_cell() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(80.0, 40.0));
+        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(-50.0, -50.0)), (0, 0));
+        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(500.0, 500.0)), (1, 9));
+    }
+
+    #[test]
+    fn ordered_normalizes_a_bottom_to_top_drag() {
+        let selection = Selection { anchor: Some((3, 5)), current: Some((1, 2)) };
+        assert_eq!(selection.ordered(), Some(((1, 2), (3, 5))));
+    }
+
+    #[test]
+    fn ordered_is_none_without_a_full_anchor_and_current_pair() {
+        assert_eq!(Selection::default().ordered(), None);
+    }
+
+    #[test]
+    fn selection_text_reads_a_single_row_span() {
+        let parser = screen(3, 10, "hello world");
+        assert_eq!(selection_text(parser.screen(), (0, 0), (0, 4), 10), "hello");
+    }
+
+    #[test]
+    fn selection_text_trims_each_rows_trailing_padding_before_its_own_newline() {
+        let parser = screen(3, 10, "hi\nbye");
+        assert_eq!(selection_text(parser.screen(), (0, 0), (1, 2), 10), "hi\nbye");
     }
 }

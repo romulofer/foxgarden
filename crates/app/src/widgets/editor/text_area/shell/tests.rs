@@ -64,23 +64,67 @@ fn frame(ctx: &egui::Context, id: egui::Id, buffer: &Rope, events: Vec<Event>, r
     let text = buffer.to_string();
     let _ = ctx.run_ui(sized_raw_input(events), |ui| {
         ui.memory_mut(|m| m.request_focus(id));
-        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-            result = Some(show(
-                ui,
-                id,
-                buffer,
-                &text,
-                egui::FontId::monospace(14.0),
-                egui::Color32::WHITE,
-                read_only,
-                &[],
-                &[],
-                false,
-                true,
-            ));
-        });
+        egui::ScrollArea::vertical()
+            .max_height(400.0)
+            .id_salt("shell_tests_scroll_area")
+            .show(ui, |ui| {
+                result = Some(show(
+                    ui,
+                    id,
+                    buffer,
+                    &text,
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                    read_only,
+                    &[],
+                    &[],
+                    false,
+                    true,
+                ));
+            });
     });
     result.expect("show ran inside the scroll area closure")
+}
+
+/// Regression test for scroll-follows-cursor: repeated `ArrowDown` past the
+/// bottom of a 400px-tall viewport must eventually scroll the `ScrollArea`
+/// so the caret's own line comes back into view — before `show`'s own
+/// `ui.scroll_to_rect_animation` call, the caret would move but the viewport
+/// wouldn't follow it, leaving it to scroll off-screen.
+///
+/// `ui.scroll_to_rect` only ever schedules a target offset; the enclosing
+/// `ScrollArea` reads and starts moving toward it on its own *next* `show`
+/// call, then keeps easing every call after using real elapsed wall-clock
+/// time (`egui`'s own `ScrollArea` animation, `ScrollAnimation::none()` here
+/// just collapses its duration to zero rather than skipping the mechanism
+/// entirely) — so proving it actually arrived needs a couple of realistic,
+/// real-time-spaced frames after the one that moved the caret, exactly like
+/// a real 60fps run already provides well before a user could ever notice.
+#[test]
+fn arrow_down_past_the_visible_window_scrolls_the_caret_into_view() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("scroll_follow");
+    let lines: Vec<String> = (0..100).map(|i| format!("line{i}")).collect();
+    let buffer = Rope::from_str(&lines.join("\n"));
+
+    let arrow_downs = std::iter::repeat_with(|| key_event(Key::ArrowDown)).take(60).collect();
+    let out = frame(&ctx, id, &buffer, arrow_downs, false);
+    let caret_line = buffer.char_to_line(out.caret.expect("focused").primary);
+    assert_eq!(caret_line, 60);
+    assert!(
+        !out.base.row_galleys.iter().any(|(line, _)| *line == caret_line),
+        "line 60 shouldn't already be visible the same frame it was reached"
+    );
+
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let _ = frame(&ctx, id, &buffer, vec![], false);
+    }
+    let out = frame(&ctx, id, &buffer, vec![], false);
+    assert!(
+        out.base.row_galleys.iter().any(|(line, _)| *line == caret_line),
+        "line 60 should now be visible after the scroll took effect"
+    );
 }
 
 #[test]

@@ -21,6 +21,17 @@ pub fn apply(ctx: &egui::Context, dark_mode: bool) {
         visuals.extreme_bg_color = RAYWHITE;
         ctx.set_visuals(visuals);
     }
+
+    // `set_visuals` only ever touches `Style::visuals`, never `Style::
+    // spacing` — asserted explicitly, every time this runs, so a scroll bar
+    // that should thicken on hover (`ScrollStyle::floating`'s own
+    // `floating_width` → `bar_width` growth, already egui's own default)
+    // can't stay stuck thin/fixed-size because of a stale `Style` restored
+    // from a prior session's persisted `egui::Memory` (`eframe`'s own
+    // `persist_egui_memory`, on by default) predating this behavior.
+    ctx.all_styles_mut(|style| {
+        style.spacing.scroll = egui::style::ScrollStyle::floating();
+    });
 }
 
 const DARK_TEXT: Color32 = Color32::from_rgb(171, 178, 191);
@@ -279,6 +290,37 @@ pub fn color_for_scope(scope: Scope, dark_mode: bool) -> Color32 {
             Scope::Operator => Color32::from_rgb(95, 110, 125),
             Scope::Label => Color32::from_rgb(150, 110, 20),
             Scope::DocComment => Color32::from_rgb(70, 115, 75),
+        }
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+
+    /// `apply` must assert the hover-grows scroll bar itself, not just trust
+    /// whatever `Style` a prior session's persisted `egui::Memory` restored
+    /// — regresses if a future edit ever drops the `all_styles_mut` call and
+    /// leaves it to chance again.
+    #[test]
+    fn apply_forces_a_floating_hover_grow_scrollbar_in_both_themes() {
+        let ctx = egui::Context::default();
+        // Simulate a stale persisted style that predates hover-grow — a
+        // solid, fixed-width scroll bar in both themes.
+        ctx.all_styles_mut(|style| style.spacing.scroll = egui::style::ScrollStyle::solid());
+
+        apply(&ctx, true);
+        apply(&ctx, false);
+
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let scroll = ctx.style_of(theme).spacing.scroll;
+            assert!(scroll.floating, "{theme:?} scroll bar should float/hover-grow");
+            assert!(
+                scroll.bar_width > scroll.floating_width,
+                "{theme:?} hovered width ({}) should exceed the resting width ({})",
+                scroll.bar_width,
+                scroll.floating_width
+            );
         }
     }
 }

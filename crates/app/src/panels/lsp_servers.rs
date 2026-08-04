@@ -130,21 +130,16 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             state.manager.check_latest(server);
         }
 
-        // An update is only offered when a check actually found a version
-        // that isn't the one installed — and it installs *that* version,
-        // rather than silently redefining what Install means.
+        // `install` can only ever install the version bundled with this
+        // FoxGarden build (`lsp_manager::Server::recommended_version`'s own
+        // doc comment) — so a newer upstream version is reported for
+        // awareness only, never as a clickable update that would just fail.
         match state.latest_version(server) {
-            Some(Ok(latest)) if *latest == installed_version => {
+            Some(Ok(latest)) if *latest == server.recommended_version() => {
                 ui.label(egui::RichText::new("Up to date").weak());
             }
             Some(Ok(latest)) => {
-                let latest = latest.clone();
-                if ui
-                    .add_enabled(!installing, egui::Button::new(format!("Update to {latest}")))
-                    .clicked()
-                {
-                    state.manager.install(server, latest);
-                }
+                ui.label(egui::RichText::new(format!("{latest} available upstream (not yet bundled)")).weak());
             }
             Some(Err(error)) => {
                 ui.label(egui::RichText::new(format!("Update check failed: {error}")).weak());
@@ -174,6 +169,25 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
                 .desired_width(380.0),
         );
     });
+
+    // jdt.ls hard-requires Java 21 *to run* (not just to build) — on a
+    // machine whose default `java` isn't 21 (an sdkman/asdf-managed install
+    // that isn't the active one, say), this is how to point jdt.ls at one
+    // without changing the system default. Empty auto-detects from
+    // `JAVA_HOME`/`PATH`, same as leaving it unset.
+    if let Server::Jdtls = server {
+        ui.horizontal(|ui| {
+            ui.label("Java Home").on_hover_text(
+                "jdt.ls requires a JDK 21+ to run. Leave blank to use JAVA_HOME/PATH, or point this at a specific \
+                 JDK 21 install (e.g. ~/.sdkman/candidates/java/21.0.11-zulu).",
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.jdtls_java_home)
+                    .id_salt("jdtls_java_home")
+                    .desired_width(380.0),
+            );
+        });
+    }
 }
 
 #[cfg(test)]

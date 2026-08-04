@@ -18,6 +18,13 @@ pub struct LspSettings {
     pub enabled: bool,
     pub jdtls_binary: String,
     pub jdtls_installed_version: String,
+    /// Explicit `JAVA_HOME` jdt.ls itself runs under, overriding the
+    /// ambient `JAVA_HOME`/`PATH` `lsp_manager::resolve_jdtls_java` would
+    /// otherwise fall back to — for the common case where the system
+    /// default `java` isn't Java 21 (jdt.ls' own stated runtime minimum),
+    /// e.g. an sdkman/asdf-managed JDK 21 that isn't the active one. Empty
+    /// means "auto-detect", same as leaving it unset.
+    pub jdtls_java_home: String,
     pub kotlin_language_server_binary: String,
     pub kotlin_language_server_installed_version: String,
 }

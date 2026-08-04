@@ -84,6 +84,7 @@ const AUTO_SAVE_MODE_AFTER_IDLE: &str = "after_idle";
 const LSP_ENABLED_KEY: &str = "lsp_enabled";
 const LSP_JDTLS_BINARY_KEY: &str = "lsp_jdtls_binary";
 const LSP_JDTLS_INSTALLED_VERSION_KEY: &str = "lsp_jdtls_installed_version";
+const LSP_JDTLS_JAVA_HOME_KEY: &str = "lsp_jdtls_java_home";
 const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
 const LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY: &str = "lsp_kotlin_language_server_installed_version";
 
@@ -852,6 +853,9 @@ fn restore_settings(
     if let Some(version) = storage.get_string(LSP_JDTLS_INSTALLED_VERSION_KEY) {
         lsp_settings.jdtls_installed_version = version;
     }
+    if let Some(home) = storage.get_string(LSP_JDTLS_JAVA_HOME_KEY) {
+        lsp_settings.jdtls_java_home = home;
+    }
     if let Some(path) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY) {
         lsp_settings.kotlin_language_server_binary = path;
     }
@@ -930,6 +934,7 @@ fn persist_settings(
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
     storage.set_string(LSP_JDTLS_INSTALLED_VERSION_KEY, lsp_settings.jdtls_installed_version.clone());
+    storage.set_string(LSP_JDTLS_JAVA_HOME_KEY, lsp_settings.jdtls_java_home.clone());
     storage.set_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY, lsp_settings.kotlin_language_server_binary.clone());
     storage.set_string(
         LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,

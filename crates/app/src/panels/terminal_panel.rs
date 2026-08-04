@@ -177,13 +177,15 @@ pub fn show(
                         // event instead, so `key_event_to_bytes`'s own
                         // `Ctrl+C -> 0x03` mapping below is never actually
                         // reachable from a real keypress; this is the only
-                        // place that ever sees it. This grid has no text
-                        // selection to copy in the first place (`Sense::
-                        // click()` only, no drag-to-select), so treating a
-                        // Copy while focused as "send the interrupt byte" —
-                        // every real terminal emulator's own convention for
-                        // plain Ctrl+C — is unambiguous here, not a
-                        // narrowing of some other behavior this loses.
+                        // place that ever sees it. `terminal_widget::show`
+                        // does now support drag-to-select — deliberately
+                        // *not* wired to this event: it already copies the
+                        // selection to the clipboard itself on mouse-up (the
+                        // xterm/most-Linux-terminals convention), so plain
+                        // Ctrl+C stays the interrupt byte unconditionally —
+                        // every real terminal emulator's own convention, and
+                        // the one this app's users already expect a running
+                        // program in the shell to receive.
                         egui::Event::Copy => {
                             let _ = session.write(&[0x03]);
                             interacted = true;

@@ -160,11 +160,11 @@ impl<'a> FoldMap<'a> {
     }
 
     /// The visual row a logical line renders on, or `None` if that line is
-    /// currently hidden inside a fold. Unused in production until Phase 3
-    /// actually populates a non-empty fold set (`to_logical`, `to_visual`'s
-    /// inverse, is already exercised by `render.rs`'s row-shaping loop);
-    /// exercised directly by `text_area/tests.rs` today.
-    #[cfg_attr(not(test), expect(dead_code, reason = "Phase 3 fold-set API surface"))]
+    /// currently hidden inside a fold — `shell::show`'s scroll-follows-
+    /// cursor logic uses this (the no-wrap case) to find where an off-
+    /// screen caret move landed, since that row was never actually shaped
+    /// this frame (`layout_visible` only shapes what's inside the current
+    /// viewport) and so has no `TextAreaOutput::char_rect` to read back.
     pub(super) fn to_visual(&self, logical_line: usize) -> Option<usize> {
         let mut skipped = 0;
         for range in self.hidden {

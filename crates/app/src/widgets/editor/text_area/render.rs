@@ -380,7 +380,7 @@ struct CachedRowCounts {
 /// gestures at — an editing frame still pays for a whole-buffer pass here
 /// (unlike the virtualized *painting* path, which never has), a deliberate
 /// first-cut trade-off flagged rather than silently accepted.
-fn cached_row_counts(
+pub(super) fn cached_row_counts(
     ui: &egui::Ui,
     id: egui::Id,
     buffer: &Rope,
