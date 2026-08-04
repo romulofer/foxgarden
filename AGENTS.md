@@ -555,6 +555,40 @@ recurring.
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
   `crates/app/src/widgets/editor/widget/tests.rs` for the pattern.
+- Whole-app flows (click a file in the tree, type, save, close a dirty tab)
+  belong in `crates/app/src/app/e2e/` — one `E2e` harness (`e2e/common.rs`)
+  builds a real `FoxGardenApp` via `egui_kittest`'s `build_eframe`, drives
+  real frames, and queries the accessibility tree by label (`get_by_label
+  ("☕ Main.java")`, `shows("*Main.java")`), so a test fails when the *UI*
+  regresses, not just the state behind it. Add a flow test there in
+  addition to — never instead of — the unit test for the logic it exercises.
+  Two setup steps deliberately bypass the UI, both documented at `e2e/mod.
+  rs`'s top: opening a project (`rfd`'s native dialog is outside egui
+  entirely) and placing the caret (the editor is custom-painted, so it has
+  no node to click by label — use `widgets::editor::jump_to`). Anything the
+  harness *can* drive, drive; don't reach into `harness.state_mut()` to
+  simulate a click. The build closure must call `style::fonts::install`
+  exactly as `main` does, or painting the editor panics on an unbound
+  `FontFamily::Name("JetBrainsMono")`.
+- Three things about that harness cost real debugging time once each, so
+  reach for the existing helper rather than rediscovering them: a menu
+  item's accessibility label carries its decoration (`Save Ctrl+S`,
+  `Theme ⏵`), so menus go through `menu`/`click_containing`, never an
+  exact label; `shows_containing` uses `query_all_` because the singular
+  query *panics* on two matches, which for an "is this on screen?" check is
+  a false failure; and where a menu entry and the panel it toggles share a
+  name (`Source Control` is both a checkbox and a heading), only
+  `click_checkbox`'s role filter can tell them apart. `E2e::launch` also
+  Ctrl+clicks the project root after expanding it — expanding *selects* it,
+  and a selected root silently joins every later multi-target operation
+  (a Delete aimed at two files would offer to delete three, the project
+  directory included).
+- Don't add e2e coverage for anything whose answer arrives on a background
+  thread (LSP, Checkstyle/PMD, `git`, the terminal's shell, `notify`'s
+  file-change events) or after a timer (auto-save): a frame loop can only
+  assert on the race. Those have unit tests; `e2e/mod.rs`'s header lists
+  what's deliberately excluded and why, and is the place to update if that
+  set ever changes.
 - **Do not drive the running app with `xdotool`/`wmctrl`/`import` (or any
   other click-automation tooling) — that approach has repeatedly produced
   false reads** (a screenshot racing the app's own redraw and showing stale
