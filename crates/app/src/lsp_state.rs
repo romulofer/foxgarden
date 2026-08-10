@@ -822,4 +822,198 @@ sys.stdin.buffer.read()
         let value = rx.recv().expect("the fake server's response arrives").expect("the fake server replied successfully");
         assert_eq!(value[0]["label"], "add(E e) : boolean");
     }
+
+    /// Where the real-server tests below look for a binary: an environment
+    /// override first (a developer's own install, wherever it lives), then
+    /// whatever `lsp_manager` last installed into its own cache directory.
+    /// Panics rather than silently passing — these tests are `#[ignore]`d,
+    /// so reaching one at all means a developer explicitly asked for it and
+    /// deserves to be told why it can't run.
+    fn real_server_binary(env_var: &str, cache_relative: &str) -> PathBuf {
+        if let Some(configured) = std::env::var_os(env_var) {
+            return PathBuf::from(configured);
+        }
+        let cached = lsp_manager::cache_dir().expect("a cache directory").join(cache_relative);
+        assert!(
+            cached.is_file(),
+            "no language server at {} — install one through Settings > Language Servers…, \
+             or point {env_var} at your own",
+            cached.display()
+        );
+        cached
+    }
+
+    /// Drives `sync` until this state's Kotlin session finishes its
+    /// handshake, the same way the app's own update loop would across
+    /// frames. Any lifecycle error is a hard failure: a real-server test
+    /// that quietly proceeds with no session would "pass" by asserting
+    /// nothing.
+    fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
+        let deadline = Instant::now() + Duration::from_secs(240);
+        while !matches!(state.kotlin, Slot::Ready { .. }) {
+            let errors = state.sync(settings, Some(root), std::slice::from_mut(doc));
+            assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
+            assert!(Instant::now() < deadline, "kotlin-language-server never finished its handshake");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// `sync_until_kotlin_ready`'s Java counterpart — same loop, same
+    /// hard-failure stance, just the other slot.
+    fn sync_until_java_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
+        let deadline = Instant::now() + Duration::from_secs(240);
+        while !matches!(state.java, Slot::Ready { .. }) {
+            let errors = state.sync(settings, Some(root), std::slice::from_mut(doc));
+            assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
+            assert!(Instant::now() < deadline, "jdtls never finished its handshake");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// `TECHNICAL_DEBT.md` #20: Track 20 Phase 3's own live-verify only ever
+    /// got a blank `contents` back, for what was almost certainly a JDK
+    /// type with no sources attached — leaving "hover is genuinely broken"
+    /// and "this install simply has no Javadoc for `List`" indistinguishable.
+    /// A symbol the *project itself* declares separates them: jdtls resolves
+    /// that from its own compiled bindings, no external sources needed, so
+    /// blank content here would be a real bug in `request_hover`.
+    ///
+    /// Retries rather than asking once: jdtls answers a hover long before
+    /// it has finished building the project model, and its early answers
+    /// are legitimately empty.
+    ///
+    /// `#[ignore]`d for the same reasons as the Kotlin test above; jdtls
+    /// additionally needs a JDK 21 (`FOXGARDEN_JDTLS_JAVA_HOME`).
+    #[test]
+    #[ignore = "needs a real jdtls install and a JDK 21; run with --ignored"]
+    fn java_hover_against_a_real_server_documents_a_project_owned_symbol() {
+        let binary = real_server_binary("FOXGARDEN_JDTLS", "jdtls-1.60.0/bin/jdtls");
+        let source = concat!(
+            "public class Sample {\n",
+            "    /** Returns the answer to everything. */\n",
+            "    int answer() {\n",
+            "        return 42;\n",
+            "    }\n",
+            "\n",
+            "    void run() {\n",
+            "        int value = answer();\n",
+            "    }\n",
+            "}\n",
+        );
+        let dir = test_support::tempdir();
+        let path = test_support::write_file(dir.path(), "Sample.java", source);
+        let mut doc = Document::open(path).expect("open the fixture");
+        let settings = LspSettings {
+            enabled: true,
+            jdtls_binary: binary.display().to_string(),
+            jdtls_java_home: std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default(),
+            ..Default::default()
+        };
+
+        let mut state = LspState::default();
+        sync_until_java_ready(&mut state, &settings, dir.path(), &mut doc);
+
+        // The `answer()` *call site*, not its declaration — the ordinary
+        // "what is this thing I'm reading" hover, and the one that has to
+        // resolve a binding rather than just read the token under the
+        // pointer.
+        let call_site = source.rfind("answer()").expect("the fixture calls its own method");
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let content = loop {
+            let rx = state
+                .request_hover(&mut doc, call_site)
+                .expect("a Ready Java session should accept the request");
+            let value = rx
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the server answers the hover request")
+                .expect("the server replied successfully");
+            let text = value["contents"].to_string();
+            if text.contains("answer") {
+                break text;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "jdtls never resolved a project-owned symbol; last hover contents: {text}"
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        };
+        assert!(
+            content.contains("Returns the answer to everything"),
+            "hover resolved the symbol but dropped its Javadoc: {content}"
+        );
+    }
+
+    /// `TECHNICAL_DEBT.md` #18: a raw JSON-RPC probe already proved
+    /// `kotlin-language-server` itself answers a `list.` completion with
+    /// the receiver's own members, but the same action through the real
+    /// GUI showed generic top-level candidates instead — leaving it
+    /// unknown whether *this codebase's* own client path (URI encoding,
+    /// `didOpen`/`didChange` ordering, `byte_to_utf16_position`) was at
+    /// fault. This drives exactly that path — no GUI, no raw probe — so
+    /// the answer is attributable to one side or the other.
+    ///
+    /// `#[ignore]`d: needs a real server binary on disk and takes tens of
+    /// seconds of real handshake/indexing time. Run it with
+    /// `cargo test -p foxgarden --bin foxgarden -- --ignored kotlin_completion`.
+    #[test]
+    #[ignore = "needs a real kotlin-language-server install; run with --ignored"]
+    fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
+        let binary = real_server_binary(
+            "FOXGARDEN_KOTLIN_LANGUAGE_SERVER",
+            "kotlin-language-server-1.3.13/server/bin/kotlin-language-server",
+        );
+        let before_dot = "fun main() {\n    val list = mutableListOf<String>()\n    list\n}\n";
+        let dir = test_support::tempdir();
+        let path = test_support::write_file(dir.path(), "src/main/kotlin/Sample.kt", before_dot);
+        let mut doc = Document::open(path).expect("open the fixture");
+        let settings = LspSettings {
+            enabled: true,
+            kotlin_language_server_binary: binary.display().to_string(),
+            ..Default::default()
+        };
+
+        let mut state = LspState::default();
+        // The handshake (and the `didOpen` `sync` sends with it) completes
+        // *before* the dot is typed — the GUI's own ordering, and the one
+        // that makes the `didChange` below a real mid-session edit rather
+        // than part of the document's very first `didOpen`.
+        sync_until_kotlin_ready(&mut state, &settings, dir.path(), &mut doc);
+
+        let typed = before_dot.replace("    list\n", "    list.\n");
+        // Exactly what `widgets::editor::widget::apply_edit` does for a
+        // typed character, minus the tree-sitter reparse this doesn't need.
+        doc.buffer = ropey::Rope::from_str(&typed);
+        doc.lsp_version += 1;
+        doc.lsp_sync_pending = true;
+        let anchor = typed.find("list.").expect("the fixture contains the receiver") + "list.".len();
+
+        let rx = state
+            .request_completion(&mut doc, anchor)
+            .expect("a Ready Kotlin session should accept the request");
+        let value = rx
+            .recv_timeout(Duration::from_secs(120))
+            .expect("the server answers the completion request")
+            .expect("the server replied successfully");
+        let labels: Vec<String> = serde_json::from_value::<lsp_types::CompletionResponse>(value)
+            .map(|response| match response {
+                lsp_types::CompletionResponse::Array(items) => items,
+                lsp_types::CompletionResponse::List(list) => list.items,
+            })
+            .expect("a well-formed completion response")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        // `MutableList<String>`'s own members, not the bare-keyword set a
+        // server falls back to when it can't resolve the receiver at the
+        // requested position — that fallback (`by`/`out`/`set`/…) is
+        // precisely the degraded result #18 recorded from the GUI.
+        for member in ["add", "get", "size", "clear"] {
+            assert!(
+                labels.iter().any(|label| label.split('(').next() == Some(member)),
+                "no `{member}` among {} completions: {labels:?}",
+                labels.len()
+            );
+        }
+    }
 }

@@ -170,7 +170,10 @@ enum InstallEvent {
     Finished(InstallResult),
 }
 
-fn cache_dir() -> Result<PathBuf, String> {
+/// `pub(crate)` for `lsp_state`'s own real-server tests, which look here
+/// for whatever this module last installed rather than hard-coding a
+/// second copy of the same per-platform path.
+pub(crate) fn cache_dir() -> Result<PathBuf, String> {
     ProjectDirs::from("", "", "foxgarden")
         .map(|dirs| dirs.cache_dir().join("lsp-servers"))
         .ok_or_else(|| "couldn't determine a cache directory for this platform".to_string())

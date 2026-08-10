@@ -36,10 +36,12 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
-| 20 | `[OPEN]` | Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols |
+| 22 | `[OPEN]` | Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it |
+| 21 | `[OPEN]` | `bundled_archives_extract_with_the_launcher_at_its_documented_path` fails on any clone without Git LFS, because `include_bytes!` happily embeds the pointer file |
+| 20 | `[RESOLVED]` | Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols |
 | 19 | `[RESOLVED]` | `LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin |
-| 18 | `[OPEN]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
-| 17 | `[OPEN]` | The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file |
+| 18 | `[RESOLVED]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
+| 17 | `[RESOLVED]` | The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file |
 | 16 | `[OPEN]` | Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other |
 | 15 | `[OPEN]` | Spring endpoint map jump-to-handler doesn't land the cursor correctly |
 | 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
@@ -61,230 +63,113 @@ rewritten or removed, not blindly executed.
 
 # Open
 
-## 20. [OPEN] Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols
+## 22. [OPEN] Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it
 
-**Where:** `crates/app/src/widgets/editor/hover.rs` (`HoverState::update`,
-`hover_text_from_response`) and `crates/app/src/lsp_state.rs`
-(`request_hover`) — Track 20 Phase 3's own implementation, built this
-session. Also touches `crates/app/src/lsp_client.rs` (see #19, found and
-fixed in the same session while chasing this).
+**Where:** `crates/app/src/widgets/editor/hover.rs`
+(`hover_text_from_response`, `HoverState::paint`) and
+`crates/app/src/lsp_state.rs` (`initialize_params`' own
+`hover.content_format`).
 
-**Status:** Open — mid live-verify, paused to resume another day.
-Temporary `eprintln!("[hover-debug] ...")` diagnostic lines are still in
-place at both call sites above; remove them once this entry closes.
-
-### What was found
-
-Live-verifying Checkpoint 3 ("hovering a real symbol shows real
-documentation") against a real `jdtls` surfaced two distinct issues, only
-one of which is this codebase's own bug (see #19 for that one — a genuine
-UI-freeze fix, already shipped). Once #19 was fixed, hover's actual
-request/response round trip was confirmed working end to end via the
-debug logging: a `textDocument/hover` request fires correctly after the
-pointer dwells on an identifier, reaches jdtls, and a real reply comes
-back and gets parsed correctly. But the one reply captured this session,
-for what was almost certainly a JDK type (`List`/`ArrayList` — the same
-symbols the live-verify steps ask to hover), was `{"contents":""}` — jdtls
-answered, but had nothing to show. `hover_text_from_response` correctly
-treats blank content as "nothing to show" (no tooltip), matching this
-codebase's own established silent-degrade convention elsewhere — so
-*if* this is jdtls genuinely having no Javadoc for JDK types (plausible:
-this jdtls install may have no JDK sources/Javadoc attached, unlike a
-full IDE install that bundles or downloads them), there is no bug here to
-fix, just an environment limitation like #17's Kotlin one. That's
-unconfirmed, though — the live-verify was paused before testing hover on
-a symbol the *project itself* defines (a local method/field/class),
-which would come back from ECJ's own resolved bindings without needing
-any external sources at all, and should show real content if hover is
-genuinely working end to end.
-
-### Why it wasn't fixed (or confirmed) on the spot
-
-Ran out of session time chasing #19 (a real, higher-priority freeze) first;
-by the time that was fixed and hover's transport was confirmed working,
-the live-verify itself hadn't yet been pointed at a project-owned symbol.
-
-### Proposed fix / next step
-
-Next session: hover over a symbol defined in the open project itself (not
-`List`/`ArrayList` or any other JDK type) and check the `[hover-debug]`
-output.
-- Real, non-empty `contents` → hover genuinely works; Checkpoint 3 is
-  satisfied for Java. Remove the debug `eprintln!`s, add the normal
-  `PLAN.md` Track 20 "done" writeup, and separately decide whether the
-  JDK-blank-response case is worth a fix (e.g. checking whether a
-  JDK sources jar can be attached to this jdtls install) or is fine to
-  leave as a known, documented limitation.
-- Still blank/no reply even for a project-owned symbol → a real remaining
-  bug in `request_hover`/`hover_text_from_response`/`identifier_span` to
-  chase, not an environment limitation — the debug logging already in
-  place (raw response, decoded content, fired-span) is the starting point.
-
-### Trigger condition
-
-Next time Track 20 Phase 3 is picked back up.
-
----
-
-## 18. [OPEN] Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin
-
-**Where:** `crates/app/src/widgets/editor/widget.rs`'s dot-completion
-trigger + `crates/app/src/lsp_state.rs`'s `request_completion` — the same
-code path already live-verified correct against a real `jdtls` (Java:
-`list.`/`array.` on `List<String>`/`int[]` show real, correctly-named JDK
-members). Not a known bug — an unresolved observation from this session's
-own live-verify that a future pass should chase down before trusting
-Kotlin completion works as well as Java's.
-
-**Status:** Open. Found while live-verifying `PLAN.md` Track 20 Phase 5
-in the real GUI (Xvfb + a real `kotlin-language-server` process, mirroring
-the same setup Phase 1/2's own live-verify already used).
+**Status:** Open. Found while closing #20 — the same real-jdtls run that
+proved hover content resolves correctly also showed *what* that content
+looks like.
 
 ### What was found
 
-A raw JSON-RPC probe (a standalone script, bypassing FoxGarden entirely —
-same technique that root-caused #17) sent `didOpen` for a `MutableList<
-String>` receiver, waited 3 real seconds, then `textDocument/completion`,
-and got back correct, well-formed members (`add`, `get`, `size`, `clear`,
-...) — proving the server itself, and this session's `bare_label_and_has_
-params`/kind-mapping decode logic, both handle Kotlin's response shape
-correctly (`add(element: String)`-style labels parse to a bare `add` name
-with `has_params: true` exactly as designed).
+`initialize_params` declares `content_format: [PlainText, Markdown]`,
+which the protocol defines as a client *preference*, not a constraint —
+and a real jdtls 1.60.0 ignores it for the legacy `MarkedString` reply
+shape. Hovering `String` came back as a two-element array: a
+`{language: "java", value: "java.lang.String"}` code element plus a
+second element whose text is unmistakably Markdown — backtick-quoted
+identifiers, `>`-indented code blocks, `*  **Since:**` bullet lists, and
+full `[Character](jdt://contents/java.base/java.lang/Character.class?=…)`
+links whose URLs run to several hundred characters each.
 
-The equivalent action *through the actual FoxGarden GUI* (type `list.`
-after a real `val list = mutableListOf<String>()`) did not show `list`'s
-own members — it showed a generic, top-level-scope-shaped set of
-candidates (bare Kotlin keywords like `by`/`get`/`out`/`set`, plus a
-couple of unrelated importable-symbol suggestions), as if the completion
-request had actually been evaluated at a different position than where
-the popup was visually anchored, or against stale/not-yet-reprocessed
-buffer content. The buffer itself was confirmed correct after the fact
-(`list.` really did land on the right line) — so this isn't the
-"click landed in the wrong place" explanation it might first look like.
-
-### Why it wasn't chased further
-
-Time ran out this session before a repeat, more targeted probe (e.g.
-artificially delaying `request_completion`'s own request by a frame or
-two, to see if the discrepancy is a real "the server hasn't reprocessed
-this document's just-typed `.` yet" race specific to `kotlin-language-
-server`'s own internal indexing latency — plausible, since the raw probe
-that *did* work waited a full 3 seconds after `didOpen` before requesting
-completion, while the GUI path sends `didChange`+the completion request
-back-to-back in the same call with no settling time) could be run and
-compared against a repeat of the exact same GUI steps. Recorded rather
-than guessed at blind.
-
-### Proposed fix
-
-Next time this is picked up: reproduce the exact GUI steps again first
-(open a fresh Kotlin file, type `list.` after a `mutableListOf<String>()`
-receiver) and capture what the real wire traffic looks like this time —
-either by temporarily logging `request_completion`'s own request
-params/position and the raw response value, or by re-running the same
-raw-protocol probe but shaping its timing to match the GUI path exactly
-(a `didChange` immediately followed by the completion request, no
-artificial delay) to see if the *probe itself* reproduces the same
-degraded result under that timing — that would confirm the "the server
-needs a moment after a `didChange`" theory cleanly, independent of any
-FoxGarden-side bug. If confirmed, the fix is almost certainly on
-FoxGarden's own side despite being a server-timing issue: either debounce
-completion requests by a frame or two after a `didChange` specifically
-for a just-opened/just-edited document, or accept the first response as
-provisional and let a quick follow-up keystroke naturally re-request
-(worth checking whether that already happens for free, given `poll_lsp`
-already merges async).
-
-### Trigger condition
-
-Next time Track 20's Kotlin side is touched for any reason, or before
-ever documenting Kotlin-side Phase 5 completion as fully working — Java's
-own live-verify should not be read as covering Kotlin too.
-
----
-
-## 17. [OPEN] The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file
-
-**Where:** Dev/test tooling for `PLAN.md` Track 20 (LSP integration), not
-this repo's own source — specifically whichever binary a developer points
-`LspSettings::kotlin_language_server_binary` at (`crates/app/src/
-lsp_settings.rs`, set via Settings > Language Server in `menu_bar.rs`). On
-this machine that's the build bundled with the locally available
-`pulsar-ide-kotlin` addon
-(`.../pulsar-ide-kotlin/install/server/bin/kotlin-language-server`, whose
-own `CLASSPATH` bundles `kotlin-compiler-2.1.0.jar`), versus this
-machine's SDKMAN-managed system Kotlin (`~/.sdkman/candidates/kotlin/
-current` → 2.4.10).
-
-**Status:** Open. Found live during Track 20 Checkpoint 2's own
-Kotlin-side manual verification (Java's own live-verify, recorded in
-`PLAN.md` under Track 20, was unaffected — this is Kotlin-only).
-
-### What was found
-
-Reproduced directly against the raw JSON-RPC protocol, bypassing
-FoxGarden's own `lsp_client`/`lsp_state` entirely (a standalone script
-sending `initialize`/`initialized`/`didOpen` and printing
-`publishDiagnostics` verbatim), to rule out a bug in this codebase's own
-UTF-16→byte decoding before looking anywhere else. `kotlin-language-
-server` resolves the analyzed file's stdlib classpath from the system's
-`kotlin`/`kotlinc` (SDKMAN's `current` symlink → 2.4.10), but its own
-bundled analysis compiler can only read class-file metadata up to version
-2.2.0; the 2.4.10 stdlib jar carries metadata version 2.4.0. Every symbol
-resolved from the stdlib — `println`, `Random`, `IntArray.lastIndex`,
-`contentToString`, even `kotlin.Unit` itself — comes back as
-`INCOMPATIBLE_CLASS`/`UNRESOLVED_REFERENCE`, on completely valid Kotlin
-code with nothing wrong in it. Confirmed live through FoxGarden too:
-opening a real, correct `Exercise.kt` (a Fisher–Yates shuffle) rendered
-roughly ten false-positive squiggles, initially indistinguishable from a
-real bug in this session's own `lsp_state.rs` diagnostics work until the
-raw-protocol probe isolated it to the server/SDK pairing itself.
-
-This is not a bug in FoxGarden's own code — `lsp_state.rs` is correctly
-relaying exactly what the server reports, the same code path Track 20
-Checkpoint 2's Java-side live-verify (`PLAN.md`) already confirmed
-correct against a real semantic error. But as long as it stands:
-- Kotlin-side live-verification of every later Track 20 phase (hover,
-  go-to-definition, completion, rename) is unusable — any Kotlin file
-  touching the stdlib will be wall-to-wall false positives.
-- A real regression in this codebase's own diagnostic handling could hide
-  behind this noise, or vice versa, unless the environment mismatch is
-  fixed (or at least confirmed still present) before trusting a Kotlin
-  live-verify's result.
+`HoverState::paint` renders that through a plain `ui.label`, so every one
+of those markers paints as literal text. For a JDK type the result is a
+tooltip dominated by `jdt://` URLs rather than by the documentation the
+user hovered for. A project-owned symbol's own short Javadoc (#20's
+fixture) renders acceptably, which is why this didn't surface earlier.
 
 ### Why it wasn't fixed on the spot
 
-Purely an environment/tooling mismatch on the developer's own machine —
-which Kotlin SDK version SDKMAN defaults to, which `kotlin-language-
-server` build happens to be locally available — not a line of this
-repo's own source to patch. Recording it here so the mismatch and its
-root cause aren't rediscovered from scratch next time Kotlin-side
-live-verification is attempted.
+Two credible fixes, and picking between them is a real design call rather
+than an obvious cleanup: render the Markdown for real (a dependency —
+`egui_commonmark` — against a project whose stated bar is Zed-class
+startup and frame cost), or strip it to readable plain text in
+`hover_text_from_response` (no dependency, but hand-rolling even a small
+Markdown subset is exactly the kind of thing that grows). Both are
+larger than the debt-closing pass that found this.
 
 ### Proposed fix
 
-Before any future Kotlin-side Track 20 checkpoint live-verify, either:
-- Point SDKMAN's default `kotlin` at a version whose stdlib metadata is
-  at or below 2.2.0 (roughly Kotlin 2.0.x or earlier) for the duration of
-  the live-verify, or
-- Obtain/build a `kotlin-language-server` release whose own bundled
-  compiler is new enough to read 2.4.x metadata (the fwcd/kotlin-
-  language-server upstream project may already have a newer release than
-  the 2.1.0-compiler build available locally here — not checked this
-  session).
-
-Whichever is chosen, confirm it with the same raw-JSON-RPC-probe approach
-used to find this (skip FoxGarden, send `didOpen` for a known-good file,
-inspect `publishDiagnostics` directly) before trusting any FoxGarden-side
-Kotlin live-verify again — that isolation is what made this cleanly
-diagnosable instead of looking like a regression in this session's own
-diagnostics work.
+Prefer the stripping route first, scoped tightly to what jdtls and
+`kotlin-language-server` actually emit (confirmed above, not guessed):
+unwrap inline code spans, drop link targets while keeping link text,
+convert `>`-indented blocks and `*` bullets to plain indentation. Keep it
+in `hover_text_from_response` so it's covered by that function's existing
+unit-test shape, with the real captured jdtls reply as a fixture. Only
+reach for a Markdown renderer if that proves insufficient in practice.
 
 ### Trigger condition
 
-Next time a Track 20 phase (3 and onward) needs a Kotlin-side
-live-verify, or sooner if a user reports bogus Kotlin squiggles on
-otherwise-correct code again.
+Next time hover docs are touched, or the first time a user reports
+tooltips full of `jdt://` links.
+
+---
+
+## 21. [OPEN] `bundled_archives_extract_with_the_launcher_at_its_documented_path` fails on any clone without Git LFS, because `include_bytes!` happily embeds the pointer file
+
+**Where:** `crates/app/src/lsp_manager.rs` (`JDTLS_ARCHIVE`/
+`KOTLIN_LANGUAGE_SERVER_ARCHIVE`'s own `include_bytes!`, and the test of
+the same name), plus `vendor/lsp-servers/` and `.gitattributes`.
+
+**Status:** Open. Found as the one failing test in an otherwise-green
+`cargo test --workspace` at the start of a later session.
+
+### What was found
+
+```
+extracts: "failed to extract archive: failed to iterate over archive"
+```
+
+`vendor/lsp-servers/*.tar.gz` and `*.zip` are Git LFS-tracked. On a
+machine without `git-lfs` installed (`git: 'lfs' is not a git command`),
+checkout leaves the 133-byte pointer file in place — `version
+https://git-lfs.github.com/spec/v1`, an `oid`, a `size` — and there is no
+`.git/lfs` object store at all, so the real bytes aren't recoverable
+locally either.
+
+The failing test is the mild half of the problem. `include_bytes!` has no
+idea it's embedding a pointer instead of an archive, so a release binary
+built from such a clone ships with both bundled installers silently
+broken; the failure only surfaces at the moment a user clicks Install,
+as an extraction error naming neither LFS nor the pointer.
+
+### Why it wasn't fixed on the spot
+
+The session that found it was scoped to closing the LSP debts (#17/#18/
+#20), and the fix isn't a one-liner: it's a choice between requiring
+`git-lfs` as a documented build prerequisite (with a `build.rs` check
+that fails the build with a readable message when the vendored file is a
+pointer), dropping LFS in favor of downloading at install time again, or
+not vendoring at all. That's a build/distribution decision, not a code
+cleanup.
+
+### Proposed fix
+
+A `build.rs` check is the cheap, high-value half regardless of which
+distribution route wins: a vendored archive that starts with `version
+https://git-lfs.github.com/spec/v1` should fail the build with "run `git
+lfs install && git lfs pull`", so the problem surfaces at build time with
+its own remedy attached instead of as a broken Install button. Whether
+LFS stays at all is the separate, larger question.
+
+### Trigger condition
+
+Any time `cargo test --workspace` is expected green on a fresh clone, or
+before cutting any release binary that users will click Install in.
 
 ---
 
@@ -954,6 +839,144 @@ this exact symptom.
 ---
 
 # Resolved
+
+## 20. [RESOLVED] ~~Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols~~
+
+**Where:** `crates/app/src/widgets/editor/hover.rs` (`HoverState::update`,
+`hover_text_from_response`) and `crates/app/src/lsp_state.rs`
+(`request_hover`).
+
+**Status:** Resolved — hover genuinely works end to end, for both of the
+cases this entry couldn't separate. The temporary `[hover-debug]`
+`eprintln!`s this entry asked to remove are already gone (they went with
+the hover fixes in "Fix hover docs, add Language Servers modal +
+in-app installer").
+
+### How it was answered
+
+This entry's own next step was "hover a symbol the project itself
+defines and check whether real content comes back" — now covered by a
+permanent, `#[ignore]`d real-server test rather than a one-off manual
+check: `lsp_state::tests::java_hover_against_a_real_server_documents_a_
+project_owned_symbol` drives this codebase's own `LspState` (not a raw
+protocol probe) against a real jdtls, hovers a `answer()` call site whose
+declaration carries `/** Returns the answer to everything. */`, and
+asserts both that the symbol resolves and that its Javadoc survives the
+round trip. It passes.
+
+The JDK-symbol half turned out not to be an environment limitation
+either: a one-off run of the same test extended to hover `String` came
+back with the full `java.lang.String` class Javadoc from a Zulu 21
+JDK — several thousand characters of it. So the original blank
+`{"contents":""}` belonged to the *pre-fix* client (which declared no
+`hover` capability at all), not to a JDK-sources gap in the install.
+
+What that same run *did* surface is a separate, real defect: the content
+comes back Markdown-formatted despite the client's stated `PlainText`
+preference, and the tooltip is a plain `ui.label`. Recorded as #22 rather
+than folded in here.
+
+### Verification
+
+`cargo test -p foxgarden --bin foxgarden -- --ignored java_hover`, with
+`FOXGARDEN_JDTLS` pointing at a real jdtls launcher and
+`FOXGARDEN_JDTLS_JAVA_HOME` at a JDK 21.
+
+---
+
+## 18. [RESOLVED] ~~Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin~~
+
+**Where:** `crates/app/src/widgets/editor/widget.rs`'s dot-completion
+trigger + `crates/app/src/lsp_state.rs`'s `request_completion`.
+
+**Status:** Resolved — not reproducible, and the theory this entry
+proposed is disproved. Attributed to #17's server/SDK mismatch, which
+was live at the time of the original observation.
+
+### How it was answered
+
+Two experiments, in the order this entry asked for:
+
+1. **The timing theory, tested directly.** The proposed root cause was
+   that `kotlin-language-server` needs a moment after a `didChange`
+   before it can answer a completion, and that the GUI (which sends
+   `didChange` and the request back to back) was outrunning it while the
+   original raw probe's own 3-second sleep hid the problem. Re-running
+   the raw probe with the GUI's exact timing — `didOpen`, then
+   `didChange` and `textDocument/completion` with no delay at all —
+   returned the same 75 correct `MutableList<String>` members as the
+   settled-timing run, item for item. The server needs no settling time.
+
+2. **This codebase's own client path, tested directly.** The remaining
+   possibility was a FoxGarden-side bug the raw probe structurally
+   couldn't see (URI encoding, `didOpen`/`didChange` ordering,
+   `byte_to_utf16_position`). `lsp_state::tests::kotlin_completion_
+   against_a_real_server_returns_the_receivers_own_members` — new,
+   `#[ignore]`d — drives `LspState` itself against a real server through
+   the same sequence a dot keystroke produces: handshake to `Ready`
+   first, *then* the edit that lands the `.`, then `request_completion`.
+   It asserts `add`/`get`/`size`/`clear` are all present, and passes.
+
+### What the symptom actually was
+
+Almost certainly #17: with the then-active `kotlin-language-server`
+unable to read the system Kotlin stdlib's class metadata, `mutableListOf<
+String>()` didn't resolve to anything, so the server had no receiver type
+to enumerate and fell back to its global keyword set — `by`/`get`/`out`/
+`set`, precisely what the GUI showed. Both #17's mismatch and this
+symptom disappeared together.
+
+### Still owed
+
+A GUI click-through remains the one thing neither experiment covers
+(both are headless by design). The trigger site's own logic —
+`typed_dot` detection, `word_before_cursor`, the popup's merge — is
+unit-tested but not exercised against a live server here.
+
+---
+
+## 17. [RESOLVED] ~~The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file~~
+
+**Where:** Dev/test tooling for `PLAN.md` Track 20, not this repo's own
+source — whichever binary
+`LspSettings::kotlin_language_server_binary` points at.
+
+**Status:** Resolved on this machine. Both halves of the mismatch moved:
+the server is now the one FoxGarden's own installer put in its cache
+(`kotlin-language-server` 1.3.13, bundled `kotlin-compiler-2.1.0.jar`)
+rather than the `pulsar-ide-kotlin` addon's copy, and SDKMAN's default
+`kotlin` is now 1.9.24 rather than 2.4.10 — well under the 2.2.0 metadata
+ceiling the bundled compiler can read.
+
+### Verification
+
+Re-run of the same raw-JSON-RPC-probe technique that originally isolated
+this, which is what this entry's own "Proposed fix" asked for before
+trusting any Kotlin-side result again:
+
+- A valid Kotlin file (a Fisher–Yates shuffle over `IntArray`, using
+  `Random`, `lastIndex`, `contentToString`, `println` — every symbol that
+  previously came back `INCOMPATIBLE_CLASS`/`UNRESOLVED_REFERENCE`)
+  produces **zero** diagnostics.
+- A deliberately broken file produces exactly the two real errors it
+  should: `TYPE_MISMATCH` ("inferred type is String but Int was
+  expected") and `UNRESOLVED_REFERENCE` ("Unresolved reference:
+  undefinedHelper") — proving the clean result above is genuine analysis,
+  not analysis silently not running.
+
+Kotlin-side live-verification of Track 20's later phases is therefore
+unblocked; #18 was closed off the back of this.
+
+### Caveat for a future reader
+
+This resolved itself through the *environment* changing, not through a
+fix in this repo — there is nothing here pinning either version. Pointing
+the setting at an older server build, or bumping SDKMAN's default Kotlin
+past 2.2.x again, reproduces the original symptom exactly. The probe
+above is the cheap way to confirm the pairing before trusting a Kotlin
+live-verify.
+
+---
 
 ## 19. [RESOLVED] ~~`LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin~~
 

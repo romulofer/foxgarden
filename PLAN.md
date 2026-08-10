@@ -1904,11 +1904,22 @@ completions against the freshly-*installed* (not just the pre-existing
 ### Major tier
 
 - [ ] Track 19 — Large file handling — full viewport virtualization
-- [ ] Track 20 — LSP integration (Phases 1/2/5 shipped and live-verified
-      on the Java side against a real `jdtls`; Kotlin-side Phase 5 has a
-      real server-level pass via a raw protocol probe but an inconclusive
-      in-app GUI check — see `TECHNICAL_DEBT.md` #18. Phases 3/4/6/7 not
-      started.)
+- [ ] Track 20 — LSP integration (Phases 1/2/3/5 shipped and verified
+      against real servers; Phases 4/6/7 not started.) Phase 3's own
+      Checkpoint 3 is satisfied: hover returns real documentation for
+      both a project-owned symbol and a JDK type, proven by a permanent
+      `#[ignore]`d real-jdtls test (`lsp_state::tests::java_hover_
+      against_a_real_server_documents_a_project_owned_symbol`) rather
+      than a one-off manual check — closing `TECHNICAL_DEBT.md` #20. One
+      defect that verification surfaced stays open as #22: jdtls answers
+      in Markdown regardless of the client's declared `PlainText`
+      preference, and the tooltip is a plain `ui.label`. Kotlin-side
+      Phase 5 now has its own equivalent real-server test
+      (`kotlin_completion_against_a_real_server_returns_the_receivers_
+      own_members`), which closes #18 — the earlier degraded GUI result
+      is attributed to #17's server/SDK mismatch, itself since resolved
+      and re-probed. A Kotlin GUI click-through is the one thing still
+      owed there, both tests being headless by design.
 - [x] Track 21 — Maven/Gradle awareness (all 3 phases done: `pom.xml`
       parsing verified against 5 real files; Gradle model extraction
       verified against a real multi-module Kotlin/Spring project, including
