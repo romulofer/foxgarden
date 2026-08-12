@@ -53,7 +53,7 @@ impl ServerKind {
         }
     }
 
-    fn initialization_options(self) -> serde_json::Value {
+    fn initialization_options(self, config: &SessionConfig) -> serde_json::Value {
         match self {
             // The local Zed Java reference establishes these as useful,
             // conservative JDTLS capabilities. Classpath injection remains
@@ -63,13 +63,41 @@ impl ServerKind {
                 "extendedClientCapabilities": {
                     "classFileContentsSupport": true,
                     "resolveAdditionalTextEditsSupport": true,
-                }
+                },
+                "settings": { "java": { "configuration": { "runtimes": jdtls_runtimes(config) } } },
             }),
             // kotlin-language-server has usable workspace settings, but no
             // project-specific setting is safe to invent here.
             Self::Kotlin => json!({}),
         }
     }
+}
+
+/// jdt.ls' own `java.configuration.runtimes` list: every JDK this machine
+/// has, named by its Eclipse execution environment, with the one matching
+/// the project's declared release marked `default`.
+///
+/// This is what makes older projects diagnosable at all. jdt.ls itself only
+/// runs on a JDK 21, and left to itself it compiles against *that* — so a
+/// Java 8 codebase gets no error on `var`, no error on a `record`, and no
+/// warning where its real compiler would reject the file outright. Handing
+/// it the JDK 8 install and telling it that's the project's environment
+/// makes its diagnostics match the build. A project whose declared release
+/// has no matching JDK installed still gets the full list (jdt.ls can then
+/// at least report the mismatch itself) but no `default` — claiming an
+/// environment that isn't there produces worse errors than saying nothing.
+fn jdtls_runtimes(config: &SessionConfig) -> Vec<serde_json::Value> {
+    config
+        .runtimes
+        .iter()
+        .map(|runtime| {
+            json!({
+                "name": runtime.name,
+                "path": runtime.path.display().to_string(),
+                "default": Some(runtime.major) == config.java_release,
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -83,6 +111,19 @@ struct SessionConfig {
     /// `SessionConfig`, and the running session restarts under the newly
     /// chosen JVM the same way changing the binary path already does.
     java_home: String,
+    /// The Java release this project declares (`fg_core::detect_java_release`
+    /// — `pom.xml`/Gradle/`.java-version`), or `None` when it declares none;
+    /// always `None` for `ServerKind::Kotlin`. Part of the config for the
+    /// same reason `java_home` is: a server told at `initialize` time which
+    /// execution environment is the default never revisits it, so changing
+    /// a `pom.xml`'s compiler release has to restart the session.
+    java_release: Option<u32>,
+    /// Every JDK found on this machine (`lsp_manager::runtimes_snapshot`) —
+    /// what lets a project be linted at a release *older* than the JVM
+    /// jdt.ls itself runs on. Empty for `ServerKind::Kotlin`, and empty for
+    /// Java until the background scan lands, at which point this differs and
+    /// the session restarts with the real list.
+    runtimes: Vec<lsp_manager::JavaRuntime>,
 }
 
 struct RunningSession {
@@ -114,6 +155,7 @@ pub struct LspState {
     java: Slot,
     kotlin: Slot,
     retiring: Vec<RetiringSession>,
+    java_release: JavaReleaseCache,
 }
 
 impl LspState {
@@ -133,7 +175,7 @@ impl LspState {
 
         for kind in [ServerKind::Java, ServerKind::Kotlin] {
             let needed = match kind { ServerKind::Java => java_needed, ServerKind::Kotlin => kotlin_needed };
-            let config = desired_config(kind, settings, project_root, needed);
+            let config = desired_config(kind, settings, project_root, needed, &mut self.java_release);
             let slot = match kind {
                 ServerKind::Java => &mut self.java,
                 ServerKind::Kotlin => &mut self.kotlin,
@@ -267,20 +309,59 @@ impl Drop for LspState {
     }
 }
 
-fn desired_config(kind: ServerKind, settings: &LspSettings, root: Option<&Path>, needed: bool) -> Option<SessionConfig> {
+/// The project's declared Java release, remembered between frames.
+/// `LspState::sync` runs every frame and a config is rebuilt each time, but
+/// the answer only changes when a build file does — so it's re-read on a
+/// new project root and otherwise at most once every `RECHECK_AFTER`,
+/// which picks up an edited `pom.xml` without stat-ing four paths per frame.
+#[derive(Default)]
+struct JavaReleaseCache {
+    root: Option<PathBuf>,
+    release: Option<u32>,
+    checked: Option<Instant>,
+}
+
+impl JavaReleaseCache {
+    const RECHECK_AFTER: Duration = Duration::from_secs(2);
+
+    fn release_for(&mut self, root: &Path) -> Option<u32> {
+        let stale = self.root.as_deref() != Some(root)
+            || self.checked.is_none_or(|at| at.elapsed() >= Self::RECHECK_AFTER);
+        if stale {
+            self.root = Some(root.to_path_buf());
+            self.release = fg_core::detect_java_release(root).map(|found| found.major);
+            self.checked = Some(Instant::now());
+        }
+        self.release
+    }
+}
+
+fn desired_config(
+    kind: ServerKind,
+    settings: &LspSettings,
+    root: Option<&Path>,
+    needed: bool,
+    java_release: &mut JavaReleaseCache,
+) -> Option<SessionConfig> {
     if !settings.enabled || !needed {
         return None;
     }
     let binary = kind.configured_binary(settings).trim();
     let root = root?;
-    let java_home = match kind {
-        ServerKind::Java => settings.jdtls_java_home.trim().to_string(),
-        ServerKind::Kotlin => String::new(),
+    let (java_home, release, runtimes) = match kind {
+        ServerKind::Java => (
+            settings.jdtls_java_home.trim().to_string(),
+            java_release.release_for(root),
+            lsp_manager::runtimes_snapshot(),
+        ),
+        ServerKind::Kotlin => (String::new(), None, Vec::new()),
     };
     (!binary.is_empty()).then(|| SessionConfig {
         root: root.to_path_buf(),
         binary: PathBuf::from(binary),
         java_home,
+        java_release: release,
+        runtimes,
     })
 }
 
@@ -572,14 +653,15 @@ fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSessi
     };
     let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root))
         .map_err(|error| format!("failed to start {} at {}: {error}", kind.name(), config.binary.display()))?;
-    let params = initialize_params(kind, &config.root)?;
+    let params = initialize_params(kind, &config)?;
     let initialize_rx = session
         .initialize(params)
         .map_err(|error| format!("failed to initialize {}: {error}", kind.name()))?;
     Ok(RunningSession { config, session, initialize_rx })
 }
 
-fn initialize_params(kind: ServerKind, root: &Path) -> Result<InitializeParams, String> {
+fn initialize_params(kind: ServerKind, config: &SessionConfig) -> Result<InitializeParams, String> {
+    let root = config.root.as_path();
     let uri = file_uri(root)?;
     #[allow(deprecated)]
     let params = InitializeParams {
@@ -589,7 +671,7 @@ fn initialize_params(kind: ServerKind, root: &Path) -> Result<InitializeParams, 
             uri,
             name: root.file_name().and_then(|name| name.to_str()).unwrap_or("FoxGarden project").to_string(),
         }]),
-        initialization_options: Some(kind.initialization_options()),
+        initialization_options: Some(kind.initialization_options(config)),
         // `snippet_support: Some(false)` — Phase 5's own completion
         // candidates are inserted as plain text (`completion::
         // bare_label_and_has_params`), never a real tab-stop-navigable
@@ -646,18 +728,103 @@ fn file_uri(path: &Path) -> Result<Uri, String> {
 mod tests {
     use super::*;
 
+    /// A `SessionConfig` for tests that only care about the fields they set
+    /// — the Java release/runtimes ones default to "nothing detected", which
+    /// is exactly a machine with no JDK scan finished and a project that
+    /// declares no release.
+    fn test_config(root: &Path) -> SessionConfig {
+        SessionConfig {
+            root: root.to_path_buf(),
+            binary: PathBuf::from("jdtls"),
+            java_home: String::new(),
+            java_release: None,
+            runtimes: Vec::new(),
+        }
+    }
+
     #[test]
     fn desired_config_requires_opt_in_root_language_and_binary() {
         let settings = LspSettings { enabled: true, jdtls_binary: "jdtls".to_string(), ..Default::default() };
         let root = Path::new(".");
-        assert!(desired_config(ServerKind::Java, &settings, Some(root), true).is_some());
-        assert!(desired_config(ServerKind::Java, &settings, Some(root), false).is_none());
-        assert!(desired_config(ServerKind::Kotlin, &settings, Some(root), true).is_none());
+        let cache = &mut JavaReleaseCache::default();
+        assert!(desired_config(ServerKind::Java, &settings, Some(root), true, cache).is_some());
+        assert!(desired_config(ServerKind::Java, &settings, Some(root), false, cache).is_none());
+        assert!(desired_config(ServerKind::Kotlin, &settings, Some(root), true, cache).is_none());
+    }
+
+    /// The project's declared release travels in the config, so a session
+    /// started before a `pom.xml` said "Java 8" is replaced by one that
+    /// knows — `slot_matches` compares whole configs.
+    #[test]
+    fn desired_config_carries_the_projects_declared_java_release() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pom.xml"),
+            "<project><properties><maven.compiler.source>1.8</maven.compiler.source></properties></project>",
+        )
+        .unwrap();
+        let settings = LspSettings { enabled: true, jdtls_binary: "jdtls".to_string(), ..Default::default() };
+
+        let config = desired_config(
+            ServerKind::Java,
+            &settings,
+            Some(dir.path()),
+            true,
+            &mut JavaReleaseCache::default(),
+        )
+        .expect("a Java session is wanted");
+
+        assert_eq!(config.java_release, Some(8));
+    }
+
+    /// jdt.ls is handed every installed JDK, with the project's own release
+    /// marked default — that pairing is what makes an old project's
+    /// diagnostics match its real compiler instead of jdt.ls' own JVM.
+    #[test]
+    fn jdtls_runtimes_name_every_jdk_and_default_to_the_projects_release() {
+        let config = SessionConfig {
+            java_release: Some(8),
+            runtimes: vec![
+                lsp_manager::JavaRuntime { major: 21, name: "JavaSE-21".to_string(), path: PathBuf::from("/jdk21") },
+                lsp_manager::JavaRuntime { major: 8, name: "JavaSE-1.8".to_string(), path: PathBuf::from("/jdk8") },
+            ],
+            ..test_config(Path::new("."))
+        };
+
+        let runtimes = jdtls_runtimes(&config);
+
+        assert_eq!(runtimes.len(), 2);
+        assert_eq!(runtimes[0]["name"], "JavaSE-21");
+        assert_eq!(runtimes[0]["default"], false);
+        assert_eq!(runtimes[1]["name"], "JavaSE-1.8");
+        assert_eq!(runtimes[1]["path"], "/jdk8");
+        assert_eq!(runtimes[1]["default"], true);
+    }
+
+    /// A project whose declared release isn't installed anywhere must not
+    /// have some *other* JDK declared its default — jdt.ls reporting the
+    /// missing environment itself beats silently linting at the wrong one.
+    #[test]
+    fn no_runtime_is_default_when_the_projects_release_is_not_installed() {
+        let config = SessionConfig {
+            java_release: Some(8),
+            runtimes: vec![lsp_manager::JavaRuntime {
+                major: 21,
+                name: "JavaSE-21".to_string(),
+                path: PathBuf::from("/jdk21"),
+            }],
+            ..test_config(Path::new("."))
+        };
+
+        let runtimes = jdtls_runtimes(&config);
+
+        assert_eq!(runtimes.len(), 1);
+        assert_eq!(runtimes[0]["default"], false);
     }
 
     #[test]
     fn initialize_params_has_one_root_workspace_and_jdtls_capabilities() {
-        let params = initialize_params(ServerKind::Java, Path::new(".")).unwrap();
+        let params = initialize_params(ServerKind::Java, &test_config(Path::new("."))).unwrap();
         assert_eq!(params.workspace_folders.as_ref().unwrap().len(), 1);
         assert_eq!(params.initialization_options.unwrap()["extendedClientCapabilities"]["classFileContentsSupport"], true);
     }
@@ -669,7 +836,7 @@ mod tests {
     /// renderer). PlainText must therefore be *first*, not merely present.
     #[test]
     fn initialize_params_prefers_plain_text_hover_content() {
-        let params = initialize_params(ServerKind::Java, Path::new(".")).unwrap();
+        let params = initialize_params(ServerKind::Java, &test_config(Path::new("."))).unwrap();
         let hover = params.capabilities.text_document.unwrap().hover.unwrap();
         assert_eq!(
             hover.content_format,
@@ -810,12 +977,13 @@ sys.stdin.buffer.read()
         let root = doc.path.parent().unwrap().to_path_buf();
         let mut state = LspState {
             java: Slot::Ready {
-                config: SessionConfig { root, binary: PathBuf::from("python3"), java_home: String::new() },
+                config: SessionConfig { binary: PathBuf::from("python3"), ..test_config(&root) },
                 session,
                 open_documents: HashSet::new(),
             },
             kotlin: Slot::Empty,
             retiring: Vec::new(),
+            java_release: JavaReleaseCache::default(),
         };
 
         let rx = state.request_completion(&mut doc, 0).expect("a Ready Java session should accept the request");

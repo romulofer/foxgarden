@@ -213,9 +213,28 @@ fn ensure_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Catches the one way `include_bytes!` can embed something that isn't the
+/// archive at all: `vendor/lsp-servers/` is tracked via Git LFS, and a clone
+/// made without `git-lfs` installed leaves a ~130-byte text *pointer* at
+/// each of those paths instead of the real bytes. That compiles perfectly
+/// happily, and only fails at install time — as an unreadable `failed to
+/// iterate over archive` out of the tar/zip decoder — so name the actual
+/// problem here instead.
+fn reject_lfs_pointer(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
+        return Err(
+            "this FoxGarden build embedded a Git LFS pointer instead of the server's archive — the \
+             vendor/lsp-servers/ files weren't fetched. Install git-lfs, run `git lfs pull`, and rebuild"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Extracts a `.zip` archive's bytes (Kotlin Language Server's own
 /// `server.zip`, vendored verbatim) into `dir`.
 fn extract_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    reject_lfs_pointer(bytes)?;
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("not a valid zip: {e}"))?;
     archive.extract(dir).map_err(|e| format!("failed to extract archive: {e}"))
@@ -224,6 +243,7 @@ fn extract_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
 /// Extracts a gzipped tarball's bytes (jdt.ls' own milestone distribution,
 /// vendored verbatim) into `dir`.
 fn extract_tar_gz(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    reject_lfs_pointer(bytes)?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
     archive.unpack(dir).map_err(|e| format!("failed to extract archive: {e}"))
 }
@@ -297,6 +317,207 @@ fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
 pub fn resolve_jdtls_java(java_home: &str) -> Result<PathBuf, String> {
     check_java(JDTLS_MINIMUM_JDK, java_home)?;
     Ok(java_command(java_home))
+}
+
+/// The `java` on `PATH`, resolved through every symlink to the real
+/// executable — on a distro-packaged JDK that's the whole point: `/usr/bin/
+/// java` is an alternatives symlink, and only the resolved target names the
+/// JDK home the launcher actually lives under.
+fn java_on_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("java"))
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+}
+
+/// Where whole JDKs get installed on the platforms FoxGarden runs on, as
+/// directories full of one-JDK-each subdirectories. Deliberately includes
+/// the version-manager layouts (sdkman, asdf, jenv/jabba), since a machine
+/// whose *default* `java` isn't 21 is exactly the case this detection has to
+/// answer for — see `LspSettings::jdtls_java_home`.
+fn jdk_search_roots() -> Vec<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/usr/lib/jvm"),
+        PathBuf::from("/usr/lib64/jvm"),
+        PathBuf::from("/opt/java"),
+        PathBuf::from("/Library/Java/JavaVirtualMachines"),
+    ];
+    if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
+        roots.push(home.join(".sdkman/candidates/java"));
+        roots.push(home.join(".asdf/installs/java"));
+        roots.push(home.join(".jdks"));
+        roots.push(home.join("Library/Java/JavaVirtualMachines"));
+    }
+    roots
+}
+
+/// A directory's own JDK home, if it is one: either directly (`bin/java`
+/// under it) or through macOS' bundle layout (`Contents/Home/bin/java`).
+fn java_home_at(dir: &Path) -> Option<PathBuf> {
+    [dir.to_path_buf(), dir.join("Contents").join("Home")]
+        .into_iter()
+        .find(|home| home.join("bin").join("java").is_file())
+}
+
+/// The number a JDK directory name leads with, for ordering candidates
+/// newest-first: `java-21-openjdk-amd64` and `21.0.11-zulu` both read as 21,
+/// `jdk1.8.0_401` as 1. Plain lexicographic order would put `java-8` ahead
+/// of `java-21` and hand back a JVM jdt.ls can't run under.
+fn version_hint(name: &str) -> u32 {
+    name.split(|c: char| !c.is_ascii_digit())
+        .find(|part| !part.is_empty())
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Every plausible JDK home on this machine, most-likely-usable first:
+/// whatever `JAVA_HOME` and `PATH` already point at (what jdt.ls' own
+/// launcher would have picked, so preferring it keeps detection agreeing
+/// with the machine's configured default whenever that default is new
+/// enough), then each search root's own installs, newest-looking first.
+/// Split from `detect_java_home` so the ordering is testable without
+/// spawning a JVM per candidate.
+fn java_home_candidates(env_home: Option<PathBuf>, path_java: Option<PathBuf>, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.extend(env_home);
+    // `<home>/bin/java` — two levels up from the executable is the home.
+    candidates.extend(path_java.and_then(|java| java.parent()?.parent().map(Path::to_path_buf)));
+
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        let mut installs: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        installs.sort_by(|a, b| {
+            let hint = |path: &Path| version_hint(&path.file_name().unwrap_or_default().to_string_lossy());
+            hint(b).cmp(&hint(a)).then_with(|| b.file_name().cmp(&a.file_name()))
+        });
+        candidates.extend(installs);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .iter()
+        .filter_map(|candidate| java_home_at(candidate))
+        .filter(|home| seen.insert(std::fs::canonicalize(home).unwrap_or_else(|_| home.clone())))
+        .collect()
+}
+
+/// One JDK found on this machine. `name` is the Eclipse execution
+/// environment jdt.ls identifies it by — the vocabulary its own
+/// `java.configuration.runtimes` setting speaks (see `lsp_state`'s Java
+/// initialization options), which is how a project targeting Java 8 or 11
+/// gets compiled and linted against *that* release even though jdt.ls
+/// itself only runs on 21.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaRuntime {
+    pub major: u32,
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Eclipse's own name for a Java release. The old `1.x` spelling is not
+/// cosmetic — jdt.ls rejects an unknown execution environment name, and
+/// Java 8 is `JavaSE-1.8` there, never `JavaSE-8`. Anything older than 5
+/// collapses onto `J2SE-1.5`, the oldest environment current JDTLS still
+/// knows.
+pub fn execution_environment_name(major: u32) -> String {
+    match major {
+        0..=5 => "J2SE-1.5".to_string(),
+        6..=8 => format!("JavaSE-1.{major}"),
+        _ => format!("JavaSE-{major}"),
+    }
+}
+
+/// The major version of the JVM installed at `home`, by running it — a
+/// directory called `java-21-openjdk` that actually holds a JRE, or a half-
+/// deleted install, has to be rejected here rather than believed.
+fn java_major_at(home: &Path) -> Option<u32> {
+    let output = Command::new(home.join("bin").join("java")).arg("-version").output().ok()?;
+    // Every JVM prints its version banner on stderr, not stdout.
+    java_major_version(&String::from_utf8_lossy(&output.stderr))
+}
+
+/// Every JDK on this machine, one per release, in `java_home_candidates`'
+/// own preference order — so the entry kept for a release is the one the
+/// machine is already configured around (`JAVA_HOME`/`PATH`) when that's the
+/// release in question, and the newest-looking install otherwise. Costs one
+/// `java -version` spawn per candidate, so it is only ever called off the UI
+/// thread (`runtimes_snapshot`).
+pub fn installed_runtimes() -> Vec<JavaRuntime> {
+    let candidates = java_home_candidates(
+        std::env::var_os("JAVA_HOME").map(PathBuf::from),
+        java_on_path(),
+        &jdk_search_roots(),
+    );
+    let mut runtimes: Vec<JavaRuntime> = Vec::new();
+    for home in candidates {
+        let Some(major) = java_major_at(&home) else { continue };
+        if runtimes.iter().any(|runtime| runtime.major == major) {
+            continue;
+        }
+        runtimes.push(JavaRuntime {
+            major,
+            name: execution_environment_name(major),
+            path: home,
+        });
+    }
+    runtimes
+}
+
+/// The scan's one process-wide result, plus whether a scan has been started
+/// at all. Cached because both callers want the same answer repeatedly:
+/// `detect_java_home` (once per dialog open) and `runtimes_snapshot` (once
+/// per `LspState::sync`, i.e. every frame).
+static INSTALLED_RUNTIMES: std::sync::OnceLock<std::sync::Mutex<Option<Vec<JavaRuntime>>>> = std::sync::OnceLock::new();
+static RUNTIME_SCAN_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn runtimes_cache() -> &'static std::sync::Mutex<Option<Vec<JavaRuntime>>> {
+    INSTALLED_RUNTIMES.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// What the JDK scan currently knows, without ever blocking: the finished
+/// scan's runtimes, or an empty list while the first one is still running
+/// (started here, on a background thread, the first time anything asks).
+/// Empty is a safe answer for the caller — `lsp_state` then configures
+/// jdt.ls with no explicit runtimes and it falls back to its own JVM, and
+/// the moment the scan lands the session's config differs and it restarts
+/// with the real list.
+pub fn runtimes_snapshot() -> Vec<JavaRuntime> {
+    if let Some(found) = runtimes_cache().lock().ok().and_then(|cached| cached.clone()) {
+        return found;
+    }
+    if !RUNTIME_SCAN_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::thread::spawn(|| {
+            let found = installed_runtimes();
+            if let Ok(mut cached) = runtimes_cache().lock() {
+                *cached = Some(found);
+            }
+        });
+    }
+    Vec::new()
+}
+
+/// The JDK jdt.ls itself should run under: the first one this machine
+/// offers that satisfies jdt.ls' own Java 21 runtime minimum, or `None` if
+/// it has none. Runs on a background thread
+/// (`LspManagerState::detect_java_home`) — a `java -version` spawn per
+/// installed JDK is far too slow for the UI thread.
+pub fn detect_java_home() -> Option<PathBuf> {
+    let runtimes = installed_runtimes();
+    if let Ok(mut cached) = runtimes_cache().lock() {
+        *cached = Some(runtimes.clone());
+        RUNTIME_SCAN_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    runtimes
+        .into_iter()
+        .find(|runtime| runtime.major >= JDTLS_MINIMUM_JDK)
+        .map(|runtime| runtime.path)
 }
 
 /// Extracts `server`'s bundled archive into `dir` and returns the launcher's
@@ -406,6 +627,10 @@ struct InstallJob {
 pub struct LspManagerState {
     installs: HashMap<Server, InstallJob>,
     checks: HashMap<Server, Receiver<LatestVersionResult>>,
+    /// A running JDK scan (`detect_java_home`), if any — at most one, since
+    /// its answer is a property of the machine rather than of any one
+    /// server.
+    java_home_detection: Option<Receiver<Option<PathBuf>>>,
 }
 
 impl LspManagerState {
@@ -427,7 +652,46 @@ impl LspManagerState {
     /// uses this to keep requesting repaints, since progress lands on a
     /// background thread with no input event to piggyback on.
     pub fn busy(&self) -> bool {
-        !self.installs.is_empty() || !self.checks.is_empty()
+        !self.installs.is_empty() || !self.checks.is_empty() || self.java_home_detection.is_some()
+    }
+
+    /// Starts scanning this machine for a JDK 21+ on a background thread —
+    /// the dialog fires this when it opens with an empty Java Home, so the
+    /// field arrives already filled in rather than leaving the user to go
+    /// find a JDK path by hand. A scan already in flight is left alone.
+    pub fn detect_java_home(&mut self) {
+        if self.java_home_detection.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(detect_java_home());
+        });
+        self.java_home_detection = Some(rx);
+    }
+
+    pub fn detecting_java_home(&self) -> bool {
+        self.java_home_detection.is_some()
+    }
+
+    /// The finished scan's answer, once: `Some(Some(home))` when a JDK 21+
+    /// was found, `Some(None)` when the machine has none. Called once a
+    /// frame alongside the other polls.
+    pub fn poll_java_home_detection(&mut self) -> Option<Option<PathBuf>> {
+        let detection = self.java_home_detection.as_ref()?;
+        match detection.try_recv() {
+            Ok(found) => {
+                self.java_home_detection = None;
+                Some(found)
+            }
+            Err(TryRecvError::Empty) => None,
+            // The scanning thread died without answering — nothing left to
+            // wait for, and no JDK to report either.
+            Err(TryRecvError::Disconnected) => {
+                self.java_home_detection = None;
+                Some(None)
+            }
+        }
     }
 
     /// Starts installing `version` of `server` on a background thread.
@@ -617,6 +881,96 @@ mod tests {
                 assert!(mode & 0o111 != 0, "the launcher must be executable, got {mode:o}");
             }
         }
+    }
+
+    /// A clone made without `git-lfs` leaves a text pointer where each
+    /// vendored archive should be; the resulting install failure has to say
+    /// so, not just report an unreadable decoder error.
+    #[test]
+    fn an_lfs_pointer_is_reported_as_itself_rather_than_as_a_broken_archive() {
+        let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 50925681\n";
+        let dir = test_support::tempdir();
+
+        for error in [
+            extract_tar_gz(pointer, dir.path()).expect_err("a pointer is not a tarball"),
+            extract_zip(pointer, dir.path()).expect_err("a pointer is not a zip"),
+        ] {
+            assert!(error.contains("Git LFS pointer"), "{error}");
+            assert!(error.contains("git lfs pull"), "{error}");
+        }
+    }
+
+    /// Ordering is the whole point of the candidate list: a machine with
+    /// several JDKs installed must be offered its newest one, and plain
+    /// lexicographic order would rank `java-8` above `java-21`.
+    #[test]
+    fn java_home_candidates_rank_a_search_roots_installs_newest_first() {
+        let root = test_support::tempdir();
+        for name in ["java-8-openjdk", "java-21-openjdk", "java-17-openjdk"] {
+            let bin = root.path().join(name).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join("java"), b"#!/bin/sh\n").unwrap();
+        }
+
+        let candidates = java_home_candidates(None, None, &[root.path().to_path_buf()]);
+
+        let names: Vec<_> = candidates
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["java-21-openjdk", "java-17-openjdk", "java-8-openjdk"]);
+    }
+
+    /// `JAVA_HOME` and `PATH` are what jdt.ls' own launcher would pick, so
+    /// detection agrees with the machine's configured default whenever that
+    /// default is new enough — and never offers the same home twice.
+    #[test]
+    fn java_home_candidates_lead_with_java_home_then_path_and_never_repeat_one() {
+        let root = test_support::tempdir();
+        let configured = root.path().join("configured");
+        let on_path = root.path().join("on-path");
+        for home in [&configured, &on_path] {
+            std::fs::create_dir_all(home.join("bin")).unwrap();
+            std::fs::write(home.join("bin").join("java"), b"#!/bin/sh\n").unwrap();
+        }
+
+        let candidates = java_home_candidates(
+            Some(configured.clone()),
+            Some(on_path.join("bin").join("java")),
+            // The same two homes again, as a search root would find them.
+            &[root.path().to_path_buf()],
+        );
+
+        assert_eq!(candidates, [configured, on_path]);
+    }
+
+    /// A directory that isn't a JDK at all can't be a candidate, however
+    /// promising its name — `bin/java` has to actually be there.
+    #[test]
+    fn java_home_candidates_skip_a_directory_with_no_java_in_it() {
+        let root = test_support::tempdir();
+        std::fs::create_dir_all(root.path().join("java-21-not-really")).unwrap();
+        assert!(java_home_candidates(None, None, &[root.path().to_path_buf()]).is_empty());
+    }
+
+    /// macOS ships JDKs as bundles, where the home is `Contents/Home` under
+    /// the install directory rather than the directory itself.
+    #[test]
+    fn java_home_candidates_understand_the_macos_bundle_layout() {
+        let root = test_support::tempdir();
+        let home = root.path().join("temurin-21.jdk").join("Contents").join("Home");
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(home.join("bin").join("java"), b"#!/bin/sh\n").unwrap();
+
+        assert_eq!(java_home_candidates(None, None, &[root.path().to_path_buf()]), [home]);
+    }
+
+    #[test]
+    fn version_hint_reads_the_major_version_out_of_a_jdk_directory_name() {
+        assert_eq!(version_hint("java-21-openjdk-amd64"), 21);
+        assert_eq!(version_hint("21.0.11-zulu"), 21);
+        assert_eq!(version_hint("temurin-17.jdk"), 17);
+        assert_eq!(version_hint("openjdk"), 0);
     }
 
     #[test]

@@ -1308,7 +1308,8 @@ impl eframe::App for FoxGardenApp {
             self.static_analysis.open_settings();
         }
         if menu_outcome.open_lsp_servers_settings_request {
-            self.lsp_servers.open_settings();
+            self.lsp_servers
+                .open_settings(&self.lsp_settings, self.state.project.as_ref().map(|p| p.root.as_path()));
         }
         if menu_outcome.run_checkstyle_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
@@ -1371,6 +1372,21 @@ impl eframe::App for FoxGardenApp {
         }
         for (server, result) in self.lsp_servers.manager.poll_checks() {
             self.lsp_servers.record_latest_version(server, result);
+        }
+        // A finished JDK scan always wins over what's in the field: it only
+        // ever runs because the field was empty when the dialog opened, or
+        // because Detect was clicked — which is a direct request to replace
+        // whatever is there. A machine with no JDK 21+ leaves it empty, so
+        // jdt.ls still falls back to JAVA_HOME/PATH.
+        if let Some(found) = self.lsp_servers.manager.poll_java_home_detection() {
+            if let Some(home) = &found {
+                self.lsp_settings.jdtls_java_home = home.display().to_string();
+            }
+            // A machine with no JDK 21+ is reported inside the dialog next
+            // to the field itself, not as an app-wide error: the scan runs
+            // unprompted whenever the dialog opens empty, and a modal error
+            // over the dialog the user just opened would be noise.
+            self.lsp_servers.record_java_home_detection(found.is_some());
         }
         if self.lsp_servers.manager.busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
