@@ -13,6 +13,7 @@
 use crate::lsp_manager::{ALL_SERVERS, LatestVersionResult, LspManagerState, Server};
 use crate::lsp_settings::LspSettings;
 use crate::widgets::modal::show_modal;
+use fg_i18n::{msg, t};
 
 /// Dialog-open flag plus the background install/update-check machinery it
 /// drives. Lives on `FoxGardenApp` (not in `MenuBarState`) for the same
@@ -75,7 +76,7 @@ impl LspServersState {
 pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut LspSettings) {
     let outcome = show_modal(ui, "lsp_servers_dialog", state.settings_open.then_some(()), |ui, ()| {
         ui.set_min_width(560.0);
-        ui.heading("Language Servers");
+        ui.heading(t().lsp.heading);
         ui.label(
             egui::RichText::new(
                 "Semantic diagnostics, completion and hover docs for Java and Kotlin come from an external \
@@ -94,7 +95,7 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
         }
 
         ui.separator();
-        ui.button("Close").clicked()
+        ui.button(t().common.close).clicked()
     });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
@@ -119,21 +120,20 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
 
     ui.horizontal(|ui| {
         if installed_version.is_empty() {
-            ui.label(egui::RichText::new("Not installed").weak());
+            ui.label(egui::RichText::new(t().common.not_installed).weak());
         } else {
-            ui.label(format!("Installed: {installed_version}"));
+            ui.label(msg::installed_version(&installed_version));
         }
 
         let installing = state.manager.installing(server);
         let install_label = if installed_version.is_empty() {
-            "Install"
+            t().install.install
         } else {
-            "Reinstall"
+            t().install.reinstall
         };
         if ui
             .add_enabled(!installing, egui::Button::new(install_label))
-            .on_hover_text(format!(
-                "Installs {} {}, from {}",
+            .on_hover_text(msg::installs_from(
                 server.display_name(),
                 server.recommended_version(),
                 server.github_repo(),
@@ -147,7 +147,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         if ui
             .add_enabled(
                 !checking,
-                egui::Button::new(if checking { "Checking…" } else { "Check for Updates" }),
+                egui::Button::new(if checking { t().install.checking } else { t().install.check_for_updates }),
             )
             .clicked()
         {
@@ -160,13 +160,13 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         // awareness only, never as a clickable update that would just fail.
         match state.latest_version(server) {
             Some(Ok(latest)) if *latest == server.recommended_version() => {
-                ui.label(egui::RichText::new("Up to date").weak());
+                ui.label(egui::RichText::new(t().lsp.up_to_date).weak());
             }
             Some(Ok(latest)) => {
-                ui.label(egui::RichText::new(format!("{latest} available upstream (not yet bundled)")).weak());
+                ui.label(egui::RichText::new(msg::available_upstream(latest)).weak());
             }
             Some(Err(error)) => {
-                ui.label(egui::RichText::new(format!("Update check failed: {error}")).weak());
+                ui.label(egui::RichText::new(msg::update_check_failed(&error.to_string())).weak());
             }
             None => {}
         }
@@ -183,7 +183,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     }
 
     ui.horizontal(|ui| {
-        ui.label("Binary");
+        ui.label(t().lsp.binary);
         ui.add(
             egui::TextEdit::singleline(settings.fields_for(server).0)
                 .id_salt(match server {
@@ -201,7 +201,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     // `JAVA_HOME`/`PATH`, same as leaving it unset.
     if let Server::Jdtls = server {
         ui.horizontal(|ui| {
-            ui.label("Java Home").on_hover_text(
+            ui.label(t().lsp.java_home).on_hover_text(
                 "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on this \
                  machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). Blank \
                  falls back to JAVA_HOME/PATH.",
@@ -213,8 +213,8 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             );
             let detecting = state.manager.detecting_java_home();
             if ui
-                .add_enabled(!detecting, egui::Button::new("Detect"))
-                .on_hover_text("Scans JAVA_HOME, PATH and the usual JDK install directories for a JDK 21 or newer.")
+                .add_enabled(!detecting, egui::Button::new(t().lsp.detect))
+                .on_hover_text(t().lsp.detect_hint)
                 .clicked()
             {
                 state.manager.detect_java_home();
@@ -229,7 +229,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         // this one its default, so diagnostics match the project's own
         // compiler rather than jdt.ls' JVM.
         ui.horizontal(|ui| {
-            ui.label("Project Java").on_hover_text(
+            ui.label(t().lsp.project_java).on_hover_text(
                 "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and Kotlin \
                  sources are diagnosed at this release, using the matching JDK from the list found on this machine.",
             );
@@ -239,7 +239,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
                 }
                 None => {
                     ui.label(
-                        egui::RichText::new("not declared — jdt.ls uses its own JVM's release").weak(),
+                        egui::RichText::new(t().lsp.project_java_undeclared).weak(),
                     );
                 }
             }

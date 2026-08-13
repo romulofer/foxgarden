@@ -3,6 +3,7 @@
 //! operations respect.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::{msg, t};
 
 #[test]
 fn renaming_a_file_from_the_tree_renames_it_on_disk_and_repoints_its_tab() {
@@ -10,7 +11,7 @@ fn renaming_a_file_from_the_tree_renames_it_on_disk_and_repoints_its_tab() {
     app.click("☕ Main.java");
 
     app.click_secondary("☕ Main.java");
-    app.click("Rename");
+    app.click(t().common.rename);
     app.replace_focused_text("Renamed.java");
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
@@ -30,7 +31,7 @@ fn a_renamed_open_file_is_still_saveable_under_its_new_name() {
     app.click("☕ Main.java");
 
     app.click_secondary("☕ Main.java");
-    app.click("Rename");
+    app.click(t().common.rename);
     app.replace_focused_text("Renamed.java");
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
@@ -46,13 +47,13 @@ fn deleting_a_file_asks_first_then_removes_it_and_closes_its_tab() {
     app.click("☕ Main.java");
 
     app.click_secondary("☕ Main.java");
-    app.click("Delete");
+    app.click(t().common.delete);
     assert!(
-        app.shows("Delete Main.java? This cannot be undone."),
+        app.shows(&msg::confirm_delete_file("Main.java")),
         "a delete must be confirmed before it happens"
     );
 
-    app.click("Delete");
+    app.click(t().common.delete);
 
     assert!(!app.path("Main.java").exists(), "confirming deletes the file");
     assert!(
@@ -68,8 +69,8 @@ fn cancelling_a_delete_leaves_the_file_alone() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
     app.click_secondary("☕ Main.java");
-    app.click("Delete");
-    app.click("Cancel");
+    app.click(t().common.delete);
+    app.click(t().common.cancel);
 
     assert!(app.path("Main.java").exists());
     assert!(app.shows("☕ Main.java"));
@@ -83,9 +84,9 @@ fn copying_a_file_and_pasting_into_a_directory_duplicates_it() {
     ]);
 
     app.click_secondary("☕ Main.java");
-    app.click("Copy");
+    app.click(t().common.copy);
     app.click_secondary("📁 sub");
-    app.click("Paste");
+    app.click(t().common.paste);
 
     assert!(
         app.path("Main.java").exists(),
@@ -105,9 +106,9 @@ fn cutting_a_file_and_pasting_into_a_directory_moves_it() {
     ]);
 
     app.click_secondary("☕ Main.java");
-    app.click("Cut");
+    app.click(t().common.cut);
     app.click_secondary("📁 sub");
-    app.click("Paste");
+    app.click(t().common.paste);
 
     assert!(!app.path("Main.java").exists(), "a cut removes the original");
     assert_eq!(
@@ -128,7 +129,7 @@ fn new_file_from_a_directory_row_creates_it_inside_that_directory() {
 
     app.click("📁 sub");
     app.click_secondary("📁 sub");
-    app.click("New File");
+    app.click(t().common.new_file);
     app.type_text("Inner.java");
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
@@ -174,13 +175,10 @@ fn ctrl_clicking_two_rows_deletes_both_in_one_confirmation() {
     assert!(app.open_tab_names().is_empty(), "a Ctrl+click selects without opening");
 
     app.click_secondary("☕ B.java");
-    app.click("Delete");
-    assert!(
-        app.shows("Delete 2 items? This cannot be undone."),
-        "one prompt for the whole set"
-    );
+    app.click(t().common.delete);
+    assert!(app.shows(&msg::confirm_delete_many(2)), "one prompt for the whole set");
 
-    app.click("Delete");
+    app.click(t().common.delete);
 
     assert!(!app.path("A.java").exists());
     assert!(!app.path("B.java").exists());
@@ -191,7 +189,7 @@ fn escape_cancels_a_rename_without_touching_the_file() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
     app.click_secondary("☕ Main.java");
-    app.click("Rename");
+    app.click(t().common.rename);
     app.replace_focused_text("Nope.java");
     app.press(egui::Modifiers::NONE, egui::Key::Escape);
 

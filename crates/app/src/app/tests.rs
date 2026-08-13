@@ -50,7 +50,15 @@ fn process_file_events_reloads_a_clean_tab_transparently() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
+    process_file_events(
+        &rx,
+        &mut state,
+        &mut parsers,
+        &mut conflicts,
+        &mut deleted,
+        &mut DiffState::default(),
+        None,
+    );
 
     assert_eq!(
         state.open_tabs[index].buffer.to_string(),
@@ -81,7 +89,15 @@ fn process_file_events_flags_a_conflict_for_a_dirty_tab() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
+    process_file_events(
+        &rx,
+        &mut state,
+        &mut parsers,
+        &mut conflicts,
+        &mut deleted,
+        &mut DiffState::default(),
+        None,
+    );
 
     assert_eq!(
         state.open_tabs[index].buffer.to_string(),
@@ -109,7 +125,15 @@ fn process_file_events_ignores_its_own_recent_save() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
+    process_file_events(
+        &rx,
+        &mut state,
+        &mut parsers,
+        &mut conflicts,
+        &mut deleted,
+        &mut DiffState::default(),
+        None,
+    );
 
     assert!(!state.open_tabs[index].is_dirty());
     assert!(conflicts.is_empty());
@@ -130,7 +154,15 @@ fn process_file_events_marks_an_externally_deleted_tab() {
 
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
+    process_file_events(
+        &rx,
+        &mut state,
+        &mut parsers,
+        &mut conflicts,
+        &mut deleted,
+        &mut DiffState::default(),
+        None,
+    );
 
     assert!(deleted.contains(&path));
     assert!(conflicts.is_empty());
@@ -150,7 +182,15 @@ fn process_file_events_ignores_paths_with_no_open_tab() {
     let mut conflicts = HashSet::new();
     let mut deleted = HashSet::new();
     // Must not panic despite there being no open tabs at all.
-    process_file_events(&rx, &mut state, &mut parsers, &mut conflicts, &mut deleted, &mut DiffState::default(), None);
+    process_file_events(
+        &rx,
+        &mut state,
+        &mut parsers,
+        &mut conflicts,
+        &mut deleted,
+        &mut DiffState::default(),
+        None,
+    );
 
     assert!(conflicts.is_empty());
     assert!(deleted.is_empty());
@@ -324,14 +364,76 @@ fn persisted_settings_round_trip() {
     assert_eq!(custom_templates.global, saved_templates.global);
     assert_eq!(external_tool_paths.checkstyle_binary, saved_tools.checkstyle_binary);
     assert_eq!(external_tool_paths.checkstyle_config, saved_tools.checkstyle_config);
-    assert_eq!(external_tool_paths.checkstyle_installed_version, saved_tools.checkstyle_installed_version);
+    assert_eq!(
+        external_tool_paths.checkstyle_installed_version,
+        saved_tools.checkstyle_installed_version
+    );
     assert_eq!(external_tool_paths.pmd_binary, saved_tools.pmd_binary);
     assert_eq!(external_tool_paths.pmd_ruleset, saved_tools.pmd_ruleset);
-    assert_eq!(external_tool_paths.pmd_installed_version, saved_tools.pmd_installed_version);
+    assert_eq!(
+        external_tool_paths.pmd_installed_version,
+        saved_tools.pmd_installed_version
+    );
     assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
-    assert_eq!(external_tool_paths.spotbugs_installed_version, saved_tools.spotbugs_installed_version);
+    assert_eq!(
+        external_tool_paths.spotbugs_installed_version,
+        saved_tools.spotbugs_installed_version
+    );
     assert_eq!(auto_save_settings, saved_auto_save);
     assert_eq!(lsp_settings, saved_lsp);
+}
+
+/// Settings > Language is persisted like any other setting, but through
+/// `fg_i18n`'s process-global rather than a field on `FoxGardenApp` — these
+/// cover both ends of that without ever writing to the global, which the
+/// rest of this test binary is reading in parallel.
+#[test]
+fn persist_settings_writes_the_active_language() {
+    let mut storage = FakeStorage::default();
+
+    persist_settings(
+        &mut storage,
+        EditorFont::default(),
+        DEFAULT_FONT_SIZE,
+        DEFAULT_DARK_MODE,
+        IndentSettings::default(),
+        ViewSettings::default(),
+        DEFAULT_SIDE_PANEL_WIDTH,
+        true,
+        false,
+        false,
+        &UserTemplates::default(),
+        &ExternalToolPaths::default(),
+        AutoSaveSettings::default(),
+        &LspSettings::default(),
+    );
+
+    assert_eq!(storage.get_string(LANGUAGE_KEY).as_deref(), Some(fg_i18n::lang().tag()));
+}
+
+#[test]
+fn stored_language_reads_back_an_explicit_choice() {
+    let mut storage = FakeStorage::default();
+    storage.set_string(LANGUAGE_KEY, "en-US".to_string());
+
+    assert_eq!(stored_language(Some(&storage)), Some(fg_i18n::Lang::EnUs));
+}
+
+/// All three "nobody chose" shapes answer `None`, which is what makes
+/// `FoxGardenApp::new` fall through to detecting the host locale instead of
+/// pinning an arbitrary language.
+#[test]
+fn stored_language_is_none_when_nothing_valid_was_saved() {
+    assert_eq!(stored_language(None), None, "no storage at all");
+    assert_eq!(
+        stored_language(Some(&FakeStorage::default())),
+        None,
+        "storage, but no key"
+    );
+
+    let mut storage = FakeStorage::default();
+    storage.set_string(LANGUAGE_KEY, "tlh-Piqd".to_string());
+    assert_eq!(stored_language(Some(&storage)), None, "a tag this build doesn't know");
 }
 
 #[test]
@@ -568,7 +670,10 @@ fn resolve_pending_navigation_converts_byte_to_char_offset_and_clears_the_field(
 
     let byte_offset = source.find("bar").unwrap();
     let expected_char_offset = source[..byte_offset].chars().count();
-    assert_ne!(byte_offset, expected_char_offset, "sanity: café's multi-byte é must make these differ");
+    assert_ne!(
+        byte_offset, expected_char_offset,
+        "sanity: café's multi-byte é must make these differ"
+    );
 
     let mut pending = Some((path.clone(), byte_offset));
     let resolved = resolve_pending_navigation(&state, &mut pending);
@@ -625,7 +730,10 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut lsp_settings,
     );
 
-    assert_eq!(auto_save_settings.idle_seconds, AutoSaveSettings::default().idle_seconds);
+    assert_eq!(
+        auto_save_settings.idle_seconds,
+        AutoSaveSettings::default().idle_seconds
+    );
 }
 
 #[test]
@@ -709,8 +817,14 @@ fn auto_save_focus_loss_trigger_saves_only_the_dirty_tab() {
     tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
 
     assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
-    assert!(!state.open_tabs[dirty_index].is_dirty(), "focus loss must save the dirty tab");
-    assert_eq!(std::fs::read_to_string(&dirty_path).unwrap(), "// unsaved edit\nclass Dirty.java {}");
+    assert!(
+        !state.open_tabs[dirty_index].is_dirty(),
+        "focus loss must save the dirty tab"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&dirty_path).unwrap(),
+        "// unsaved edit\nclass Dirty.java {}"
+    );
     assert_eq!(
         std::fs::read_to_string(&clean_path).unwrap(),
         "class Clean.java {}",
@@ -737,10 +851,16 @@ fn auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity() {
     auto_save_state.record_activity(0.0);
     let mut last_error = None;
 
-    assert!(!auto_save_state.tick(settings, true, 5.0), "only 5s idle: no trigger yet");
+    assert!(
+        !auto_save_state.tick(settings, true, 5.0),
+        "only 5s idle: no trigger yet"
+    );
     assert!(state.open_tabs[index].is_dirty());
 
-    assert!(auto_save_state.tick(settings, true, 10.0), "10s idle: threshold reached");
+    assert!(
+        auto_save_state.tick(settings, true, 10.0),
+        "10s idle: threshold reached"
+    );
     tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
 
     assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
@@ -781,6 +901,12 @@ fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
         state.open_tabs[conflicted_index].is_dirty(),
         "a conflicted tab must not be auto-saved out from under its banner"
     );
-    assert_eq!(state.open_tabs[conflicted_index].buffer.to_string(), conflicted_buffer_before);
-    assert!(!state.open_tabs[plain_index].is_dirty(), "an unconflicted dirty tab still saves normally");
+    assert_eq!(
+        state.open_tabs[conflicted_index].buffer.to_string(),
+        conflicted_buffer_before
+    );
+    assert!(
+        !state.open_tabs[plain_index].is_dirty(),
+        "an unconflicted dirty tab still saves normally"
+    );
 }

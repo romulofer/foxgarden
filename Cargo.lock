@@ -1167,6 +1167,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fg-i18n"
+version = "0.2.0"
+
+[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1282,6 +1286,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "fg-core",
+ "fg-i18n",
  "flate2",
  "lsp-types",
  "notify",

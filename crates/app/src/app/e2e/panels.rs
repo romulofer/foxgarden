@@ -6,6 +6,7 @@
 //! logic has its own unit tests in `pty_session`/`panels::git_stage`.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::t;
 
 #[test]
 fn the_terminal_panel_opens_and_closes_with_its_shortcut() {
@@ -27,22 +28,25 @@ fn the_terminal_panel_opens_and_closes_with_its_shortcut() {
 fn the_terminal_panel_can_also_be_toggled_from_the_view_menu() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
-    app.menu("View", "Terminal Panel");
+    app.menu(t().menu.view, t().menu.terminal_panel);
     assert!(app.app().terminal_panel_visible);
 
-    app.menu("View", "Terminal Panel");
+    app.menu(t().menu.view, t().menu.terminal_panel);
     assert!(!app.app().terminal_panel_visible);
 }
 
 #[test]
 fn the_source_control_panel_opens_from_the_view_menu() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    assert!(!app.shows("Source Control"));
+    assert!(!app.shows(t().menu.source_control));
 
-    app.menu("View", "Source Control");
-    assert!(app.shows("Source Control"), "the panel shows its heading once open");
+    app.menu(t().menu.view, t().menu.source_control);
+    assert!(
+        app.shows(t().menu.source_control),
+        "the panel shows its heading once open"
+    );
 
-    app.click("View");
-    app.click_checkbox("Source Control");
-    assert!(!app.shows("Source Control"));
+    app.click(t().menu.view);
+    app.click_checkbox(t().menu.source_control);
+    assert!(!app.shows(t().menu.source_control));
 }

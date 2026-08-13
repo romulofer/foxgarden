@@ -1,4 +1,5 @@
 use fg_core::EditorState;
+use fg_i18n::{Lang, msg, t};
 use syntax::{IncrementalParser, Scope};
 
 use super::side_panel::SidePanelState;
@@ -9,8 +10,8 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    AccessorKind, CaseConversion, GLOBAL_TEMPLATES, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES,
-    UserTemplate, UserTemplates,
+    AccessorKind, CaseConversion, GLOBAL_TEMPLATES, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES, UserTemplate,
+    UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -103,18 +104,21 @@ pub fn show(
     let mut outcome = MenuBarOutcome::default();
 
     egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button("File", |ui| {
-            if ui.add(egui::Button::new("New File…").shortcut_text("Ctrl+N")).clicked() {
+        ui.menu_button(t().menu.file, |ui| {
+            if ui
+                .add(egui::Button::new(t().menu.new_file).shortcut_text("Ctrl+N"))
+                .clicked()
+            {
                 if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
                     side_panel.begin_new_file(root);
                 }
                 ui.close();
             }
-            if ui.button("Open Folder…").clicked() {
+            if ui.button(t().menu.open_folder).clicked() {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder()
                     && let Err(err) = state.open_project(folder)
                 {
-                    *last_error = Some(format!("failed to open project: {err}"));
+                    *last_error = Some(msg::failed_to_open_project(&err.to_string()));
                 }
                 ui.close();
             }
@@ -122,7 +126,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.active_tab.is_some(),
-                    egui::Button::new("Save").shortcut_text("Ctrl+S"),
+                    egui::Button::new(t().common.save).shortcut_text("Ctrl+S"),
                 )
                 .clicked()
             {
@@ -130,7 +134,7 @@ pub fn show(
                 ui.close();
             }
             if ui
-                .add_enabled(state.active_tab.is_some(), egui::Button::new("Close Tab"))
+                .add_enabled(state.active_tab.is_some(), egui::Button::new(t().menu.close_tab))
                 .clicked()
             {
                 if let Some(active) = state.active_tab {
@@ -141,7 +145,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     !state.closed_tabs.is_empty(),
-                    egui::Button::new("Reopen Closed Tab").shortcut_text("Ctrl+Shift+T"),
+                    egui::Button::new(t().menu.reopen_closed_tab).shortcut_text("Ctrl+Shift+T"),
                 )
                 .clicked()
             {
@@ -149,59 +153,87 @@ pub fn show(
                 ui.close();
             }
             ui.separator();
-            if ui.button("Exit").clicked() {
+            if ui.button(t().menu.exit).clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 ui.close();
             }
         });
 
-        ui.menu_button("Settings", |ui| {
-            ui.menu_button("Theme", |ui| {
-                if ui.button("Light").clicked() {
+        ui.menu_button(t().menu.settings, |ui| {
+            ui.menu_button(t().menu.theme, |ui| {
+                if ui.button(t().menu.theme_light).clicked() {
                     *dark_mode = false;
                     theme::apply(ui.ctx(), false);
                     ui.close();
                 }
-                if ui.button("Dark").clicked() {
+                if ui.button(t().menu.theme_dark).clicked() {
                     *dark_mode = true;
                     theme::apply(ui.ctx(), true);
                     ui.close();
                 }
             });
-            if ui.button("Font…").clicked() {
+            // Each language is listed under its own name (`Lang::autonym`),
+            // not translated into the active one — someone who opened the
+            // app in a language they don't read has to be able to find
+            // their own in this list.
+            //
+            // No outcome flag: the active language is process-global, so
+            // `set_lang` is the whole change (the rest of this very frame
+            // already draws translated), and `persist_settings` reads
+            // `fg_i18n::lang()` straight off that global at save time —
+            // there's nothing for `FoxGardenApp` to carry.
+            ui.menu_button(t().menu.language, |ui| {
+                let active = fg_i18n::lang();
+                for language in Lang::ALL {
+                    if ui.radio(active == language, language.autonym()).clicked() {
+                        fg_i18n::set_lang(language);
+                        ui.close();
+                    }
+                }
+            });
+            if ui.button(t().menu.font).clicked() {
                 menu.font_settings_open = true;
                 ui.close();
             }
-            ui.menu_button("Indentation", |ui| {
-                if ui.radio(!indent_settings.use_tabs, "Spaces").clicked() {
+            ui.menu_button(t().menu.indentation, |ui| {
+                if ui.radio(!indent_settings.use_tabs, t().menu.indent_spaces).clicked() {
                     indent_settings.use_tabs = false;
                     ui.close();
                 }
-                if ui.radio(indent_settings.use_tabs, "Tabs").clicked() {
+                if ui.radio(indent_settings.use_tabs, t().menu.indent_tabs).clicked() {
                     indent_settings.use_tabs = true;
                     ui.close();
                 }
                 ui.add_enabled_ui(!indent_settings.use_tabs, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Width");
+                        ui.label(t().menu.indent_width);
                         ui.add(egui::DragValue::new(&mut indent_settings.width).range(INDENT_WIDTH_RANGE));
                     });
                 });
             });
-            ui.menu_button("Auto-save", |ui| {
-                if ui.checkbox(&mut auto_save_settings.enabled, "Enabled").clicked() {
+            ui.menu_button(t().menu.auto_save, |ui| {
+                if ui
+                    .checkbox(&mut auto_save_settings.enabled, t().menu.auto_save_enabled)
+                    .clicked()
+                {
                     ui.close();
                 }
                 ui.add_enabled_ui(auto_save_settings.enabled, |ui| {
                     if ui
-                        .radio(auto_save_settings.mode == AutoSaveMode::OnFocusLoss, "On Focus Loss")
+                        .radio(
+                            auto_save_settings.mode == AutoSaveMode::OnFocusLoss,
+                            t().menu.auto_save_on_focus_loss,
+                        )
                         .clicked()
                     {
                         auto_save_settings.mode = AutoSaveMode::OnFocusLoss;
                         ui.close();
                     }
                     if ui
-                        .radio(auto_save_settings.mode == AutoSaveMode::AfterIdle, "After Idle")
+                        .radio(
+                            auto_save_settings.mode == AutoSaveMode::AfterIdle,
+                            t().menu.auto_save_after_idle,
+                        )
                         .clicked()
                     {
                         auto_save_settings.mode = AutoSaveMode::AfterIdle;
@@ -209,7 +241,7 @@ pub fn show(
                     }
                     ui.add_enabled_ui(auto_save_settings.mode == AutoSaveMode::AfterIdle, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("Idle Seconds");
+                            ui.label(t().menu.auto_save_idle_seconds);
                             ui.add(
                                 egui::DragValue::new(&mut auto_save_settings.idle_seconds)
                                     .range(AUTO_SAVE_IDLE_SECONDS_RANGE),
@@ -218,17 +250,17 @@ pub fn show(
                     });
                 });
             });
-            if ui.button("Language Servers…").clicked() {
+            if ui.button(t().menu.language_servers).clicked() {
                 outcome.open_lsp_servers_settings_request = true;
                 ui.close();
             }
-            if ui.button("External Tools…").clicked() {
+            if ui.button(t().menu.external_tools).clicked() {
                 outcome.open_external_tools_settings_request = true;
                 ui.close();
             }
         });
 
-        ui.menu_button("Tools", |ui| {
+        ui.menu_button(t().menu.tools, |ui| {
             // Every item here is only meaningful given some precondition
             // (Java + cursor inside a class body; a non-empty selection)
             // that can't be checked from the menu — `widgets::editor::show`
@@ -239,49 +271,52 @@ pub fn show(
             let has_active_tab = state.active_tab.is_some();
             if let Some(active) = state.active_tab
                 && ui
-                    .checkbox(&mut state.open_tabs[active].read_only, "Read-Only")
+                    .checkbox(&mut state.open_tabs[active].read_only, t().menu.read_only)
                     .clicked()
             {
                 ui.close();
             }
             ui.separator();
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Generate Getters"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_getters))
                 .clicked()
             {
                 outcome.generate_request = Some(AccessorKind::Getters);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Generate Setters"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_setters))
                 .clicked()
             {
                 outcome.generate_request = Some(AccessorKind::Setters);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Generate Constructor"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_constructor))
                 .clicked()
             {
                 outcome.generate_method_request = Some(GenerateMethodKind::Constructor);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Generate toString()"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_to_string))
                 .clicked()
             {
                 outcome.generate_method_request = Some(GenerateMethodKind::ToString);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Generate equals() and hashCode()"))
+                .add_enabled(
+                    has_active_tab,
+                    egui::Button::new(t().menu.generate_equals_and_hash_code),
+                )
                 .clicked()
             {
                 outcome.generate_method_request = Some(GenerateMethodKind::EqualsAndHashCode);
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Override Method"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.override_method))
                 .clicked()
             {
                 outcome.override_method_request = true;
@@ -291,7 +326,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     has_active_tab,
-                    egui::Button::new("Convert to UPPERCASE").shortcut_text("Ctrl+Shift+U"),
+                    egui::Button::new(t().menu.convert_to_uppercase).shortcut_text("Ctrl+Shift+U"),
                 )
                 .clicked()
             {
@@ -301,7 +336,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     has_active_tab,
-                    egui::Button::new("Convert to lowercase").shortcut_text("Ctrl+Shift+L"),
+                    egui::Button::new(t().menu.convert_to_lowercase).shortcut_text("Ctrl+Shift+L"),
                 )
                 .clicked()
             {
@@ -309,7 +344,7 @@ pub fn show(
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Convert to Title Case"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.convert_to_title_case))
                 .clicked()
             {
                 outcome.case_conversion_request = Some(CaseConversion::Title);
@@ -317,14 +352,14 @@ pub fn show(
             }
             ui.separator();
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Sort Lines"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.sort_lines))
                 .clicked()
             {
                 outcome.sort_lines_request = true;
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Unique Lines"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.unique_lines))
                 .clicked()
             {
                 outcome.unique_lines_request = true;
@@ -334,7 +369,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && !checkstyle_running,
-                    egui::Button::new(if checkstyle_running { "Running Checkstyle…" } else { "Run Checkstyle" }),
+                    egui::Button::new(if checkstyle_running {
+                        t().menu.running_checkstyle
+                    } else {
+                        t().menu.run_checkstyle
+                    }),
                 )
                 .clicked()
             {
@@ -344,7 +383,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && !pmd_running,
-                    egui::Button::new(if pmd_running { "Running PMD…" } else { "Run PMD" }),
+                    egui::Button::new(if pmd_running {
+                        t().menu.running_pmd
+                    } else {
+                        t().menu.run_pmd
+                    }),
                 )
                 .clicked()
             {
@@ -353,9 +396,9 @@ pub fn show(
             }
         });
 
-        ui.menu_button("Run", |ui| {
+        ui.menu_button(t().menu.run, |ui| {
             if ui
-                .add_enabled(state.project.is_some(), egui::Button::new("Edit Configurations…"))
+                .add_enabled(state.project.is_some(), egui::Button::new(t().menu.edit_configurations))
                 .clicked()
             {
                 outcome.open_run_configs_request = true;
@@ -363,70 +406,73 @@ pub fn show(
             }
         });
 
-        ui.menu_button("View", |ui| {
-            if checkbox_with_shortcut(ui, zen_mode, "Zen Mode", "F11").changed() {
+        ui.menu_button(t().menu.view, |ui| {
+            if checkbox_with_shortcut(ui, zen_mode, t().menu.zen_mode, "F11").changed() {
                 ui.close();
             }
-            if checkbox_with_shortcut(ui, side_panel_visible, "Side Panel", "Ctrl+B").changed() {
+            if checkbox_with_shortcut(ui, side_panel_visible, t().menu.side_panel, "Ctrl+B").changed() {
                 ui.close();
             }
-            if checkbox_with_shortcut(ui, terminal_panel_visible, "Terminal Panel", "Ctrl+`").changed() {
+            if checkbox_with_shortcut(ui, terminal_panel_visible, t().menu.terminal_panel, "Ctrl+`").changed() {
                 ui.close();
             }
-            if ui.checkbox(source_control_visible, "Source Control").changed() {
+            if ui.checkbox(source_control_visible, t().menu.source_control).changed() {
                 ui.close();
             }
             ui.separator();
-            if ui.checkbox(&mut view_settings.word_wrap, "Word Wrap").changed() {
+            if ui.checkbox(&mut view_settings.word_wrap, t().menu.word_wrap).changed() {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.show_whitespace, "Render Whitespace")
+                .checkbox(&mut view_settings.show_whitespace, t().menu.render_whitespace)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.show_indent_guides, "Indentation Guides")
+                .checkbox(&mut view_settings.show_indent_guides, t().menu.indentation_guides)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.show_sticky_scroll, "Sticky Scroll")
-                .on_hover_text("Pin the enclosing class/method header while scrolling (Java)")
+                .checkbox(&mut view_settings.show_sticky_scroll, t().menu.sticky_scroll)
+                .on_hover_text(t().menu.sticky_scroll_hint)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.cursor_blink, "Blinking Cursor")
+                .checkbox(&mut view_settings.cursor_blink, t().menu.blinking_cursor)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.show_editor_outline, "Editor Outline")
-                .on_hover_text("Border around the active editor pane, highlighted while it has focus")
+                .checkbox(&mut view_settings.show_editor_outline, t().menu.editor_outline)
+                .on_hover_text(t().menu.editor_outline_hint)
                 .changed()
             {
                 ui.close();
             }
             if ui
-                .checkbox(&mut view_settings.show_inline_blame, "Inline Blame")
-                .on_hover_text("Dimmed author/date/summary annotation on the cursor's current line")
+                .checkbox(&mut view_settings.show_inline_blame, t().menu.inline_blame)
+                .on_hover_text(t().menu.inline_blame_hint)
                 .changed()
             {
                 ui.close();
             }
             ui.separator();
             let has_active_tab = state.active_tab.is_some();
-            if ui.add_enabled(has_active_tab, egui::Button::new("Fold All")).clicked() {
+            if ui
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.fold_all))
+                .clicked()
+            {
                 outcome.fold_all_request = true;
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new("Expand All"))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.expand_all))
                 .clicked()
             {
                 outcome.expand_all_request = true;
@@ -434,12 +480,12 @@ pub fn show(
             }
         });
 
-        ui.menu_button("Help", |ui| {
-            if ui.button("Live Templates…").clicked() {
+        ui.menu_button(t().menu.help, |ui| {
+            if ui.button(t().menu.live_templates).clicked() {
                 menu.live_templates_open = true;
                 ui.close();
             }
-            if ui.button("About").clicked() {
+            if ui.button(t().menu.about).clicked() {
                 menu.about_open = true;
                 ui.close();
             }
@@ -452,9 +498,9 @@ pub fn show(
         // reachable to bring the panel back, not just to hide it.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (icon, hover) = if *side_panel_visible {
-                ("◀", "Collapse Side Panel (Ctrl+B)")
+                ("◀", t().menu.collapse_side_panel)
             } else {
-                ("▶", "Expand Side Panel (Ctrl+B)")
+                ("▶", t().menu.expand_side_panel)
             };
             if ui.button(icon).on_hover_text(hover).clicked() {
                 *side_panel_visible = !*side_panel_visible;
@@ -493,7 +539,7 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
         "font_settings_dialog",
         menu.font_settings_open.then_some(()),
         |ui, ()| {
-            ui.heading("Font");
+            ui.heading(t().dialogs.font_heading);
             ui.separator();
             for font in EditorFont::ALL {
                 if ui.radio(*editor_font == font, font.label()).clicked() {
@@ -502,7 +548,7 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
             }
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("Size");
+                ui.label(t().dialogs.font_size);
                 // A plain numeric input (spinner) rather than the family
                 // radios' click-to-pick shape — `DragValue` doubles as both
                 // a drag-to-adjust slider and, on click, an editable number
@@ -511,7 +557,7 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
                 ui.add(egui::DragValue::new(font_size).range(FONT_SIZE_RANGE).speed(0.25));
             });
             ui.separator();
-            ui.button("Close").clicked()
+            ui.button(t().common.close).clicked()
         },
     );
     if let Some((close_clicked, escape_pressed)) = outcome
@@ -541,13 +587,13 @@ fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, 
         menu.live_templates_open.then_some(()),
         |ui, ()| {
             ui.set_min_width(380.0);
-            ui.heading("Live Templates");
-            ui.label("Type a trigger below, then press Tab with no selection to expand it.");
-            ui.label("Add your own below — a custom trigger overrides a built-in one of the same name.");
+            ui.heading(t().dialogs.live_templates_heading);
+            ui.label(t().dialogs.live_templates_intro);
+            ui.label(t().dialogs.live_templates_custom_intro);
             ui.separator();
             egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
-                ui.strong("Global");
-                ui.label(egui::RichText::new("Expands the same way in every file, Java/Kotlin or not.").weak());
+                ui.strong(t().dialogs.live_templates_global);
+                ui.label(egui::RichText::new(t().dialogs.live_templates_global_hint).weak());
                 ui.add_space(4.0);
                 show_template_group(ui, GLOBAL_TEMPLATES, dark_mode);
                 show_user_templates_editor(
@@ -592,7 +638,7 @@ fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, 
                 );
             });
             ui.separator();
-            ui.button("Close").clicked()
+            ui.button(t().common.close).clicked()
         },
     );
     if let Some((close_clicked, escape_pressed)) = outcome
@@ -617,7 +663,12 @@ fn show_template_group(ui: &mut egui::Ui, templates: &[crate::widgets::editor::T
     for template in templates {
         ui.group(|ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(template.trigger).monospace().strong().color(trigger_color));
+            ui.label(
+                egui::RichText::new(template.trigger)
+                    .monospace()
+                    .strong()
+                    .color(trigger_color),
+            );
             ui.label(egui::RichText::new(template.body.replace("${cursor}", "|")).monospace());
         });
         ui.add_space(6.0);
@@ -643,7 +694,7 @@ fn show_user_templates_editor(
 ) {
     let trigger_color = theme::color_for_scope(Scope::Function, dark_mode);
     ui.add_space(4.0);
-    ui.weak("Your Templates");
+    ui.weak(t().dialogs.live_templates_yours);
     ui.add_space(4.0);
 
     let mut remove_index = None;
@@ -658,7 +709,7 @@ fn show_user_templates_editor(
                         .text_color(trigger_color)
                         .desired_width(100.0),
                 );
-                if ui.small_button("✗").on_hover_text("Remove").clicked() {
+                if ui.small_button("✗").on_hover_text(t().common.remove).clicked() {
                     remove_index = Some(index);
                 }
             });
@@ -680,17 +731,17 @@ fn show_user_templates_editor(
         ui.add(
             egui::TextEdit::singleline(new_trigger)
                 .id_salt((id_prefix, "new_trigger"))
-                .hint_text("trigger")
+                .hint_text(t().dialogs.live_templates_trigger_hint)
                 .font(egui::TextStyle::Monospace)
                 .desired_width(100.0),
         );
         ui.add(
             egui::TextEdit::singleline(new_body)
                 .id_salt((id_prefix, "new_body"))
-                .hint_text("expansion — ${cursor} marks where the cursor lands")
+                .hint_text(t().dialogs.live_templates_expansion_hint)
                 .font(egui::TextStyle::Monospace),
         );
-        if ui.button("+ Add").clicked() && !new_trigger.is_empty() {
+        if ui.button(t().common.add).clicked() && !new_trigger.is_empty() {
             templates.push(UserTemplate {
                 trigger: std::mem::take(new_trigger),
                 body: std::mem::take(new_body),
@@ -702,39 +753,25 @@ fn show_user_templates_editor(
 fn show_about(ui: &mut egui::Ui, menu: &mut MenuBarState) {
     let outcome = show_modal(ui, "about_dialog", menu.about_open.then_some(()), |ui, ()| {
         ui.heading("FoxGarden");
-        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+        ui.label(msg::version(env!("CARGO_PKG_VERSION")));
         ui.label(env!("CARGO_PKG_DESCRIPTION"));
-        ui.label("By Rômulo Fernandes Evangelista");
+        ui.label(t().about.author);
         ui.hyperlink_to("github.com/romulofer/foxgarden", env!("CARGO_PKG_REPOSITORY"));
         ui.separator();
-        ui.label("Shortcuts:");
-        ui.label("Ctrl+S — save the active tab");
-        ui.label("Ctrl+Shift+T — reopen the last closed tab");
-        ui.label("Middle-click a tab — close it");
-        ui.label("F11 — toggle Zen Mode (hide menu bar and side panel)");
-        ui.label("Ctrl+B — toggle the side panel");
-        ui.label("Ctrl+J — join the current line with the next one");
-        ui.label("Ctrl+E — go to a recent file");
-        ui.label("Ctrl+Shift+E — search Spring endpoints");
-        ui.label("Ctrl+/ — toggle line comments");
-        ui.label("Ctrl+Shift+G — generate getters and setters (Java)");
-        ui.label("Ctrl+Shift+U/L — convert selection to UPPER/lowercase");
-        ui.label("Tools menu — generate just getters/setters, or Title Case");
-        ui.label("Type a snippet trigger (e.g. \"sout\") then Tab to expand it");
-        ui.label("Help > Live Templates… — full list of snippet triggers");
-        // Plain "Up"/"Down" rather than `↑`/`↓` glyphs — the bundled
-        // font set (Hack + Ubuntu-Light + the emoji fonts `style::
-        // fonts::install` leaves untouched, see that fn's doc comment)
-        // has no glyph for the plain Arrows-block `U+2191`/`U+2193`, so
-        // those rendered as tofu; every other line in this list is
-        // already plain shortcut text, not a symbol.
-        ui.label("Alt+Up/Down — move the current line up/down");
-        ui.label("Alt+Shift+Up/Down — duplicate the current line");
-        ui.label("Home — jump to first non-whitespace, then column 0");
-        ui.label("Ctrl+N — new file");
-        ui.label("Esc — close the current dialog");
+        ui.label(t().about.shortcuts_heading);
+        // The list lives in the catalogue (`About::shortcuts`) rather than
+        // as literals here, since every line is translated. Note that both
+        // languages spell the arrow keys as plain "Up"/"Down" rather than
+        // `↑`/`↓`: the bundled font set (Hack + Ubuntu-Light + the emoji
+        // fonts `style::fonts::install` leaves untouched, see that fn's doc
+        // comment) has no glyph for the plain Arrows-block `U+2191`/
+        // `U+2193`, so those rendered as tofu; every other line in the list
+        // is already plain shortcut text, not a symbol.
+        for shortcut in t().about.shortcuts {
+            ui.label(shortcut);
+        }
         ui.separator();
-        ui.button("Close").clicked()
+        ui.button(t().common.close).clicked()
     });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)

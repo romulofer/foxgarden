@@ -2,6 +2,7 @@
 //! creating a file from it, and hiding the panel itself.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::t;
 
 #[test]
 fn an_open_project_lists_its_files_in_the_side_panel() {
@@ -118,8 +119,8 @@ fn settings_indentation_can_switch_to_tabs() {
     let mut app = E2e::launch(&[("Body.java", "class Body {\nint a = 1;\n}\n")]);
     app.click("☕ Body.java");
 
-    app.menu("Settings", "Indentation");
-    app.click("Tabs");
+    app.menu(t().menu.settings, t().menu.indentation);
+    app.click(t().menu.indent_tabs);
 
     app.type_into_active_tab("class Body {\n".chars().count(), "");
     app.press(egui::Modifiers::NONE, egui::Key::Tab);

@@ -3,19 +3,26 @@
 //! map.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::t;
 
 #[test]
 fn ctrl_p_opens_the_file_it_matches() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA), ("Other.kt", "class Other\n")]);
 
     app.press(egui::Modifiers::COMMAND, egui::Key::P);
-    assert!(app.shows("Go to file"), "Ctrl+P must open the go-to-file popup");
+    assert!(
+        app.shows(t().palettes.go_to_file),
+        "Ctrl+P must open the go-to-file popup"
+    );
 
     app.type_text("Other");
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
     assert_eq!(app.open_tab_names(), ["Other.kt"]);
-    assert!(!app.shows("Go to file"), "picking a match must close the popup");
+    assert!(
+        !app.shows(t().palettes.go_to_file),
+        "picking a match must close the popup"
+    );
 }
 
 #[test]
@@ -25,7 +32,7 @@ fn escape_closes_the_go_to_file_popup_without_opening_anything() {
     app.press(egui::Modifiers::COMMAND, egui::Key::P);
     app.press(egui::Modifiers::NONE, egui::Key::Escape);
 
-    assert!(!app.shows("Go to file"));
+    assert!(!app.shows(t().palettes.go_to_file));
     assert!(app.open_tab_names().is_empty());
 }
 
@@ -52,7 +59,10 @@ fn ctrl_e_lists_recent_files_and_reopens_one() {
     app.click("🔷 Other.kt");
 
     app.press(egui::Modifiers::COMMAND, egui::Key::E);
-    assert!(app.shows("Go to recent file"), "Ctrl+E opens the recent-files switcher");
+    assert!(
+        app.shows(t().palettes.go_to_recent_file),
+        "Ctrl+E opens the recent-files switcher"
+    );
 
     // Driven by keyboard rather than by clicking the row: the popup lists
     // `Main.java` under the same label its own tab already has, so a
@@ -62,7 +72,7 @@ fn ctrl_e_lists_recent_files_and_reopens_one() {
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
     assert_eq!(app.active_tab_name().as_deref(), Some("Main.java"));
-    assert!(!app.shows("Go to recent file"), "picking closes it");
+    assert!(!app.shows(t().palettes.go_to_recent_file), "picking closes it");
 }
 
 #[test]
@@ -78,7 +88,10 @@ class UserController {
     let mut app = E2e::launch(&[("UserController.java", CONTROLLER)]);
 
     app.press(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::E);
-    assert!(app.shows("Spring endpoints"), "Ctrl+Shift+E opens the endpoint map");
+    assert!(
+        app.shows(t().palettes.spring_endpoints),
+        "Ctrl+Shift+E opens the endpoint map"
+    );
     assert!(app.shows_containing("/api/users"), "and lists the mapped path");
 
     app.click_containing("/api/users");
@@ -88,5 +101,5 @@ class UserController {
         ["UserController.java"],
         "picking one opens its file"
     );
-    assert!(!app.shows("Spring endpoints"));
+    assert!(!app.shows(t().palettes.spring_endpoints));
 }

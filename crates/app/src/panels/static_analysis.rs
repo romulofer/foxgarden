@@ -9,6 +9,7 @@
 //! background scan, and applying a completed scan's findings to open
 //! documents.
 
+use fg_i18n::{msg, t};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -236,7 +237,7 @@ pub fn apply_pmd_results(state: &mut EditorState, results: &[(PathBuf, Diagnosti
 pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut ExternalToolPaths) {
     let outcome = show_modal(ui, "external_tools_dialog", state.settings_open.then_some(()), |ui, ()| {
         ui.set_min_width(460.0);
-        ui.heading("External Tools");
+        ui.heading(t().external_tools.heading);
         ui.label(
             egui::RichText::new(
                 "Install fetches a specific, verified-compatible release into a local cache — not necessarily \
@@ -264,7 +265,7 @@ pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut
         labeled_path_field(ui, "spotbugs_binary_path", "Binary", &mut tools.spotbugs_binary);
 
         ui.separator();
-        ui.button("Close").clicked()
+        ui.button(t().common.close).clicked()
     });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
@@ -283,18 +284,18 @@ pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut
 fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: Tool, installed_version: &str) {
     ui.horizontal(|ui| {
         if installed_version.is_empty() {
-            ui.label(egui::RichText::new("Not installed").weak());
+            ui.label(egui::RichText::new(t().common.not_installed).weak());
         } else {
-            ui.label(format!("Installed: {installed_version}"));
+            ui.label(msg::installed_version(installed_version));
         }
 
         let installing = state.tool_manager.installing(tool);
         let install_label = if installing {
-            "Installing…"
+            t().install.installing
         } else if installed_version.is_empty() {
-            "Install"
+            t().install.install
         } else {
-            "Reinstall"
+            t().install.reinstall
         };
         if ui.add_enabled(!installing, egui::Button::new(install_label)).clicked() {
             state.tool_manager.install(tool);
@@ -302,7 +303,7 @@ fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: To
 
         let checking = state.tool_manager.checking(tool);
         if ui
-            .add_enabled(!checking, egui::Button::new(if checking { "Checking…" } else { "Check for Updates" }))
+            .add_enabled(!checking, egui::Button::new(if checking { t().install.checking } else { t().install.check_for_updates }))
             .clicked()
         {
             state.tool_manager.check_latest(tool);
@@ -310,22 +311,17 @@ fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: To
 
         match state.latest_version(tool) {
             Some(Ok(version)) if version == installed_version => {
-                ui.label(egui::RichText::new(format!("Up to date ({version})")).weak());
+                ui.label(egui::RichText::new(msg::up_to_date_at(version)).weak());
             }
             // Deliberately not "you're behind" phrasing — Install never
             // auto-upgrades to this, so a version mismatch here is the
             // normal steady state, not a warning. See the hover text.
             Some(Ok(version)) => {
-                ui.label(egui::RichText::new(format!("GitHub's latest: {version}")).weak()).on_hover_text(format!(
-                    "Install always uses {pinned}, the version this app has verified actually \
-                     runs correctly — not necessarily whatever's newest on GitHub. A newer \
-                     release here is expected, not a problem; Reinstall will still install \
-                     {pinned} unless a future FoxGarden update changes that pin.",
-                    pinned = tool.recommended_version(),
-                ));
+                ui.label(egui::RichText::new(msg::githubs_latest(version)).weak())
+                    .on_hover_text(msg::install_pin_explanation(tool.recommended_version()));
             }
             Some(Err(err)) => {
-                ui.label(egui::RichText::new(format!("Update check failed: {err}")).weak());
+                ui.label(egui::RichText::new(msg::update_check_failed(&err.to_string())).weak());
             }
             None => {}
         }

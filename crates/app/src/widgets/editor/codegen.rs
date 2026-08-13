@@ -1,3 +1,4 @@
+use fg_i18n::t;
 use super::text_offset::{byte_to_char, char_to_byte};
 use crate::widgets::modal::show_modal;
 use fg_core::{FileKind, FileNode};
@@ -314,7 +315,7 @@ pub fn show_generate_method_dialog(
         let dialog = generate_method_dialog.as_ref().expect("guarded by is_open above");
 
         if dialog.classes().len() > 1 {
-            ui.label("Generate for:");
+            ui.label(t().codegen.generate_for);
             for (index, class) in dialog.classes().iter().enumerate() {
                 if ui
                     .radio(index == dialog.selected_class(), class.name.as_str())
@@ -337,8 +338,8 @@ pub fn show_generate_method_dialog(
 
         ui.separator();
         ui.horizontal(|ui| {
-            generate_clicked = ui.button("Generate").clicked();
-            cancel_clicked = ui.button("Cancel").clicked();
+            generate_clicked = ui.button(t().codegen.generate).clicked();
+            cancel_clicked = ui.button(t().common.cancel).clicked();
         });
     });
 
@@ -474,7 +475,7 @@ pub fn show_generate_accessors_dialog(
         let dialog = generate_dialog.as_ref().expect("guarded by is_open above");
 
         if dialog.classes().len() > 1 {
-            ui.label("Generate accessors for:");
+            ui.label(t().codegen.generate_accessors_for);
             for (index, class) in dialog.classes().iter().enumerate() {
                 if ui
                     .radio(index == dialog.selected_class(), class.name.as_str())
@@ -501,8 +502,8 @@ pub fn show_generate_accessors_dialog(
 
         ui.separator();
         ui.horizontal(|ui| {
-            generate_clicked = ui.button("Generate").clicked();
-            cancel_clicked = ui.button("Cancel").clicked();
+            generate_clicked = ui.button(t().codegen.generate).clicked();
+            cancel_clicked = ui.button(t().common.cancel).clicked();
         });
     });
 
@@ -678,7 +679,7 @@ pub fn show_override_method_dialog(
     let modal_outcome = show_modal(ui, "override_method_dialog", is_open.then_some(()), |ui, _| {
         let dialog = override_method_dialog.as_ref().expect("guarded by is_open above");
 
-        ui.label("Override:");
+        ui.label(t().codegen.override_for);
         for (index, method) in dialog.methods().iter().enumerate() {
             let params = method
                 .params
@@ -695,8 +696,8 @@ pub fn show_override_method_dialog(
 
         ui.separator();
         ui.horizontal(|ui| {
-            generate_clicked = ui.button("Generate").clicked();
-            cancel_clicked = ui.button("Cancel").clicked();
+            generate_clicked = ui.button(t().codegen.generate).clicked();
+            cancel_clicked = ui.button(t().common.cancel).clicked();
         });
     });
 

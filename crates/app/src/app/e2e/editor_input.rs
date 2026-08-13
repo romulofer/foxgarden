@@ -3,6 +3,7 @@
 //! indent) as a character is typed.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::t;
 
 /// A two-statement method body, for the line-level operations (comment,
 /// join, move, duplicate) that need more than one line to be interesting.
@@ -129,7 +130,7 @@ fn a_live_template_expands_on_tab() {
 fn a_read_only_tab_ignores_the_line_operations_too() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
     app.click("☕ Body.java");
-    app.menu("Tools", "Read-Only");
+    app.menu(t().menu.tools, t().menu.read_only);
 
     app.type_into_active_tab(line_two_start(), "");
     app.press(egui::Modifiers::COMMAND, egui::Key::Slash);

@@ -1,3 +1,4 @@
+use fg_i18n::t;
 use std::path::{Path, PathBuf};
 
 use fg_core::EditorState;
@@ -79,7 +80,7 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut QuickSwitcherStat
 
     egui::Modal::new(egui::Id::new("quick_switcher")).show(&ctx, |ui| {
         ui.set_min_width(420.0);
-        ui.label("Go to recent file");
+        ui.label(t().palettes.go_to_recent_file);
 
         let response = ui.text_edit_singleline(&mut switcher.query);
         response.request_focus();
@@ -95,7 +96,7 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut QuickSwitcherStat
 
         ui.separator();
         if candidates.is_empty() {
-            ui.weak("No matches");
+            ui.weak(t().common.no_matches);
         }
         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
             for (index, path) in candidates.iter().enumerate() {

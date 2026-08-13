@@ -2,6 +2,7 @@
 //! changes" prompt every way it can be answered.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::{msg, t};
 
 #[test]
 fn typing_marks_the_tab_dirty_and_saving_clears_it() {
@@ -33,7 +34,7 @@ fn closing_a_dirty_tab_asks_first_and_save_writes_the_file() {
     app.close_tab(0);
 
     assert!(
-        app.shows("Save changes to Main.java before closing?"),
+        app.shows(&msg::save_changes_before_closing("Main.java")),
         "closing a dirty tab must ask before dropping the edit"
     );
     assert_eq!(
@@ -42,7 +43,7 @@ fn closing_a_dirty_tab_asks_first_and_save_writes_the_file() {
         "the tab stays open until the prompt is answered"
     );
 
-    app.click("Save");
+    app.click(t().common.save);
 
     assert!(
         app.open_tab_names().is_empty(),
@@ -58,7 +59,7 @@ fn discarding_a_dirty_tab_closes_it_and_leaves_the_file_alone() {
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// edited");
 
     app.close_tab(0);
-    app.click("Discard");
+    app.click(t().tabs.discard);
 
     assert!(app.open_tab_names().is_empty());
     assert_eq!(app.on_disk("Main.java"), MAIN_JAVA, "Discard must not write the edit");
@@ -71,12 +72,12 @@ fn cancelling_the_close_prompt_keeps_the_dirty_tab_open() {
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// edited");
 
     app.close_tab(0);
-    app.click("Cancel");
+    app.click(t().common.cancel);
 
     assert_eq!(app.open_tab_names(), ["Main.java"]);
     assert!(app.shows("*Main.java"), "the tab is still open and still dirty");
     assert!(
-        !app.shows("Save changes to Main.java before closing?"),
+        !app.shows(&msg::save_changes_before_closing("Main.java")),
         "the prompt must be gone"
     );
 }
@@ -129,7 +130,7 @@ fn saving_with_no_tab_open_does_nothing_and_reports_nothing() {
 
     app.press(egui::Modifiers::COMMAND, egui::Key::S);
 
-    assert!(app.shows("No file open"), "still nothing open");
+    assert!(app.shows(t().tabs.no_file_open), "still nothing open");
     assert_eq!(app.on_disk("Main.java"), MAIN_JAVA);
 }
 
@@ -143,5 +144,5 @@ fn undoing_every_edit_before_closing_skips_the_prompt_entirely() {
     app.close_tab(0);
 
     assert!(app.open_tab_names().is_empty(), "a clean tab closes without asking");
-    assert!(!app.shows("Save changes to Main.java before closing?"));
+    assert!(!app.shows(&msg::save_changes_before_closing("Main.java")));
 }

@@ -1,3 +1,4 @@
+use fg_i18n::t;
 use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
@@ -125,7 +126,7 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut GoToFileState) ->
 
     egui::Modal::new(egui::Id::new("go_to_file")).show(&ctx, |ui| {
         ui.set_min_width(480.0);
-        ui.label("Go to file");
+        ui.label(t().palettes.go_to_file);
 
         let response = ui.text_edit_singleline(&mut switcher.query);
         response.request_focus();
@@ -141,7 +142,7 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut GoToFileState) ->
 
         ui.separator();
         if candidates.is_empty() {
-            ui.weak("No matches");
+            ui.weak(t().common.no_matches);
         }
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
             for (index, path) in candidates.iter().enumerate() {

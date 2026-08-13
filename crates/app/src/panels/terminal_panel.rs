@@ -7,6 +7,7 @@
 //! `side_panel`'s own "a dockable area with its own visibility flag" shape.
 
 use fg_core::EditorState;
+use fg_i18n::t;
 
 use crate::pty_session::PtySession;
 use crate::style::fonts::EditorFont;
@@ -82,7 +83,7 @@ pub fn show(
                 }
             });
         }
-        if ui.small_button("+").on_hover_text("New Terminal").clicked() {
+        if ui.small_button("+").on_hover_text(t().palettes.new_terminal).clicked() {
             outcome.new_session_requested = true;
         }
     });
@@ -207,7 +208,7 @@ pub fn show(
             }
         }
         None => {
-            ui.weak("No terminal session");
+            ui.weak(t().palettes.no_terminal_session);
         }
     }
 

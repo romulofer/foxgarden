@@ -2,17 +2,18 @@
 //! them, and getting a closed one back.
 
 use super::common::{E2e, MAIN_JAVA};
+use fg_i18n::{msg, t};
 
 #[test]
 fn clicking_a_file_in_the_tree_opens_it_in_a_tab() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    assert!(app.shows("No file open"), "nothing is open before the click");
+    assert!(app.shows(t().tabs.no_file_open), "nothing is open before the click");
 
     app.click("☕ Main.java");
 
     assert_eq!(app.open_tab_names(), ["Main.java"]);
     assert!(app.shows("Main.java"), "the opened file must get a tab");
-    assert!(!app.shows("No file open"));
+    assert!(!app.shows(t().tabs.no_file_open));
 }
 
 #[test]
@@ -93,11 +94,11 @@ fn a_tabs_context_menu_toggles_read_only() {
     app.click("☕ Main.java");
 
     app.click_secondary("Main.java");
-    app.click("Read-Only");
+    app.click(t().menu.read_only);
     assert!(app.shows("🔒Main.java"));
 
     app.click_secondary("🔒Main.java");
-    app.click("Allow Editing");
+    app.click(t().tabs.allow_editing);
     assert!(app.shows("Main.java"), "and back again");
     assert!(!app.shows("🔒Main.java"));
 }
@@ -110,11 +111,12 @@ fn opening_a_binary_file_reports_an_error_instead_of_a_tab() {
 
     app.click("📄 blob.bin");
 
-    assert!(
-        app.shows_containing("not a text file"),
-        "a binary file must report why it won't open"
-    );
+    // The whole message, not a fragment of it: the path it names is
+    // knowable here, and asserting on the fragment alone would keep
+    // passing if the refusal ever started naming the wrong file.
+    let refusal = msg::couldnt_open_not_text(&app.path("blob.bin").display().to_string());
+    assert!(app.shows(&refusal), "a binary file must report why it won't open");
     assert!(app.open_tab_names().is_empty(), "and open no tab");
-    app.click("OK");
-    assert!(!app.shows_containing("not a text file"));
+    app.click(t().common.ok);
+    assert!(!app.shows(&refusal));
 }

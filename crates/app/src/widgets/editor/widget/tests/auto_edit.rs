@@ -3,6 +3,7 @@
 use super::super::*;
 use super::common::*;
 use fg_core::Language;
+use fg_i18n::t;
 
 #[test]
 fn typing_a_bracket_over_a_selection_wraps_it_instead_of_replacing_it() {
@@ -349,7 +350,7 @@ fn case_conversion_with_no_selection_reports_why_instead_of_doing_nothing() {
         focused_frame_with_selection_and_case_request(&mut doc, &mut parser, 4..4, None, vec![command_shift_u_event()]);
 
     assert_eq!(doc.buffer.to_string(), before);
-    assert!(last_error.is_some_and(|msg| msg.contains("Select")));
+    assert_eq!(last_error.as_deref(), Some(t().errors.select_text_first));
 }
 
 #[test]
