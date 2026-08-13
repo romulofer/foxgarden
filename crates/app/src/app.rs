@@ -22,6 +22,7 @@ use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_config::SpringConfigState;
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
+use crate::panels::status_bar;
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
 use crate::pty_session::PtySession;
@@ -1296,6 +1297,30 @@ impl eframe::App for FoxGardenApp {
                     )
                 })
                 .inner;
+
+            // Added before every other bottom/side panel so it spans the
+            // full window width along the very bottom edge, underneath the
+            // project tree and the terminal both — egui gives each panel
+            // the outermost strip of whatever space is left when it's
+            // added, so anything registered earlier would push the bar
+            // inward. Hidden in zen mode along with the rest of the chrome.
+            //
+            // What it reports is gathered here rather than after this
+            // frame's own polls further down: a job that finished this
+            // frame therefore stays on the bar for one more frame (~16ms),
+            // exactly as the Tools menu's own "Running Checkstyle…" label
+            // already does, and one frame of staleness is invisible next to
+            // jobs that run for seconds or minutes.
+            let work = status_bar::BackgroundWork::gather(
+                &self.lsp,
+                &self.lsp_servers,
+                &self.static_analysis,
+                &self.spring_config,
+                &self.git_stage,
+                &self.diff,
+            );
+            let activities = status_bar::activities(&work);
+            egui::Panel::bottom("status_bar").show(ui, |ui| status_bar::show(ui, &activities));
 
             if self.side_panel_visible {
                 let panel_response = egui::Panel::left("project_panel")

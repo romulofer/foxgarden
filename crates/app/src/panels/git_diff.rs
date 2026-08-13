@@ -51,6 +51,12 @@ pub struct DiffState {
 }
 
 impl DiffState {
+    /// Whether any `git diff`/`git blame` scan is still running — the
+    /// status bar's own "is git busy" signal, alongside `GitStageState`'s.
+    pub fn running(&self) -> bool {
+        !self.scans.is_empty()
+    }
+
     /// Kicks off a `git diff` **and** `git blame` for `path` on one
     /// background thread, replacing any still-running scan already in
     /// flight for the same path (a rapid save-then-save only needs the

@@ -273,7 +273,11 @@ recurring.
     delete), `tabs.rs` (tab bar + the parser-lifecycle helper above, plus
     `save_document` — the save-then-reparse sequence shared by `Ctrl+S`,
     the close-confirmation modal's Save button, and the editor's
-    right-click Save), `quick_switcher.rs` (`Ctrl+E`'s recent-files popup).
+    right-click Save), `quick_switcher.rs` (`Ctrl+E`'s recent-files popup),
+    `status_bar.rs` (the bottom bar reporting whatever the app is doing on
+    its own initiative — a language server starting, an install, a
+    Checkstyle/PMD run, a classpath scan, a `git` refresh; each subsystem
+    answers "am I busy", `status_bar` decides what that reads as).
   - `style/` is cross-cutting presentation: `fonts.rs` (`EditorFont`
     selection, JetBrains Mono registration), `theme.rs` (light/dark color
     palette), `indent.rs` (tabs-vs-spaces + width settings).

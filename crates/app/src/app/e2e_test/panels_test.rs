@@ -50,3 +50,24 @@ fn the_source_control_panel_opens_from_the_view_menu() {
     app.click_checkbox(t().menu.source_control);
     assert!(!app.shows(t().menu.source_control));
 }
+
+/// The status bar is chrome, not a toggleable panel: it's simply always
+/// there, saying either what the app is doing on its own or that it isn't
+/// doing anything. What it says while a job *is* running isn't driven from
+/// here — every one of those jobs finishes whenever its own thread finishes
+/// (this module's own header) — so `panels::status_bar`'s unit tests cover
+/// the wording and this covers that the bar reaches the screen at all.
+#[test]
+fn the_status_bar_reports_an_idle_app_and_goes_away_in_zen_mode() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    assert!(
+        app.shows(t().status_bar.ready),
+        "an app with nothing running says so along the bottom"
+    );
+
+    app.menu(t().menu.view, t().menu.zen_mode);
+    assert!(
+        !app.shows(t().status_bar.ready),
+        "zen mode hides the status bar along with the rest of the chrome"
+    );
+}

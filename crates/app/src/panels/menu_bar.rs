@@ -370,7 +370,7 @@ pub fn show(
                 .add_enabled(
                     state.project.is_some() && !checkstyle_running,
                     egui::Button::new(if checkstyle_running {
-                        t().menu.running_checkstyle
+                        t().common.running_checkstyle
                     } else {
                         t().menu.run_checkstyle
                     }),
@@ -384,7 +384,7 @@ pub fn show(
                 .add_enabled(
                     state.project.is_some() && !pmd_running,
                     egui::Button::new(if pmd_running {
-                        t().menu.running_pmd
+                        t().common.running_pmd
                     } else {
                         t().menu.run_pmd
                     }),

@@ -328,6 +328,36 @@ msg! {
     }
 }
 
+// --- The status bar -----------------------------------------------------
+
+msg! {
+    /// A language server whose `initialize` handshake is still in flight —
+    /// `name` is the server's own product name (`JDTLS`), never translated.
+    starting_language_server(name: &str) {
+        pt: "Iniciando {name}…",
+        en: "Starting {name}…",
+    }
+}
+
+msg! {
+    /// A background install of a language server or an external tool.
+    /// [`crate::Strings::install`]'s own `installing` is the dialog's
+    /// button-adjacent "Installing…" with nothing to name; this one names
+    /// what's being installed, since the status bar has no surrounding
+    /// dialog to say which.
+    installing_named(name: &str) {
+        pt: "Instalando {name}…",
+        en: "Installing {name}…",
+    }
+}
+
+msg! {
+    checking_for_updates_to(name: &str) {
+        pt: "Verificando atualizações de {name}…",
+        en: "Checking {name} for updates…",
+    }
+}
+
 // --- Generate / Override Method -----------------------------------------
 
 msg! {

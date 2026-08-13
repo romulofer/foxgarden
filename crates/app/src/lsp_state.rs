@@ -187,6 +187,22 @@ impl LspState {
         errors
     }
 
+    /// The display names of every server whose `initialize` handshake is
+    /// still in flight, for the status bar to report.
+    ///
+    /// Starting a language server is this app's longest-running unprompted
+    /// job by far — jdt.ls indexes a real project for tens of seconds
+    /// before it answers anything — and until it lands, an open `.java`
+    /// file simply has no completions, no hovers, and no diagnostics, with
+    /// nothing anywhere to say why. This is what the bar says instead.
+    pub fn starting_servers(&self) -> Vec<&'static str> {
+        [(ServerKind::Java, &self.java), (ServerKind::Kotlin, &self.kotlin)]
+            .into_iter()
+            .filter(|(_, slot)| matches!(slot, Slot::Starting(_)))
+            .map(|(kind, _)| kind.name())
+            .collect()
+    }
+
     /// Whether anything here is still waiting on a background reply — a
     /// handshake in flight, a live session whose server can publish
     /// diagnostics unprompted at any time (real servers do, right after

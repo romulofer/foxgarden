@@ -28,6 +28,7 @@ pub struct Strings {
     pub editor: Editor,
     pub codegen: Codegen,
     pub install: Install,
+    pub status_bar: StatusBar,
     pub errors: Errors,
     pub common: Common,
 }
@@ -74,9 +75,7 @@ pub struct Menu {
     pub sort_lines: &'static str,
     pub unique_lines: &'static str,
     pub run_checkstyle: &'static str,
-    pub running_checkstyle: &'static str,
     pub run_pmd: &'static str,
-    pub running_pmd: &'static str,
 
     pub run: &'static str,
     pub edit_configurations: &'static str,
@@ -240,6 +239,19 @@ pub struct Install {
     pub check_for_updates: &'static str,
 }
 
+/// The bottom status bar's own fixed labels — the jobs it reports that
+/// name nothing at runtime. The ones that name a language server or a tool
+/// (`Iniciando JDTLS…`) interpolate that name, so they live in
+/// [`crate::msg`] instead.
+pub struct StatusBar {
+    /// Shown when nothing at all is running, so the bar keeps its height
+    /// (and its meaning: "the app is not busy", not "the bar is broken").
+    pub ready: &'static str,
+    pub detecting_java_home: &'static str,
+    pub scanning_classpath: &'static str,
+    pub running_git: &'static str,
+}
+
 /// Error messages that interpolate nothing, so they can stay `&'static
 /// str`. The ones that carry a path or an underlying error live in
 /// [`crate::msg`] instead.
@@ -279,6 +291,11 @@ pub struct Common {
     pub keep_mine: &'static str,
     pub not_installed: &'static str,
     pub no_matches: &'static str,
+    /// The Tools menu shows this in place of `menu.run_checkstyle` while a
+    /// scan is in flight, and the status bar reports the same scan with the
+    /// same words — one string, so the two can't drift apart.
+    pub running_checkstyle: &'static str,
+    pub running_pmd: &'static str,
 }
 
 /// Brazilian Portuguese — the primary language.
@@ -323,9 +340,7 @@ pub const PT_BR: Strings = Strings {
         sort_lines: "Ordenar Linhas",
         unique_lines: "Remover Linhas Duplicadas",
         run_checkstyle: "Executar Checkstyle",
-        running_checkstyle: "Executando Checkstyle…",
         run_pmd: "Executar PMD",
-        running_pmd: "Executando PMD…",
 
         run: "Executar",
         edit_configurations: "Editar Configurações…",
@@ -476,6 +491,12 @@ pub const PT_BR: Strings = Strings {
         checking: "Verificando…",
         check_for_updates: "Verificar Atualizações",
     },
+    status_bar: StatusBar {
+        ready: "Pronto",
+        detecting_java_home: "Procurando um JDK…",
+        scanning_classpath: "Lendo o classpath do projeto…",
+        running_git: "Consultando o git…",
+    },
     errors: Errors {
         select_text_first: "Selecione algum texto primeiro e tente de novo.",
         accessors_java_only: "Gerar getters/setters só funciona em arquivos Java.",
@@ -510,6 +531,8 @@ pub const PT_BR: Strings = Strings {
         keep_mine: "Manter o Meu",
         not_installed: "Não instalado",
         no_matches: "Nenhum resultado",
+        running_checkstyle: "Executando Checkstyle…",
+        running_pmd: "Executando PMD…",
     },
 };
 
@@ -555,9 +578,7 @@ pub const EN_US: Strings = Strings {
         sort_lines: "Sort Lines",
         unique_lines: "Unique Lines",
         run_checkstyle: "Run Checkstyle",
-        running_checkstyle: "Running Checkstyle…",
         run_pmd: "Run PMD",
-        running_pmd: "Running PMD…",
 
         run: "Run",
         edit_configurations: "Edit Configurations…",
@@ -708,6 +729,12 @@ pub const EN_US: Strings = Strings {
         checking: "Checking…",
         check_for_updates: "Check for Updates",
     },
+    status_bar: StatusBar {
+        ready: "Ready",
+        detecting_java_home: "Looking for a JDK…",
+        scanning_classpath: "Reading the project classpath…",
+        running_git: "Running git…",
+    },
     errors: Errors {
         select_text_first: "Select some text first, then try again.",
         accessors_java_only: "Generate getters/setters only works for Java files.",
@@ -742,5 +769,7 @@ pub const EN_US: Strings = Strings {
         keep_mine: "Keep Mine",
         not_installed: "Not installed",
         no_matches: "No matches",
+        running_checkstyle: "Running Checkstyle…",
+        running_pmd: "Running PMD…",
     },
 };
