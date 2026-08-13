@@ -1,7 +1,7 @@
 //! Tests for the pure text-transform interceptions in `auto_edit.rs`: wrap-selection, Home, Tab/Shift+Tab indent, Alt+Arrow move/duplicate line, Ctrl+J join, case conversion, sort/unique lines, and auto-pair.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 use fg_i18n::t;
 

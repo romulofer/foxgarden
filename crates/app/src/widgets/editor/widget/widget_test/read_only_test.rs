@@ -1,7 +1,7 @@
 //! Read-only mode: every edit-shaped request is a no-op, plus `is_mutating_event`, the pure classifier read-only mode is built on.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 #[test]

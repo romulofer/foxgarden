@@ -1,6 +1,6 @@
 //! Error signals: what the editor has to squiggle, on open and while typing.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 
 #[test]
 fn a_file_with_a_syntax_error_reports_a_diagnostic_when_opened() {

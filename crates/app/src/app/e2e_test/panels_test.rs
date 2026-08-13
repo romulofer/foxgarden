@@ -5,7 +5,7 @@
 //! asserting on their contents from here would be timing-dependent; that
 //! logic has its own unit tests in `pty_session`/`panels::git_stage`.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::t;
 
 #[test]

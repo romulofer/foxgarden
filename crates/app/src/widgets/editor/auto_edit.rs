@@ -786,4 +786,4 @@ pub(super) fn wrap_selection(
 }
 
 #[cfg(test)]
-mod tests;
+mod auto_edit_test;

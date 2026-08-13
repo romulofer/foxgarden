@@ -1,4 +1,4 @@
-//! Shared test fixtures/event-builders for every `widget::tests::*` topic
+//! Shared test fixtures/event-builders for every `widget::widget_test::*` topic
 //! module below — `open_fixture`/`parsed`/the `focused_frame*` family/the
 //! `*_event` builders are all reused across more than one topic, so they
 //! live here once rather than being copy-pasted per file. `pub(super)` on

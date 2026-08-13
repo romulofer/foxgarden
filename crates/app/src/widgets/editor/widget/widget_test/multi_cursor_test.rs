@@ -1,6 +1,6 @@
 //! Ctrl+D multi-cursor: applying an edit at every active cursor, and the various ways extra selections collapse back to one.
 
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 #[test]

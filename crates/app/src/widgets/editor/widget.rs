@@ -2441,4 +2441,4 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+mod widget_test;

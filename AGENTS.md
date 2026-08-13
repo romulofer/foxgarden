@@ -209,7 +209,7 @@ recurring.
     newline-joined strings — no `serde` dependency for just a list of paths.
     Both are free functions taking `&dyn eframe::Storage` rather than
     methods on `FoxGardenApp`, specifically so they're unit-testable against
-    a hand-rolled fake `Storage` (see `app/tests.rs`) — a real
+    a hand-rolled fake `Storage` (see `app/app_test.rs`) — a real
     `eframe::CreationContext` isn't practically constructible outside a live
     windowing/render backend, so `FoxGardenApp::new` itself stays untested,
     same as the rest of its GUI-wiring functions.
@@ -379,7 +379,7 @@ recurring.
   exercised Java. If you touch either language's highlight query, bisect
   candidate tokens individually through `tree_sitter::Query::new(&lang,
   "(\"token\")")` rather than trusting the grammar source, and make sure
-  `crates/syntax/tests/syntax_tests.rs` has a `highlight_spans` test for
+  `crates/syntax/tests/syntax_test.rs` has a `highlight_spans` test for
   *each* language, not just one.
 - **A single node can match more than one capture pattern in a bundled
   highlight query — `highlight_spans` must resolve that itself, not return
@@ -404,7 +404,7 @@ recurring.
   `highlight_spans`'s output for a given range — check it's the *only* one
   for that exact range (see `yaml_highlight_query_covers_mapping_key_
   string_and_comment`'s regression-guard assertions in
-  `crates/syntax/tests/syntax_tests.rs` for the pattern), or the same class
+  `crates/syntax/tests/syntax_test.rs` for the pattern), or the same class
   of bug can reappear silently.
 - **JetBrains Mono is registered under a custom `FontFamily::Name(...)`, not
   merged into `FontFamily::Monospace`** (see `style/fonts.rs`), so both it
@@ -540,30 +540,38 @@ recurring.
 
 - `core` and `syntax` are fully headless-testable; prefer adding coverage
   there over the `app` crate when the logic doesn't strictly need a GUI.
+- **Every file that exists to hold tests is named `<something>_test.rs`** —
+  no `tests.rs`, no `tests/mod.rs`. The suffix is what makes a test file
+  identifiable as one from a path alone, in an editor tab, a `git log
+  --stat`, or a glob.
 - `app` is a binary crate (no `[lib]` target), so its tests live as
   `#[cfg(test)] mod tests` colocated with the code they cover, not under
   `tests/` (integration tests there can't `use` binary-crate internals). A
   small file keeps that module inline at the bottom; once a file grows large,
-  the module moves to a sibling `<module>/tests.rs` file (the module file just
-  declares `#[cfg(test)] mod tests;`) so it stays focused on the code under
-  test — e.g. `widget.rs`'s tests are in `widget/tests.rs`, `app.rs`'s in
-  `app/tests.rs`, `side_panel.rs`'s in `side_panel/tests.rs`. Same module,
-  separate file; `use super::*;` reaches the code exactly as an inline module
-  would.
+  the module moves to a sibling `<module>/<module>_test.rs` file (the module
+  file just declares `#[cfg(test)] mod <module>_test;`) so it stays focused on
+  the code under test — e.g. `widget.rs`'s tests are in
+  `widget/widget_test.rs`, `app.rs`'s in `app/app_test.rs`, `side_panel.rs`'s
+  in `side_panel/side_panel_test.rs`. Same module, separate file;
+  `use super::*;` reaches the code exactly as an inline module would.
+  A test module big enough to split further becomes a directory of its own
+  next to that file (`widget/widget_test/click_test.rs`,
+  `widget/widget_test/painting_test.rs`, …), every file still `_test.rs`.
 - GUI widget logic (highlighting, squiggle painting) can be exercised
   headlessly via `egui::__run_test_ui(|ui| { ... })` — it runs a real egui
   frame without needing a window, so panics/layout bugs surface in `cargo
   test` without any display or click-automation tooling. See
-  `crates/app/src/widgets/editor/widget/tests.rs` for the pattern.
+  `crates/app/src/widgets/editor/widget/widget_test.rs` for the pattern.
 - Whole-app flows (click a file in the tree, type, save, close a dirty tab)
-  belong in `crates/app/src/app/e2e/` — one `E2e` harness (`e2e/common.rs`)
+  belong in `crates/app/src/app/e2e_test/` — one `E2e` harness
+  (`e2e_test/common_test.rs`)
   builds a real `FoxGardenApp` via `egui_kittest`'s `build_eframe`, drives
   real frames, and queries the accessibility tree by label (`get_by_label
   ("☕ Main.java")`, `shows("*Main.java")`), so a test fails when the *UI*
   regresses, not just the state behind it. Add a flow test there in
   addition to — never instead of — the unit test for the logic it exercises.
-  Two setup steps deliberately bypass the UI, both documented at `e2e/mod.
-  rs`'s top: opening a project (`rfd`'s native dialog is outside egui
+  Two setup steps deliberately bypass the UI, both documented at
+  `e2e_test.rs`'s top: opening a project (`rfd`'s native dialog is outside egui
   entirely) and placing the caret (the editor is custom-painted, so it has
   no node to click by label — use `widgets::editor::jump_to`). Anything the
   harness *can* drive, drive; don't reach into `harness.state_mut()` to
@@ -586,7 +594,7 @@ recurring.
 - Don't add e2e coverage for anything whose answer arrives on a background
   thread (LSP, Checkstyle/PMD, `git`, the terminal's shell, `notify`'s
   file-change events) or after a timer (auto-save): a frame loop can only
-  assert on the race. Those have unit tests; `e2e/mod.rs`'s header lists
+  assert on the race. Those have unit tests; `e2e_test.rs`'s header lists
   what's deliberately excluded and why, and is the place to update if that
   set ever changes.
 - **Do not drive the running app with `xdotool`/`wmctrl`/`import` (or any
@@ -612,10 +620,10 @@ recurring.
 - Anything that needs `eframe::Storage` (session persistence) or
   `egui::Context`'s persistent temp data (the layout cache) is testable
   without a real window: implement `eframe::Storage` yourself over a plain
-  `HashMap` (`FakeStorage` in `app/tests.rs`) for the former; for
+  `HashMap` (`FakeStorage` in `app/app_test.rs`) for the former; for
   the latter, drive a real, reused `egui::Context` through two or more
   `ctx.run_ui(...)` passes and read `ctx.data(|d| d.get_temp::<T>(id))`
-  directly (see `widget/tests.rs`'s `layout_cache_reuses_galley_across_
+  directly (see `widget/widget_test.rs`'s `layout_cache_reuses_galley_across_
   unchanged_frames` / `_reshapes_after_an_edit`, which assert `Arc::ptr_eq`
   to prove a galley either was or wasn't reused across frames). Neither
   needs a real `eframe::CreationContext`, which isn't practically

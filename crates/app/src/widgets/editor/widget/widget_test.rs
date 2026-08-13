@@ -7,16 +7,16 @@
 //! convention (`AGENTS.md`'s testing-conventions section), just one level
 //! deeper than a single `<module>/tests.rs` normally goes.
 
-mod common;
+mod common_test;
 
-mod auto_edit;
-mod click;
-mod codegen;
-mod completion;
-mod context_menu;
-mod line_comment;
-mod multi_cursor;
-mod painting;
-mod read_only;
-mod selection;
-mod templates;
+mod auto_edit_test;
+mod click_test;
+mod codegen_test;
+mod completion_test;
+mod context_menu_test;
+mod line_comment_test;
+mod multi_cursor_test;
+mod painting_test;
+mod read_only_test;
+mod selection_test;
+mod templates_test;

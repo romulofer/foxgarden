@@ -1,7 +1,7 @@
 //! Rendering/highlighting/diagnostics smoke tests: sticky scroll, syntax highlighting, bracket-match, squiggles, occurrence highlighting, whitespace/indent guides, and the layout/highlight caches behind them. Mirrors `painting.rs`'s own scope.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 #[test]

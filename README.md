@@ -241,7 +241,7 @@ with simulated keyboard events and an explicitly focused widget to exercise
 multi-cursor editing end to end, plus session-persistence tests against a
 hand-rolled fake `eframe::Storage`.
 
-End-to-end tests live in `crates/app/src/app/e2e/` and drive the *whole*
+End-to-end tests live in `crates/app/src/app/e2e_test/` and drive the *whole*
 app — a real `FoxGardenApp` rendering real frames via
 [`egui_kittest`](https://docs.rs/egui_kittest) against a temp project —
 clicking, typing, and asserting on what the accessibility tree says is on

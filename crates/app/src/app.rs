@@ -1623,6 +1623,6 @@ impl eframe::App for FoxGardenApp {
 }
 
 #[cfg(test)]
-mod e2e;
+mod e2e_test;
 #[cfg(test)]
-mod tests;
+mod app_test;

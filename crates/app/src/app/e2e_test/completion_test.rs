@@ -1,7 +1,7 @@
 //! The completion popup: what opens it, what it offers, and what accepting
 //! (or dismissing) one does to the buffer.
 
-use super::common::E2e;
+use super::common_test::E2e;
 
 /// A class with one long, distinctive identifier already in it — the word
 /// completion candidate every test here types a prefix of.

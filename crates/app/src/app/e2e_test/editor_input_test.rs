@@ -2,7 +2,7 @@
 //! advertises, plus the edits that happen on their own (auto-close, auto-
 //! indent) as a character is typed.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::t;
 
 /// A two-statement method body, for the line-level operations (comment,

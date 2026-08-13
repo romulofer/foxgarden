@@ -2,7 +2,7 @@
 //! doesn't need an OS dialog (File > Open Folder…) or an external process
 //! (Tools > Run Checkstyle/PMD) behind it.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::t;
 
 #[test]

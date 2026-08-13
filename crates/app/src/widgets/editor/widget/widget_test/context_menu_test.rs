@@ -1,7 +1,7 @@
 //! The right-click context menu's `pending_input` queueing mechanism (see `context_menu.rs`'s own doc comment for why Undo/Redo/Select All are queued rather than applied directly).
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 
 #[test]
 fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {

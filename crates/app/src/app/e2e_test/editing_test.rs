@@ -1,7 +1,7 @@
 //! Editing a file: the dirty asterisk, saving, and the "you have unsaved
 //! changes" prompt every way it can be answered.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::{msg, t};
 
 #[test]

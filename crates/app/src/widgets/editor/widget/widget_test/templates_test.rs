@@ -1,7 +1,7 @@
 //! Tab-trigger live-template expansion (`templates.rs`) as wired into `widget::show`'s own Tab interception.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 #[test]

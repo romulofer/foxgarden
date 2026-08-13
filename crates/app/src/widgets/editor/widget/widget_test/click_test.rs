@@ -1,7 +1,7 @@
 //! Mouse-driven selection: Alt+Click's bare extra cursor, double-click word select, triple-click line select.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 
 #[test]
 fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {

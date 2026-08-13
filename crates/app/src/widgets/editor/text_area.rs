@@ -197,4 +197,4 @@ impl<'a> FoldMap<'a> {
 }
 
 #[cfg(test)]
-mod tests;
+mod text_area_test;

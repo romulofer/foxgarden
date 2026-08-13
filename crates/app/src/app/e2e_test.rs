@@ -1,6 +1,6 @@
 //! End-to-end tests: the whole app, driven the way a user drives it.
 //!
-//! Unlike [`super::tests`] (which calls individual free functions with
+//! Unlike [`super::app_test`] (which calls individual free functions with
 //! hand-built state), everything here goes through a real `FoxGardenApp`
 //! rendering real frames via `egui_kittest`, and asserts on what the
 //! accessibility tree actually says is on screen — a tab labelled
@@ -41,23 +41,23 @@
 //!   arrives on a background thread whenever it arrives.
 //! - **The file watcher's external-change paths** (reload, conflict banner,
 //!   externally-deleted) — `notify` delivers on its own thread with no
-//!   bound on when, so `super::tests` drives `process_file_events` with
+//!   bound on when, so `super::app_test` drives `process_file_events` with
 //!   hand-built events instead.
 //! - **Auto-save's timers**, for the same reason, plus needing wall-clock
 //!   time to pass.
 //! - **Session persistence**, which needs an `eframe::Storage` across two
 //!   launches; `egui_kittest`'s `CreationContext` has none, so
-//!   `super::tests` uses its own `FakeStorage` instead.
+//!   `super::app_test` uses its own `FakeStorage` instead.
 
-mod common;
+mod common_test;
 
-mod completion;
-mod diagnostics;
-mod editing;
-mod editor_input;
-mod file_operations;
-mod menus;
-mod navigation;
-mod panels;
-mod project_tree;
-mod tabs;
+mod completion_test;
+mod diagnostics_test;
+mod editing_test;
+mod editor_input_test;
+mod file_operations_test;
+mod menus_test;
+mod navigation_test;
+mod panels_test;
+mod project_tree_test;
+mod tabs_test;

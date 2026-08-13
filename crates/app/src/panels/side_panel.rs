@@ -837,4 +837,4 @@ fn render_node(
 }
 
 #[cfg(test)]
-mod tests;
+mod side_panel_test;

@@ -1,7 +1,7 @@
 //! Ctrl+/ line-comment toggling.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 
 #[test]
 fn ctrl_slash_comments_the_current_line() {

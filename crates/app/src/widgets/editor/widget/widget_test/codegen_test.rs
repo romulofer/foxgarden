@@ -1,7 +1,7 @@
 //! Java code generation end to end (`codegen.rs`): getter/setter accessors, constructor/toString/equals generation, and Override Method.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 use fg_i18n::{msg, t};
 

@@ -722,4 +722,4 @@ pub fn show_override_method_dialog(
 }
 
 #[cfg(test)]
-mod tests;
+mod codegen_test;

@@ -1,7 +1,7 @@
 //! The side panel: what the project tree lists, expanding/collapsing it,
 //! creating a file from it, and hiding the panel itself.
 
-use super::common::{E2e, MAIN_JAVA};
+use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::t;
 
 #[test]
