@@ -40,6 +40,21 @@ impl JdkRegistry {
         Ok(())
     }
 
+    /// Adds `home` at an already-known `major_version`, skipping a real
+    /// `java -version` spawn — for a caller (an auto-detect scan) that
+    /// verified it another way. Silently skips a `home` already registered,
+    /// so re-running a scan against an unchanged machine is a no-op rather
+    /// than piling up duplicate entries (see TECHNICAL_DEBT.md #24: this is
+    /// what lets `lsp_manager::installed_runtimes`'s own machine-scanning
+    /// knowledge — sdkman/asdf/jenv layouts, macOS bundles — feed this
+    /// registry instead of being reimplemented here a second time).
+    pub fn add_known(&mut self, home: PathBuf, major_version: u32) {
+        if self.jdks.iter().any(|jdk| jdk.home == home) {
+            return;
+        }
+        self.jdks.push(RegisteredJdk { label: format!("Java {major_version}"), home, major_version: Some(major_version) });
+    }
+
     pub fn remove(&mut self, index: usize) {
         if index < self.jdks.len() {
             self.jdks.remove(index);
@@ -173,6 +188,23 @@ mod tests {
     fn from_json_on_malformed_input_is_an_empty_registry_not_a_panic() {
         assert_eq!(JdkRegistry::from_json("not json"), JdkRegistry::default());
         assert_eq!(JdkRegistry::from_json(""), JdkRegistry::default());
+    }
+
+    #[test]
+    fn add_known_registers_a_jdk_at_the_given_version_without_probing_it() {
+        let mut registry = JdkRegistry::default();
+        registry.add_known(PathBuf::from("/jdk21"), 21);
+        assert_eq!(registry.jdks, vec![known(21)]);
+    }
+
+    #[test]
+    fn add_known_is_a_no_op_when_the_same_home_is_already_registered() {
+        let mut registry = JdkRegistry { jdks: vec![known(21)] };
+        // A rescan reporting the same home again, even at a different
+        // (impossible in practice, but the point stands) major version,
+        // must not duplicate or overwrite the existing entry.
+        registry.add_known(PathBuf::from("/jdk21"), 99);
+        assert_eq!(registry.jdks, vec![known(21)]);
     }
 
     #[test]

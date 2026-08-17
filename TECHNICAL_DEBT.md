@@ -36,7 +36,7 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
-| 24 | `[OPEN]` | Two independent "find the JDKs on this machine" code paths now exist, from parallel unsynced work |
+| 24 | `[RESOLVED]` | Two independent "find the JDKs on this machine" code paths now exist, from parallel unsynced work |
 | 23 | `[OPEN]` | `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it |
 | 22 | `[OPEN]` | Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it |
 | 21 | `[OPEN]` | `bundled_archives_extract_with_the_launcher_at_its_documented_path` fails on any clone without Git LFS, because `include_bytes!` happily embeds the pointer file |
@@ -155,62 +155,6 @@ pair a fourth time — a scope call for whoever picks this up, not required.
 
 Next time any of the three remaining sites is touched for an unrelated
 reason, or a user reports FoxGarden hanging on "Open Folder…"/"Browse…".
-
----
-
-## 24. [OPEN] Two independent "find the JDKs on this machine" code paths now exist, from parallel unsynced work
-
-**Where:** `crates/app/src/jdk.rs`/`jdk_registry.rs` (`detect_major_version`,
-`JdkRegistry::detect_and_add`, `PLAN.md` Track 29 Phase 1, this session)
-vs. `crates/app/src/lsp_manager.rs` (`jdk_search_roots`,
-`java_home_candidates`, `version_hint`, landed independently in "Detect
-the JDK and the project's Java release for jdt.ls").
-
-**Status:** Open. Found reconciling a local branch that had fallen behind
-`origin/ide-henshin` by several days' worth of pushed commits — both
-pieces of work started from the same shared ancestor without either
-session aware of the other.
-
-### What was found
-
-Both scan the machine for JDK installs and verify each candidate by
-actually running it rather than trusting its directory name, but for
-different consumers and with real shape differences: `jdk_search_roots`/
-`java_home_candidates` already knows sdkman/asdf/jenv/jabba layouts and
-macOS `Contents/Home` bundles specifically to auto-fill jdt.ls' own
-single "Java Home" field (Settings > Language Servers…, always 21+);
-`JdkRegistry::detect_and_add` is manual (a folder picker, not a scan) and
-keeps a whole list rather than picking one best candidate, feeding a
-different concern (which JDKs exist to *target*, any version, for a
-project or a future scaffolded one — Track 29's later phases). Nothing
-is broken by the duplication — the two systems don't call each other and
-don't share state — but a machine's actual JDK layout knowledge (the
-sdkman/asdf/jenv paths, the macOS bundle shape) now lives in one of them
-and would need to be kept in sync by hand if either changes.
-
-### Why it wasn't fixed on the spot
-
-Unifying them is a real design call (does the registry gain an
-"auto-detect from the machine" button built on `jdk_search_roots`? does
-jdt.ls' own Java Home become `closest_for(21)` against the shared
-registry instead of its own independent scan?) rather than a mechanical
-merge fix, and this entry was written while reconciling the two branches
-themselves, not while doing feature work on either system.
-
-### Proposed fix
-
-Have `JdkRegistry` gain a `detect_installed() -> Vec<PathBuf>` built on
-`lsp_manager::jdk_search_roots`/`java_home_candidates` (made `pub(crate)`
-if they aren't already), offered as an "Auto-detect" option beside Add
-JDK…'s own folder picker — the version-manager-layout knowledge stays in
-one place either way, and the registry becomes a superset rather than a
-parallel system.
-
-### Trigger condition
-
-Next time either system is touched for an unrelated reason, or a user
-registers a JDK by hand that `java_home_candidates` would already have
-found automatically.
 
 ---
 
@@ -911,6 +855,73 @@ this exact symptom.
 ---
 
 # Resolved
+
+## 24. [RESOLVED] ~~Two independent "find the JDKs on this machine" code paths now exist, from parallel unsynced work~~
+
+**Where:** `crates/app/src/jdk.rs`/`jdk_registry.rs` (`detect_major_version`,
+`JdkRegistry::detect_and_add`, `PLAN.md` Track 29 Phase 1, this session)
+vs. `crates/app/src/lsp_manager.rs` (`jdk_search_roots`,
+`java_home_candidates`, `version_hint`, landed independently in "Detect
+the JDK and the project's Java release for jdt.ls").
+
+**Status:** Resolved same session it was found. Found reconciling a local
+branch that had fallen behind `origin/ide-henshin` by several days' worth
+of pushed commits — both pieces of work started from the same shared
+ancestor without either session aware of the other.
+
+### What was found
+
+Both scan the machine for JDK installs and verify each candidate by
+actually running it rather than trusting its directory name, but for
+different consumers and with real shape differences: `jdk_search_roots`/
+`java_home_candidates` already knows sdkman/asdf/jenv/jabba layouts and
+macOS `Contents/Home` bundles specifically to auto-fill jdt.ls' own
+single "Java Home" field (Settings > Language Servers…, always 21+);
+`JdkRegistry::detect_and_add` is manual (a folder picker, not a scan) and
+keeps a whole list rather than picking one best candidate, feeding a
+different concern (which JDKs exist to *target*, any version, for a
+project or a future scaffolded one — Track 29's later phases). Nothing
+is broken by the duplication — the two systems don't call each other and
+don't share state — but a machine's actual JDK layout knowledge (the
+sdkman/asdf/jenv paths, the macOS bundle shape) now lives in one of them
+and would need to be kept in sync by hand if either changes.
+
+### What was done
+
+`JdkRegistry` gained `add_known(home, major_version)` (`crates/app/src/
+jdk_registry.rs`) — registers an already-verified JDK without a second
+`java -version` spawn, silently skipping a `home` already present so a
+repeated scan is idempotent. `panels/jdk_registry.rs`'s "JDKs…" dialog
+gained an "Auto-detect" button beside "Add JDK…", spawned on its own
+background thread (same `Receiver`-polled-once-a-frame shape as the
+folder picker, #23) calling `lsp_manager::installed_runtimes()` directly
+— the exact function `jdk_search_roots`/`java_home_candidates` already
+fed, unmodified — and merging every result in via `add_known`. Left
+`lsp_manager::detect_java_home`/`installed_runtimes` themselves untouched
+rather than rerouting jdt.ls' own Java Home through the registry too —
+that's a real behavior change to a working, unrelated path (Settings >
+Language Servers…) for no functional gain today, since neither field
+needs the other's answer.
+
+**Live-verified** end-to-end under a real (fresh, isolated) FoxGarden
+instance: Auto-detect found this machine's real SDKMAN-managed `Java 17`,
+the entry showed up in the dialog immediately (no UI-thread block — the
+whole point of routing it through the same background-thread shape as
+#23), and it survived a real quit (File > Sair) and relaunch, landing
+back in the dialog on the next open. This also closes the one gap Track
+29 Phase 1's own Checkpoint 1 had left unconfirmed (the folder-picker path
+itself couldn't be live-verified in a sandboxed environment — see #23);
+Auto-detect exercises the identical `add_*` → persist → reload path
+without depending on a native OS dialog, closing that gap by a different
+door.
+
+### Trigger condition
+
+N/A — resolved. Kept as historical record per this file's own convention,
+in case a similar "two sessions solve the same problem in parallel"
+shape resurfaces elsewhere.
+
+---
 
 ## 20. [RESOLVED] ~~Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols~~
 

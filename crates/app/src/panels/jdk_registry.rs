@@ -1,15 +1,19 @@
 //! Settings > JDKs… — the modal that owns the machine-wide inventory of
-//! registered JDKs (`PLAN.md` Track 29 Phase 1): add one by folder picker
-//! (auto-detected via a real `java -version`), remove one, see what's
-//! registered. Deliberately separate from Settings > Language Servers…
-//! (`panels::lsp_servers`): `LspSettings::jdtls_java_home` is "which JVM
-//! runs jdt.ls itself" (always 21+), this is "which JDKs exist on this
-//! machine to *target*" (any version) — different concerns.
+//! registered JDKs (`PLAN.md` Track 29 Phase 1): add one by folder picker,
+//! or Auto-detect the whole machine at once via `lsp_manager::
+//! installed_runtimes` (TECHNICAL_DEBT.md #24 — reuses that scan's own
+//! sdkman/asdf/jenv/macOS-bundle knowledge instead of a second copy of it),
+//! remove one, see what's registered. Deliberately separate from Settings >
+//! Language Servers… (`panels::lsp_servers`): `LspSettings::
+//! jdtls_java_home` is "which JVM runs jdt.ls itself" (always 21+), this is
+//! "which JDKs exist on this machine to *target*" (any version) —
+//! different concerns.
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
 use crate::jdk_registry::JdkRegistry;
+use crate::lsp_manager::JavaRuntime;
 use crate::widgets::modal::show_modal;
 
 /// Dialog-open flag plus the last "Add JDK" failure, if any — shown inline
@@ -17,17 +21,20 @@ use crate::widgets::modal::show_modal;
 /// to one field in this one dialog, the same way `run_configs.rs`'s own
 /// per-config fields report their own save failures.
 ///
-/// `picker_rx` runs the native folder-picker dialog on a background thread
-/// (mirroring `git_stage.rs`'s own `spawn`/`poll` shape) rather than
-/// calling `rfd::FileDialog::pick_folder()` inline on click — that call is
-/// synchronous and, live-verified this session, blocks the whole UI thread
-/// with no timeout for as long as the OS/portal dialog takes to resolve
-/// (indefinitely, if the portal never responds) — see TECHNICAL_DEBT.md.
+/// `picker_rx`/`auto_detect_rx` both run on a background thread (mirroring
+/// `git_stage.rs`'s own `spawn`/`poll` shape) rather than blocking the UI
+/// thread inline — `picker_rx` because `rfd::FileDialog::pick_folder()`,
+/// live-verified this session, can block indefinitely with no timeout if
+/// the OS/portal dialog never resolves (see TECHNICAL_DEBT.md #23);
+/// `auto_detect_rx` because `lsp_manager::installed_runtimes()` spawns one
+/// `java -version` per candidate JDK, the same reason that function is
+/// already documented as UI-thread-unsafe at its own call site.
 #[derive(Default)]
 pub struct JdkRegistryState {
     settings_open: bool,
     last_add_error: Option<String>,
     picker_rx: Option<Receiver<Option<PathBuf>>>,
+    auto_detect_rx: Option<Receiver<Vec<JavaRuntime>>>,
 }
 
 impl JdkRegistryState {
@@ -59,6 +66,29 @@ impl JdkRegistryState {
             }
         }
     }
+
+    pub fn auto_detect_running(&self) -> bool {
+        self.auto_detect_rx.is_some()
+    }
+
+    /// Drains a completed auto-detect scan, if it finished since the last
+    /// poll — same shape as `poll_picker`. An empty `Vec` covers both
+    /// "still running" and "found nothing new"; the caller only needs to
+    /// know when there's something to merge in.
+    pub fn poll_auto_detect(&mut self) -> Vec<JavaRuntime> {
+        let Some(rx) = self.auto_detect_rx.as_ref() else { return Vec::new() };
+        match rx.try_recv() {
+            Ok(runtimes) => {
+                self.auto_detect_rx = None;
+                runtimes
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => Vec::new(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.auto_detect_rx = None;
+                Vec::new()
+            }
+        }
+    }
 }
 
 pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut JdkRegistry) {
@@ -69,7 +99,10 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
             state.last_add_error = None;
         }
     }
-    if state.picker_running() {
+    for runtime in state.poll_auto_detect() {
+        registry.add_known(runtime.path, runtime.major);
+    }
+    if state.picker_running() || state.auto_detect_running() {
         ui.ctx().request_repaint();
     }
 
@@ -104,13 +137,25 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
         }
 
         ui.add_space(4.0);
-        if ui.add_enabled(!state.picker_running(), egui::Button::new("Add JDK…")).clicked() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(rfd::FileDialog::new().pick_folder());
-            });
-            state.picker_rx = Some(rx);
-        }
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!state.picker_running(), egui::Button::new("Add JDK…")).clicked() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(rfd::FileDialog::new().pick_folder());
+                });
+                state.picker_rx = Some(rx);
+            }
+            if ui.add_enabled(!state.auto_detect_running(), egui::Button::new("Auto-detect")).clicked() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(crate::lsp_manager::installed_runtimes());
+                });
+                state.auto_detect_rx = Some(rx);
+            }
+            if state.auto_detect_running() {
+                ui.spinner();
+            }
+        });
         if let Some(error) = &state.last_add_error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -131,8 +176,12 @@ mod tests {
 
     #[test]
     fn open_settings_opens_the_dialog_and_clears_the_previous_error() {
-        let mut state =
-            JdkRegistryState { settings_open: false, last_add_error: Some("stale".to_string()), picker_rx: None };
+        let mut state = JdkRegistryState {
+            settings_open: false,
+            last_add_error: Some("stale".to_string()),
+            picker_rx: None,
+            auto_detect_rx: None,
+        };
         state.open_settings();
         assert!(state.settings_open);
         assert!(state.last_add_error.is_none());
@@ -165,5 +214,35 @@ mod tests {
 
         assert!(state.poll_picker().is_none());
         assert!(!state.picker_running());
+    }
+
+    #[test]
+    fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut state = JdkRegistryState::default();
+        state.auto_detect_rx = Some(rx);
+        assert!(state.auto_detect_running());
+
+        // Nothing sent yet — still running, not a false "found nothing"
+        // result (same "in flight" vs. "resolved" distinction poll_picker
+        // has to make).
+        assert!(state.poll_auto_detect().is_empty());
+        assert!(state.auto_detect_running());
+
+        let found = vec![JavaRuntime { major: 21, name: "JavaSE-21".to_string(), path: PathBuf::from("/jdk21") }];
+        tx.send(found.clone()).unwrap();
+        assert_eq!(state.poll_auto_detect(), found);
+        assert!(!state.auto_detect_running());
+    }
+
+    #[test]
+    fn poll_auto_detect_on_a_disconnected_sender_clears_the_slot_without_a_result() {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<JavaRuntime>>();
+        let mut state = JdkRegistryState::default();
+        state.auto_detect_rx = Some(rx);
+        drop(tx);
+
+        assert!(state.poll_auto_detect().is_empty());
+        assert!(!state.auto_detect_running());
     }
 }
