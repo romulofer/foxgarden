@@ -12,6 +12,7 @@
 //! or right after one of its own stage/unstage/commit actions completes,
 //! not on a timer or every keystroke.
 
+use fg_i18n::t;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -343,21 +344,21 @@ pub fn show(
     }
 
     ui.horizontal(|ui| {
-        ui.heading("Source Control");
+        ui.heading(t().git.heading);
         if let Some(name) = &git_stage.committer_first_name {
             ui.label(egui::RichText::new(name).weak());
         }
-        if ui.add_enabled(!git_stage.status_running(), egui::Button::new("Refresh")).clicked() {
+        if ui.add_enabled(!git_stage.status_running(), egui::Button::new(t().git.refresh)).clicked() {
             git_stage.refresh(root.to_path_buf());
         }
-        if ui.add_enabled(!git_stage.op_running(), egui::Button::new("Push")).clicked() {
+        if ui.add_enabled(!git_stage.op_running(), egui::Button::new(t().git.push)).clicked() {
             git_stage.push(root.to_path_buf());
         }
     });
     ui.separator();
 
     if git_stage.entries.is_empty() {
-        ui.label(egui::RichText::new(if git_stage.status_running() { "Loading…" } else { "No changes" }).weak());
+        ui.label(egui::RichText::new(if git_stage.status_running() { t().git.loading } else { t().git.no_changes }).weak());
     }
 
     let mut action: Option<RowAction> = None;
@@ -395,12 +396,12 @@ pub fn show(
     ui.add(
         egui::TextEdit::multiline(&mut git_stage.commit_message)
             .desired_rows(3)
-            .hint_text("Commit message")
+            .hint_text(t().git.commit_message_hint)
             .desired_width(f32::INFINITY),
     );
     let has_staged = git_stage.entries.iter().any(StatusEntry::is_staged);
     let can_commit = has_staged && !git_stage.commit_message.trim().is_empty() && !git_stage.op_running();
-    if ui.add_enabled(can_commit, egui::Button::new("Commit")).clicked() {
+    if ui.add_enabled(can_commit, egui::Button::new(t().git.commit)).clicked() {
         git_stage.commit(root.to_path_buf(), git_stage.commit_message.clone());
     }
 
@@ -461,18 +462,18 @@ fn show_full_diff_window(
         .default_size([700.0, 500.0])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut mode, DiffMode::SideBySide, "Side by Side");
-                ui.selectable_value(&mut mode, DiffMode::Inline, "Inline");
+                ui.selectable_value(&mut mode, DiffMode::SideBySide, t().git.side_by_side);
+                ui.selectable_value(&mut mode, DiffMode::Inline, t().git.inline);
             });
             ui.separator();
             egui::ScrollArea::both().show(ui, |ui| {
                 if loading {
-                    ui.label(egui::RichText::new("Loading…").weak());
+                    ui.label(egui::RichText::new(t().git.loading).weak());
                 } else if let Some((old, new)) = &content {
                     diff_view::show_diff(ui, old, new, mode, editor_font, font_size, dark_mode);
                 }
                 ui.separator();
-                ui.strong("Hunks");
+                ui.strong(t().git.hunks);
                 show_hunks(ui, git_stage, &mut hunk_action);
             });
         });
@@ -520,7 +521,7 @@ fn show_entry_row(ui: &mut egui::Ui, git_stage: &GitStageState, entry: &StatusEn
         if ui.checkbox(&mut staged, label).changed() {
             *action = Some(RowAction::Toggle(entry.path.clone(), staged));
         }
-        if ui.small_button("Diff").clicked() {
+        if ui.small_button(t().git.diff).clicked() {
             *action = Some(RowAction::OpenFullDiff(entry.path.clone()));
         }
     });
@@ -539,13 +540,13 @@ fn show_entry_row(ui: &mut egui::Ui, git_stage: &GitStageState, entry: &StatusEn
 fn show_hunks(ui: &mut egui::Ui, git_stage: &GitStageState, action: &mut Option<RowAction>) {
     ui.indent("git_stage_hunks", |ui| {
         let Some((unstaged, staged)) = &git_stage.expanded_diffs else {
-            ui.label(egui::RichText::new("Loading hunks…").weak());
+            ui.label(egui::RichText::new(t().git.loading_hunks).weak());
             return;
         };
         for (index, hunk) in staged.hunks.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&hunk.header).monospace().weak());
-                if ui.small_button("Unstage Hunk").clicked() {
+                if ui.small_button(t().git.unstage_hunk).clicked() {
                     *action = Some(RowAction::UnstageHunk(index));
                 }
             });
@@ -553,7 +554,7 @@ fn show_hunks(ui: &mut egui::Ui, git_stage: &GitStageState, action: &mut Option<
         for (index, hunk) in unstaged.hunks.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&hunk.header).monospace().weak());
-                if ui.small_button("Stage Hunk").clicked() {
+                if ui.small_button(t().git.stage_hunk).clicked() {
                     *action = Some(RowAction::StageHunk(index));
                 }
             });

@@ -1,3 +1,4 @@
+use fg_i18n::{msg, t};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -111,7 +112,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     let mut outcome = SidePanelOutcome::default();
 
     ui.horizontal(|ui| {
-        if ui.button("📁").on_hover_text("Open Folder").clicked() {
+        if ui.button("📁").on_hover_text(t().side_panel.open_folder_hint).clicked() {
             // Default to the already-open project's folder, if there is
             // one, so re-opening (a sibling folder, or the same project
             // after it was closed) doesn't mean re-navigating away from
@@ -124,17 +125,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             if let Some(folder) = dialog.pick_folder()
                 && let Err(err) = state.open_project(folder)
             {
-                outcome.error = Some(format!("failed to open project: {err}"));
+                outcome.error = Some(msg::failed_to_open_project(&err.to_string()));
             }
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
-            if ui.button("📄").on_hover_text("New File").clicked() {
+            if ui.button("📄").on_hover_text(t().side_panel.new_file_hint).clicked() {
                 panel.begin_new_file(root.clone());
             }
-            if ui.button("💻").on_hover_text("Open Terminal").clicked()
+            if ui.button("💻").on_hover_text(t().side_panel.open_terminal_hint).clicked()
                 && let Err(err) = terminal::open(&root)
             {
-                outcome.error = Some(format!("failed to open terminal: {err}"));
+                outcome.error = Some(msg::failed_to_open_terminal(&err.to_string()));
             }
         }
     });
@@ -169,7 +170,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             );
         });
     } else {
-        ui.weak("No folder open");
+        ui.weak(t().side_panel.no_folder_open);
     }
 
     if let Some((path, modifiers)) = actions.select_click.take() {
@@ -187,7 +188,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
         && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
         && let Err(err) = state.open_project(root)
     {
-        outcome.error = Some(format!("failed to refresh project tree: {err}"));
+        outcome.error = Some(msg::failed_to_refresh_tree(&err.to_string()));
     }
 
     outcome
@@ -243,11 +244,11 @@ fn show_new_file_row(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| dir.display().to_string());
-        ui.label(format!("New file in {dir_label}:"));
+        ui.label(msg::new_file_in(&dir_label));
 
         let (confirmed, escaped) = text_field_outcome(ui, name, should_focus);
 
-        if ui.button("Create").clicked() || confirmed {
+        if ui.button(t().side_panel.create).clicked() || confirmed {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
                 // `trimmed` may itself contain `/` (e.g. "controllers/
@@ -258,7 +259,7 @@ fn show_new_file_row(
                 // before `fs::write` can create the file in them.
                 let new_path = dir.join(trimmed);
                 if new_path.exists() {
-                    outcome.error = Some(format!("file already exists: {}", new_path.display()));
+                    outcome.error = Some(msg::file_already_exists(&new_path.display().to_string()));
                 } else {
                     let content = new_path
                         .extension()
@@ -274,12 +275,12 @@ fn show_new_file_row(
                             close_draft = true;
                             created = true;
                         }
-                        Err(err) => outcome.error = Some(format!("failed to create file: {err}")),
+                        Err(err) => outcome.error = Some(msg::failed_to_create_file(&err.to_string())),
                     }
                 }
             }
         }
-        if ui.button("Cancel").clicked() || escaped {
+        if ui.button(t().common.cancel).clicked() || escaped {
             close_draft = true;
         }
     });
@@ -383,15 +384,15 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
         let new_name = new_name.trim();
         let new_path = old_path.parent().map(|p| p.join(new_name));
         match new_path {
-            _ if new_name.is_empty() => outcome.error = Some("rename failed: empty name".to_string()),
+            _ if new_name.is_empty() => outcome.error = Some(t().errors.rename_empty_name.to_string()),
             Some(new_path) if new_path.exists() => {
-                outcome.error = Some(format!("rename failed: {} already exists", new_path.display()));
+                outcome.error = Some(msg::rename_target_exists(&new_path.display().to_string()));
             }
             Some(new_path) => match std::fs::rename(&old_path, &new_path) {
                 Ok(()) => outcome.renamed.push((old_path, new_path)),
-                Err(err) => outcome.error = Some(format!("failed to rename: {err}")),
+                Err(err) => outcome.error = Some(msg::failed_to_rename(&err.to_string())),
             },
-            None => outcome.error = Some("rename failed: no parent directory".to_string()),
+            None => outcome.error = Some(t().errors.rename_no_parent.to_string()),
         }
     }
 
@@ -447,7 +448,7 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
             panel.clipboard = None;
         }
         if !failures.is_empty() {
-            outcome.error = Some(format!("failed to paste:\n{}", failures.join("\n")));
+            outcome.error = Some(msg::failed_to_paste(&failures.join("\n")));
         }
     }
 
@@ -537,18 +538,18 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if path.is_dir() {
-                format!("Delete directory {name} and everything inside it? This cannot be undone.")
+                msg::confirm_delete_directory(&name)
             } else {
-                format!("Delete {name}? This cannot be undone.")
+                msg::confirm_delete_file(&name)
             }
         }
-        _ => format!("Delete {} items? This cannot be undone.", paths.len()),
+        _ => msg::confirm_delete_many(paths.len()),
     };
 
     let modal_outcome = show_modal(ui, "delete_confirm", Some(paths), |ui, paths| {
         ui.label(message);
         ui.horizontal(|ui| {
-            if ui.button("Delete").clicked() {
+            if ui.button(t().common.delete).clicked() {
                 let mut failures = Vec::new();
                 for path in paths {
                     match delete_path(path) {
@@ -557,11 +558,11 @@ fn show_delete_confirm(ui: &mut egui::Ui, panel: &mut SidePanelState, outcome: &
                     }
                 }
                 if !failures.is_empty() {
-                    outcome.error = Some(format!("failed to delete:\n{}", failures.join("\n")));
+                    outcome.error = Some(msg::failed_to_delete(&failures.join("\n")));
                 }
                 panel.pending_delete = None;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(t().common.cancel).clicked() {
                 panel.pending_delete = None;
             }
         });
@@ -718,29 +719,29 @@ fn render_node(
             let single_target = selected.len() <= 1;
             label_response.context_menu(|ui| {
                 if ui
-                    .add_enabled(single_target, egui::Button::new("New File"))
+                    .add_enabled(single_target, egui::Button::new(t().common.new_file))
                     .clicked()
                 {
                     actions.start_new_file = Some(terminal.path.clone());
                     ui.close();
                 }
                 if ui
-                    .add_enabled(single_target, egui::Button::new("Rename"))
+                    .add_enabled(single_target, egui::Button::new(t().common.rename))
                     .clicked()
                 {
                     actions.start_rename = Some(terminal.path.clone());
                     ui.close();
                 }
-                if ui.button("Delete").clicked() {
+                if ui.button(t().common.delete).clicked() {
                     actions.delete_request = Some(terminal.path.clone());
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Copy").clicked() {
+                if ui.button(t().common.copy).clicked() {
                     actions.copy_request = Some(terminal.path.clone());
                     ui.close();
                 }
-                if ui.button("Cut").clicked() {
+                if ui.button(t().common.cut).clicked() {
                     actions.cut_request = Some(terminal.path.clone());
                     ui.close();
                 }
@@ -749,7 +750,7 @@ fn render_node(
                 // pasting into a folder does, so `FileKind::File` below
                 // gets no Paste entry at all.
                 if ui
-                    .add_enabled(clipboard.is_some(), egui::Button::new("Paste"))
+                    .add_enabled(clipboard.is_some(), egui::Button::new(t().common.paste))
                     .clicked()
                 {
                     actions.paste_request = Some(terminal.path.clone());
@@ -803,7 +804,7 @@ fn render_node(
             let single_target = selected.len() <= 1;
             response.context_menu(|ui| {
                 if ui
-                    .add_enabled(single_target, egui::Button::new("New File"))
+                    .add_enabled(single_target, egui::Button::new(t().common.new_file))
                     .clicked()
                 {
                     let dir = node.path.parent().map_or_else(|| node.path.clone(), PathBuf::from);
@@ -811,22 +812,22 @@ fn render_node(
                     ui.close();
                 }
                 if ui
-                    .add_enabled(single_target, egui::Button::new("Rename"))
+                    .add_enabled(single_target, egui::Button::new(t().common.rename))
                     .clicked()
                 {
                     actions.start_rename = Some(node.path.clone());
                     ui.close();
                 }
-                if ui.button("Delete").clicked() {
+                if ui.button(t().common.delete).clicked() {
                     actions.delete_request = Some(node.path.clone());
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Copy").clicked() {
+                if ui.button(t().common.copy).clicked() {
                     actions.copy_request = Some(node.path.clone());
                     ui.close();
                 }
-                if ui.button("Cut").clicked() {
+                if ui.button(t().common.cut).clicked() {
                     actions.cut_request = Some(node.path.clone());
                     ui.close();
                 }
@@ -836,4 +837,4 @@ fn render_node(
 }
 
 #[cfg(test)]
-mod tests;
+mod side_panel_test;

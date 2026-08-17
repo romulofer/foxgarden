@@ -1,7 +1,7 @@
 //! Ctrl+W/Ctrl+Shift+W syntax-node selection expand/shrink (`syntax::selection`, wired in `widget.rs`).
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 #[test]

@@ -1,3 +1,4 @@
+use fg_i18n::{msg, t};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -1024,7 +1025,7 @@ pub fn show(
                     }
                 }
                 _ => {
-                    *last_error = Some("Select some text first, then try again.".to_string());
+                    *last_error = Some(t().errors.select_text_first.to_string());
                 }
             }
         }
@@ -1626,18 +1627,18 @@ pub fn show(
         (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
         if doc.language != Some(Language::Java) {
-            *last_error = Some("Generate getters/setters only works for Java files.".to_string());
+            *last_error = Some(t().errors.accessors_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
-                0 => *last_error = Some("No class fields found in this file.".to_string()),
+                0 => *last_error = Some(t().errors.no_class_fields.to_string()),
                 1 => {
                     let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
-                        *last_error = Some("Nothing to generate: every field here is final.".to_string());
+                        *last_error = Some(t().errors.every_field_is_final.to_string());
                     } else {
                         let (inserted, new_cursor) =
                             insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
@@ -1648,7 +1649,7 @@ pub fn show(
                 _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some("Couldn't generate accessors: no syntax tree available yet.".to_string());
+            *last_error = Some(t().errors.accessors_no_tree.to_string());
         }
     }
 
@@ -1682,12 +1683,12 @@ pub fn show(
     // templates are all valid Java even with zero fields selected).
     if let Some(kind) = generate_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some("Generate Constructor/toString/equals() only works for Java files.".to_string());
+            *last_error = Some(t().errors.generate_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
-                0 => *last_error = Some("No class fields found in this file.".to_string()),
+                0 => *last_error = Some(t().errors.no_class_fields.to_string()),
                 1 => {
                     let generated =
                         codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
@@ -1698,7 +1699,7 @@ pub fn show(
                 _ => *generate_method_dialog = Some(GenerateMethodDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some("Couldn't generate: no syntax tree available yet.".to_string());
+            *last_error = Some(t().errors.generate_no_tree.to_string());
         }
     }
 
@@ -1729,31 +1730,27 @@ pub fn show(
     // work."
     if override_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some("Override Method only works for Java files.".to_string());
+            *last_error = Some(t().errors.override_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let cursor_byte = shell_out.caret.map(|c| char_to_byte(&text_now, c.primary));
             let enclosing = cursor_byte.and_then(|c| syntax::enclosing_class(tree, &text_now, c));
 
             match enclosing {
-                None => *last_error = Some("Place the cursor inside a class to override a method.".to_string()),
+                None => *last_error = Some(t().errors.override_needs_class.to_string()),
                 Some((class_name, insertion_byte)) => match syntax::superclass_name(tree, &text_now, &class_name) {
                     None => {
-                        *last_error = Some(format!(
-                            "{class_name} has no superclass or interface to override methods from."
-                        ));
+                        *last_error = Some(msg::no_superclass(&class_name));
                     }
                     Some(super_name) => {
                         let super_path = project.and_then(|p| codegen::find_java_file_by_stem(&p.tree, &super_name));
                         match super_path {
                             None => {
-                                *last_error = Some(format!(
-                                    "Override Method only looks up superclasses in this project (couldn't find {super_name}.java)."
-                                ));
+                                *last_error = Some(msg::superclass_not_in_project(&super_name));
                             }
                             Some(super_path) => match std::fs::read_to_string(&super_path) {
                                 Err(err) => {
-                                    *last_error = Some(format!("failed to read {}: {err}", super_path.display()));
+                                    *last_error = Some(msg::failed_to_read(&super_path.display().to_string(), &err.to_string()));
                                 }
                                 Ok(super_source) => {
                                     let mut super_parser = IncrementalParser::new(Language::Java);
@@ -1770,9 +1767,7 @@ pub fn show(
                                         .collect();
 
                                     if candidates.is_empty() {
-                                        *last_error = Some(format!(
-                                            "No overridable methods found on {super_name} (or they're all already overridden)."
-                                        ));
+                                        *last_error = Some(msg::no_overridable_methods(&super_name));
                                     } else {
                                         *override_method_dialog =
                                             Some(OverrideMethodDialog::new(candidates, insertion_byte));
@@ -1784,7 +1779,7 @@ pub fn show(
                 },
             }
         } else {
-            *last_error = Some("Couldn't find overridable methods: no syntax tree available yet.".to_string());
+            *last_error = Some(t().errors.override_no_tree.to_string());
         }
     }
 
@@ -2446,4 +2441,4 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+mod widget_test;

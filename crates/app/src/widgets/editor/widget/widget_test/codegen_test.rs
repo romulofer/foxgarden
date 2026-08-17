@@ -1,8 +1,9 @@
 //! Java code generation end to end (`codegen.rs`): getter/setter accessors, constructor/toString/equals generation, and Override Method.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
+use fg_i18n::{msg, t};
 
 #[test]
 fn ctrl_shift_g_generates_getter_and_setter_at_the_cursor() {
@@ -58,7 +59,7 @@ fn ctrl_shift_g_on_a_fieldless_class_is_a_no_op_but_reports_why() {
     );
 
     assert_eq!(doc.buffer.to_string(), before);
-    assert!(last_error.is_some_and(|msg| msg.contains("fields")));
+    assert_eq!(last_error.as_deref(), Some(t().errors.no_class_fields));
 }
 
 #[test]
@@ -278,8 +279,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -321,8 +322,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -381,8 +382,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -423,8 +424,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
 
@@ -477,8 +478,8 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
     text_area::set_caret(
@@ -520,11 +521,11 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
         );
     });
 
     assert!(override_method_dialog.is_none());
-    assert!(last_error.is_some_and(|msg| msg.contains("this project")));
+    assert_eq!(last_error, Some(msg::superclass_not_in_project("SomeLibraryClass")));
 }

@@ -239,8 +239,38 @@ harness) that exercise highlighting and error-squiggle rendering without
 needing a window, including some that drive a real, reused `egui::Context`
 with simulated keyboard events and an explicitly focused widget to exercise
 multi-cursor editing end to end, plus session-persistence tests against a
-hand-rolled fake `eframe::Storage`. Full end-to-end GUI interaction (opening
-folders, clicking files, editing) is verified manually.
+hand-rolled fake `eframe::Storage`.
+
+End-to-end tests live in `crates/app/src/app/e2e_test/` and drive the *whole*
+app — a real `FoxGardenApp` rendering real frames via
+[`egui_kittest`](https://docs.rs/egui_kittest) against a temp project —
+clicking, typing, and asserting on what the accessibility tree says is on
+screen plus what ended up on disk:
+
+```sh
+cargo test -p foxgarden e2e::
+```
+
+They're split by user-facing area: `project_tree` (listing, collapsing,
+icons, skip-list, creating files), `tabs` (opening, switching, closing,
+reopening, read-only, binary-file errors), `editing` (dirty asterisk,
+saving, the close-confirmation prompt), `editor_input` (undo, line
+comment/join/move/duplicate, indent, auto-close, live templates,
+multi-cursor), `completion`, `diagnostics` (squiggle sources in Java and
+Kotlin), `file_operations` (rename/delete/copy/cut/paste and multi-select),
+`menus` (every File/Settings/Tools/Run/View/Help item), `navigation`
+(`Ctrl+P`/`Ctrl+E`/`Ctrl+Shift+E`), and `panels`.
+
+Two things they can't drive through the UI: the native "Open Folder…"
+dialog (`rfd` opens an OS window outside egui's event loop, so tests call
+`EditorState::open_project` directly, exactly as the dialog's callback
+does) and clicking in the editor to place the caret (it's custom-painted,
+so it has no accessibility node — tests use `widgets::editor::jump_to`,
+then send real keystrokes). Whatever an external process answers (LSP,
+Checkstyle/PMD, `git`, the terminal's shell), the file watcher's
+external-change paths, auto-save's timers, and session persistence are
+covered by unit tests instead — from a frame loop those would assert on a
+race. Anything mouse-driven beyond the above is still verified manually.
 
 ## Non-goals (checkpoint 1)
 

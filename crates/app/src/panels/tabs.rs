@@ -1,3 +1,4 @@
+use fg_i18n::{msg, t};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -69,7 +70,7 @@ pub(crate) fn save_document(
 ) {
     let old_text = doc.buffer.to_string();
     if let Err(err) = doc.save() {
-        *last_error = Some(format!("failed to save: {err}"));
+        *last_error = Some(msg::failed_to_save(&err.to_string()));
         return;
     }
     if let Some(parser) = parser.as_mut() {
@@ -165,7 +166,7 @@ pub fn show(
                     close_request = Some(index);
                 }
                 label_response.context_menu(|ui| {
-                    let toggle_label = if doc.read_only { "Allow Editing" } else { "Read-Only" };
+                    let toggle_label = if doc.read_only { t().tabs.allow_editing } else { t().menu.read_only };
                     if ui.button(toggle_label).clicked() {
                         toggle_read_only_request = Some(index);
                         ui.close();
@@ -216,7 +217,7 @@ pub fn show(
     ui.separator();
 
     let Some(active) = state.active_tab else {
-        ui.weak("No file open");
+        ui.weak(t().tabs.no_file_open);
         return;
     };
     let project = state.project.as_ref();
@@ -377,20 +378,20 @@ fn show_close_confirm(
         .unwrap_or_default();
 
     let outcome = show_modal(ui, "close_confirm", Some(index), |ui, &index| {
-        ui.label(format!("Save changes to {name} before closing?"));
+        ui.label(msg::save_changes_before_closing(&name));
         ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
+            if ui.button(t().common.save).clicked() {
                 save_tab(state, parsers, index, last_error);
                 state.close_tab(index);
                 parsers.remove(index);
                 *pending_close = None;
             }
-            if ui.button("Discard").clicked() {
+            if ui.button(t().tabs.discard).clicked() {
                 state.close_tab(index);
                 parsers.remove(index);
                 *pending_close = None;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(t().common.cancel).clicked() {
                 *pending_close = None;
             }
         });

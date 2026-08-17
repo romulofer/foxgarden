@@ -107,4 +107,4 @@ impl History {
 }
 
 #[cfg(test)]
-mod tests;
+mod history_test;

@@ -25,6 +25,12 @@ pub enum Tool {
     SpotBugs,
 }
 
+/// Every tool this manager knows how to install, in the order the settings
+/// dialog lists them — the same shape (and purpose: something to iterate,
+/// for callers that need to ask about all of them) as
+/// `lsp_manager::ALL_SERVERS`.
+pub const ALL_TOOLS: [Tool; 3] = [Tool::Checkstyle, Tool::Pmd, Tool::SpotBugs];
+
 impl Tool {
     pub fn display_name(self) -> &'static str {
         match self {

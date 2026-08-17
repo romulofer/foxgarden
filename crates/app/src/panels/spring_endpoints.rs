@@ -1,3 +1,4 @@
+use fg_i18n::t;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -158,7 +159,7 @@ pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsStat
 
     egui::Modal::new(egui::Id::new("spring_endpoints")).show(&ctx, |ui| {
         ui.set_min_width(560.0);
-        ui.label("Spring endpoints");
+        ui.label(t().palettes.spring_endpoints);
 
         let response = ui.text_edit_singleline(&mut popup.query);
         response.request_focus();
@@ -174,9 +175,9 @@ pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsStat
 
         ui.separator();
         if scanning {
-            ui.weak("Scanning project…");
+            ui.weak(t().palettes.scanning_project);
         } else if candidates.is_empty() {
-            ui.weak("No matches");
+            ui.weak(t().common.no_matches);
         }
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
             for (index, (path, entry)) in candidates.iter().enumerate() {

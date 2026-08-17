@@ -1,0 +1,9 @@
+[package]
+name = "fg-i18n"
+version = "0.2.0"
+edition = "2024"
+description = "Compile-time string catalogue for FoxGarden's UI, in pt-BR and en-US."
+
+[dependencies]
+
+[dev-dependencies]

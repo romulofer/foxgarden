@@ -1858,6 +1858,27 @@ completions against the freshly-*installed* (not just the pre-existing
 
 ## Track 29 — Java-version-aware editing + new-project scaffolding
 
+**Reconciliation note (found merging a local branch that had fallen
+behind `origin/ide-henshin` by several days of already-pushed commits):**
+this track's Phase 0 finding and Phase 2 below were written without
+knowledge of "Detect the JDK and the project's Java release for jdt.ls"
+(`f5c4931`, landed on `origin/ide-henshin` days before this track was
+started locally) — which already ships almost exactly what Phase 2
+describes: `fg_core::java_release::detect` reads a project's own
+`pom.xml`/`build.gradle(.kts)`/`.java-version`/`.sdkmanrc` for its real
+compiler release, and `lsp_state.rs` already sends jdt.ls
+`java.configuration.runtimes` built from every JDK `lsp_manager::
+java_home_candidates` finds on the machine, release marked default. Phase
+0's own finding (jdt.ls enforces a *managed* project's declared compliance
+level with zero client-side help) still stands and is now doubly
+confirmed — Phase 2 as scoped below is very likely already done in
+substance; the next session picking this track up should read
+`java_release.rs`/`lsp_state.rs`'s current shape first and treat Phase 2
+as a verification-and-close pass, not a from-scratch implementation. See
+TECHNICAL_DEBT.md #24 for the resulting duplicate-JDK-detection debt
+(Track 29 Phase 1's own `JdkRegistry` vs. `java_home_candidates`) that
+Phase 2's close-out should probably also resolve.
+
 **Phase 0 done (live-verified); Phases 1+ not started.** `jdt.ls` needs a
 JDK 21+ **host** runtime just to execute
 (`LspSettings::jdtls_java_home`/`resolve_jdtls_java`, `lsp_manager.rs` —
@@ -2066,11 +2087,22 @@ how correct the generated skeleton is.
 ### Major tier
 
 - [ ] Track 19 — Large file handling — full viewport virtualization
-- [ ] Track 20 — LSP integration (Phases 1/2/5 shipped and live-verified
-      on the Java side against a real `jdtls`; Kotlin-side Phase 5 has a
-      real server-level pass via a raw protocol probe but an inconclusive
-      in-app GUI check — see `TECHNICAL_DEBT.md` #18. Phases 3/4/6/7 not
-      started.)
+- [ ] Track 20 — LSP integration (Phases 1/2/3/5 shipped and verified
+      against real servers; Phases 4/6/7 not started.) Phase 3's own
+      Checkpoint 3 is satisfied: hover returns real documentation for
+      both a project-owned symbol and a JDK type, proven by a permanent
+      `#[ignore]`d real-jdtls test (`lsp_state::tests::java_hover_
+      against_a_real_server_documents_a_project_owned_symbol`) rather
+      than a one-off manual check — closing `TECHNICAL_DEBT.md` #20. One
+      defect that verification surfaced stays open as #22: jdtls answers
+      in Markdown regardless of the client's declared `PlainText`
+      preference, and the tooltip is a plain `ui.label`. Kotlin-side
+      Phase 5 now has its own equivalent real-server test
+      (`kotlin_completion_against_a_real_server_returns_the_receivers_
+      own_members`), which closes #18 — the earlier degraded GUI result
+      is attributed to #17's server/SDK mismatch, itself since resolved
+      and re-probed. A Kotlin GUI click-through is the one thing still
+      owed there, both tests being headless by design.
 - [x] Track 21 — Maven/Gradle awareness (all 3 phases done: `pom.xml`
       parsing verified against 5 real files; Gradle model extraction
       verified against a real multi-module Kotlin/Spring project, including

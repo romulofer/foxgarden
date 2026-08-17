@@ -5,6 +5,7 @@ mod diff;
 mod document;
 mod editor_state;
 mod gradle;
+mod java_release;
 mod language;
 mod maven;
 mod project;
@@ -23,6 +24,10 @@ pub use diff::{
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
 pub use gradle::{GradleClasspath, GradleDependency, GradleError, GradleProject, gradle_classpaths, gradle_projects};
+pub use java_release::{
+    JavaRelease, build_files as java_release_build_files, detect as detect_java_release, parse_release_token,
+    release_from_gradle, release_from_pom, release_from_version_file,
+};
 pub use language::Language;
 pub use maven::{MavenClasspathError, MavenDependency, MavenParent, MavenProject, maven_classpath, parse_pom};
 pub use project::{FileKind, FileNode, Project};

@@ -43,6 +43,15 @@ impl SpringConfigState {
         &self.properties
     }
 
+    /// Whether a classpath scan is running right now — what the status bar
+    /// reports it with. A scan shells out to `mvn`/`gradle` and can take a
+    /// while, and it's triggered by opening a config file rather than by
+    /// anything the user asked for directly, so it's exactly the kind of
+    /// job the bar exists to make visible.
+    pub fn scanning(&self) -> bool {
+        self.scan_rx.is_some()
+    }
+
     /// Kicks off a background scan for `project_root` if none has run (or
     /// is running) for it yet — a no-op otherwise, so a completion trigger
     /// can call this unconditionally on every keystroke without piling up

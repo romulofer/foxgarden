@@ -2,27 +2,29 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use fg_core::{EditorState, Language};
+use fg_i18n::{msg, t};
 use notify::Watcher;
 use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
+use crate::file_watch::{self, ReconcileOutcome};
+use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
-use crate::file_watch::{self, ReconcileOutcome};
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
+use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
+use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
-use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::spring_config::SpringConfigState;
-use crate::jdk_registry::JdkRegistry;
-use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
-use crate::panels::lsp_servers::{self, LspServersState};
+use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
+use crate::panels::status_bar;
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
 use crate::pty_session::PtySession;
@@ -50,6 +52,11 @@ const ACTIVE_TAB_KEY: &str = "active_tab";
 const EDITOR_FONT_KEY: &str = "editor_font";
 const FONT_SIZE_KEY: &str = "font_size";
 const DARK_MODE_KEY: &str = "dark_mode";
+/// The UI language, as a `fg_i18n::Lang::tag` (`"pt-BR"`, `"en-US"`).
+///
+/// Absent until the user picks one in Settings > Language: an unset key
+/// means "follow the system locale", which is what a fresh install does.
+const LANGUAGE_KEY: &str = "language";
 const INDENT_USE_TABS_KEY: &str = "indent_use_tabs";
 const INDENT_WIDTH_KEY: &str = "indent_width";
 const WORD_WRAP_KEY: &str = "word_wrap";
@@ -358,11 +365,9 @@ fn open_path(
             // is built here in the failure arm only, instead of
             // unconditionally before the match on every open attempt.
             let message = match &err {
-                fg_core::OpenDocumentError::Binary(path) => {
-                    format!("Couldn't open {}: not a text file.", path.display())
-                }
+                fg_core::OpenDocumentError::Binary(path) => msg::couldnt_open_not_text(&path.display().to_string()),
                 fg_core::OpenDocumentError::Io(path, e) => {
-                    format!("Couldn't open {}:\n{e}", path.display())
+                    msg::couldnt_open(&path.display().to_string(), &e.to_string())
                 }
             };
             *last_error = Some(message);
@@ -389,7 +394,7 @@ fn new_terminal_session(
             sessions.push(session);
             state.new_terminal_tab();
         }
-        Err(err) => *last_error = Some(format!("failed to start terminal: {err}")),
+        Err(err) => *last_error = Some(msg::failed_to_start_terminal(&err.to_string())),
     }
 }
 
@@ -622,16 +627,16 @@ fn show_external_change_banner(
 
     if externally_deleted.contains(&path) {
         ui.horizontal(|ui| {
-            ui.label(format!("⚠ {name} was deleted on disk."));
-            if ui.button("Dismiss").clicked() {
+            ui.label(msg::file_deleted_on_disk(&name));
+            if ui.button(t().common.dismiss).clicked() {
                 externally_deleted.remove(&path);
             }
         });
         ui.separator();
     } else if external_conflicts.contains(&path) {
         ui.horizontal(|ui| {
-            ui.label(format!("⚠ {name} changed on disk since you opened it."));
-            if ui.button("Reload").clicked() {
+            ui.label(msg::file_changed_on_disk(&name));
+            if ui.button(t().common.reload).clicked() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     // No explicit `git diff` trigger here — discarding
                     // local edits to match disk is itself a dirty -> clean
@@ -643,7 +648,7 @@ fn show_external_change_banner(
                 }
                 external_conflicts.remove(&path);
             }
-            if ui.button("Keep Mine").clicked() {
+            if ui.button(t().common.keep_mine).clicked() {
                 external_conflicts.remove(&path);
             }
         });
@@ -668,7 +673,7 @@ fn restore_session(
         if path.is_dir()
             && let Err(err) = state.open_project(path)
         {
-            *last_error = Some(format!("failed to reopen last project: {err}"));
+            *last_error = Some(msg::failed_to_reopen_last_project(&err.to_string()));
         }
     }
 
@@ -688,7 +693,7 @@ fn restore_session(
                         parsers.push(parser);
                     }
                 }
-                Err(err) => *last_error = Some(format!("failed to reopen tab: {err}")),
+                Err(err) => *last_error = Some(msg::failed_to_reopen_tab(&err.to_string())),
             }
         }
     }
@@ -731,6 +736,23 @@ fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
 /// from that function because this is "how the editor looks/behaves," not
 /// "what was open"; the two happen to both live in `eframe::Storage` but
 /// are independent concerns.
+/// The language the user explicitly chose in Settings > Language, if any.
+///
+/// `None` means "nobody has chosen" — no storage at all (a first run), no
+/// `LANGUAGE_KEY` in it, or a tag this build doesn't recognise (a settings
+/// file written by a newer FoxGarden, or hand-edited). All three deserve
+/// the same answer: fall back to the host system's locale rather than to an
+/// arbitrary language.
+///
+/// Split out of `FoxGardenApp::new` so it can be tested without touching
+/// `fg_i18n`'s process-global active language, which the rest of the test
+/// binary is simultaneously reading.
+fn stored_language(storage: Option<&dyn eframe::Storage>) -> Option<fg_i18n::Lang> {
+    storage
+        .and_then(|storage| storage.get_string(LANGUAGE_KEY))
+        .and_then(|tag| fg_i18n::Lang::from_tag(&tag))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is an independently-owned Settings value restored from its own storage key, not a bundle waiting to be a struct — same shape and reasoning as menu_bar::show's own allowance"
@@ -904,6 +926,11 @@ fn persist_settings(
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
     storage.set_string(DARK_MODE_KEY, dark_mode.to_string());
+    // Read straight off `fg_i18n`'s global rather than taken as a
+    // parameter: the active language *is* that global (see
+    // `menu_bar`'s Settings > Language), so there's no copy on
+    // `FoxGardenApp` that could disagree with it.
+    storage.set_string(LANGUAGE_KEY, fg_i18n::lang().tag().to_string());
     storage.set_string(INDENT_USE_TABS_KEY, indent_settings.use_tabs.to_string());
     storage.set_string(INDENT_WIDTH_KEY, indent_settings.width.to_string());
     storage.set_string(WORD_WRAP_KEY, view_settings.word_wrap.to_string());
@@ -931,12 +958,21 @@ fn persist_settings(
     );
     storage.set_string(CHECKSTYLE_BINARY_KEY, external_tool_paths.checkstyle_binary.clone());
     storage.set_string(CHECKSTYLE_CONFIG_KEY, external_tool_paths.checkstyle_config.clone());
-    storage.set_string(CHECKSTYLE_INSTALLED_VERSION_KEY, external_tool_paths.checkstyle_installed_version.clone());
+    storage.set_string(
+        CHECKSTYLE_INSTALLED_VERSION_KEY,
+        external_tool_paths.checkstyle_installed_version.clone(),
+    );
     storage.set_string(PMD_BINARY_KEY, external_tool_paths.pmd_binary.clone());
     storage.set_string(PMD_RULESET_KEY, external_tool_paths.pmd_ruleset.clone());
-    storage.set_string(PMD_INSTALLED_VERSION_KEY, external_tool_paths.pmd_installed_version.clone());
+    storage.set_string(
+        PMD_INSTALLED_VERSION_KEY,
+        external_tool_paths.pmd_installed_version.clone(),
+    );
     storage.set_string(SPOTBUGS_BINARY_KEY, external_tool_paths.spotbugs_binary.clone());
-    storage.set_string(SPOTBUGS_INSTALLED_VERSION_KEY, external_tool_paths.spotbugs_installed_version.clone());
+    storage.set_string(
+        SPOTBUGS_INSTALLED_VERSION_KEY,
+        external_tool_paths.spotbugs_installed_version.clone(),
+    );
     storage.set_string(AUTO_SAVE_ENABLED_KEY, auto_save_settings.enabled.to_string());
     storage.set_string(
         AUTO_SAVE_MODE_KEY,
@@ -949,9 +985,15 @@ fn persist_settings(
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
-    storage.set_string(LSP_JDTLS_INSTALLED_VERSION_KEY, lsp_settings.jdtls_installed_version.clone());
+    storage.set_string(
+        LSP_JDTLS_INSTALLED_VERSION_KEY,
+        lsp_settings.jdtls_installed_version.clone(),
+    );
     storage.set_string(LSP_JDTLS_JAVA_HOME_KEY, lsp_settings.jdtls_java_home.clone());
-    storage.set_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY, lsp_settings.kotlin_language_server_binary.clone());
+    storage.set_string(
+        LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY,
+        lsp_settings.kotlin_language_server_binary.clone(),
+    );
     storage.set_string(
         LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,
         lsp_settings.kotlin_language_server_installed_version.clone(),
@@ -978,6 +1020,22 @@ impl FoxGardenApp {
         let mut auto_save_settings = AutoSaveSettings::default();
         let mut lsp_settings = LspSettings::default();
         let mut jdk_registry = JdkRegistry::default();
+
+        // Resolved before anything else can render, and deliberately outside
+        // the `if let Some(storage)` below — a first run has no storage at
+        // all, and that's exactly the case where detection matters most.
+        match stored_language(cc.storage) {
+            Some(chosen) => fg_i18n::set_lang(chosen),
+            // Under `cargo test` the host locale is whatever the developer's
+            // shell happens to export, which would make every label
+            // assertion in the e2e suite pass or fail depending on who ran
+            // it — and the language is process-global, so one test's app
+            // launch would flip it under every other test running in
+            // parallel. Test builds therefore stay on `Lang`'s default
+            // (pt-BR, the primary language) unless something sets one.
+            None if !cfg!(test) => fg_i18n::set_lang(fg_i18n::detect_from_env()),
+            None => {}
+        }
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -1060,7 +1118,12 @@ impl FoxGardenApp {
         // `Ctrl+\``'s own handler already uses, so the panel resumes to a
         // working terminal instead of the empty "No terminal session" state.
         if app.terminal_panel_visible {
-            new_terminal_session(&mut app.state, &mut app.terminal_sessions, &cc.egui_ctx, &mut app.last_error);
+            new_terminal_session(
+                &mut app.state,
+                &mut app.terminal_sessions,
+                &cc.egui_ctx,
+                &mut app.last_error,
+            );
         }
         // Same "resumed already open" gap the terminal panel above just
         // fixed, for the Source Control panel: `FoxGardenApp::ui`'s own
@@ -1093,7 +1156,7 @@ fn show_error_modal(ui: &egui::Ui, last_error: &mut Option<String>) {
     let message = last_error.as_deref();
     let outcome = show_modal(ui, "error_modal", message, |ui, message| {
         ui.label(*message);
-        ui.button("OK").clicked()
+        ui.button(t().common.ok).clicked()
     });
     if let Some((ok_clicked, escape_pressed)) = outcome
         && (ok_clicked || escape_pressed)
@@ -1115,16 +1178,15 @@ impl eframe::App for FoxGardenApp {
         // them into a focused terminal session would *also* fire the app's
         // own global popup/panel toggle.
         let terminal_focused = terminal_panel::is_terminal_focused(ui.ctx());
-        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift)
-        {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
             self.quick_switcher.toggle();
         }
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
             self.go_to_file.toggle();
         }
-        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift)
-        {
-            self.spring_endpoints.toggle(self.state.project.as_ref().map(|p| &p.tree));
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift) {
+            self.spring_endpoints
+                .toggle(self.state.project.as_ref().map(|p| &p.tree));
         }
         if !terminal_focused
             && ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
@@ -1142,7 +1204,12 @@ impl eframe::App for FoxGardenApp {
             // an empty panel with nothing in it and a second click needed
             // just to get a session going.
             if self.terminal_panel_visible && self.state.terminal_tabs.is_empty() {
-                new_terminal_session(&mut self.state, &mut self.terminal_sessions, ui.ctx(), &mut self.last_error);
+                new_terminal_session(
+                    &mut self.state,
+                    &mut self.terminal_sessions,
+                    ui.ctx(),
+                    &mut self.last_error,
+                );
             }
         }
 
@@ -1252,12 +1319,34 @@ impl eframe::App for FoxGardenApp {
                 })
                 .inner;
 
+            // Added before every other bottom/side panel so it spans the
+            // full window width along the very bottom edge, underneath the
+            // project tree and the terminal both — egui gives each panel
+            // the outermost strip of whatever space is left when it's
+            // added, so anything registered earlier would push the bar
+            // inward. Hidden in zen mode along with the rest of the chrome.
+            //
+            // What it reports is gathered here rather than after this
+            // frame's own polls further down: a job that finished this
+            // frame therefore stays on the bar for one more frame (~16ms),
+            // exactly as the Tools menu's own "Running Checkstyle…" label
+            // already does, and one frame of staleness is invisible next to
+            // jobs that run for seconds or minutes.
+            let work = status_bar::BackgroundWork::gather(
+                &self.lsp,
+                &self.lsp_servers,
+                &self.static_analysis,
+                &self.spring_config,
+                &self.git_stage,
+                &self.diff,
+            );
+            let activities = status_bar::activities(&work);
+            egui::Panel::bottom("status_bar").show(ui, |ui| status_bar::show(ui, &activities));
+
             if self.side_panel_visible {
                 let panel_response = egui::Panel::left("project_panel")
                     .default_size(self.side_panel_width)
-                    .show(ui, |ui| {
-                        side_panel::show(ui, &mut self.state, &mut self.side_panel)
-                    });
+                    .show(ui, |ui| side_panel::show(ui, &mut self.state, &mut self.side_panel));
                 // Tracks a live drag, not just the size at the frame the
                 // resize handle is released — so `self.side_panel_width`
                 // (what `save()` persists) always reflects exactly what's on
@@ -1294,20 +1383,39 @@ impl eframe::App for FoxGardenApp {
                     .resizable(true)
                     .default_size(280.0)
                     .show(ui, |ui| {
-                        git_stage::show(ui, &mut self.git_stage, &root, self.editor_font, self.font_size, self.dark_mode);
+                        git_stage::show(
+                            ui,
+                            &mut self.git_stage,
+                            &root,
+                            self.editor_font,
+                            self.font_size,
+                            self.dark_mode,
+                        );
                     });
             }
         }
 
         if terminal_outcome.new_session_requested {
-            new_terminal_session(&mut self.state, &mut self.terminal_sessions, ui.ctx(), &mut self.last_error);
+            new_terminal_session(
+                &mut self.state,
+                &mut self.terminal_sessions,
+                ui.ctx(),
+                &mut self.last_error,
+            );
         }
         if let Some(index) = terminal_outcome.close_request {
             close_terminal_session(&mut self.state, &mut self.terminal_sessions, index);
         }
 
         if let Some(path) = outcome.open {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path,
+            );
         }
         for (old, new) in &outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, old, new);
@@ -1329,7 +1437,10 @@ impl eframe::App for FoxGardenApp {
             self.static_analysis.open_settings();
         }
         if menu_outcome.open_lsp_servers_settings_request {
-            self.lsp_servers.open_settings();
+            self.lsp_servers.open_settings(
+                &self.lsp_settings,
+                self.state.project.as_ref().map(|p| p.root.as_path()),
+            );
         }
         if menu_outcome.open_jdk_registry_settings_request {
             self.jdk_registry_ui.open_settings();
@@ -1340,8 +1451,7 @@ impl eframe::App for FoxGardenApp {
             let binary = self.external_tool_paths.checkstyle_binary.trim();
             let config = self.external_tool_paths.checkstyle_config.trim();
             if binary.is_empty() || config.is_empty() {
-                self.last_error =
-                    Some("Set the Checkstyle binary and config path in Settings > External Tools first.".to_string());
+                self.last_error = Some(t().errors.checkstyle_not_configured.to_string());
             } else {
                 self.static_analysis
                     .run_checkstyle(PathBuf::from(binary), PathBuf::from(config), root);
@@ -1353,8 +1463,7 @@ impl eframe::App for FoxGardenApp {
             let binary = self.external_tool_paths.pmd_binary.trim();
             let ruleset = self.external_tool_paths.pmd_ruleset.trim();
             if binary.is_empty() || ruleset.is_empty() {
-                self.last_error =
-                    Some("Set the PMD binary and ruleset path in Settings > External Tools first.".to_string());
+                self.last_error = Some(t().errors.pmd_not_configured.to_string());
             } else {
                 self.static_analysis
                     .run_pmd(PathBuf::from(binary), ruleset.to_string(), root);
@@ -1363,20 +1472,20 @@ impl eframe::App for FoxGardenApp {
         if let Some(result) = self.static_analysis.poll_checkstyle() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_checkstyle_results(&mut self.state, &diagnostics),
-                Err(err) => self.last_error = Some(format!("Checkstyle failed: {err}")),
+                Err(err) => self.last_error = Some(msg::checkstyle_failed(&err.to_string())),
             }
         }
         if let Some(result) = self.static_analysis.poll_pmd() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
-                Err(err) => self.last_error = Some(format!("PMD failed: {err}")),
+                Err(err) => self.last_error = Some(msg::pmd_failed(&err.to_string())),
             }
         }
         self.spring_config.poll();
         for result in self.static_analysis.tool_manager.poll_installs() {
             match result {
                 Ok(installed) => self.external_tool_paths.apply_installed(&installed),
-                Err(err) => self.last_error = Some(format!("Install failed: {err}")),
+                Err(err) => self.last_error = Some(msg::install_failed(&err.to_string())),
             }
         }
         for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
@@ -1390,11 +1499,26 @@ impl eframe::App for FoxGardenApp {
         for result in self.lsp_servers.manager.poll_installs() {
             match result {
                 Ok(installed) => self.lsp_settings.apply_installed(&installed),
-                Err(err) => self.last_error = Some(format!("Language server install failed: {err}")),
+                Err(err) => self.last_error = Some(msg::language_server_install_failed(&err.to_string())),
             }
         }
         for (server, result) in self.lsp_servers.manager.poll_checks() {
             self.lsp_servers.record_latest_version(server, result);
+        }
+        // A finished JDK scan always wins over what's in the field: it only
+        // ever runs because the field was empty when the dialog opened, or
+        // because Detect was clicked — which is a direct request to replace
+        // whatever is there. A machine with no JDK 21+ leaves it empty, so
+        // jdt.ls still falls back to JAVA_HOME/PATH.
+        if let Some(found) = self.lsp_servers.manager.poll_java_home_detection() {
+            if let Some(home) = &found {
+                self.lsp_settings.jdtls_java_home = home.display().to_string();
+            }
+            // A machine with no JDK 21+ is reported inside the dialog next
+            // to the field itself, not as an app-wide error: the scan runs
+            // unprompted whenever the dialog opens empty, and a modal error
+            // over the dialog the user just opened would be noise.
+            self.lsp_servers.record_java_home_detection(found.is_some());
         }
         if self.lsp_servers.manager.busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
@@ -1404,7 +1528,7 @@ impl eframe::App for FoxGardenApp {
         if let Some(result) = self.git_stage.poll_status()
             && let Err(err) = result
         {
-            self.last_error = Some(format!("git status failed: {err}"));
+            self.last_error = Some(msg::git_status_failed(&err.to_string()));
         }
         if let Some(result) = self.git_stage.poll_op() {
             match result {
@@ -1422,18 +1546,18 @@ impl eframe::App for FoxGardenApp {
                         self.git_stage.refresh_expanded(root);
                     }
                 }
-                Err(err) => self.last_error = Some(format!("Git operation failed: {err}")),
+                Err(err) => self.last_error = Some(msg::git_operation_failed(&err.to_string())),
             }
         }
         if let Some(result) = self.git_stage.poll_expanded()
             && let Err(err) = result
         {
-            self.last_error = Some(format!("git diff failed: {err}"));
+            self.last_error = Some(msg::git_diff_failed(&err.to_string()));
         }
         if let Some(result) = self.git_stage.poll_full_diff()
             && let Err(err) = result
         {
-            self.last_error = Some(format!("git diff failed: {err}"));
+            self.last_error = Some(msg::git_diff_failed(&err.to_string()));
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -1487,10 +1611,24 @@ impl eframe::App for FoxGardenApp {
         self.diff.check_for_saves(&self.state, diff_root.as_deref());
 
         if let Some(path) = quick_switcher::show(ui, &self.state, &mut self.quick_switcher) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path,
+            );
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path);
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path,
+            );
         }
         if let Some((path, handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
             open_path(
@@ -1536,4 +1674,6 @@ impl eframe::App for FoxGardenApp {
 }
 
 #[cfg(test)]
-mod tests;
+mod e2e_test;
+#[cfg(test)]
+mod app_test;

@@ -500,4 +500,4 @@ pub fn column_of(index: &LineIndex, char_off: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+mod input_test;

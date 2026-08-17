@@ -13,6 +13,7 @@
 use crate::lsp_manager::{ALL_SERVERS, LatestVersionResult, LspManagerState, Server};
 use crate::lsp_settings::LspSettings;
 use crate::widgets::modal::show_modal;
+use fg_i18n::{msg, t};
 
 /// Dialog-open flag plus the background install/update-check machinery it
 /// drives. Lives on `FoxGardenApp` (not in `MenuBarState`) for the same
@@ -27,17 +28,41 @@ pub struct LspServersState {
     /// specific chosen version rather than silently tracking whatever is
     /// newest (see `lsp_manager::Server::recommended_version`).
     latest_versions: std::collections::HashMap<Server, LatestVersionResult>,
+    /// Whether the last finished JDK scan came up empty — shown beside the
+    /// Java Home field, since that's the field it's about. `false` before
+    /// any scan has finished, so nothing is claimed until one has.
+    no_java_home_found: bool,
+    /// The open project's own declared Java release, read when the dialog
+    /// opens. Display only — `lsp_state` detects this itself for the session
+    /// it configures; showing it here is what makes "why is this linted as
+    /// Java 8?" answerable without guessing.
+    project_release: Option<fg_core::JavaRelease>,
 }
 
 impl LspServersState {
-    pub fn open_settings(&mut self) {
+    /// Opens the dialog, and — when no Java Home is configured yet — starts
+    /// the background JDK scan that fills that field in, so it's already
+    /// populated by the time the user reads down to it instead of sitting
+    /// empty with jdt.ls' Java 21 requirement stated above it.
+    pub fn open_settings(&mut self, settings: &LspSettings, project_root: Option<&std::path::Path>) {
         self.settings_open = true;
+        if settings.jdtls_java_home.trim().is_empty() {
+            self.manager.detect_java_home();
+        }
+        self.project_release = project_root.and_then(fg_core::detect_java_release);
     }
 
     /// Records a finished update check — called from `FoxGardenApp::ui`'s
     /// own per-frame poll of `self.lsp_servers.manager`.
     pub fn record_latest_version(&mut self, server: Server, result: LatestVersionResult) {
         self.latest_versions.insert(server, result);
+    }
+
+    /// Records a finished JDK scan — `FoxGardenApp::ui` writes the found
+    /// path into `LspSettings::jdtls_java_home` itself and passes on only
+    /// whether there was one.
+    pub fn record_java_home_detection(&mut self, found: bool) {
+        self.no_java_home_found = !found;
     }
 
     fn latest_version(&self, server: Server) -> Option<&LatestVersionResult> {
@@ -51,7 +76,7 @@ impl LspServersState {
 pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut LspSettings) {
     let outcome = show_modal(ui, "lsp_servers_dialog", state.settings_open.then_some(()), |ui, ()| {
         ui.set_min_width(560.0);
-        ui.heading("Language Servers");
+        ui.heading(t().lsp.heading);
         ui.label(
             egui::RichText::new(
                 "Semantic diagnostics, completion and hover docs for Java and Kotlin come from an external \
@@ -70,7 +95,7 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
         }
 
         ui.separator();
-        ui.button("Close").clicked()
+        ui.button(t().common.close).clicked()
     });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
@@ -95,21 +120,20 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
 
     ui.horizontal(|ui| {
         if installed_version.is_empty() {
-            ui.label(egui::RichText::new("Not installed").weak());
+            ui.label(egui::RichText::new(t().common.not_installed).weak());
         } else {
-            ui.label(format!("Installed: {installed_version}"));
+            ui.label(msg::installed_version(&installed_version));
         }
 
         let installing = state.manager.installing(server);
         let install_label = if installed_version.is_empty() {
-            "Install"
+            t().install.install
         } else {
-            "Reinstall"
+            t().install.reinstall
         };
         if ui
             .add_enabled(!installing, egui::Button::new(install_label))
-            .on_hover_text(format!(
-                "Installs {} {}, from {}",
+            .on_hover_text(msg::installs_from(
                 server.display_name(),
                 server.recommended_version(),
                 server.github_repo(),
@@ -123,7 +147,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         if ui
             .add_enabled(
                 !checking,
-                egui::Button::new(if checking { "Checking…" } else { "Check for Updates" }),
+                egui::Button::new(if checking { t().install.checking } else { t().install.check_for_updates }),
             )
             .clicked()
         {
@@ -136,13 +160,13 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         // awareness only, never as a clickable update that would just fail.
         match state.latest_version(server) {
             Some(Ok(latest)) if *latest == server.recommended_version() => {
-                ui.label(egui::RichText::new("Up to date").weak());
+                ui.label(egui::RichText::new(t().lsp.up_to_date).weak());
             }
             Some(Ok(latest)) => {
-                ui.label(egui::RichText::new(format!("{latest} available upstream (not yet bundled)")).weak());
+                ui.label(egui::RichText::new(msg::available_upstream(latest)).weak());
             }
             Some(Err(error)) => {
-                ui.label(egui::RichText::new(format!("Update check failed: {error}")).weak());
+                ui.label(egui::RichText::new(msg::update_check_failed(&error.to_string())).weak());
             }
             None => {}
         }
@@ -159,7 +183,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     }
 
     ui.horizontal(|ui| {
-        ui.label("Binary");
+        ui.label(t().lsp.binary);
         ui.add(
             egui::TextEdit::singleline(settings.fields_for(server).0)
                 .id_salt(match server {
@@ -177,16 +201,59 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     // `JAVA_HOME`/`PATH`, same as leaving it unset.
     if let Server::Jdtls = server {
         ui.horizontal(|ui| {
-            ui.label("Java Home").on_hover_text(
-                "jdt.ls requires a JDK 21+ to run. Leave blank to use JAVA_HOME/PATH, or point this at a specific \
-                 JDK 21 install (e.g. ~/.sdkman/candidates/java/21.0.11-zulu).",
+            ui.label(t().lsp.java_home).on_hover_text(
+                "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on this \
+                 machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). Blank \
+                 falls back to JAVA_HOME/PATH.",
             );
             ui.add(
                 egui::TextEdit::singleline(&mut settings.jdtls_java_home)
                     .id_salt("jdtls_java_home")
-                    .desired_width(380.0),
+                    .desired_width(300.0),
             );
+            let detecting = state.manager.detecting_java_home();
+            if ui
+                .add_enabled(!detecting, egui::Button::new(t().lsp.detect))
+                .on_hover_text(t().lsp.detect_hint)
+                .clicked()
+            {
+                state.manager.detect_java_home();
+            }
+            if detecting {
+                ui.spinner();
+            }
         });
+        // What the project itself targets, which is a different question
+        // from which JVM jdt.ls runs on: jdt.ls needs 21, the code may be
+        // Java 8. `lsp_state` hands jdt.ls every installed JDK and marks
+        // this one its default, so diagnostics match the project's own
+        // compiler rather than jdt.ls' JVM.
+        ui.horizontal(|ui| {
+            ui.label(t().lsp.project_java).on_hover_text(
+                "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and Kotlin \
+                 sources are diagnosed at this release, using the matching JDK from the list found on this machine.",
+            );
+            match &state.project_release {
+                Some(release) => {
+                    ui.label(format!("{} — from {} ({})", release.major, release.file, release.setting));
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new(t().lsp.project_java_undeclared).weak(),
+                    );
+                }
+            }
+        });
+
+        if state.no_java_home_found && settings.jdtls_java_home.trim().is_empty() {
+            ui.label(
+                egui::RichText::new(
+                    "No JDK 21 or newer found on this machine — install one, or type its path above. jdt.ls won't \
+                     start without it.",
+                )
+                .weak(),
+            );
+        }
     }
 }
 
@@ -198,8 +265,38 @@ mod tests {
     fn open_settings_opens_the_dialog() {
         let mut state = LspServersState::default();
         assert!(!state.settings_open);
-        state.open_settings();
+        state.open_settings(&LspSettings::default(), None);
         assert!(state.settings_open);
+    }
+
+    /// Opening with no Java Home configured is what kicks the JDK scan that
+    /// fills the field in; opening with one already set must not, since
+    /// that scan's result overwrites the field.
+    #[test]
+    fn opening_scans_for_a_jdk_only_when_java_home_is_blank() {
+        let mut state = LspServersState::default();
+        state.open_settings(&LspSettings::default(), None);
+        assert!(state.manager.detecting_java_home());
+
+        let mut state = LspServersState::default();
+        state.open_settings(
+            &LspSettings {
+                jdtls_java_home: "/usr/lib/jvm/java-21".to_string(),
+                ..Default::default()
+            },
+            None,
+        );
+        assert!(!state.manager.detecting_java_home());
+    }
+
+    #[test]
+    fn a_scan_that_found_nothing_is_what_shows_the_missing_jdk_note() {
+        let mut state = LspServersState::default();
+        assert!(!state.no_java_home_found);
+        state.record_java_home_detection(false);
+        assert!(state.no_java_home_found);
+        state.record_java_home_detection(true);
+        assert!(!state.no_java_home_found);
     }
 
     #[test]

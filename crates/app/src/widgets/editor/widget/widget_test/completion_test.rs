@@ -5,7 +5,7 @@
 //! resolution, which direct calls can't.
 
 use super::super::*;
-use super::common::*;
+use super::common_test::*;
 use fg_core::Language;
 
 fn tree_of(source: &str) -> Tree {

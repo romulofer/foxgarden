@@ -1,5 +1,6 @@
-//! The surrounding UI chrome: the menu bar, the project side panel, and the
-//! tab bar (which also owns tab/parser lifecycle — see `tabs::open_parser_for`).
+//! The surrounding UI chrome: the menu bar, the project side panel, the
+//! status bar, and the tab bar (which also owns tab/parser lifecycle — see
+//! `tabs::open_parser_for`).
 
 pub mod git_diff;
 pub mod git_stage;
@@ -13,5 +14,6 @@ pub mod side_panel;
 pub mod spring_config;
 pub mod spring_endpoints;
 pub mod static_analysis;
+pub mod status_bar;
 pub mod tabs;
 pub mod terminal_panel;

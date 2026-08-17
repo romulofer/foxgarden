@@ -5,6 +5,7 @@
 
 use egui::{Event, Key, Modifiers};
 use fg_core::Document;
+use fg_i18n::t;
 use syntax::IncrementalParser;
 
 use super::auto_edit::{duplicate_line, toggle_line_comments};
@@ -79,7 +80,7 @@ pub(super) fn show_context_menu(
 
     response.context_menu(|ui| {
         if ui
-            .add(egui::Button::new("Undo").shortcut_text("Ctrl+Z"))
+            .add(egui::Button::new(t().editor.undo).shortcut_text("Ctrl+Z"))
             .clicked()
         {
             pending_input.push(synthetic_shortcut(Key::Z, false));
@@ -87,7 +88,7 @@ pub(super) fn show_context_menu(
             ui.close();
         }
         if ui
-            .add(egui::Button::new("Redo").shortcut_text("Ctrl+Shift+Z"))
+            .add(egui::Button::new(t().editor.redo).shortcut_text("Ctrl+Shift+Z"))
             .clicked()
         {
             pending_input.push(synthetic_shortcut(Key::Z, true));
@@ -100,7 +101,7 @@ pub(super) fn show_context_menu(
         if ui
             .add_enabled(
                 has_selection,
-                egui::Button::new("Cut").shortcut_text("Ctrl+X"),
+                egui::Button::new(t().common.cut).shortcut_text("Ctrl+X"),
             )
             .clicked()
         {
@@ -118,7 +119,7 @@ pub(super) fn show_context_menu(
         if ui
             .add_enabled(
                 has_selection,
-                egui::Button::new("Copy").shortcut_text("Ctrl+C"),
+                egui::Button::new(t().common.copy).shortcut_text("Ctrl+C"),
             )
             .clicked()
         {
@@ -136,7 +137,7 @@ pub(super) fn show_context_menu(
         if ui
             .add_enabled(
                 cached_clipboard_text.is_some(),
-                egui::Button::new("Paste").shortcut_text("Ctrl+V"),
+                egui::Button::new(t().common.paste).shortcut_text("Ctrl+V"),
             )
             .clicked()
         {
@@ -152,7 +153,7 @@ pub(super) fn show_context_menu(
             ui.close();
         }
         if ui
-            .add(egui::Button::new("Select All").shortcut_text("Ctrl+A"))
+            .add(egui::Button::new(t().editor.select_all).shortcut_text("Ctrl+A"))
             .clicked()
         {
             pending_input.push(synthetic_shortcut(Key::A, false));
@@ -163,7 +164,7 @@ pub(super) fn show_context_menu(
         ui.separator();
 
         if ui
-            .add(egui::Button::new("Toggle Line Comment").shortcut_text("Ctrl+/"))
+            .add(egui::Button::new(t().editor.toggle_line_comment).shortcut_text("Ctrl+/"))
             .clicked()
         {
             if let Some(range) = primary_caret.map(|c| c.range()) {
@@ -178,7 +179,7 @@ pub(super) fn show_context_menu(
             ui.close();
         }
         if ui
-            .add(egui::Button::new("Duplicate Line").shortcut_text("Alt+Shift+Up/Down"))
+            .add(egui::Button::new(t().editor.duplicate_line).shortcut_text("Alt+Shift+Up/Down"))
             .clicked()
         {
             if let Some(cursor_char) = cursor_char {
@@ -195,7 +196,7 @@ pub(super) fn show_context_menu(
         if ui
             .add_enabled(
                 doc.is_dirty(),
-                egui::Button::new("Save").shortcut_text("Ctrl+S"),
+                egui::Button::new(t().common.save).shortcut_text("Ctrl+S"),
             )
             .clicked()
         {

@@ -1082,4 +1082,4 @@ fn apply_ime_event(
 }
 
 #[cfg(test)]
-mod tests;
+mod shell_test;
