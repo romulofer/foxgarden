@@ -1929,11 +1929,24 @@ folder picker + auto-detect, list with remove) under its own new
 "Settings > JDKs…" entry — deliberately separate from the Language Servers
 modal, since `jdtls_java_home` is "which JVM runs jdt.ls" (always 21+) and
 this is "which JDKs exist to target" (any version).
-**Checkpoint 1:** `cargo test --workspace` green (new `detect_and_add`/
-`closest_for` tests against fake `java_home` dirs, mirroring
-`lsp_manager.rs`'s own `java_major_version_reads_a_modern_jvm_banner`
-style); live-verify adding a real local JDK by folder path, confirming
-auto-detected version and persistence across an app restart.
+**Checkpoint 1 — done.** `cargo test --workspace` green (713 passed in
+`crates/app`, including `detect_and_add`/`closest_for` against fake
+`java_home` dirs). Live-verify of the Settings > JDKs… dialog itself
+(menu wiring, modal, empty state, Add JDK button) confirmed working under
+a real (if sandboxed) `xdg-desktop-portal`/`xdg-desktop-portal-gtk` pair —
+which also surfaced and closed TECHNICAL_DEBT.md #21: `pick_folder()` was
+called synchronously on the UI thread with no timeout, freezing the whole
+app if the portal didn't answer promptly; now backgrounded on a thread and
+polled like every other slow op in this codebase (`git_stage.rs`'s own
+`spawn`/`poll` shape). The literal "pick a real folder, see the JDK show
+up, restart the app, confirm it's still there" step is **not** confirmed
+end-to-end in-app this session — the sandboxed portal used for live-
+verification never actually resolved a real pick (see #21's "What was
+found"); `JdkRegistry::to_json`/`from_json`'s own round-trip is unit-
+tested and `eframe::Storage` persistence is shared, proven plumbing used
+by every other setting in this app, so the risk here is low, but a real
+desktop add-a-JDK-and-restart click-through is still worth 30 seconds
+next time this dialog is opened normally.
 
 **Phase 2 — Capability A: correct analysis across Java levels.** Scoped to
 Phase 0's confirmed finding — the managed case needs no wiring at all.
@@ -2074,5 +2087,7 @@ how correct the generated skeleton is.
       the deviation and its two open follow-ups)
 - [ ] Track 29 — Java-version-aware editing + new-project scaffolding
       (Phase 0 live-verified: jdt.ls already enforces a Maven project's own
-      declared compliance level with zero client-side help; Phases 1+ not
-      started)
+      declared compliance level with zero client-side help; Phase 1 — JDK
+      registry, Settings > JDKs… — shipped and live-verified, also fixing
+      TECHNICAL_DEBT.md #21 (UI-thread-blocking folder picker) found along
+      the way; Phases 2+ not started)

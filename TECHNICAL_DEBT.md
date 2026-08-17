@@ -36,6 +36,7 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 21 | `[OPEN]` | `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it |
 | 20 | `[OPEN]` | Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols |
 | 19 | `[RESOLVED]` | `LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin |
 | 18 | `[OPEN]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
@@ -60,6 +61,99 @@ rewritten or removed, not blindly executed.
 ---
 
 # Open
+
+## 21. [OPEN] `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it
+
+**Where:** `crates/app/src/panels/side_panel.rs:120` ("Open Folder" 📁
+button), `crates/app/src/panels/run_configs.rs:139` ("Browse…" working-dir
+picker), `crates/app/src/panels/menu_bar.rs:119` (File → "Open Folder…").
+Fixed at the fourth site, `crates/app/src/panels/jdk_registry.rs` ("Add
+JDK…", `PLAN.md` Track 29 Phase 1) — see "What was done" below.
+
+**Status:** Open — the underlying pattern is now proven and one site is
+fixed; the other three still call `rfd::FileDialog::new().pick_folder()`
+synchronously inline.
+
+### What was found
+
+Found live while verifying Track 29 Phase 1's own Checkpoint 1 (adding a
+real JDK through Settings > JDKs…) under a real, if unusually configured,
+`xdg-desktop-portal`/`xdg-desktop-portal-gtk` pair (an isolated
+`dbus-run-session` bound to a private Xvfb display, set up specifically to
+give `rfd`'s Linux backend — `default = ["xdg-portal", "wayland"]` in
+`rfd-0.17.2`'s own `Cargo.toml`, no `gtk3` fallback compiled in — a real
+portal to talk to instead of failing instantly with no dialog at all).
+Clicking "Add JDK…" froze the entire window — every widget, not just the
+dialog — for 20+ seconds with zero recovery (confirmed via repeated
+screenshots and a failed click on the modal's own "Close" button), because
+`pick_folder()` is a blocking call made directly inside the button's
+`.clicked()` handler, on the same thread that runs every other frame's
+`egui::Context::run`. `ps`'s `wchan` showed the process parked in `poll()`
+— consistent with `pick_folder()`'s internal `pollster::block_on` waiting
+on a D-Bus reply that, in that portal configuration, never arrived. No
+timeout exists anywhere in the call chain: a portal that's slow, hung, or
+simply never answers (a first-run permission prompt stuck behind another
+window, a portal backend that crashed, exactly this session's own
+non-standard setup) freezes FoxGarden **completely**, with no way out
+short of `kill -9`. Not confirmed whether a normal desktop portal ever
+actually stalls this way in ordinary use — but the zero-timeout,
+blocking-the-only-UI-thread shape is a real gap regardless of how often a
+slow portal triggers it in practice.
+
+All four `rfd::FileDialog` call sites in the codebase share the exact same
+shape — none of them back it with a thread, unlike every other
+slow/blocking operation in this codebase (`git push`, LSP process spawn,
+static-analysis scans, …), which all already go through a `spawn`/`poll`
+pair (`crates/app/src/panels/git_stage.rs:36-59` is the canonical
+example: `std::thread::spawn` + `std::sync::mpsc::channel`, drained once a
+frame from `FoxGardenApp::ui`, with `ui.ctx().request_repaint()` called
+every frame an op is in flight since egui's reactive repaint mode
+otherwise won't pick up a background result until an unrelated input event
+happens to fire the next frame).
+
+### Why it wasn't fixed everywhere on the spot
+
+The JDK one was in scope (found live-verifying that track's own
+checkpoint) and small enough to fix immediately. The other three sites are
+unrelated features (`Open Folder` is the app's single most central
+action) — fixing all four in the same pass was judged riskier than
+fixing the one actually in scope and recording the rest here, matching
+this file's own "known-and-deferred" purpose rather than silently
+expanding an unrelated track's diff.
+
+### What was done
+
+`crates/app/src/panels/jdk_registry.rs`: `JdkRegistryState` gained a
+`picker_rx: Option<Receiver<Option<PathBuf>>>` field and a `poll_picker`
+method mirroring `git_stage.rs`'s `poll_op` shape exactly. The "Add JDK…"
+button now spawns `rfd::FileDialog::new().pick_folder()` on a
+`std::thread::spawn`, is disabled (`ui.add_enabled`) while a pick is in
+flight, and `show_settings` polls once a frame and calls
+`ui.ctx().request_repaint()` while running. Live-verified against the same
+non-responding portal that produced the original hang: the button now
+visibly disables on click and — critically — "Close" and every other
+widget stay responsive immediately, even with the picker thread itself
+still parked forever waiting on a portal that never replies. The stray
+thread in that specific (still-not-understood) portal configuration never
+returns and is never joined, but it's an isolated OS thread with no
+handle back into the UI, so it costs nothing beyond the thread itself
+sitting idle in `poll()`.
+
+### Proposed fix
+
+Apply the identical `spawn`/`poll` pair to `side_panel.rs`,
+`run_configs.rs`, and `menu_bar.rs`'s own `pick_folder()`/`pick_file()`
+call sites. Given all four sites need the exact same few lines, consider
+factoring a tiny shared `spawn_folder_pick() -> Receiver<Option<PathBuf>>`
+helper (and a `poll` twin) into a small module instead of copy-pasting the
+pair a fourth time — a scope call for whoever picks this up, not required.
+
+### Trigger condition
+
+Next time any of the three remaining sites is touched for an unrelated
+reason, or a user reports FoxGarden hanging on "Open Folder…"/"Browse…".
+
+---
 
 ## 20. [OPEN] Track 20 Phase 3 (LSP hover) live-verify is blocked: jdtls returns blank `contents` for JDK-library symbols, unconfirmed for project-owned symbols
 
