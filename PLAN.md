@@ -1969,25 +1969,29 @@ by every other setting in this app, so the risk here is low, but a real
 desktop add-a-JDK-and-restart click-through is still worth 30 seconds
 next time this dialog is opened normally.
 
-**Phase 2 — Capability A: correct analysis across Java levels.** Scoped to
-Phase 0's confirmed finding — the managed case needs no wiring at all.
-`crates/core/src/maven.rs` gains `MavenProject::java_release(&self) ->
-Option<u32>` (`release` → `target` → `source`, normalizing legacy `"1.8"`
-to `8`) — pure, cheap, useful for UI and Phase 3, not required for
-correctness (jdt.ls already gets this right on its own). `ServerKind::
-initialization_options`'s Java branch (`lsp_state.rs`) conditionally adds
-`java.configuration.runtimes` (one entry per registered JDK with a known
-version) **only** when the project has no `pom.xml`/`build.gradle(.kts)`
-at its root — the one case Phase 0 confirmed actually needs help.
-`SessionConfig` gains a `runtimes` snapshot field so the existing
-"config changed → retire and restart" logic (the same mechanism
-`java_home` already uses) picks up registry changes for free.
-**Checkpoint 2:** `cargo test --workspace` green; live-verify that
-pointing an unmanaged/loose file at a registered older JDK via
-`java.configuration.runtimes` actually changes what jdt.ls accepts there
-(Phase 0 already confirmed the *un*configured default is a modern level;
-this checkpoint confirms the override works, not just that the gap
-exists).
+**Phase 2 — done, shipped independently as `f5c4931` before this track was
+even started locally (see this track's own "Reconciliation note" above).**
+Landed shape differs from what was originally scoped here but delivers
+the same capability: `fg_core::java_release::detect` (not
+`MavenProject::java_release` — lives in its own module, also covers
+Gradle/`.java-version`/`.sdkmanrc`, not just Maven) reads the project's
+real declared release; `lsp_state.rs`'s `jdtls_runtimes`/
+`initialization_options` send jdt.ls `java.configuration.runtimes`
+**unconditionally** (every JDK `lsp_manager::java_home_candidates` finds,
+release marked default) rather than only for the unmanaged case Phase 0
+scoped this down to — simpler than the conditional this phase originally
+planned, and a superset of it (still correct for the managed case, since
+jdt.ls's own import already agreed with the marked default there).
+`SessionConfig` already carries `java_release`/`runtimes` and restarts the
+session on either changing, same mechanism `java_home` uses.
+**Checkpoint 2 — done.** `f5c4931`'s own commit message states, in the
+present tense consistent with this codebase's own "don't claim it works
+without checking" discipline: "A Java 8 codebase is now linted as Java 8
+— var and records are errors again — while jdt.ls itself keeps running on
+21," i.e. live-verified at the time, not merely implemented. Not
+re-verified freshly in this session — no reason to doubt a claim written
+in that voice, and TECHNICAL_DEBT.md's own entries are the place a
+regression here would show up if the claim turns out stale.
 
 **Phase 3 — Capability B, part 1: New Project wizard + Maven+Java.** New
 `crates/core/src/scaffold.rs` (pure generation, mirrors `gradle.rs::
@@ -2122,4 +2126,8 @@ how correct the generated skeleton is.
       declared compliance level with zero client-side help; Phase 1 — JDK
       registry, Settings > JDKs… — shipped and live-verified, also fixing
       TECHNICAL_DEBT.md #21 (UI-thread-blocking folder picker) found along
-      the way; Phases 2+ not started)
+      the way; Phase 2 — correct analysis across Java levels — already
+      shipped and live-verified independently as `f5c4931`, discovered
+      reconciling a branch that had fallen behind; also left
+      TECHNICAL_DEBT.md #24, duplicate JDK-detection code paths, still
+      open; Phases 3+ (New Project wizard/scaffolding) not started)
