@@ -41,7 +41,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use directories::ProjectDirs;
@@ -225,62 +224,24 @@ fn extract_tar_gz(bytes: &[u8], dir: &Path) -> Result<(), String> {
     archive.unpack(dir).map_err(|e| format!("failed to extract archive: {e}"))
 }
 
-/// Which `java` `jdt.ls` will actually run under: `java_home`'s if given
-/// (Settings > Language Servers…'s own explicit override — for the common
-/// case of a system default `java` that isn't Java 21, e.g. an sdkman/asdf-
-/// managed install that isn't the active one), else `JAVA_HOME`'s if set,
-/// else whatever is on `PATH` — the same fallback rule `jdt.ls`' own
-/// `bin/jdtls` launcher applies internally.
-fn java_command(java_home: &str) -> PathBuf {
-    let home = if java_home.trim().is_empty() {
-        std::env::var_os("JAVA_HOME").map(PathBuf::from)
-    } else {
-        Some(PathBuf::from(java_home.trim()))
-    };
-    match home {
-        Some(home) => home.join("bin").join("java"),
-        None => PathBuf::from("java"),
-    }
-}
-
-/// The major version out of `java -version`'s own output. Handles both
-/// shapes a real JVM prints: modern `openjdk version "21.0.2"` and the
-/// legacy `java version "1.8.0_292"`, where the major version is the
-/// *second* component.
-fn java_major_version(version_output: &str) -> Option<u32> {
-    let quoted = version_output.split('"').nth(1)?;
-    let mut parts = quoted.split(['.', '_', '-', '+']);
-    let first = parts.next()?;
-    if first == "1" {
-        parts.next()?.parse().ok()
-    } else {
-        first.parse().ok()
-    }
-}
-
-/// Verifies the JVM `java_command(java_home)` resolves to is at least
-/// `minimum_major` — called both at install time (fail fast with one plain
-/// sentence, rather than a confusing crash the first time a session tries to
-/// start) and by `resolve_jdtls_java` (to pin every jdt.ls spawn to a
-/// verified JVM rather than trusting whatever `java` PATH resolves to later).
+/// Verifies the JVM `crate::jdk::java_command(java_home)` resolves to is at
+/// least `minimum_major` — called both at install time (fail fast with one
+/// plain sentence, rather than a confusing crash the first time a session
+/// tries to start) and by `resolve_jdtls_java` (to pin every jdt.ls spawn to
+/// a verified JVM rather than trusting whatever `java` PATH resolves to
+/// later). `crate::jdk::detect_major_version` (Track 29 Phase 1) does the
+/// actual "run `java -version`, parse it" work generically — shared with
+/// `jdk_registry`, which has no jdt.ls-specific minimum to enforce; this
+/// function is just that generic result plus jdt.ls's own wording on top.
 fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
-    let java = java_command(java_home);
-    let output = Command::new(&java).arg("-version").output().map_err(|e| {
-        format!(
-            "couldn't run {}: {e} — install a JDK {minimum_major}+, or set it in Settings > Language Servers…",
-            java.display()
-        )
-    })?;
-    // Every JVM prints its version banner on stderr, not stdout.
-    let banner = String::from_utf8_lossy(&output.stderr);
-    match java_major_version(&banner) {
-        Some(major) if major >= minimum_major => Ok(()),
-        Some(major) => Err(format!(
+    match crate::jdk::detect_major_version(java_home) {
+        Ok(major) if major >= minimum_major => Ok(()),
+        Ok(major) => Err(format!(
             "jdt.ls needs a JDK {minimum_major} or newer to run, but {} is Java {major} — install a newer JDK, or \
              point Settings > Language Servers… at one",
-            java.display()
+            crate::jdk::java_command(java_home).display()
         )),
-        None => Err(format!("couldn't read a version out of `{} -version`", java.display())),
+        Err(e) => Err(format!("{e} — install a JDK {minimum_major}+, or set it in Settings > Language Servers…")),
     }
 }
 
@@ -293,7 +254,7 @@ fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
 /// detect from JAVA_HOME/PATH", same as an unset override always has.
 pub fn resolve_jdtls_java(java_home: &str) -> Result<PathBuf, String> {
     check_java(JDTLS_MINIMUM_JDK, java_home)?;
-    Ok(java_command(java_home))
+    Ok(crate::jdk::java_command(java_home))
 }
 
 /// Extracts `server`'s bundled archive into `dir` and returns the launcher's
@@ -327,6 +288,133 @@ fn install_bundled(server: Server, dir: &Path, report: &dyn Fn(String)) -> Resul
     }
     ensure_executable(&launcher)?;
     Ok(launcher)
+}
+
+/// `kotlin-language-server` resolves the stdlib jar an analyzed file
+/// compiles against by first checking a `kotlinc` on `PATH`
+/// (`BackupClassPathResolver.findKotlinCliCompilerLibrary` in its own
+/// source — verified against the exact vendored tag, 1.3.13). A `kotlinc`
+/// newer than this server's own bundled analysis compiler can read (roughly
+/// anything above Kotlin 2.2.0) makes every stdlib symbol — `println`,
+/// `Random`, even `kotlin.Unit` — come back `INCOMPATIBLE_CLASS`/
+/// `UNRESOLVED_REFERENCE` on otherwise-correct code (`TECHNICAL_DEBT.md`
+/// #17), independent of whether that `kotlinc` has anything to do with the
+/// project being edited.
+///
+/// The server checks its own documented override first, though:
+/// `ShellClassPathResolver.global` runs an executable script at
+/// `<config root>/kotlin-language-server/classpath` (`$XDG_CONFIG_HOME`, or
+/// `~/.config` if unset) and uses whatever jar paths it prints, before ever
+/// falling back to `kotlinc`-on-`PATH`. Pointing that script at the stdlib
+/// jars sitting next to whichever `kotlin-language-server` binary is
+/// actually configured — `binary`'s own sibling `../lib/`, the upstream
+/// release zip's layout, so this works for both a FoxGarden-installed build
+/// and a manually pointed-at one — pins the version match regardless of the
+/// user's own `PATH`.
+fn kotlin_stdlib_jars(lib_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let entries = std::fs::read_dir(lib_dir).map_err(|e| format!("couldn't read {}: {e}", lib_dir.display()))?;
+    let mut jars: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.starts_with("kotlin-stdlib") && name.ends_with(".jar") && !name.contains("-common") && !name.contains("-sources")
+        })
+        .collect();
+    jars.sort();
+    Ok(jars)
+}
+
+/// Where `kotlin-language-server` itself looks for the override script —
+/// same resolution order as its own `ShellClassPathResolver.global`
+/// (`$XDG_CONFIG_HOME`, else `<home>/.config`), taken as an explicit
+/// `config_root` parameter here rather than read from the environment
+/// directly so this stays testable against a tempdir instead of a
+/// developer's real config directory.
+fn kotlin_classpath_override_path(config_root: &Path) -> PathBuf {
+    let name = if cfg!(windows) { "classpath.bat" } else { "classpath" };
+    config_root.join("kotlin-language-server").join(name)
+}
+
+/// The override script's own contents — a one-liner that just echoes the
+/// joined jar paths back out, in the platform path-list separator
+/// `kotlin-language-server`'s `ShellClassPathResolver` splits on (`:` on
+/// Unix, `;` on Windows, both matching `java.io.File.pathSeparator`).
+fn kotlin_classpath_override_script(jars: &[PathBuf]) -> String {
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let joined = jars.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(&separator.to_string());
+    if cfg!(windows) {
+        format!("@echo off\r\necho {joined}\r\n")
+    } else {
+        format!("#!/bin/sh\necho \"{joined}\"\n")
+    }
+}
+
+/// Writes (or refreshes) the classpath override for whichever
+/// `kotlin-language-server` `binary` is configured, under `config_root`.
+/// Idempotent — skips the write (and, on Unix, the `chmod` syscall) once the
+/// script's content already matches, since this runs on every session
+/// start, not just once at install time (a manually configured `binary`
+/// this module never installed still needs the override written the first
+/// time it's used). Every failure here — no `lib/` next to `binary`, no
+/// stdlib jars in it, an unwritable config directory — is returned rather
+/// than panicking; the caller treats it as best-effort.
+fn ensure_kotlin_stdlib_override(binary: &Path, config_root: &Path) -> Result<(), String> {
+    let lib_dir = binary
+        .parent() // server/bin
+        .and_then(Path::parent) // server
+        .map(|server_dir| server_dir.join("lib"))
+        .ok_or_else(|| format!("couldn't find a lib/ directory next to {}", binary.display()))?;
+
+    let jars = kotlin_stdlib_jars(&lib_dir)?;
+    if jars.is_empty() {
+        return Err(format!("no kotlin-stdlib*.jar found in {}", lib_dir.display()));
+    }
+
+    let script_path = kotlin_classpath_override_path(config_root);
+    let script = kotlin_classpath_override_script(&jars);
+    if std::fs::read_to_string(&script_path).ok().as_deref() == Some(script.as_str()) {
+        return Ok(());
+    }
+
+    if let Some(parent) = script_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&script_path, &script).map_err(|e| format!("couldn't write {}: {e}", script_path.display()))?;
+    ensure_executable(&script_path)?;
+    Ok(())
+}
+
+/// The real config root `kotlin-language-server` itself resolves at
+/// runtime — `$XDG_CONFIG_HOME`, else `~/.config` — matching
+/// `ShellClassPathResolver.global`'s own Kotlin-side resolution exactly, so
+/// the script lands exactly where that server will look for it.
+fn xdg_config_root() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+    directories::UserDirs::new()
+        .map(|dirs| dirs.home_dir().join(".config"))
+        .ok_or_else(|| "couldn't determine a home directory".to_string())
+}
+
+/// Best-effort entry point `lsp_state` calls right before spawning a
+/// `kotlin-language-server` session — see this module's own
+/// `kotlin_stdlib_jars` doc comment for why. Never fails the caller: a
+/// server started without the override just falls back to
+/// `kotlin-language-server`'s pre-existing (possibly version-mismatched)
+/// `PATH`-based resolution, exactly as before this existed.
+pub fn ensure_kotlin_stdlib_override_for(binary: &Path) {
+    let root = match xdg_config_root() {
+        Ok(root) => root,
+        Err(e) => {
+            eprintln!("kotlin-language-server stdlib override: {e}");
+            return;
+        }
+    };
+    if let Err(e) = ensure_kotlin_stdlib_override(binary, &root) {
+        eprintln!("kotlin-language-server stdlib override: {e}");
+    }
 }
 
 /// Installs one specific `version` of `server`, reporting each step through
@@ -559,31 +647,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn java_major_version_reads_a_modern_jvm_banner() {
-        assert_eq!(
-            java_major_version("openjdk version \"21.0.2\" 2024-01-16 LTS\n"),
-            Some(21)
-        );
-        assert_eq!(
-            java_major_version("openjdk version \"17.0.4\" 2022-07-19 LTS"),
-            Some(17)
-        );
-    }
-
-    /// A Java 8 JVM reports `1.8.0_x`, where the major version is the
-    /// second component — reading the first would call it "Java 1" and
-    /// reject every JVM ever with a confusing message.
-    #[test]
-    fn java_major_version_reads_a_legacy_jvm_banner() {
-        assert_eq!(java_major_version("java version \"1.8.0_292\""), Some(8));
-    }
-
-    #[test]
-    fn java_major_version_on_unparseable_output_is_none() {
-        assert!(java_major_version("no version here").is_none());
-        assert!(java_major_version("version \"nonsense\"").is_none());
-    }
+    // `java_major_version`'s own tests now live in `crate::jdk` (Track 29
+    // Phase 1) — `lsp_manager` no longer defines that function itself.
 
     /// End-to-end against the real vendored archives — no network, no
     /// `#[ignore]` needed, since the bytes are already embedded in the test
@@ -614,6 +679,136 @@ mod tests {
                 assert!(mode & 0o111 != 0, "the launcher must be executable, got {mode:o}");
             }
         }
+    }
+
+    /// Regression for TECHNICAL_DEBT.md #17: the override must only pick up
+    /// real stdlib jars, matching `kotlin-language-server`'s own
+    /// `WithStdlibResolver.isStdlib` filter (excludes `-common`, and this
+    /// codebase's own scan also excludes `-sources`) — anything else in
+    /// `lib/` (the compiler jar, unrelated dependency jars) must not leak
+    /// into the override.
+    #[test]
+    fn kotlin_stdlib_jars_finds_only_real_stdlib_jars_not_the_compiler_or_common() {
+        let dir = test_support::tempdir();
+        for name in [
+            "kotlin-stdlib-2.1.0.jar",
+            "kotlin-stdlib-jdk7-2.1.0.jar",
+            "kotlin-stdlib-jdk8-2.1.0.jar",
+            "kotlin-stdlib-common-2.1.0.jar",
+            "kotlin-stdlib-2.1.0-sources.jar",
+            "kotlin-compiler-2.1.0.jar",
+            "kotlin-reflect-2.1.0.jar",
+        ] {
+            std::fs::write(dir.path().join(name), b"").unwrap();
+        }
+
+        let jars = kotlin_stdlib_jars(dir.path()).expect("reads dir");
+        let names: Vec<&str> = jars.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            vec!["kotlin-stdlib-2.1.0.jar", "kotlin-stdlib-jdk7-2.1.0.jar", "kotlin-stdlib-jdk8-2.1.0.jar"]
+        );
+    }
+
+    #[test]
+    fn kotlin_stdlib_jars_on_a_missing_dir_is_an_error_not_a_panic() {
+        let dir = test_support::tempdir();
+        assert!(kotlin_stdlib_jars(&dir.path().join("does-not-exist")).is_err());
+    }
+
+    #[test]
+    fn kotlin_classpath_override_path_matches_the_servers_own_resolution() {
+        let root = Path::new("/home/dev/.config");
+        let expected =
+            if cfg!(windows) { "classpath.bat" } else { "classpath" };
+        assert_eq!(
+            kotlin_classpath_override_path(root),
+            root.join("kotlin-language-server").join(expected)
+        );
+    }
+
+    /// The script's own separator must match `java.io.File.pathSeparator` on
+    /// the platform `kotlin-language-server`'s `ShellClassPathResolver`
+    /// actually splits on — `:` on Unix, `;` on Windows — or a correctly
+    /// found jar still wouldn't parse back out on the server's side.
+    #[test]
+    fn kotlin_classpath_override_script_joins_with_the_platform_path_separator() {
+        let jars = vec![PathBuf::from("/a/kotlin-stdlib.jar"), PathBuf::from("/a/kotlin-stdlib-jdk8.jar")];
+        let script = kotlin_classpath_override_script(&jars);
+        if cfg!(windows) {
+            assert!(script.contains("/a/kotlin-stdlib.jar;/a/kotlin-stdlib-jdk8.jar"), "{script}");
+        } else {
+            assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+            assert!(script.contains("/a/kotlin-stdlib.jar:/a/kotlin-stdlib-jdk8.jar"), "{script}");
+        }
+    }
+
+    /// End-to-end against the real vendored `kotlin-language-server` archive
+    /// (same as `bundled_archives_extract_with_the_launcher_at_its_documented_
+    /// path`, but proving the stdlib-override side rather than the launcher
+    /// path): extracts it into a temp "install dir", points a temp "config
+    /// root" at it, and confirms the written script is both executable and
+    /// lists the real jars that shipped in this build's own vendored
+    /// archive — the actual regression scenario from #17, not a synthetic
+    /// stand-in.
+    #[test]
+    fn ensure_kotlin_stdlib_override_writes_a_script_naming_the_real_vendored_stdlib_jars() {
+        let install_dir = test_support::tempdir();
+        extract_zip(Server::KotlinLanguageServer.bundled_archive(), install_dir.path()).expect("extracts");
+        let binary = install_dir.path().join(Server::KotlinLanguageServer.launcher_path());
+
+        let config_root = test_support::tempdir();
+        ensure_kotlin_stdlib_override(&binary, config_root.path()).expect("writes the override");
+
+        let script_path = kotlin_classpath_override_path(config_root.path());
+        let script = std::fs::read_to_string(&script_path).expect("script was written");
+        assert!(script.contains("kotlin-stdlib-2.1.0.jar"), "{script}");
+        assert!(!script.contains("kotlin-compiler"), "{script}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&script_path).unwrap().permissions().mode();
+            assert!(mode & 0o111 != 0, "the override script must be executable, got {mode:o}");
+        }
+    }
+
+    /// Regression: the whole point of the idempotency check is that a
+    /// session-start call that finds nothing changed must not re-`chmod`/
+    /// rewrite the file (relevant if a user's own tooling ever needs to
+    /// tweak it) — verified here by writing once, mutating the file's
+    /// content to something else, then calling again and confirming the
+    /// *second* call still rewrites back to the expected content (proving
+    /// the skip path is content-based, not "only ever runs once").
+    #[test]
+    fn ensure_kotlin_stdlib_override_is_idempotent_and_self_heals_if_the_script_changes() {
+        let install_dir = test_support::tempdir();
+        extract_zip(Server::KotlinLanguageServer.bundled_archive(), install_dir.path()).expect("extracts");
+        let binary = install_dir.path().join(Server::KotlinLanguageServer.launcher_path());
+        let config_root = test_support::tempdir();
+
+        ensure_kotlin_stdlib_override(&binary, config_root.path()).unwrap();
+        let script_path = kotlin_classpath_override_path(config_root.path());
+        let first = std::fs::read_to_string(&script_path).unwrap();
+
+        std::fs::write(&script_path, "echo tampered").unwrap();
+        ensure_kotlin_stdlib_override(&binary, config_root.path()).unwrap();
+        let second = std::fs::read_to_string(&script_path).unwrap();
+
+        assert_eq!(first, second);
+        assert_ne!(second, "echo tampered");
+    }
+
+    /// A `binary` that doesn't have the upstream `server/bin/…` shape (e.g.
+    /// a typo'd manual override in Settings > Language Servers…) must fail
+    /// the override cleanly rather than writing garbage or panicking on the
+    /// `Path::parent` chain.
+    #[test]
+    fn ensure_kotlin_stdlib_override_on_a_binary_with_no_lib_dir_sibling_is_an_error() {
+        let config_root = test_support::tempdir();
+        let error = ensure_kotlin_stdlib_override(Path::new("/kotlin-language-server"), config_root.path())
+            .expect_err("no lib/ next to a root-level binary");
+        assert!(error.contains("lib"), "{error}");
     }
 
     #[test]

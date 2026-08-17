@@ -1856,6 +1856,155 @@ completions against the freshly-*installed* (not just the pre-existing
 
 ---
 
+## Track 29 — Java-version-aware editing + new-project scaffolding
+
+**Phase 0 done (live-verified); Phases 1+ not started.** `jdt.ls` needs a
+JDK 21+ **host** runtime just to execute
+(`LspSettings::jdtls_java_home`/`resolve_jdtls_java`, `lsp_manager.rs` —
+already correct, unrelated to this track). Separately, Eclipse JDT's own
+compiler (`ecj`) can *target* any older Java language level regardless of
+the host JVM, the same way `javac --release 8` works fine under a JDK 21.
+Today FoxGarden sends jdt.ls no `java.configuration.*` settings at all
+(`lsp_state.rs`'s `initialize_params`), relying entirely on its own native
+Maven/Gradle project import — never live-verified in this codebase for
+anything beyond the default (Java 21) case (see TECHNICAL_DEBT.md #20).
+
+Two capabilities, both explicitly in scope: (1) open and correctly analyze
+an *existing* project targeting any Java level, and (2) create a *new*
+Java/Kotlin/Maven/Gradle project from FoxGarden's own UI, picking a target
+Java version. Actually compiling/running either kind of project is **not**
+in scope — that's Track 22 (Build/run/test integration, not started). This
+track ends with a project a real `mvn`/`gradle` on the user's own machine
+can build, analyzed by jdt.ls at the right language level.
+
+**Phase 0 — Live-verify jdt.ls's actual multi-version behavior (no code).
+Done — finding recorded below, confirmed via a real jdtls 1.60.0 process.**
+Method: a raw JSON-RPC probe (bypassing FoxGarden entirely, same technique
+TECHNICAL_DEBT.md #17/#18 already used) against the real vendored jdtls
+1.60.0, run under a JDK 21 (`~/.sdkman/candidates/java/21.0.12-zulu`,
+installed this session purely as an SDKMAN candidate — the shell default
+was left at the machine's own pre-existing 17 throughout), sending exactly
+what `lsp_state.rs`'s real `initialize_params` sends today (no
+`java.configuration.*` at all).
+
+- **Managed case (a real `pom.xml` with `<maven.compiler.release>8`
+  `</maven.compiler.release>`):** a fixture with a `record` (Java 16+) and
+  `var` (Java 10+) opened with zero client-side configuration got back
+  real `publishDiagnostics` correctly rejecting both — `"'record' is not a
+  valid type name; it is a restricted identifier and not allowed as a type
+  identifier in Java 1.8"`, plus `var`/`Point` reported unresolvable.
+  jdt.ls's own native Maven import already reads and enforces the
+  project's declared compliance level with **zero help needed** from this
+  client. Gradle's own Buildship-based import is the same well-established
+  mechanism (reading `sourceCompatibility`/toolchain instead of a POM
+  property) — not independently re-probed, low risk given how decisive the
+  Maven result was.
+- **Unmanaged case (the identical fixture, no `pom.xml`/`build.gradle` at
+  all):** the same `record`+`var` file opened with no build file present
+  produced **zero diagnostics** — jdt.ls's own "unmanaged folder" default
+  accepts both, i.e. it defaults to a modern compliance level (consistent
+  with the host JVM), not something a user can steer without help.
+
+**Finding:** outcome (a) for the managed case (confirmed, no speculation)
+— Phase 2 below is now scoped down accordingly: `MavenProject::
+java_release()` still lands (cheap, useful for UI/Phase 3), but the
+`java.configuration.runtimes` wiring is needed **only** for the genuinely
+narrower unmanaged/loose-file case, not for any project a scaffolded or
+opened pom.xml/build.gradle already describes.
+
+**Phase 1 — Registered JDKs inventory.** Both capabilities need "which
+JDKs exist on this machine," independent of Phase 0's outcome. New
+`crates/app/src/jdk.rs`: lift `java_command`/`java_major_version` out of
+`lsp_manager.rs` as `pub fn`s, add `pub fn detect_major_version(java_home:
+&str) -> Result<u32, String>` as `check_java`'s generic core (jdt.ls's own
+wording moves into a thin wrapper on top, `resolve_jdtls_java` unchanged
+from its caller's side). New `crates/app/src/jdk_registry.rs`:
+`RegisteredJdk { label, home, major_version }`, `JdkRegistry { jdks:
+Vec<RegisteredJdk> }` with `detect_and_add`/`closest_for(release: u32)` —
+a JDK install is a fact about the machine, not the project (same reasoning
+`jdtls_java_home` already rests on), so this is a global registry via
+`eframe::Storage`, not a per-project `.foxgarden/` file. New
+`crates/app/src/panels/jdk_registry.rs`: a flat settings form (add via
+folder picker + auto-detect, list with remove) under its own new
+"Settings > JDKs…" entry — deliberately separate from the Language Servers
+modal, since `jdtls_java_home` is "which JVM runs jdt.ls" (always 21+) and
+this is "which JDKs exist to target" (any version).
+**Checkpoint 1:** `cargo test --workspace` green (new `detect_and_add`/
+`closest_for` tests against fake `java_home` dirs, mirroring
+`lsp_manager.rs`'s own `java_major_version_reads_a_modern_jvm_banner`
+style); live-verify adding a real local JDK by folder path, confirming
+auto-detected version and persistence across an app restart.
+
+**Phase 2 — Capability A: correct analysis across Java levels.** Scoped to
+Phase 0's confirmed finding — the managed case needs no wiring at all.
+`crates/core/src/maven.rs` gains `MavenProject::java_release(&self) ->
+Option<u32>` (`release` → `target` → `source`, normalizing legacy `"1.8"`
+to `8`) — pure, cheap, useful for UI and Phase 3, not required for
+correctness (jdt.ls already gets this right on its own). `ServerKind::
+initialization_options`'s Java branch (`lsp_state.rs`) conditionally adds
+`java.configuration.runtimes` (one entry per registered JDK with a known
+version) **only** when the project has no `pom.xml`/`build.gradle(.kts)`
+at its root — the one case Phase 0 confirmed actually needs help.
+`SessionConfig` gains a `runtimes` snapshot field so the existing
+"config changed → retire and restart" logic (the same mechanism
+`java_home` already uses) picks up registry changes for free.
+**Checkpoint 2:** `cargo test --workspace` green; live-verify that
+pointing an unmanaged/loose file at a registered older JDK via
+`java.configuration.runtimes` actually changes what jdt.ls accepts there
+(Phase 0 already confirmed the *un*configured default is a modern level;
+this checkpoint confirms the override works, not just that the gap
+exists).
+
+**Phase 3 — Capability B, part 1: New Project wizard + Maven+Java.** New
+`crates/core/src/scaffold.rs` (pure generation, mirrors `gradle.rs::
+INIT_SCRIPT`'s "Rust string constant, values substituted in" shape):
+`ScaffoldSpec { group_id, artifact_id, java_release, build_tool, language
+}`, `scaffold_files(&ScaffoldSpec) -> Vec<(PathBuf, String)>`,
+`write_scaffold(project_root, files)` — refuses if `project_root` exists
+and is non-empty. Maven+Java output: `pom.xml` (a bare
+`<maven.compiler.release>` property, no compiler-plugin config needed),
+`src/main/java/<package path>/Main.java`, `.gitignore`. New
+`crates/core/src/project_config.rs`: per-project `ProjectConfig {
+java_release, jdk_home }` in `.foxgarden/project.json`, sibling of
+`run_config.rs`'s own `.foxgarden/run_configs.json` convention (same
+`#[serde(default)]`, malformed/missing → default not error). Written once
+at scaffold time; an existing project opened normally just has none, and
+Phase 2's logic falls back to `java_release()`/jdt.ls's native import. New
+`crates/app/src/panels/new_project.rs`: `NewProjectWizardState`, built on
+`widgets::modal::show_modal` (`run_configs.rs`'s own template — the right
+one here since this wizard has a real terminal "Create" action). On
+Create: `scaffold::write_scaffold` → `project_config::save_project_config`
+→ `EditorState::open_project` (the exact function "Open Folder…" already
+calls). `MenuBarOutcome` gains `open_new_project_wizard_request`; File
+menu gets "New Project…" right after "Open Folder…".
+**Checkpoint 3:** `cargo test --workspace` green (`scaffold_files` exact
+output per spec; `project_config.rs` round-trip tests mirroring
+`run_config.rs`'s own suite); live-verify: create a real Maven+Java
+project targeting Java 8 through the wizard, confirm the generated files,
+confirm a real `mvn -q compile` succeeds against it outside FoxGarden,
+confirm FoxGarden opens it and jdt.ls (Phase 2) treats it as Java 8.
+
+**Phase 4 — Capability B, part 2: Gradle (Kotlin DSL) + Java.**
+`scaffold.rs` gains `BuildTool::Gradle`: `settings.gradle.kts`,
+`build.gradle.kts` (`java { toolchain { languageVersion = ... } }`), same
+source/`.gitignore` shape. No Gradle wrapper generated (needs a real
+network fetch or vendoring — the same trade-off `lsp_manager.rs`'s own
+header already reasons through for jdt.ls, out of scope per this track's
+own non-goal) — stated explicitly in the wizard's help text, not silently.
+**Checkpoint 4:** `cargo test --workspace` green; live-verify: create a
+real Gradle+Java project targeting Java 17, confirm a real `gradle
+compileJava` (system Gradle) succeeds outside FoxGarden, confirm FoxGarden
+opens it and jdt.ls treats it as Java 17.
+
+**Phase 5 (stretch, optional) — Kotlin scaffolding.** Maven+Kotlin/
+Gradle+Kotlin added to `scaffold.rs`'s `ProjectLanguage` enum once Phases
+3-4 are solid. Explicitly deferrable: `kotlin-language-server` has two
+open, unresolved gaps (TECHNICAL_DEBT.md #17/#18) that make a fresh
+Kotlin project's actual in-app analysis experience uncertain regardless of
+how correct the generated skeleton is.
+
+---
+
 ## Build status (live)
 
 ### Moderate tier
@@ -1923,3 +2072,7 @@ completions against the freshly-*installed* (not just the pre-existing
       server installer (landed; jdtls builds from its GitHub repo rather
       than downloading an Eclipse milestone tarball — see that track for
       the deviation and its two open follow-ups)
+- [ ] Track 29 — Java-version-aware editing + new-project scaffolding
+      (Phase 0 live-verified: jdt.ls already enforces a Maven project's own
+      declared compliance level with zero client-side help; Phases 1+ not
+      started)

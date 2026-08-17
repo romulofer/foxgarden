@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
+use crate::jdk_registry::RegisteredJdk;
 use crate::widgets::editor::UserTemplate;
 use eframe::Storage as _;
 use std::collections::HashMap;
@@ -263,6 +264,13 @@ fn persisted_settings_round_trip() {
         kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
         kotlin_language_server_installed_version: "1.3.13".to_string(),
     };
+    let saved_jdk_registry = JdkRegistry {
+        jdks: vec![RegisteredJdk {
+            label: "Java 21".to_string(),
+            home: PathBuf::from("/usr/lib/jvm/java-21"),
+            major_version: Some(21),
+        }],
+    };
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -278,6 +286,7 @@ fn persisted_settings_round_trip() {
         &saved_tools,
         saved_auto_save,
         &saved_lsp,
+        &saved_jdk_registry,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -293,6 +302,7 @@ fn persisted_settings_round_trip() {
     let mut external_tool_paths = ExternalToolPaths::default();
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
+    let mut jdk_registry = JdkRegistry::default();
     restore_settings(
         &storage,
         &mut editor_font,
@@ -308,6 +318,7 @@ fn persisted_settings_round_trip() {
         &mut external_tool_paths,
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut jdk_registry,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -332,6 +343,7 @@ fn persisted_settings_round_trip() {
     assert_eq!(external_tool_paths.spotbugs_installed_version, saved_tools.spotbugs_installed_version);
     assert_eq!(auto_save_settings, saved_auto_save);
     assert_eq!(lsp_settings, saved_lsp);
+    assert_eq!(jdk_registry, saved_jdk_registry);
 }
 
 #[test]
@@ -364,6 +376,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut JdkRegistry::default(),
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -407,6 +420,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut JdkRegistry::default(),
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -443,6 +457,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut JdkRegistry::default(),
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);
@@ -623,6 +638,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut JdkRegistry::default(),
     );
 
     assert_eq!(auto_save_settings.idle_seconds, AutoSaveSettings::default().idle_seconds);
@@ -663,6 +679,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
         &mut lsp_settings,
+        &mut JdkRegistry::default(),
     );
 
     assert_eq!(auto_save_settings.mode, AutoSaveMode::OnFocusLoss);

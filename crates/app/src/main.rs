@@ -1,6 +1,8 @@
 mod app;
 mod auto_save;
 mod file_watch;
+mod jdk;
+mod jdk_registry;
 mod lsp_client;
 mod lsp_manager;
 mod lsp_settings;

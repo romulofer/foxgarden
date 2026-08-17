@@ -1272,6 +1272,7 @@ dependencies = [
  "portable-pty",
  "rfd",
  "ropey",
+ "serde",
  "serde_json",
  "similar",
  "syntax",

@@ -40,7 +40,7 @@ rewritten or removed, not blindly executed.
 | 19 | `[RESOLVED]` | `LspSession`'s synchronous stdin write could freeze the whole editor if the server stalled reading its own stdin |
 | 18 | `[OPEN]` | Track 20 Phase 5 (LSP completion) real-server verification succeeded raw-protocol but was inconclusive in the actual GUI for Kotlin |
 | 17 | `[OPEN]` | The locally available `kotlin-language-server` build is version-mismatched against this machine's system Kotlin SDK, producing false-positive diagnostics on any valid Kotlin file |
-| 16 | `[OPEN]` | Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other |
+| 16 | `[RESOLVED]` | Two `pty_session` tests raced on the process-wide `SHELL` env var and intermittently failed each other |
 | 15 | `[OPEN]` | Spring endpoint map jump-to-handler doesn't land the cursor correctly |
 | 3 | `[OPEN]` | Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here |
 | 9 | `[OPEN]` | Cross-class dot-completion offers a field regardless of its visibility, unlike methods — Java and Kotlin both |
@@ -288,85 +288,6 @@ otherwise-correct code again.
 
 ---
 
-## 16. [OPEN] Two `pty_session` tests race on the process-wide `SHELL` env var and intermittently fail each other
-
-**Where:** `crates/app/src/pty_session.rs` (`tests::
-shell_command_falls_back_to_bin_sh_when_shell_unset`, `tests::
-shell_command_uses_shell_env_var_when_set`).
-
-**Status:** Open. Found by chance while running `cargo test --workspace`
-repeatedly as a checkpoint for unrelated work (Track 5's static-analysis
-tools) — not caused by that work, `pty_session.rs` was never touched. Each
-of several consecutive full-suite runs had either 0 or exactly 1 failure,
-always one of these same two tests, confirming a race rather than a real
-regression (isolating either test with `cargo test <name>` alone, no
-`--test-threads=1` needed, always passes).
-
-### What was found
-
-```rust
-#[test]
-#[cfg(not(windows))]
-fn shell_command_falls_back_to_bin_sh_when_shell_unset() {
-    // SAFETY: test-only, single-threaded within this process's own env
-    // mutation; no other test in this crate reads/writes `SHELL`.
-    unsafe { std::env::remove_var("SHELL"); }
-    assert_eq!(shell_command().get_argv()[0], std::ffi::OsString::from("/bin/sh"));
-}
-
-#[test]
-#[cfg(not(windows))]
-fn shell_command_uses_shell_env_var_when_set() {
-    // SAFETY: see above.
-    unsafe { std::env::set_var("SHELL", "/bin/definitely-not-a-real-shell"); }
-    assert_eq!(/* ... reads it back via shell_command() ... */);
-    // (a third statement further down removes SHELL again as cleanup)
-}
-```
-
-Both tests' own `SAFETY` comments assert "no other test in this crate
-reads/writes `SHELL`" — false as of this pair: they're the only two, but
-they mutate the *same* process-wide `SHELL` variable as each other, and
-Rust's default test harness runs tests concurrently on separate threads
-within one process (`std::env::set_var`/`remove_var` have been `unsafe`
-since Rust 2024 for exactly this reason — see each function's own current
-docs). Interleaving `shell_command_falls_back_to_bin_sh_when_shell_unset`'s
-`remove_var` between the other test's `set_var` and its own read-back (or
-vice versa) makes either assertion see the wrong state and fail — which
-one fails depends on scheduling, matching what was actually observed
-(never both, never predictably the same one).
-
-### Why it wasn't fixed on the spot
-
-Unrelated to the work in progress when found (`pty_session.rs` wasn't
-touched this session), and a real fix needs a decision on shape (see
-below) rather than a one-line change — recording it per this file's own
-purpose rather than a drive-by fix mid a different track.
-
-### Proposed fix
-
-Either:
-- Merge both into one `#[test]` function that does remove-then-assert,
-  then set-then-assert, in sequence — the two assertions were already
-  closely related (both just check `shell_command`'s `SHELL` handling),
-  and a single test can't race against itself.
-- Or keep them separate but serialize this file's env-mutating tests
-  specifically (a lightweight `static ENV_LOCK: std::sync::Mutex<()>`
-  each test locks for its duration) rather than forcing the whole suite
-  to `--test-threads=1`, which would slow down every other, unrelated
-  test in the workspace for one file's problem.
-
-Either way, fix the `SAFETY` comments' now-disproven "no other test
-touches this" claim once the real fix lands, so it doesn't mislead a
-future reader the way it did here.
-
-### Trigger condition
-
-Next time `pty_session.rs`'s tests are touched for an unrelated reason, or
-this flakiness causes a real CI failure (not just an occasional local
-`cargo test --workspace` re-run) worth chasing on its own.
-
----
 
 ## 3. [OPEN] Kotlin's reference `highlights.scm` targets a different grammar than the one vendored here
 
@@ -1011,6 +932,79 @@ N/A — fixed. Kept as historical record per this file's own convention, in
 case a similar synchronous-I/O-on-the-UI-thread shape resurfaces
 elsewhere (e.g. a future debug-adapter or build-tool integration that
 also shells out to a long-lived child process).
+
+---
+
+## 16. [RESOLVED] ~~Two `pty_session` tests raced on the process-wide `SHELL` env var and intermittently failed each other~~
+
+**Where:** `crates/app/src/pty_session.rs` (`tests::
+shell_command_falls_back_to_bin_sh_when_shell_unset`, `tests::
+shell_command_uses_shell_env_var_when_set`).
+
+**Status:** Fixed. Found by chance while running `cargo test --workspace`
+repeatedly as a checkpoint for unrelated work (Track 5's static-analysis
+tools) — not caused by that work, `pty_session.rs` wasn't touched at the
+time. Each of several consecutive full-suite runs had either 0 or exactly
+1 failure, always one of these same two tests, confirming a race rather
+than a real regression (isolating either test with `cargo test <name>`
+alone, no `--test-threads=1` needed, always passed).
+
+### What was found
+
+```rust
+#[test]
+#[cfg(not(windows))]
+fn shell_command_falls_back_to_bin_sh_when_shell_unset() {
+    // SAFETY: test-only, single-threaded within this process's own env
+    // mutation; no other test in this crate reads/writes `SHELL`.
+    unsafe { std::env::remove_var("SHELL"); }
+    assert_eq!(shell_command().get_argv()[0], std::ffi::OsString::from("/bin/sh"));
+}
+
+#[test]
+#[cfg(not(windows))]
+fn shell_command_uses_shell_env_var_when_set() {
+    // SAFETY: see above.
+    unsafe { std::env::set_var("SHELL", "/bin/definitely-not-a-real-shell"); }
+    assert_eq!(/* ... reads it back via shell_command() ... */);
+    // (a third statement further down removes SHELL again as cleanup)
+}
+```
+
+Both tests' own `SAFETY` comments assert "no other test in this crate
+reads/writes `SHELL`" — false as of this pair: they're the only two, but
+they mutate the *same* process-wide `SHELL` variable as each other, and
+Rust's default test harness runs tests concurrently on separate threads
+within one process (`std::env::set_var`/`remove_var` have been `unsafe`
+since Rust 2024 for exactly this reason — see each function's own current
+docs). Interleaving `shell_command_falls_back_to_bin_sh_when_shell_unset`'s
+`remove_var` between the other test's `set_var` and its own read-back (or
+vice versa) makes either assertion see the wrong state and fail — which
+one fails depends on scheduling, matching what was actually observed
+(never both, never predictably the same one).
+
+### Why it wasn't fixed on the spot
+
+Unrelated to the work in progress when found (`pty_session.rs` wasn't
+touched this session), and a real fix needed a decision on shape rather
+than a one-line change — recorded here per this file's own purpose rather
+than a drive-by fix mid a different track, then closed out in a later
+session.
+
+### What was done
+
+Merged the two tests into one (`shell_command_reflects_the_shell_env_var_
+with_a_bin_sh_fallback`, `crates/app/src/pty_session.rs:198`): remove-then-
+assert followed by set-then-assert, sequential in a single `#[test]`, so
+there's no second thread left to race against. The `SAFETY` comments were
+rewritten to say why it's actually safe now (sequential within the one
+test) instead of repeating the disproven "no other test touches this"
+claim.
+
+### Trigger condition
+
+N/A — fixed. Kept as historical record per this file's own convention, in
+case a similar env-var-mutating-test-pair shape resurfaces elsewhere.
 
 ---
 

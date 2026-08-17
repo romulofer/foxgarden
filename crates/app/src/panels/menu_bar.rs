@@ -49,6 +49,11 @@ pub struct MenuBarOutcome {
     pub open_run_configs_request: bool,
     pub fold_all_request: bool,
     pub expand_all_request: bool,
+    /// Settings > JDKs… — opens `panels::jdk_registry`'s dialog (`PLAN.md`
+    /// Track 29 Phase 1). Deliberately separate from Language Servers…:
+    /// `LspSettings::jdtls_java_home` is "which JVM runs jdt.ls itself"
+    /// (always 21+), this is "which JDKs exist to *target*" (any version).
+    pub open_jdk_registry_settings_request: bool,
     /// Settings > External Tools… — opens `static_analysis::
     /// StaticAnalysisState`'s dialog, which lives on `FoxGardenApp` rather
     /// than `MenuBarState`, same "the feature's own state, not menu_bar's"
@@ -220,6 +225,10 @@ pub fn show(
             });
             if ui.button("Language Servers…").clicked() {
                 outcome.open_lsp_servers_settings_request = true;
+                ui.close();
+            }
+            if ui.button("JDKs…").clicked() {
+                outcome.open_jdk_registry_settings_request = true;
                 ui.close();
             }
             if ui.button("External Tools…").clicked() {

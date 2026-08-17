@@ -568,7 +568,15 @@ fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSessi
             let java = lsp_manager::resolve_jdtls_java(&config.java_home)?;
             vec!["--java-executable".to_string(), java.display().to_string()]
         }
-        ServerKind::Kotlin => Vec::new(),
+        ServerKind::Kotlin => {
+            // See `lsp_manager::ensure_kotlin_stdlib_override_for`'s own doc
+            // comment (TECHNICAL_DEBT.md #17) — pins kotlin-language-server
+            // to a version-matched stdlib regardless of what's on `PATH`,
+            // best-effort so a failure here never blocks starting the
+            // session itself.
+            lsp_manager::ensure_kotlin_stdlib_override_for(&config.binary);
+            Vec::new()
+        }
     };
     let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root))
         .map_err(|error| format!("failed to start {} at {}: {error}", kind.name(), config.binary.display()))?;

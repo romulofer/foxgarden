@@ -19,6 +19,8 @@ use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_endpoints::{self, SpringEndpointsState};
 use crate::panels::spring_config::SpringConfigState;
+use crate::jdk_registry::JdkRegistry;
+use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
 use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::tabs;
@@ -87,6 +89,7 @@ const LSP_JDTLS_INSTALLED_VERSION_KEY: &str = "lsp_jdtls_installed_version";
 const LSP_JDTLS_JAVA_HOME_KEY: &str = "lsp_jdtls_java_home";
 const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
 const LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY: &str = "lsp_kotlin_language_server_installed_version";
+const JDK_REGISTRY_KEY: &str = "jdk_registry";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -288,6 +291,14 @@ pub struct FoxGardenApp {
     /// through `lsp_settings`, and a job in flight at shutdown is simply
     /// gone, not resumed.
     lsp_servers: LspServersState,
+    /// Machine-wide inventory of registered JDKs (`PLAN.md` Track 29,
+    /// Phase 1) — persisted (a JDK install is a fact about the machine,
+    /// same as `lsp_settings` above), edited through Settings > JDKs… via
+    /// `jdk_registry_ui`.
+    jdk_registry: JdkRegistry,
+    /// Settings > JDKs… — the dialog that edits `jdk_registry` above.
+    /// Runtime-only, same reasoning as `lsp_servers` above.
+    jdk_registry_ui: JdkRegistryState,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
     /// runtime-only, never persisted (there's nothing meaningful to resume
     /// across a restart: `was_focused` starts however the OS hands focus to
@@ -739,6 +750,7 @@ fn restore_settings(
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
     lsp_settings: &mut LspSettings,
+    jdk_registry: &mut JdkRegistry,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -862,6 +874,9 @@ fn restore_settings(
     if let Some(version) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY) {
         lsp_settings.kotlin_language_server_installed_version = version;
     }
+    if let Some(saved) = storage.get_string(JDK_REGISTRY_KEY) {
+        *jdk_registry = JdkRegistry::from_json(&saved);
+    }
 }
 
 /// Inverse of `restore_settings`.
@@ -884,6 +899,7 @@ fn persist_settings(
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
     lsp_settings: &LspSettings,
+    jdk_registry: &JdkRegistry,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -940,6 +956,7 @@ fn persist_settings(
         LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,
         lsp_settings.kotlin_language_server_installed_version.clone(),
     );
+    storage.set_string(JDK_REGISTRY_KEY, jdk_registry.to_json());
 }
 
 impl FoxGardenApp {
@@ -960,6 +977,7 @@ impl FoxGardenApp {
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
         let mut lsp_settings = LspSettings::default();
+        let mut jdk_registry = JdkRegistry::default();
 
         if let Some(storage) = cc.storage {
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
@@ -978,6 +996,7 @@ impl FoxGardenApp {
                 &mut external_tool_paths,
                 &mut auto_save_settings,
                 &mut lsp_settings,
+                &mut jdk_registry,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -1029,6 +1048,8 @@ impl FoxGardenApp {
             lsp_settings,
             lsp: LspState::default(),
             lsp_servers: LspServersState::default(),
+            jdk_registry,
+            jdk_registry_ui: JdkRegistryState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
         };
@@ -1310,6 +1331,9 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.open_lsp_servers_settings_request {
             self.lsp_servers.open_settings();
         }
+        if menu_outcome.open_jdk_registry_settings_request {
+            self.jdk_registry_ui.open_settings();
+        }
         if menu_outcome.run_checkstyle_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
@@ -1484,6 +1508,7 @@ impl eframe::App for FoxGardenApp {
         }
         static_analysis::show_settings(ui, &mut self.static_analysis, &mut self.external_tool_paths);
         lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
+        jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
 
         show_error_modal(ui, &mut self.last_error);
     }
@@ -1505,6 +1530,7 @@ impl eframe::App for FoxGardenApp {
             &self.external_tool_paths,
             self.auto_save_settings,
             &self.lsp_settings,
+            &self.jdk_registry,
         );
     }
 }
