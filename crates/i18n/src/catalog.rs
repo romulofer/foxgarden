@@ -83,6 +83,7 @@ pub struct Menu {
     pub run: &'static str,
     pub edit_configurations: &'static str,
     pub build: &'static str,
+    pub run_project: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
@@ -293,6 +294,7 @@ pub struct Errors {
     pub checkstyle_not_configured: &'static str,
     pub pmd_not_configured: &'static str,
     pub no_build_tool_detected: &'static str,
+    pub no_run_config: &'static str,
     pub rename_empty_name: &'static str,
     pub rename_no_parent: &'static str,
 }
@@ -326,6 +328,13 @@ pub struct Common {
     /// words — same "one string, so the two can't drift apart" shape as
     /// `running_checkstyle`/`running_pmd`.
     pub running_build: &'static str,
+    pub running_run: &'static str,
+    /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
+    /// generic enough verb to belong here rather than under `Menu`/
+    /// `RunConfigs`, matching this struct's own "shared by more than one
+    /// area" purpose (a future Docker/debugger Stop control would reuse it
+    /// too, per `PLAN.md` Tracks 14/23's own similar wording).
+    pub stop: &'static str,
 }
 
 /// Brazilian Portuguese — the primary language.
@@ -377,6 +386,7 @@ pub const PT_BR: Strings = Strings {
         run: "Executar",
         edit_configurations: "Editar Configurações…",
         build: "Compilar",
+        run_project: "Executar Projeto",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
@@ -558,6 +568,7 @@ pub const PT_BR: Strings = Strings {
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
         checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
+        no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
         pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
         rename_empty_name: "falha ao renomear: nome vazio",
         rename_no_parent: "falha ao renomear: sem diretório pai",
@@ -583,6 +594,8 @@ pub const PT_BR: Strings = Strings {
         running_checkstyle: "Executando Checkstyle…",
         running_pmd: "Executando PMD…",
         running_build: "Compilando…",
+        running_run: "Executando…",
+        stop: "Parar",
     },
 };
 
@@ -635,6 +648,7 @@ pub const EN_US: Strings = Strings {
         run: "Run",
         edit_configurations: "Edit Configurations…",
         build: "Build",
+        run_project: "Run Project",
 
         view: "View",
         zen_mode: "Zen Mode",
@@ -816,6 +830,7 @@ pub const EN_US: Strings = Strings {
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
         checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
+        no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
         pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
         rename_empty_name: "rename failed: empty name",
         rename_no_parent: "rename failed: no parent directory",
@@ -841,5 +856,7 @@ pub const EN_US: Strings = Strings {
         running_checkstyle: "Running Checkstyle…",
         running_pmd: "Running PMD…",
         running_build: "Building…",
+        running_run: "Running…",
+        stop: "Stop",
     },
 };

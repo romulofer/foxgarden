@@ -73,6 +73,8 @@ pub struct MenuBarOutcome {
     pub run_pmd_request: bool,
     /// Run > Build (`PLAN.md` Track 22 Phase 1).
     pub build_request: bool,
+    /// Run > Run Project (`PLAN.md` Track 22 Phase 2).
+    pub run_project_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -112,6 +114,7 @@ pub fn show(
     checkstyle_running: bool,
     pmd_running: bool,
     build_running: bool,
+    run_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -426,12 +429,22 @@ pub fn show(
             }
             if ui
                 .add_enabled(
-                    state.project.is_some() && !build_running,
+                    state.project.is_some() && !build_running && !run_running,
                     egui::Button::new(if build_running { t().common.running_build } else { t().menu.build }),
                 )
                 .clicked()
             {
                 outcome.build_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !build_running && !run_running,
+                    egui::Button::new(if run_running { t().common.running_run } else { t().menu.run_project }),
+                )
+                .clicked()
+            {
+                outcome.run_project_request = true;
                 ui.close();
             }
         });

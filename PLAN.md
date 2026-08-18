@@ -1313,9 +1313,42 @@ class/application task (`mvn exec:java`/`gradle run` shape, reusing
 `RunConfig`), streaming to the same output panel; a Stop control kills the
 running process.
 
-**Checkpoint 2:** full suite green; live-verify running a real project's
-`main` prints real output live, and Stop actually terminates the process
-(not just detaches from it).
+**Checkpoint 2:** done — deliberately **not** `mvn exec:java`/`gradle run`
+(this phase's own literal text above): `gradle run` only exists when the
+target project applies Gradle's own `application` plugin, which an
+arbitrary real project — including this app's own scaffolded Gradle
+template, Track 29 Phase 4 — has no guarantee of declaring. `fg_core::run`
+(`run_command`) instead launches `java` directly against Track 21's own
+already-resolved classpath (`maven_classpath`/`gradle_classpaths`),
+prefixed with the tool's own default compiled-classes output directory
+(`target/classes`/`build/classes/java/main`) — the same thing every
+mainstream IDE's own "Run" already does under the hood, verified live end
+to end (a real dependency on the classpath, `System.getenv`/`args` both
+read correctly by the launched program) rather than assumed. `crates/app/
+src/panels/build_panel.rs`'s `BuildState` (Phase 1's own single-shot
+design) gained a `Stage` enum so Run's "compile, then — only on success —
+launch" chains onto the *same* streamed process machinery Build already
+uses, both stages appending to one continuous log; `Stop` needed a live
+handle to whichever child is currently running, which Phase 1's original
+"the completion thread owns the `Child` outright" shape didn't keep
+around at all — `child` is now `Arc<Mutex<Option<Child>>>`, shared with
+that thread (which locks it to call `wait()`), so `stop()` can reach in
+and kill it from the UI thread at any time. Run > Run Project always uses
+the *first* saved `RunConfig` for the project, not a user-picked one — a
+deliberate scope limit (a real config-picker dropdown is a natural
+follow-up, not what this checkpoint asked for).
+
+Live-verified end to end (screenshots, not just described), same isolated-
+profile `xdotool` approach Phase 1's own checkpoint used: a real two-
+dependency Maven project's `Run Project` streamed `mvn -B compile`'s own
+live output, then chained straight into the launched program's own output
+(`MY_ENV=hello from run config`, `arg: foo`, `arg: bar`, then a real
+`Thread.sleep`-paced `tick 1`/`tick 2`/... arriving roughly once a second,
+proving genuine live streaming rather than a buffered dump at the end).
+Stop clicked mid-run: output froze at `tick 3` and never resumed, the
+"Parar" button disappeared (Rust-side confirmation the process transitioned
+out of "running"), and no further ticks appeared even several seconds
+later — a real kill, not a detach that would have kept ticking invisibly.
 
 **Phase 3 — Test.** A Test action invokes the project's test task (`mvn
 test`/`gradle test` shape), parsing the tool's own test-report output
@@ -1783,9 +1816,12 @@ how correct the generated skeleton is.
       for both build tools verified end-to-end against real, resolvable
       projects with real jars landing on disk. Unblocks Track 12, Track
       20's classpath feed, and Track 27.)
-- [ ] Track 22 — Build/run/test integration (Phase 1/Build shipped and
-      live-verified — real `mvn`/`gradle` compile streamed live with
-      clickable error rows; Phases 2/3 — Run, Test — not started)
+- [ ] Track 22 — Build/run/test integration (Phase 1/Build and Phase 2/Run
+      both shipped and live-verified — real `mvn`/`gradle` compile streamed
+      live with clickable error rows; Run chains a real `java` launch
+      (direct classpath, not `mvn exec:java`/`gradle run`) after a
+      successful compile, with a working Stop that genuinely kills the
+      process; Phase 3 — Test — not started)
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-

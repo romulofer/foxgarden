@@ -1352,7 +1352,8 @@ impl eframe::App for FoxGardenApp {
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
                         self.static_analysis.pmd_running(),
-                        self.build_state.running(),
+                        self.build_state.is_build_running(),
+                        self.build_state.is_run_running(),
                     )
                 })
                 .inner;
@@ -1512,9 +1513,31 @@ impl eframe::App for FoxGardenApp {
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
             match fg_core::detect_build_tool(&root) {
-                Some(tool) => match self.build_state.start(&root, tool) {
+                Some(tool) => match self.build_state.start_build(&root, tool) {
                     Ok(()) => self.build_panel_visible = true,
                     Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                },
+                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+            }
+        }
+
+        // The first saved `RunConfig`, not a user-picked one — `PLAN.md`
+        // Track 22 Phase 2's own deliberate scope limit; a real config
+        // *picker* (a dropdown next to Run, the way every mainstream IDE
+        // has one) is a natural follow-up but isn't what this checkpoint
+        // asks for, and `RunConfigsDialogState`'s own `selected` field only
+        // exists while that dialog is open, not as a durable "active"
+        // choice to read here instead.
+        if menu_outcome.run_project_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            match fg_core::detect_build_tool(&root) {
+                Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
+                    Some(config) => match self.build_state.start_run(&root, tool, config) {
+                        Ok(()) => self.build_panel_visible = true,
+                        Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                    },
+                    None => self.last_error = Some(t().errors.no_run_config.to_string()),
                 },
                 None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
             }
