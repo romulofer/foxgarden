@@ -1354,6 +1354,7 @@ impl eframe::App for FoxGardenApp {
                         self.static_analysis.pmd_running(),
                         self.build_state.is_build_running(),
                         self.build_state.is_run_running(),
+                        self.build_state.is_test_running(),
                     )
                 })
                 .inner;
@@ -1484,11 +1485,7 @@ impl eframe::App for FoxGardenApp {
                 path.clone(),
             );
             if let Some(doc) = self.state.open_tabs.iter().find(|d| d.path() == path.as_path()) {
-                let line_idx = (line.saturating_sub(1)).min(doc.buffer.len_lines().saturating_sub(1));
-                let line_start_char = doc.buffer.line_to_char(line_idx);
-                let line_len_chars = doc.buffer.line(line_idx).len_chars();
-                let char_idx = line_start_char + (column.saturating_sub(1)).min(line_len_chars);
-                let byte = doc.buffer.char_to_byte(char_idx);
+                let byte = fg_core::line_col_to_byte(&doc.buffer, line, Some(column));
                 self.pending_navigation = Some((path, byte));
             }
         }
@@ -1538,6 +1535,18 @@ impl eframe::App for FoxGardenApp {
                         Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
                     },
                     None => self.last_error = Some(t().errors.no_run_config.to_string()),
+                },
+                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+            }
+        }
+
+        if menu_outcome.run_tests_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            match fg_core::detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start_test(&root, tool) {
+                    Ok(()) => self.build_panel_visible = true,
+                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
                 },
                 None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
             }

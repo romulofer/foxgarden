@@ -17,6 +17,7 @@ mod scaffold;
 mod spring_config_metadata;
 mod static_analysis;
 mod status;
+mod test_report;
 
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
@@ -45,8 +46,12 @@ pub use scaffold::{BuildTool, ProjectLanguage, ScaffoldSpec, scaffold_files, wri
 pub use spring_config_metadata::{
     SpringConfigProperty, parse_metadata_json, scan_classpath_for_metadata, scan_jar_for_metadata,
 };
-pub use static_analysis::{StaticAnalysisError, checkstyle_diagnostics, pmd_diagnostics};
+pub use static_analysis::{StaticAnalysisError, checkstyle_diagnostics, line_col_to_byte, pmd_diagnostics};
 pub use status::{
     GitCommandError, GitStatusError, StatusEntry, git_add, git_apply_cached, git_commit, git_push, git_reset_paths,
     git_status, git_user_first_name,
+};
+pub use test_report::{
+    TestCase, TestOutcome, TestSummary, failure_line, parse_junit_xml, scan_test_reports, summarize, test_command,
+    test_source_file,
 };

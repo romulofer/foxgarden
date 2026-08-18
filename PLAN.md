@@ -1358,11 +1358,63 @@ integration already established) into a pass/fail summary; a failing
 test's entry jumps to its source location the same way a build error's
 does.
 
-**Checkpoint 3:** full suite green (a fixture Surefire/Gradle test-report
-XML parsed into expected pass/fail counts, headless); live-verify running
-a real project's test suite (including at least one deliberately failing
-test) shows an accurate pass/fail summary and a failing test's entry jumps
-to the right line.
+**Checkpoint 3:** done — `fg_core::test_report` (`parse_junit_xml`) reads
+either tool's own report with the same code: compared side by side against
+real `mvn -B test`/`gradle --console=plain test` runs (a two-test JUnit 5
+fixture, one deliberately failing), Maven's `target/surefire-reports/
+TEST-<FQCN>.xml` and Gradle's `build/test-results/test/TEST-<FQCN>.xml`
+turned out to be the *same* JUnit-XML schema at the structural level both
+tools happen to have converged on, not two formats needing two parsers.
+Two real, found-not-assumed differences handled: Maven wraps a `<failure>`/
+`<error>`'s own text in `<![CDATA[...]]>`, Gradle's is plain element text —
+`quick_xml` surfaces these as `Event::CData` vs. `Event::Text`, both read
+into the same `detail` field; Gradle's own `<testcase name="...">` keeps
+JUnit 5's `()` suffix on a parameterless test method's name, Maven's
+strips it — `parse_junit_xml` strips a trailing `"()"` unconditionally so
+a case's `name` reads identically regardless of which tool produced the
+report. `test_command` is `mvn -B test`/`gradle --console=plain test`
+directly (unlike Run, no separate compile step to chain — both tools'
+`test` task/phase already compiles everything it needs on its own).
+
+Jump-to-location doesn't come from the XML report itself (a JUnit report
+carries no file/line, only `classname`/`name`) — `test_source_file` maps
+`classname` onto the standard `src/test/java/<package/path>/<ClassName>.
+java` layout both tools' own scaffolding already assumes (a `None` for a
+nonstandard layout just means no click-to-jump for that one row, not a
+failure), and `failure_line` searches the failure/error's own captured
+stack trace text for the first frame naming that class's own simple name
+(`"(CalcTest.java:14)"` in `... at com.example.CalcTest.addIsBroken
+(CalcTest.java:14)"` — the *first* such frame, since every frame above it
+belongs to the assertion framework's own internals, not the test itself;
+verified against both tools' real traces, which turned out to share this
+exact frame shape since both come from the same JUnit 5 assertion
+machinery regardless of which build tool ran it).
+
+`crates/app/src/panels/build_panel.rs`'s `Stage` enum gained a `Test`
+variant: `start_test` spawns `test_command` through the exact same
+streamed-process machinery Build/Run already established, and its own
+`Finished` handling (`append_test_summary`) scans the report and appends a
+plain summary line plus one clickable row per failing/errored test —
+reusing `BuildProblem`/`BuildRow` unchanged rather than growing a second,
+parallel row type just for this (`column: 1`, the same convention Gradle's
+own column-less compiler errors already established in Phase 1). This also
+meant `app.rs`'s click handler — previously Build/Run-only — now serves
+Test's own rows for free, no new plumbing needed there at all. One
+incidental cleanup made in passing: that click handler's line/column-to-
+byte-offset conversion was hand-rolled `ropey` calls with no CRLF handling;
+`static_analysis::line_col_to_byte` (Checkstyle/PMD's own existing helper,
+which does handle CRLF) is now exported and reused there instead, for both
+Build/Run's and Test's own click-to-jump alike.
+
+Live-verified end to end (screenshots, same isolated-profile `xdotool`
+approach the earlier two checkpoints used): a real two-test Maven project
+(one passing, one deliberately failing) — Run > Run Tests streamed real
+`mvn -B test` output, then appended `Tests: 2 total, 1 passed, 1 failed, 0
+errored, 0 skipped` and a red `FAILED  com.example.CalcTest.addIsBroken`
+row; clicking it opened `CalcTest.java` with the caret landing exactly on
+line 14, the failing `assertEquals` call itself.
+
+**Track 22 — Build/run/test integration — all three phases done.**
 
 ---
 
@@ -1816,12 +1868,15 @@ how correct the generated skeleton is.
       for both build tools verified end-to-end against real, resolvable
       projects with real jars landing on disk. Unblocks Track 12, Track
       20's classpath feed, and Track 27.)
-- [ ] Track 22 — Build/run/test integration (Phase 1/Build and Phase 2/Run
-      both shipped and live-verified — real `mvn`/`gradle` compile streamed
-      live with clickable error rows; Run chains a real `java` launch
-      (direct classpath, not `mvn exec:java`/`gradle run`) after a
-      successful compile, with a working Stop that genuinely kills the
-      process; Phase 3 — Test — not started)
+- [x] Track 22 — Build/run/test integration (all 3 phases shipped and
+      live-verified — real `mvn`/`gradle` compile streamed live with
+      clickable error rows; Run chains a real `java` launch (direct
+      classpath, not `mvn exec:java`/`gradle run`) after a successful
+      compile, with a working Stop that genuinely kills the process; Test
+      parses either tool's own JUnit-XML report — the same schema for
+      both, verified side by side — into a pass/fail summary with a
+      clickable row per failing test, jumping to the exact assertion line
+      via its own stack trace)
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-

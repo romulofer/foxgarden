@@ -84,6 +84,7 @@ pub struct Menu {
     pub edit_configurations: &'static str,
     pub build: &'static str,
     pub run_project: &'static str,
+    pub run_tests: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
@@ -329,6 +330,7 @@ pub struct Common {
     /// `running_checkstyle`/`running_pmd`.
     pub running_build: &'static str,
     pub running_run: &'static str,
+    pub running_tests: &'static str,
     /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
     /// generic enough verb to belong here rather than under `Menu`/
     /// `RunConfigs`, matching this struct's own "shared by more than one
@@ -387,6 +389,7 @@ pub const PT_BR: Strings = Strings {
         edit_configurations: "Editar Configurações…",
         build: "Compilar",
         run_project: "Executar Projeto",
+        run_tests: "Executar Testes",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
@@ -595,6 +598,7 @@ pub const PT_BR: Strings = Strings {
         running_pmd: "Executando PMD…",
         running_build: "Compilando…",
         running_run: "Executando…",
+        running_tests: "Executando Testes…",
         stop: "Parar",
     },
 };
@@ -649,6 +653,7 @@ pub const EN_US: Strings = Strings {
         edit_configurations: "Edit Configurations…",
         build: "Build",
         run_project: "Run Project",
+        run_tests: "Run Tests",
 
         view: "View",
         zen_mode: "Zen Mode",
@@ -857,6 +862,7 @@ pub const EN_US: Strings = Strings {
         running_pmd: "Running PMD…",
         running_build: "Building…",
         running_run: "Running…",
+        running_tests: "Running Tests…",
         stop: "Stop",
     },
 };

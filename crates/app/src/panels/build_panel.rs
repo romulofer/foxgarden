@@ -62,7 +62,12 @@ enum BuildEvent {
 /// What the currently in-flight process (if any) is for. `Build` stops
 /// after that one command; `RunCompiling` chains a second `java` launch
 /// once the compile it's currently streaming succeeds, transitioning to
-/// `RunLaunched` for that second process.
+/// `RunLaunched` for that second process. `Test` also stops after one
+/// command (`mvn test`/`gradle test` already compile everything they need
+/// on their own, unlike Run's separate `java` launch) but its own
+/// `Finished` handling additionally scans and summarizes the tool's own
+/// JUnit-XML report once the process exits, appending that summary (and a
+/// clickable row per failing test) to the same log.
 enum Stage {
     Build,
     RunCompiling {
@@ -71,6 +76,10 @@ enum Stage {
         config: RunConfig,
     },
     RunLaunched,
+    Test {
+        project_root: PathBuf,
+        tool: BuildTool,
+    },
 }
 
 #[derive(Default)]
@@ -99,6 +108,10 @@ impl BuildState {
         self.running() && matches!(self.stage, Some(Stage::RunCompiling { .. }) | Some(Stage::RunLaunched))
     }
 
+    pub fn is_test_running(&self) -> bool {
+        self.running() && matches!(self.stage, Some(Stage::Test { .. }))
+    }
+
     /// Starts a plain Build: the project's own compile command, stopping
     /// once it finishes either way.
     pub fn start_build(&mut self, project_root: &Path, tool: BuildTool) -> std::io::Result<()> {
@@ -122,6 +135,23 @@ impl BuildState {
             project_root: project_root.to_path_buf(),
             tool,
             config,
+        });
+        Ok(())
+    }
+
+    /// Starts a Test: `mvn test`/`gradle test` (already compile everything
+    /// they need themselves, unlike Run — no chained second process here).
+    /// `poll`'s own `Finished` handling scans and summarizes the tool's own
+    /// JUnit-XML report once this exits, regardless of exit status (a test
+    /// failure makes the process itself exit non-zero, but the report is
+    /// still written and is what actually answers "which tests failed",
+    /// not the exit code).
+    pub fn start_test(&mut self, project_root: &Path, tool: BuildTool) -> std::io::Result<()> {
+        self.reset();
+        self.spawn_process(fg_core::test_command(project_root, tool))?;
+        self.stage = Some(Stage::Test {
+            project_root: project_root.to_path_buf(),
+            tool,
         });
         Ok(())
     }
@@ -185,6 +215,55 @@ impl BuildState {
         Ok(())
     }
 
+    /// Scans `tool`'s own JUnit-XML report (`fg_core::scan_test_reports`)
+    /// and appends a pass/fail summary line plus one clickable row per
+    /// failing/errored test to the log — reusing `BuildRow`'s own
+    /// `BuildProblem` shape (`column: 1`, since a test failure's own
+    /// "where" is a line, the same as Gradle's own column-less compiler
+    /// errors already use) rather than growing a second, parallel
+    /// click-to-jump row type just for this.
+    fn append_test_summary(&mut self, project_root: &Path, tool: BuildTool) {
+        let cases = fg_core::scan_test_reports(project_root, tool);
+        let summary = fg_core::summarize(&cases);
+        self.rows.push(BuildRow {
+            text: String::new(),
+            problem: None,
+        });
+        self.rows.push(BuildRow {
+            text: format!(
+                "Tests: {} total, {} passed, {} failed, {} errored, {} skipped",
+                summary.total,
+                summary.passed(),
+                summary.failed,
+                summary.errored,
+                summary.skipped
+            ),
+            problem: None,
+        });
+        for case in cases
+            .iter()
+            .filter(|c| matches!(c.outcome, fg_core::TestOutcome::Failed | fg_core::TestOutcome::Errored))
+        {
+            let label = format!("{}.{}", case.classname, case.name);
+            let line = case
+                .detail
+                .as_deref()
+                .and_then(|detail| fg_core::failure_line(detail, &case.classname))
+                .unwrap_or(1);
+            let problem = fg_core::test_source_file(project_root, &case.classname).map(|path| BuildProblem {
+                path,
+                line,
+                column: 1,
+                severity: Severity::Error,
+                message: label.clone(),
+            });
+            self.rows.push(BuildRow {
+                text: format!("FAILED  {label}"),
+                problem,
+            });
+        }
+    }
+
     fn poll(&mut self) {
         let Some(rx) = self.rx.take() else { return };
         let mut still_running = true;
@@ -220,6 +299,10 @@ impl BuildState {
                                 self.last_success = Some(false);
                             }
                         },
+                        Some(Stage::Test { project_root, tool }) => {
+                            self.last_success = Some(success);
+                            self.append_test_summary(&project_root, tool);
+                        }
                         _ => self.last_success = Some(success),
                     }
                     break;

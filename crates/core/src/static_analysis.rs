@@ -301,7 +301,7 @@ pub fn parse_pmd_xml(xml: &str) -> Result<Vec<PmdFinding>, String> {
     Ok(findings)
 }
 
-fn attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>, String> {
+pub(crate) fn attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>, String> {
     for a in start.attributes() {
         let a = a.map_err(|e| e.to_string())?;
         if a.key.as_ref() == name {
