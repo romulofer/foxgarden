@@ -24,6 +24,7 @@ pub struct Strings {
     pub lsp: Lsp,
     pub external_tools: ExternalTools,
     pub run_configs: RunConfigs,
+    pub new_project: NewProject,
     pub palettes: Palettes,
     pub editor: Editor,
     pub codegen: Codegen,
@@ -201,6 +202,21 @@ pub struct RunConfigs {
     pub env_vars: &'static str,
     pub add: &'static str,
     pub empty_hint: &'static str,
+}
+
+/// File > New Project… — `PLAN.md` Track 29 Phase 3. `create`/`cancel`'s
+/// generic sibling lives in [`Common`] (`t().common.cancel`) since Cancel
+/// is worded identically everywhere in this app; `create` isn't, since no
+/// other dialog has a matching terminal action to share the word with.
+pub struct NewProject {
+    pub heading: &'static str,
+    pub description: &'static str,
+    pub group_id: &'static str,
+    pub artifact_id: &'static str,
+    pub location: &'static str,
+    pub browse: &'static str,
+    pub java_release: &'static str,
+    pub create: &'static str,
 }
 
 /// The `Ctrl+P`/`Ctrl+E`/`Ctrl+Shift+E` popups and the terminal panel's
@@ -467,6 +483,16 @@ pub const PT_BR: Strings = Strings {
         add: "Adicionar",
         empty_hint: "Nenhuma configuração de execução ainda — clique em \"+ Nova\" para adicionar uma.",
     },
+    new_project: NewProject {
+        heading: "Novo Projeto",
+        description: "Cria um novo projeto Maven + Java e o abre. Gradle e Kotlin ainda não são suportados por este assistente.",
+        group_id: "Group ID",
+        artifact_id: "Artifact ID",
+        location: "Local",
+        browse: "Procurar…",
+        java_release: "Versão do Java",
+        create: "Criar",
+    },
     palettes: Palettes {
         go_to_file: "Ir para arquivo",
         go_to_recent_file: "Ir para arquivo recente",
@@ -706,6 +732,16 @@ pub const EN_US: Strings = Strings {
         env_vars: "Environment Variables",
         add: "Add",
         empty_hint: "No run configurations yet — click \"+ New\" to add one.",
+    },
+    new_project: NewProject {
+        heading: "New Project",
+        description: "Creates a new Maven + Java project and opens it. Gradle and Kotlin aren't supported by this wizard yet.",
+        group_id: "Group ID",
+        artifact_id: "Artifact ID",
+        location: "Location",
+        browse: "Browse…",
+        java_release: "Java release",
+        create: "Create",
     },
     palettes: Palettes {
         go_to_file: "Go to file",

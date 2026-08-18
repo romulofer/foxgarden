@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 use fg_core::{BuildTool, EditorState, ProjectConfig, ProjectLanguage, ScaffoldSpec};
+use fg_i18n::{msg, t};
 
 use crate::jdk_registry::JdkRegistry;
 use crate::widgets::modal::show_modal;
@@ -90,6 +91,16 @@ fn form_is_valid(state: &NewProjectWizardState) -> bool {
 /// subsequent open failed) is reported inline in the dialog rather than
 /// through the app-wide error banner — the user is still looking right at
 /// the form that needs fixing.
+///
+/// Cancel/Escape close the dialog without creating anything — driven by
+/// `show_modal`'s own `(result, escape_pressed)` outcome, same as every
+/// other dialog in this app (`jdk_registry.rs`'s own `show_settings` is the
+/// closest template). An earlier version of this function called
+/// `show_modal` for its side effects only and never looked at that return
+/// value at all, so Cancel's own `clicked()` was computed and then
+/// silently discarded — the dialog only ever closed via a successful
+/// Create. Regression test: `new_project_dialog_opens_and_cancel_closes_it`
+/// in `app::e2e_test::menus_test`.
 pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut EditorState) {
     if let Some(folder) = state.poll_picker() {
         state.location = folder.display().to_string();
@@ -99,28 +110,25 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
     }
 
     let mut created = false;
-    show_modal(ui, "new_project_wizard", state.open.then_some(()), |ui, ()| {
+    let outcome = show_modal(ui, "new_project_wizard", state.open.then_some(()), |ui, ()| {
         ui.set_min_width(480.0);
-        ui.heading("New Project");
-        ui.label(
-            egui::RichText::new("Creates a new Maven + Java project and opens it. Gradle and Kotlin aren't supported by this wizard yet.")
-                .weak(),
-        );
+        ui.heading(t().new_project.heading);
+        ui.label(egui::RichText::new(t().new_project.description).weak());
         ui.separator();
 
         egui::Grid::new("new_project_form").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label("Group ID");
+            ui.label(t().new_project.group_id);
             ui.text_edit_singleline(&mut state.group_id);
             ui.end_row();
 
-            ui.label("Artifact ID");
+            ui.label(t().new_project.artifact_id);
             ui.text_edit_singleline(&mut state.artifact_id);
             ui.end_row();
 
-            ui.label("Location");
+            ui.label(t().new_project.location);
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut state.location);
-                if ui.add_enabled(!state.picker_running(), egui::Button::new("Browse…")).clicked() {
+                if ui.add_enabled(!state.picker_running(), egui::Button::new(t().new_project.browse)).clicked() {
                     let (tx, rx) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
                         let _ = tx.send(rfd::FileDialog::new().pick_folder());
@@ -130,7 +138,7 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
             });
             ui.end_row();
 
-            ui.label("Java release");
+            ui.label(t().new_project.java_release);
             egui::ComboBox::new("new_project_java_release", "")
                 .selected_text(state.java_release.to_string())
                 .show_ui(ui, |ui| {
@@ -142,7 +150,8 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
         });
 
         if !state.location.trim().is_empty() && !state.artifact_id.trim().is_empty() {
-            ui.label(egui::RichText::new(format!("Will create: {}", project_root(state).display())).weak());
+            let preview = msg::will_create_project(&project_root(state).display().to_string());
+            ui.label(egui::RichText::new(preview).weak());
         }
 
         if let Some(error) = &state.last_error {
@@ -151,10 +160,10 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
 
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_is_valid(state), egui::Button::new("Create")).clicked() {
+            if ui.add_enabled(form_is_valid(state), egui::Button::new(t().new_project.create)).clicked() {
                 created = true;
             }
-            ui.button("Cancel").clicked()
+            ui.button(t().common.cancel).clicked()
         })
         .inner
     });
@@ -164,6 +173,12 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
             Ok(()) => state.open = false,
             Err(error) => state.last_error = Some(error),
         }
+    }
+
+    if let Some((cancel_clicked, escape_pressed)) = outcome
+        && (cancel_clicked || escape_pressed)
+    {
+        state.open = false;
     }
 }
 
@@ -176,14 +191,15 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
         build_tool: BuildTool::Maven,
         language: ProjectLanguage::Java,
     };
-    fg_core::write_scaffold(&root, &fg_core::scaffold_files(&spec))?;
+    fg_core::write_scaffold(&root, &fg_core::scaffold_files(&spec)).map_err(|e| msg::scaffold_failed(&e))?;
 
     let config = ProjectConfig { java_release: Some(state.java_release), jdk_home: None };
-    fg_core::save_project_config(&root, &config).map_err(|e| format!("scaffolded {} but couldn't save its project config: {e}", root.display()))?;
+    fg_core::save_project_config(&root, &config)
+        .map_err(|e| msg::scaffolded_but_config_save_failed(&root.display().to_string(), &e.to_string()))?;
 
     editor_state
         .open_project(root.clone())
-        .map_err(|e| format!("scaffolded {} but couldn't open it: {e}", root.display()))
+        .map_err(|e| msg::scaffolded_but_open_failed(&root.display().to_string(), &e.to_string()))
 }
 
 /// Not wired into `show`'s own UI yet — `JdkRegistry` only gains a real

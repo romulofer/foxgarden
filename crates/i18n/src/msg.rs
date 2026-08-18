@@ -367,6 +367,39 @@ msg! {
     }
 }
 
+// --- File > New Project… -------------------------------------------------
+
+msg! {
+    /// The wizard's own preview line, shown once Location/Artifact ID are
+    /// both filled in — states exactly where Create will scaffold to,
+    /// before the user commits to it.
+    will_create_project(path: &str) {
+        pt: "Será criado em: {path}",
+        en: "Will create: {path}",
+    }
+}
+
+msg! {
+    scaffold_failed(err: &str) {
+        pt: "falha ao gerar o projeto: {err}",
+        en: "failed to scaffold the project: {err}",
+    }
+}
+
+msg! {
+    scaffolded_but_config_save_failed(root: &str, err: &str) {
+        pt: "{root} foi gerado, mas não foi possível salvar sua configuração de projeto: {err}",
+        en: "scaffolded {root} but couldn't save its project config: {err}",
+    }
+}
+
+msg! {
+    scaffolded_but_open_failed(root: &str, err: &str) {
+        pt: "{root} foi gerado, mas não foi possível abri-lo: {err}",
+        en: "scaffolded {root} but couldn't open it: {err}",
+    }
+}
+
 msg! {
     superclass_not_in_project(super_name: &str) {
         pt: "Sobrescrever Método só procura superclasses dentro deste projeto \

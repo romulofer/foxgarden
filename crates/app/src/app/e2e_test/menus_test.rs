@@ -52,6 +52,36 @@ fn file_new_file_opens_the_side_panel_row_and_creates_the_file() {
     assert_eq!(app.open_tab_names(), ["FromMenu.java"]);
 }
 
+/// Regression: an earlier version of `panels::new_project::show` called
+/// `show_modal` for its side effects only and never looked at the
+/// `(result, escape_pressed)` it returns, so Cancel's own `clicked()` was
+/// computed and then silently discarded — clicking Cancel did nothing at
+/// all, the dialog only ever closed via a successful Create.
+#[test]
+fn file_new_project_dialog_opens_and_cancel_closes_it() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.file, t().menu.new_project);
+    assert!(app.shows(t().new_project.heading), "the wizard must open, with its heading translated");
+
+    app.click(t().common.cancel);
+    assert!(!app.shows(t().new_project.heading), "Cancel must dismiss the dialog");
+}
+
+/// Same regression as the Cancel test above, via the keyboard rather than a
+/// click — `show_modal`'s `escape_pressed` was equally unused before the
+/// fix.
+#[test]
+fn file_new_project_dialog_closes_on_escape() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.file, t().menu.new_project);
+    assert!(app.shows(t().new_project.heading));
+
+    app.press(egui::Modifiers::NONE, egui::Key::Escape);
+    assert!(!app.shows(t().new_project.heading));
+}
+
 #[test]
 fn settings_theme_switches_between_light_and_dark() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
