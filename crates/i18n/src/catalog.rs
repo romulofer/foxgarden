@@ -216,6 +216,10 @@ pub struct NewProject {
     pub location: &'static str,
     pub browse: &'static str,
     pub java_release: &'static str,
+    pub build_tool: &'static str,
+    pub build_tool_maven: &'static str,
+    pub build_tool_gradle: &'static str,
+    pub gradle_no_wrapper_hint: &'static str,
     pub create: &'static str,
 }
 
@@ -485,12 +489,16 @@ pub const PT_BR: Strings = Strings {
     },
     new_project: NewProject {
         heading: "Novo Projeto",
-        description: "Cria um novo projeto Maven + Java e o abre. Gradle e Kotlin ainda não são suportados por este assistente.",
+        description: "Cria um novo projeto Java e o abre. Kotlin ainda não é suportado por este assistente.",
         group_id: "Group ID",
         artifact_id: "Artifact ID",
         location: "Local",
         browse: "Procurar…",
         java_release: "Versão do Java",
+        build_tool: "Ferramenta de Build",
+        build_tool_maven: "Maven",
+        build_tool_gradle: "Gradle (Kotlin DSL)",
+        gradle_no_wrapper_hint: "Nenhum Gradle Wrapper é gerado — use um Gradle já instalado na máquina.",
         create: "Criar",
     },
     palettes: Palettes {
@@ -735,12 +743,16 @@ pub const EN_US: Strings = Strings {
     },
     new_project: NewProject {
         heading: "New Project",
-        description: "Creates a new Maven + Java project and opens it. Gradle and Kotlin aren't supported by this wizard yet.",
+        description: "Creates a new Java project and opens it. Kotlin isn't supported by this wizard yet.",
         group_id: "Group ID",
         artifact_id: "Artifact ID",
         location: "Location",
         browse: "Browse…",
         java_release: "Java release",
+        build_tool: "Build Tool",
+        build_tool_maven: "Maven",
+        build_tool_gradle: "Gradle (Kotlin DSL)",
+        gradle_no_wrapper_hint: "No Gradle Wrapper is generated — use a Gradle already installed on your machine.",
         create: "Create",
     },
     palettes: Palettes {

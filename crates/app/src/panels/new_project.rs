@@ -36,6 +36,7 @@ pub struct NewProjectWizardState {
     /// once).
     location: String,
     java_release: u32,
+    build_tool: BuildTool,
     last_error: Option<String>,
     picker_rx: Option<Receiver<Option<PathBuf>>>,
 }
@@ -46,6 +47,7 @@ impl NewProjectWizardState {
         self.artifact_id.clear();
         self.location.clear();
         self.java_release = 21;
+        self.build_tool = BuildTool::Maven;
         self.last_error = None;
         self.open = true;
     }
@@ -147,7 +149,20 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                     }
                 });
             ui.end_row();
+
+            ui.label(t().new_project.build_tool);
+            egui::ComboBox::new("new_project_build_tool", "")
+                .selected_text(build_tool_label(state.build_tool))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.build_tool, BuildTool::Maven, t().new_project.build_tool_maven);
+                    ui.selectable_value(&mut state.build_tool, BuildTool::Gradle, t().new_project.build_tool_gradle);
+                });
+            ui.end_row();
         });
+
+        if state.build_tool == BuildTool::Gradle {
+            ui.label(egui::RichText::new(t().new_project.gradle_no_wrapper_hint).weak());
+        }
 
         if !state.location.trim().is_empty() && !state.artifact_id.trim().is_empty() {
             let preview = msg::will_create_project(&project_root(state).display().to_string());
@@ -182,13 +197,20 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
     }
 }
 
+fn build_tool_label(build_tool: BuildTool) -> &'static str {
+    match build_tool {
+        BuildTool::Maven => t().new_project.build_tool_maven,
+        BuildTool::Gradle => t().new_project.build_tool_gradle,
+    }
+}
+
 fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState) -> Result<(), String> {
     let root = project_root(state);
     let spec = ScaffoldSpec {
         group_id: state.group_id.trim().to_string(),
         artifact_id: state.artifact_id.trim().to_string(),
         java_release: state.java_release,
-        build_tool: BuildTool::Maven,
+        build_tool: state.build_tool,
         language: ProjectLanguage::Java,
     };
     fg_core::write_scaffold(&root, &fg_core::scaffold_files(&spec)).map_err(|e| msg::scaffold_failed(&e))?;
@@ -224,6 +246,7 @@ mod tests {
             artifact_id: "stale".to_string(),
             location: "/stale".to_string(),
             java_release: 8,
+            build_tool: BuildTool::Gradle,
             last_error: Some("stale error".to_string()),
             picker_rx: None,
         };
@@ -234,6 +257,7 @@ mod tests {
         assert_eq!(state.artifact_id, "");
         assert_eq!(state.location, "");
         assert_eq!(state.java_release, 21);
+        assert_eq!(state.build_tool, BuildTool::Maven);
         assert!(state.last_error.is_none());
     }
 
@@ -292,6 +316,28 @@ mod tests {
         assert!(root.join("src/main/java/com/example/Main.java").exists());
         assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
         assert_eq!(fg_core::load_project_config(&root).java_release, Some(17));
+    }
+
+    #[test]
+    fn create_and_open_with_gradle_scaffolds_gradle_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = NewProjectWizardState {
+            group_id: "com.example".to_string(),
+            artifact_id: "my-app".to_string(),
+            location: dir.path().display().to_string(),
+            java_release: 17,
+            build_tool: BuildTool::Gradle,
+            ..Default::default()
+        };
+        let mut editor_state = EditorState::default();
+
+        create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
+
+        let root = dir.path().join("my-app");
+        assert!(root.join("settings.gradle.kts").exists());
+        assert!(root.join("build.gradle.kts").exists());
+        assert!(root.join("src/main/java/com/example/Main.java").exists());
+        assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
     }
 
     #[test]

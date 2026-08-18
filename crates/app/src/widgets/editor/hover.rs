@@ -228,6 +228,7 @@ fn hover_text_from_response(value: serde_json::Value) -> Option<String> {
         lsp_types::HoverContents::Array(items) => items.into_iter().map(marked_string_text).collect::<Vec<_>>().join("\n\n"),
         lsp_types::HoverContents::Markup(markup) => markup.value,
     };
+    let text = strip_markdown(&text);
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
 }
@@ -236,6 +237,84 @@ fn marked_string_text(marked: lsp_types::MarkedString) -> String {
     match marked {
         lsp_types::MarkedString::String(text) => text,
         lsp_types::MarkedString::LanguageString(language) => language.value,
+    }
+}
+
+/// Strips the Markdown a real jdtls/`kotlin-language-server` sends
+/// regardless of this client's declared `PlainText` preference
+/// (TECHNICAL_DEBT.md #22) down to plain text `HoverState::paint`'s
+/// `ui.label` can render correctly — a client-side hand-rolled subset
+/// rather than a full renderer (`egui_commonmark`, weighed and deferred in
+/// that entry against this project's own Zed-class startup/frame-cost bar),
+/// scoped tightly to the forms real captured server output actually uses:
+/// fenced code blocks, inline code spans, `**bold**`, `>`-quoted blocks, and
+/// `[text](url)` links.
+fn strip_markdown(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+        } else {
+            out.push_str(&strip_inline_markdown(strip_blockquote_marker(line)));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Drops a line's leading `>`/`> `/`>>` quote markers (Markdown's own
+/// nesting shape) — the surrounding indentation they carried is dropped
+/// with them rather than preserved, per TECHNICAL_DEBT.md #22's own
+/// "convert to plain indentation" proposal; a quoted block reads fine as
+/// left-aligned plain text.
+fn strip_blockquote_marker(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    while let Some(after) = rest.strip_prefix('>') {
+        rest = after.strip_prefix(' ').unwrap_or(after);
+    }
+    rest
+}
+
+/// One line's worth of inline Markdown noise removed: `[text](url)` links
+/// collapse to just `text` (the target, often several-hundred-char `jdt://`
+/// URLs, is never useful in a hover tooltip), `**bold**` markers and inline
+/// `` `code` `` backticks are dropped outright rather than represented some
+/// other way — this is a plain-text tooltip, not a themed rich-text one.
+fn strip_inline_markdown(line: &str) -> String {
+    strip_links(line).replace("**", "").replace('`', "")
+}
+
+fn strip_links(mut s: &str) -> String {
+    let mut out = String::new();
+    loop {
+        let Some(open) = s.find('[') else {
+            out.push_str(s);
+            return out;
+        };
+        let Some(close_rel) = s[open + 1..].find(']') else {
+            out.push_str(s);
+            return out;
+        };
+        let close = open + 1 + close_rel;
+        let after_close = &s[close + 1..];
+        if !after_close.starts_with('(') {
+            out.push_str(&s[..=close]);
+            s = after_close;
+            continue;
+        }
+        let Some(paren_close_rel) = after_close[1..].find(')') else {
+            out.push_str(&s[..=close]);
+            s = after_close;
+            continue;
+        };
+        out.push_str(&s[..open]);
+        out.push_str(&s[open + 1..close]);
+        s = &after_close[1 + paren_close_rel + 1..];
     }
 }
 
@@ -404,8 +483,50 @@ mod tests {
 
     #[test]
     fn hover_text_from_response_reads_markup_content() {
-        let value = serde_json::json!({ "contents": { "kind": "markdown", "value": "**bold**" } });
-        assert_eq!(hover_text_from_response(value).as_deref(), Some("**bold**"));
+        let value = serde_json::json!({ "contents": { "kind": "markdown", "value": "plain doc" } });
+        assert_eq!(hover_text_from_response(value).as_deref(), Some("plain doc"));
+    }
+
+    #[test]
+    fn hover_text_from_response_strips_markdown_noise_from_markup_content() {
+        // Real captured jdtls output shape (TECHNICAL_DEBT.md #22): bold,
+        // inline code, and a link with a long jdt:// target all appear in
+        // the same reply.
+        let value = serde_json::json!({
+            "contents": { "kind": "markdown", "value": "**Since:** 1.0 — see `String` and [Character](jdt://contents/x)" }
+        });
+        assert_eq!(
+            hover_text_from_response(value).as_deref(),
+            Some("Since: 1.0 — see String and Character")
+        );
+    }
+
+    #[test]
+    fn strip_markdown_removes_fenced_code_block_markers_but_keeps_their_content() {
+        let text = "```java\njava.lang.String\n```\n\nsome docs";
+        assert_eq!(strip_markdown(text).trim(), "java.lang.String\n\nsome docs");
+    }
+
+    #[test]
+    fn strip_markdown_drops_blockquote_markers() {
+        let text = "> indented note\n>> nested note";
+        assert_eq!(strip_markdown(text).trim(), "indented note\nnested note");
+    }
+
+    #[test]
+    fn strip_markdown_leaves_plain_text_untouched() {
+        let text = "just a plain sentence with no markup";
+        assert_eq!(strip_markdown(text).trim(), text);
+    }
+
+    #[test]
+    fn strip_links_keeps_only_the_link_text() {
+        assert_eq!(strip_links("see [Character](jdt://contents/java.base/java.lang/Character.class?=x)"), "see Character");
+    }
+
+    #[test]
+    fn strip_links_leaves_an_unmatched_bracket_alone() {
+        assert_eq!(strip_links("array[i] stays as-is"), "array[i] stays as-is");
     }
 
     #[test]

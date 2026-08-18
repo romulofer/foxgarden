@@ -18,10 +18,11 @@ pub enum ProjectLanguage {
     Java,
 }
 
-/// Only Maven is generated yet — Gradle is Phase 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum BuildTool {
+    #[default]
     Maven,
+    Gradle,
 }
 
 /// What a new project needs to be scaffolded: enough to write a real,
@@ -94,23 +95,75 @@ fn main_java(spec: &ScaffoldSpec) -> String {
 }
 
 const GITIGNORE: &str = "target/\n*.class\n.idea/\n*.iml\n";
+const GRADLE_GITIGNORE: &str = "build/\n.gradle/\n*.class\n.idea/\n*.iml\n";
+
+/// `settings.gradle.kts`: just the root project name, the same single
+/// responsibility a real `gradle init` gives this file.
+fn settings_gradle_kts(spec: &ScaffoldSpec) -> String {
+    format!("rootProject.name = \"{}\"\n", spec.artifact_id)
+}
+
+/// `build.gradle.kts`. The toolchain block is deliberately the one form
+/// `java_release::release_from_gradle` ranks highest (`java.toolchain.
+/// languageVersion`) — a scaffolded project has to read back at the release
+/// the wizard promised, the same regression `pom_xml`'s own
+/// `pom_xml_release_reads_back_through_java_release_detect_at_the_requested_
+/// value` test already guards for Maven. No Gradle wrapper is generated
+/// (`PLAN.md` Track 29 Phase 4's own stated non-goal — needs a real network
+/// fetch or vendoring, the same trade-off `lsp_manager.rs` already reasons
+/// through for jdt.ls) — the wizard's own help text says so explicitly
+/// rather than leaving a silently-missing `gradlew`.
+fn build_gradle_kts(spec: &ScaffoldSpec) -> String {
+    let package = package_path_components(&spec.group_id).join(".");
+    let main_class =
+        if package.is_empty() { "Main".to_string() } else { format!("{package}.Main") };
+    format!(
+        r#"plugins {{
+    java
+    application
+}}
+
+java {{
+    toolchain {{
+        languageVersion = JavaLanguageVersion.of({java_release})
+    }}
+}}
+
+application {{
+    mainClass = "{main_class}"
+}}
+
+group = "{group_id}"
+version = "1.0-SNAPSHOT"
+
+repositories {{
+    mavenCentral()
+}}
+"#,
+        java_release = spec.java_release,
+        group_id = spec.group_id,
+    )
+}
 
 /// The files a new project needs, as `(path relative to the project root,
 /// content)` pairs — pure generation, no filesystem access, so it's cheap
 /// to test exactly (`write_scaffold` is the only function that touches
 /// disk).
 pub fn scaffold_files(spec: &ScaffoldSpec) -> Vec<(PathBuf, String)> {
+    let package_dir: PathBuf = package_path_components(&spec.group_id).into_iter().collect();
+    let main_path = Path::new("src/main/java").join(package_dir).join("Main.java");
     match (spec.build_tool, spec.language) {
-        (BuildTool::Maven, ProjectLanguage::Java) => {
-            let package_dir: PathBuf =
-                package_path_components(&spec.group_id).into_iter().collect();
-            let main_path = Path::new("src/main/java").join(package_dir).join("Main.java");
-            vec![
-                (PathBuf::from("pom.xml"), pom_xml(spec)),
-                (main_path, main_java(spec)),
-                (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
-            ]
-        }
+        (BuildTool::Maven, ProjectLanguage::Java) => vec![
+            (PathBuf::from("pom.xml"), pom_xml(spec)),
+            (main_path, main_java(spec)),
+            (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
+        ],
+        (BuildTool::Gradle, ProjectLanguage::Java) => vec![
+            (PathBuf::from("settings.gradle.kts"), settings_gradle_kts(spec)),
+            (PathBuf::from("build.gradle.kts"), build_gradle_kts(spec)),
+            (main_path, main_java(spec)),
+            (PathBuf::from(".gitignore"), GRADLE_GITIGNORE.to_string()),
+        ],
     }
 }
 
@@ -230,5 +283,70 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_scaffold(dir.path(), &scaffold_files(&sample())).unwrap();
         assert!(dir.path().join("pom.xml").exists());
+    }
+
+    fn gradle_sample() -> ScaffoldSpec {
+        ScaffoldSpec { build_tool: BuildTool::Gradle, ..sample() }
+    }
+
+    #[test]
+    fn gradle_scaffold_files_returns_the_expected_paths() {
+        let files = scaffold_files(&gradle_sample());
+        let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                Path::new("settings.gradle.kts"),
+                Path::new("build.gradle.kts"),
+                Path::new("src/main/java/com/example/app/Main.java"),
+                Path::new(".gitignore"),
+            ]
+        );
+    }
+
+    #[test]
+    fn gradle_settings_names_the_root_project_after_the_artifact_id() {
+        let files = scaffold_files(&gradle_sample());
+        let (_, settings) = &files[0];
+        assert_eq!(settings, "rootProject.name = \"my-app\"\n");
+    }
+
+    #[test]
+    fn gradle_build_states_the_requested_release_group_and_main_class() {
+        let files = scaffold_files(&gradle_sample());
+        let (_, build) = &files[1];
+        assert!(build.contains("languageVersion = JavaLanguageVersion.of(17)"), "{build}");
+        assert!(build.contains(r#"group = "com.example.app""#), "{build}");
+        assert!(build.contains(r#"mainClass = "com.example.app.Main""#), "{build}");
+    }
+
+    #[test]
+    fn gradle_build_release_reads_back_through_java_release_detect_at_the_requested_value() {
+        // Same regression as Maven's own equivalent test: a scaffolded
+        // build.gradle.kts has to be readable by java_release::detect at
+        // exactly the release the wizard promised.
+        let spec = ScaffoldSpec { java_release: 21, ..gradle_sample() };
+        let (_, build) = &scaffold_files(&spec)[1];
+        assert_eq!(crate::java_release::release_from_gradle(build).map(|(major, _)| major), Some(21));
+    }
+
+    #[test]
+    fn a_single_segment_group_id_still_produces_a_qualified_main_class() {
+        let spec = ScaffoldSpec { group_id: "app".to_string(), ..gradle_sample() };
+        let files = scaffold_files(&spec);
+        let (_, build) = &files[1];
+        assert!(build.contains(r#"mainClass = "app.Main""#), "{build}");
+    }
+
+    #[test]
+    fn write_scaffold_creates_every_gradle_file_under_the_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("my-app");
+        write_scaffold(&root, &scaffold_files(&gradle_sample())).unwrap();
+
+        assert!(root.join("settings.gradle.kts").exists());
+        assert!(root.join("build.gradle.kts").exists());
+        assert!(root.join("src/main/java/com/example/app/Main.java").exists());
+        assert!(root.join(".gitignore").exists());
     }
 }
