@@ -153,17 +153,11 @@ a path field per tool; Tools > "Run Checkstyle" shells out against the
 project root, parses its XML report, converts each finding into the
 existing `Diagnostic` shape feeding the current squiggle pipeline.
 
-**Checkpoint 1:** full suite green (a fixture Checkstyle XML report parsed
-into expected `Diagnostic`s, headless); live-verify running Checkstyle
-against a real project with a known violation shows a squiggle at the
-right line — done: `fg_core::static_analysis` parses/converts a real
-`checkstyle -c sun_checks.xml -f xml` report captured from a live run
-against a fixture file, `crates/app/src/panels/static_analysis.rs` wires
-Settings > External Tools… and Tools > Run Checkstyle end to end via a
-background thread, and the live click-through (Settings > External
-Tools… configured with a real `checkstyle` binary + `sun_checks.xml`,
-Tools > Run Checkstyle against a real violation) was confirmed working by
-the user.
+**Checkpoint 1:** done — `fg_core::static_analysis` parses/converts a real
+Checkstyle XML report into `Diagnostic`s; `crates/app/src/panels/
+static_analysis.rs` wires Settings > External Tools… and Tools > Run
+Checkstyle end to end via a background thread. Live-verified against a
+real project.
 
 Real Checkstyle CLI (verified against an installed `8.36.1` binary, not
 assumed): `-c <config>` is required (no usable default ruleset), `-f xml`
@@ -177,31 +171,21 @@ plumbing" scope) even though nothing consumes them until Phase 2/3.
 
 **Phase 2 — PMD.** Same shape, PMD's own XML report format.
 
-**Checkpoint 2:** same as above, PMD-specific fixture + live-verify — done:
-`fg_core::static_analysis` gained `PmdFinding`/`parse_pmd_xml`/
-`pmd_severity`/`pmd_diagnostics`, verified against a real
+**Checkpoint 2:** done — `fg_core::static_analysis` gained `PmdFinding`/
+`parse_pmd_xml`/`pmd_severity`/`pmd_diagnostics`, verified against a real
 `pmd check -R rulesets/java/quickstart.xml -f xml --no-cache` run (PMD
 7.26.0, downloaded from the official GitHub release since this
-environment's package manager has no real PMD package — see
-`README.md`'s new "External tools" section); a from-scratch end-to-end
-smoke run (`fg_core::pmd_diagnostics` against the real downloaded binary
-and a real fixture file, not just the captured-XML unit tests) confirmed
-the assembled `pmd check -d ... -R ... -f xml --no-cache` invocation and
-byte-range math both work before handing off. `Document` gained a second,
-independent `pmd_diagnostics` field (Checkstyle's own `static_diagnostics`
-renamed to `checkstyle_diagnostics` alongside it) — one shared field would
-have meant a PMD run silently wiping out Checkstyle's still-valid
-squiggles and vice versa, since Phase 1's "replace wholesale, don't merge"
-design was written before a second tool existed to collide with it.
-Settings > External Tools gained a PMD "Ruleset (-R)" field (PMD, like
-Checkstyle, has no usable default and errors without one — confirmed via
-`pmd check` with no `-R`: "Missing required option: '--rulesets=<rulesets>'").
-`StaticAnalysisState` now tracks Checkstyle's and PMD's scans as two
-independent slots so one running doesn't block the other from starting.
-Live click-through (Settings > External Tools… configured with the real
-downloaded PMD binary + `rulesets/java/quickstart.xml`, Tools > Run PMD
-against real violations, Checkstyle's own squiggles confirmed undisturbed
-by the PMD run) was confirmed working by the user.
+environment's package manager has no real PMD package — see `README.md`'s
+"External tools" section). `Document` gained a second, independent
+`pmd_diagnostics` field (Checkstyle's own `static_diagnostics` renamed to
+`checkstyle_diagnostics` alongside it) — one shared field would have meant
+a PMD run silently wiping out Checkstyle's still-valid squiggles and vice
+versa, since Phase 1's "replace wholesale, don't merge" design was written
+before a second tool existed to collide with it. `StaticAnalysisState`
+tracks Checkstyle's and PMD's scans as two independent slots so one
+running doesn't block the other from starting. Live-verified against a
+real project, including that Checkstyle's own squiggles survive a PMD run
+undisturbed.
 
 PMD CLI specifics worth remembering (verified against a real `7.26.0`
 binary): the subcommand is `pmd check` (not a bare `pmd` invocation), `-R`
@@ -216,19 +200,15 @@ itself. PMD has no error/warning concept, just a 1(high)-5(low)
 `priority`; this codebase maps 1-2 to `Severity::Error` and 3-5 to
 `Severity::Warning` as its own judgment call, not a PMD convention.
 
-**Addendum — install/update the tools from inside the app (not in the
-original per-phase plan above; added once the user asked for it directly,
-after "shared plumbing" had already shipped for Checkstyle+PMD).**
-`crates/app/src/tool_manager.rs` downloads Checkstyle/PMD/SpotBugs'
-official GitHub releases into `directories::ProjectDirs`'s cache dir on an
-explicit Settings > External Tools "Install" click (`ureq` for the HTTP
-fetch, `zip` to extract PMD's/SpotBugs' own archives — Checkstyle ships a
-bare jar, no extraction needed), then fills in the binary/config fields
-itself. Every version/URL/tag-shape/archive-layout claim here was verified
-against a real download and a real run this session (`SPEC.md` §5's own
-revised text has the durable version of this reasoning) — three real bugs
-this caught before they shipped, each the kind of thing a "should just
-work" assumption would have missed:
+**Addendum — install/update the tools from inside the app** (not in the
+original per-phase plan above; added after "shared plumbing" had already
+shipped for Checkstyle+PMD). `crates/app/src/tool_manager.rs` downloads
+Checkstyle/PMD/SpotBugs' official GitHub releases into `directories::
+ProjectDirs`'s cache dir on an explicit Settings > External Tools
+"Install" click (`ureq` for the HTTP fetch, `zip` to extract PMD's/
+SpotBugs' own archives — Checkstyle ships a bare jar, no extraction
+needed), then fills in the binary/config fields itself. Three real gotchas
+found via real downloads/runs, worth keeping:
 
 1. Checkstyle's _newest_ GitHub release needs a newer JDK than a real Java
    17 install has (a genuine `UnsupportedClassVersionError` running it) —
@@ -237,8 +217,7 @@ work" assumption would have missed:
    than always chasing whatever GitHub calls "latest."
 2. PMD's real git tag is `pmd_releases/7.26.0`, not the bare `7.26.0` a
    normal-looking semver tag would suggest (SpotBugs' and Checkstyle's own
-   tags don't have this quirk) — caught by an actual failed download (a
-   real 404), not a code-review guess.
+   tags don't have this quirk) — caught by an actual failed download (404).
 3. A downloaded Checkstyle install is a bare `.jar` with no launcher
    script (unlike PMD's/SpotBugs' own `bin/<script>`), so it can't be
    `Command::new`'d directly — `fg_core::static_analysis::
@@ -266,16 +245,9 @@ for someone who pointed a binary field at an existing system install
 instead) so Settings can show "Installed: X" without re-deriving it from
 the path string.
 
-Live click-through (Install/Reinstall/Check for Updates for all three
-tools against the real cache directory, Checkstyle/PMD still running
-correctly off the freshly-installed binaries afterward) was confirmed
-working by the user. One round of UI-copy follow-up: the user read
-"Installed: 10.26.1" next to "Latest on GitHub: 13.9.0" as a possible bug
-rather than the intended pinned-vs-latest distinction, so the dialog's own
-top explanation and the per-tool "Latest on GitHub" label (now "Up to
-date (X)" when the pin already matches, otherwise a hover tooltip
-spelling out _why_ Install doesn't just chase latest) were reworded to
-say so up front rather than requiring the user to ask.
+Live-verified end-to-end (Install/Reinstall/Check for Updates for all
+three tools against the real cache directory, Checkstyle/PMD still
+running correctly off the freshly-installed binaries afterward).
 
 **Phase 3 — SpotBugs.** Same shape, SpotBugs' own XML schema (bytecode-
 based — verify it reports source line numbers accurately enough to map
@@ -311,56 +283,40 @@ Not reached.
 default) with "on focus loss" / "after N seconds idle" modes, both calling
 the existing `Document::save` unchanged.
 
-**Checkpoint 1:** full suite green (a fake-clock/fake-focus-event test
-asserting the right trigger fires `save` at the right moment); live-verify
-both modes against a real dirty tab — done: `crates/app/src/auto_save.rs`
-holds the pure trigger logic (`AutoSaveSettings`/`AutoSaveMode`/
-`AutoSaveState::tick`, unit-tested headlessly with a fake `i.time`/
-`i.focused` clock, no egui context needed) and `tabs::save_all_dirty_tabs`
-(new — saves every dirty open tab, not just the active one, since a
-focus-loss/idle trigger is app-level, not tab-level); `FoxGardenApp::ui`
-reads `ui.input(|i| (i.time, i.focused, !i.events.is_empty()))` once per
-frame to drive `tick`/`record_activity` and calls `save_all_dirty_tabs`
-when it fires. `crates/app/src/app/tests.rs` gained two integration tests
-(`auto_save_focus_loss_trigger_saves_only_the_dirty_tab`,
-`auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity`)
-wiring the fake clock through to a real temp-file save, not just
-`auto_save`'s own isolated unit tests — the Checkpoint 1 fake-clock/
-fake-focus test explicitly called for. One real deviation from `SPEC.md`
-§6's "reset on every keystroke" wording: the idle clock resets on _any_
-input event (`!i.events.is_empty()`, so pointer moves/clicks/scroll count
-too), not keystrokes only — a keystroke-only reset would make moving the
-mouse around while reading code (no typing) still count as "idle" and
-fire a save mid-thought, which reads as more surprising than useful.
-Settings > Auto-save is a new submenu alongside Theme/Font/Indentation
-(a checkbox for `enabled`, two radios for the mode, a `DragValue` for idle
-seconds clamped `5..=600`), persisted the same hand-rolled
-`eframe::Storage` way every other Settings value here already is (no
-serde in this crate — `app.rs`'s own established note). Live click-through
-(Settings > Auto-save, both modes against a real dirty tab) confirmed
-working by the user.
+**Checkpoint 1:** done — `crates/app/src/auto_save.rs` holds the pure
+trigger logic (`AutoSaveSettings`/`AutoSaveMode`/`AutoSaveState::tick`,
+unit-tested headlessly with a fake `i.time`/`i.focused` clock, no egui
+context needed) and `tabs::save_all_dirty_tabs` (saves every dirty open
+tab, not just the active one, since a focus-loss/idle trigger is
+app-level, not tab-level); `FoxGardenApp::ui` reads `ui.input(|i|
+(i.time, i.focused, !i.events.is_empty()))` once per frame to drive
+`tick`/`record_activity` and calls `save_all_dirty_tabs` when it fires.
+One real deviation from `SPEC.md` §6's "reset on every keystroke" wording:
+the idle clock resets on _any_ input event (pointer moves/clicks/scroll
+count too), not keystrokes only — a keystroke-only reset would make
+moving the mouse around while reading code (no typing) still count as
+"idle" and fire a save mid-thought, which reads as more surprising than
+useful. Settings > Auto-save is a new submenu alongside Theme/Font/
+Indentation (checkbox for `enabled`, two radios for the mode, a
+`DragValue` for idle seconds clamped `5..=600`), persisted the same
+hand-rolled `eframe::Storage` way every other Settings value here already
+is (no serde in this crate). Live-verified against a real dirty tab.
 
 **Phase 2 — conflict-banner interaction.** Auto-save suppressed for any
 tab currently showing the "changed on disk" banner; resumes once
 Reload/Keep Mine resolves it.
 
-**Checkpoint 2:** full suite green; live-verify auto-save does _not_ fire
-while the conflict banner is showing, and does resume normally after
-resolving it — code done: `tabs::save_all_dirty_tabs` gained an
+**Checkpoint 2:** done — `tabs::save_all_dirty_tabs` gained an
 `external_conflicts: &HashSet<PathBuf>` parameter and skips any dirty tab
-whose path is in it (same set `show_external_change_banner` itself reads
-to decide whether to render the banner, and that Reload/Keep Mine already
+whose path is in it (same set `show_external_change_banner` reads to
+decide whether to render the banner, and that Reload/Keep Mine already
 clear on resolution — Phase 2 needed no new state, just reading the
-existing one). `FoxGardenApp::ui`'s auto-save trigger check was moved to
-_after_ `process_file_events` (was before it in Phase 1) specifically so a
+existing one). `FoxGardenApp::ui`'s auto-save trigger check runs _after_
+`process_file_events` (was before it in Phase 1) specifically so a
 conflict that appears this very frame already suppresses this same
-frame's auto-save, not one frame late. `crates/app/src/app/tests.rs`
-gained `auto_save_skips_a_tab_showing_the_external_conflict_banner`
-(conflicted tab stays dirty and untouched on disk; a second, unconflicted
-dirty tab still saves normally in the same call). Live click-through (a
-dirty tab with the conflict banner showing doesn't get auto-saved out from
-under it; resolving via Reload/Keep Mine lets auto-save resume normally)
-confirmed working by the user.
+frame's auto-save, not one frame late. Live-verified: a dirty tab with the
+conflict banner showing doesn't get auto-saved out from under it;
+resolving via Reload/Keep Mine lets auto-save resume normally.
 
 ---
 
@@ -371,115 +327,80 @@ confirmed working by the user.
 gains a second highlight-painting path for it alongside the existing
 linear-range one.
 
-**Checkpoint 1:** full suite green; live-verify `Alt`+drag visibly
-highlights a rectangular region across several lines — code done:
-`text_area::input` gained `BlockSelection { anchor_line, anchor_col,
-primary_line, primary_col }` (anchor/primary shape, like `Caret` itself,
-rather than pre-sorted bounds — an in-progress drag that crosses back over
-its own start point doesn't need to separately remember which corner was
-the anchor; `lines()`/`cols()` derive the sorted, PLAN-described
-`start_line..end_line`/`start_col..end_col` view on demand). `ShellState`
-gained `block_selection: Option<BlockSelection>`, checked first in
-`shell::show`'s pointer-handling block whenever `modifiers.alt` is held
-during `drag_started()`/`dragged()` — entirely separate from `Caret`
-(never touches it), and any non-Alt click/drag clears it (also covers
-releasing Alt mid-drag while the mouse stays down). Plain Alt+Click (no
-drag) is untouched — it still falls through to the ordinary click branch,
-same as before this track; `widget.rs`'s own Alt+Click multi-cursor
-interception runs after `shell::show` returns and was never touched.
-`paint_block_selection` (new, alongside `paint_caret`) paints a filled
-rect at the *same* column range on every spanned row, deliberately not
-clamped to each row's own length (unlike `paint_caret`'s per-line clamp) —
-that's what makes it a rectangle rather than a per-line-linear selection.
-One real discovery while testing: egui's own drag classification needs a
-dedicated frame boundary between the press and the first move for
-`drag_started()` to fire — a synthetic test that folds press+move into one
-frame never sees a drag at all (reads as a plain click); the checkpoint
-test (`shell::tests::alt_drag_produces_a_rectangular_block_selection_
-spanning_multiple_rows`) drives three real frames (press, then a small
-move — the frame `drag_started()` actually fires and anchors the block,
-then a further move that extends it) once this was caught. Three more
-`BlockSelection` unit tests cover `lines()`/`cols()` sorting/anchor-
-stability directly in `text_area::input::tests`. Live click-through
-(`Alt`+drag paints a rectangle spanning several rows, including past a
-shorter row's own text; releasing keeps it; a plain click elsewhere clears
-it; plain Alt+Click still drops a bare multi-cursor as before) confirmed
-working by the user.
+**Checkpoint 1:** done — `text_area::input` gained `BlockSelection {
+anchor_line, anchor_col, primary_line, primary_col }` (anchor/primary
+shape, like `Caret` itself, rather than pre-sorted bounds — an
+in-progress drag that crosses back over its own start point doesn't need
+to separately remember which corner was the anchor; `lines()`/`cols()`
+derive the sorted view on demand). `ShellState` gained `block_selection:
+Option<BlockSelection>`, checked first in `shell::show`'s
+pointer-handling block whenever `modifiers.alt` is held during
+`drag_started()`/`dragged()` — entirely separate from `Caret`, and any
+non-Alt click/drag clears it (also covers releasing Alt mid-drag while
+the mouse stays down). Plain Alt+Click (no drag) is untouched — it still
+falls through to the ordinary click branch; `widget.rs`'s own Alt+Click
+multi-cursor interception runs after `shell::show` returns and was never
+touched. `paint_block_selection` paints a filled rect at the *same*
+column range on every spanned row, deliberately not clamped to each
+row's own length (unlike `paint_caret`'s per-line clamp) — that's what
+makes it a rectangle rather than a per-line-linear selection. One real
+testing gotcha: egui's own drag classification needs a dedicated frame
+boundary between the press and the first move for `drag_started()` to
+fire — a synthetic test that folds press+move into one frame never sees
+a drag at all (reads as a plain click); a real test needs at least three
+frames (press, a move that anchors the block, a further move that
+extends it). Live-verified.
 
 **Phase 2 — block-scoped editing.** Typing/Backspace/Delete over an
 active block selection applies the same column-range edit to every row
 the block spans.
 
-**Checkpoint 2:** full suite green; live-verify typing over a block
-selection edits every spanned row identically, Backspace/Delete likewise —
-code done: `text_area::input` gained `replace_block_selection`/
-`block_backspace`/`block_delete_forward`, all building their per-row char
-ranges from `BlockSelection::cols()` clamped to each row's own length
-(`block_row_ranges`), then applying the shared edit via `widgets::editor::
-multi_cursor::apply_multi_edit` — the same "apply one op at N ranges,
-correcting for cumulative delta" engine `Ctrl+D`'s own multi-cursor typing
-already uses, reused rather than reimplemented since it's already pure and
-Document-free. The resulting block's column is computed directly from the
-edit's own known width (`cols().start + insert.len()` for typing,
-`cols().start` for delete/selection-backspace), not from any one row's
-actual post-edit position — rows shorter than the block's column land
-their own edit at their own end (no padding), which would otherwise
-disagree row-to-row on "where the new column is"; the block's target
-column stays fixed independent of any single row's clamp, same as every
-real block-select editor's own convention. A real correctness risk caught
-before shipping: a zero-width row already sitting at column 0 (Backspace)
-or at its own line's end (Delete) is skipped rather than falling through
-to `apply_multi_edit`'s raw *absolute-offset* boundary check — that check
-only guards start/end of the whole buffer, not start/end of a line, so
-without this a block Backspace at column 0 across several rows would have
-silently deleted the *previous* line's trailing newline on each one,
-merging rows into each other instead of leaving them alone. `shell::show`'s
+**Checkpoint 2:** done — `text_area::input` gained
+`replace_block_selection`/`block_backspace`/`block_delete_forward`, all
+building their per-row char ranges from `BlockSelection::cols()` clamped
+to each row's own length (`block_row_ranges`), then applying the shared
+edit via `widgets::editor::multi_cursor::apply_multi_edit` — the same
+"apply one op at N ranges, correcting for cumulative delta" engine
+`Ctrl+D`'s own multi-cursor typing already uses, reused since it's
+already pure and Document-free. The resulting block's column is computed
+directly from the edit's own known width, not from any one row's actual
+post-edit position — rows shorter than the block's column land their own
+edit at their own end (no padding), since the block's target column must
+stay fixed independent of any single row's clamp. A real correctness
+trap caught before shipping: a zero-width row already sitting at column 0
+(Backspace) or at its own line's end (Delete) must be skipped rather than
+falling through to `apply_multi_edit`'s raw *absolute-offset* boundary
+check — that check only guards start/end of the whole buffer, not
+start/end of a line, so without this a block Backspace at column 0 across
+several rows would have silently deleted the *previous* line's trailing
+newline on each one, merging rows into each other. `shell::show`'s
 `process_events` intercepts `Event::Text`/`Key::Backspace`/`Key::Delete`
 ahead of their ordinary single-`Caret` arms whenever `state.block_
 selection` is `Some`, and only those three — every other event (arrows,
-Enter, Tab, Cut/Paste, …) is out of this phase's scope and still acts on
-`state.caret` exactly as before. Ten new tests: nine pure table tests in
-`text_area::input::tests` (uniform insert, real-range replace, short-line
-clamping without padding, both merge-guard cases for Backspace/Delete, the
-"only rows genuinely at column 0 are skipped" distinction) plus one
-`shell::tests` integration test seeding a real `ShellState` and driving a
-real `Event::Text` through `process_events`. Live click-through (typing
-into a zero-width block inserts on every row and stays active for further
-typing; typing over a real-width block replaces that column range on
-every row; Backspace/Delete at both zero and real width all work; a short
-line inside the block neither crashes nor merges with its neighbor)
-confirmed working by the user.
+Enter, Tab, Cut/Paste, …) still acts on `state.caret` exactly as before.
+Live-verified.
 
 **Phase 3 — block paste.** Clipboard text split on `\n`, row _i_ inserted
 at `(start_line + i, start_col)`; a row-count mismatch (fewer/more
 clipboard lines than the block spans) leaves the surplus/shortfall
 untouched rather than wrapping or clearing.
 
-**Checkpoint 3:** full suite green (table tests for exact-match,
-fewer-lines, and more-lines cases); live-verify a real block-select →
-copy → block-paste round-trip — code done: `text_area::input` gained
-`block_selection_text` (reads `block`'s own `cols()` range from every
-spanned row, joined by `\n` — the Copy/Cut side) and `block_paste`
-(`clipboard.split('\n')`, `zip`ped against `block_row_ranges` so an
-unmatched row or an unmatched clipboard line is simply left alone rather
-than wrapped/cleared, applied back-to-front so each row's own differently-
-sized insert never invalidates an earlier row's already-computed range —
-`multi_cursor::apply_multi_edit` wasn't reusable here since it only
-supports one `MultiEditOp` shared across every range, and each row's
-pasted line can differ in length). `shell::process_events` gained
-block-scoped `Event::Copy`/`Event::Cut`/`Event::Paste` arms (same
-"checked first, never falls through" placement as Phase 2's block Text/
-Backspace/Delete arms), Copy/Cut guarded by `!block.cols().is_empty()`
-matching the ordinary-caret Copy/Cut arms' own `!is_collapsed()` guard;
-Cut reuses `replace_block_selection(..., "")` to clear the block rather
-than a new deletion path. Five new `input::tests` table tests (join/
-short-line-clamp for `block_selection_text`; exact-match, fewer-lines,
-more-lines, and a `block_selection_text` → `block_paste` round-trip for
-`block_paste`) plus one `shell::tests` integration test seeding a real
-`ShellState` and driving a real `Event::Paste` through `process_events`,
-mirroring Phase 2's own checkpoint test shape. Live click-through (a real
-block-select → copy → block-paste round-trip, including the fewer-lines
-and more-lines mismatch cases) confirmed working by the user.
+**Checkpoint 3:** done — `text_area::input` gained `block_selection_text`
+(reads `block`'s own `cols()` range from every spanned row, joined by
+`\n` — the Copy/Cut side) and `block_paste` (`clipboard.split('\n')`,
+`zip`ped against `block_row_ranges` so an unmatched row or an unmatched
+clipboard line is simply left alone rather than wrapped/cleared, applied
+back-to-front so each row's own differently-sized insert never
+invalidates an earlier row's already-computed range — `multi_cursor::
+apply_multi_edit` wasn't reusable here since it only supports one
+`MultiEditOp` shared across every range, and each row's pasted line can
+differ in length). `shell::process_events` gained block-scoped
+`Event::Copy`/`Event::Cut`/`Event::Paste` arms (same "checked first,
+never falls through" placement as Phase 2's block arms), Copy/Cut guarded
+by `!block.cols().is_empty()` matching the ordinary-caret arms' own
+`!is_collapsed()` guard; Cut reuses `replace_block_selection(..., "")` to
+clear the block rather than a new deletion path. Live-verified, including
+the fewer-lines and more-lines mismatch cases.
 
 ---
 
@@ -491,303 +412,175 @@ and more-lines mismatch cases) confirmed working by the user.
 reload, hunk headers parsed into added/removed/modified line ranges,
 painted alongside the line-number gutter.
 
-**Checkpoint 1:** full suite green (a fixture diff-output string parsed
-into expected ranges, headless); live-verify editing a tracked file shows
-the right gutter marks against a real git repo — code done: this is the
-first git-aware code in the project (no `git2` dependency — shells out to
-the real CLI, mirroring `static_analysis`'s own approach, per a from-
-scratch check this session confirmed there was nothing existing to build
-on). `fg_core::diff` (new) has `git_diff_hunks(path, root)` (`git diff
---no-color -U0 -- <path>` with `root` as cwd — `root` only needs to be
-*inside* the working tree, not necessarily the git root itself, so a
-Maven/Gradle multi-module project root still works) and the pure
-`parse_unified_diff`, converting real `@@ -old[,count] +new[,count] @@`
-headers (verified against several real captured `git diff -U0` runs this
-session — a plain modify, a pure add/remove at the start/middle/end of a
-file — not assumed) into 0-based `DiffHunk { kind: Added|Removed|
-Modified, lines }`. A `Removed` hunk has no surviving line of its own, so
-`lines` is an empty `at..at` marker rather than a real range — git's own
-`+0,0` zero-count convention already reports the correct 0-based index
-with no adjustment needed, including the real edge case of a deletion at
-the very start of the file. "Not a git repository"/"untracked file"/"no
-changes" are all deliberately left indistinguishable (empty stdout, no
-`Err`) — every one of them means the same thing to this gutter: nothing to
-show, not an error to surface; only a failure to launch `git` at all is a
-real `Err`. `Document` gained `diff_hunks: Vec<DiffHunk>`, refreshed
-wholesale, the same lifecycle `checkstyle_diagnostics`/`pmd_diagnostics`
-already have and for the same reason (see that field's own doc comment).
+**Checkpoint 1:** done — this is the first git-aware code in the project
+(no `git2` dependency — shells out to the real CLI, mirroring
+`static_analysis`'s own approach). `fg_core::diff` has `git_diff_hunks(path,
+root)` (`git diff --no-color -U0 -- <path>` with `root` as cwd — `root`
+only needs to be *inside* the working tree, not necessarily the git root
+itself, so a Maven/Gradle multi-module project root still works) and the
+pure `parse_unified_diff`, converting `@@ -old[,count] +new[,count] @@`
+headers into 0-based `DiffHunk { kind: Added|Removed|Modified, lines }`. A
+`Removed` hunk has no surviving line of its own, so `lines` is an empty
+`at..at` marker rather than a real range — git's own `+0,0` zero-count
+convention already reports the correct 0-based index with no adjustment
+needed. "Not a git repository"/"untracked file"/"no changes" are all
+deliberately left indistinguishable (empty stdout, no `Err`) — every one
+of them means the same thing to this gutter: nothing to show, not an
+error to surface; only a failure to launch `git` at all is a real `Err`.
+`Document` gained `diff_hunks: Vec<DiffHunk>`, refreshed wholesale, the
+same lifecycle `checkstyle_diagnostics`/`pmd_diagnostics` already have.
 
 App-side wiring (`panels::git_diff::DiffState`) mirrors `static_analysis`'s
 own `spawn_scan`/`poll_scan` background-thread shape, but keyed per-path
 (`HashMap`, not one `Option` slot) since a diff run is triggered per-
-document from several independent points rather than one project-wide
-action at a time. Open (`app::open_path`) and reload
-(`app::reload_tab_from_disk`) each trigger `DiffState::run` explicitly, a
-few call sites each. Save is deliberately *not* threaded through every one
-of this app's several save call sites (Ctrl+S, File > Save, the close-
-confirmation modal, the editor's own right-click Save, auto-save) — instead
-`DiffState::check_for_saves`, called once a frame after `tabs::show` runs,
-detects any open tab's dirty state going `true` -> `false` since the last
-frame and fires generically, catching every save path (and the external-
-change banner's manual "Reload" button, itself a dirty -> clean transition)
-without any of those call sites needing to know this feature exists. Only
-the file-watcher's *transparent* auto-reload doesn't fit that heuristic
-(never dirty before or after, since it only fires when there were no local
-edits to begin with) — `reload_tab_from_disk`'s own explicit trigger is
-what actually covers that one case; the other trigger points are real but
-redundant with `check_for_saves` where they overlap it, which is harmless.
-Results are silently dropped on failure (including "not a git repository")
-rather than surfaced through `last_error` — an automatic background
-refresh showing no marks is the right degrade, not an error toast on every
-non-git file.
+document from several independent points. Save is deliberately *not*
+threaded through every one of this app's several save call sites (Ctrl+S,
+File > Save, the close-confirmation modal, the editor's own right-click
+Save, auto-save) — instead `DiffState::check_for_saves`, called once a
+frame after `tabs::show` runs, detects any open tab's dirty state going
+`true` -> `false` since the last frame and fires generically, catching
+every save path without any of those call sites needing to know this
+feature exists. Only the file-watcher's *transparent* auto-reload doesn't
+fit that heuristic (never dirty before or after) — `reload_tab_from_disk`'s
+own explicit trigger covers that one case. Results are silently dropped on
+failure (including "not a git repository") rather than surfaced through
+`last_error` — an automatic background refresh showing no marks is the
+right degrade, not an error toast on every non-git file.
 
-Gutter painting (`widgets::editor::diff_gutter`, new sibling to
-`folding`) reserves an extra 4px column flush against the gutter's own
-inner edge (immediately before the text starts), only when `doc.diff_hunks`
-is non-empty — same "only reserve it when there's something to show" rule
-`folding::FOLD_GUTTER_WIDTH` already established, so an untouched file's
-gutter width is unaffected. `Added`/`Modified` paint a filled rect per
-line in `hunk.lines`; a `Removed` hunk's empty-range marker paints a thin
-3px notch at a row boundary instead (the top edge of line 0 for a
-deletion at the very start of the file, else the bottom edge of the line
-right before the marker — which, with no extra casing, also correctly
-lands on the last real line's own bottom edge for a deletion at the very
-end of the file). Three new theme colors (`diff_added`/`diff_removed`/
-`diff_modified`, dark+light) reuse the same green/red/blue vocabulary
-every real diff gutter (VS Code, IntelliJ) already uses.
-
-18 new tests: 12 in `fg_core::diff` (parser table tests against the real
-captured fixtures above, plus two end-to-end tests running a real `git`
-binary against a real temp repo — one with a real commit+edit, one
-against a path outside any repository, confirming the "empty, not an
-error" degrade for real rather than just by parser inspection) and 6 in
-`panels::git_diff` (spawn-and-poll round trip, a dropped result for a
-since-closed tab, the dirty-transition trigger's no-false-positive-on-
-first-sighting and no-project-root cases). Live click-through (against
-this repo's own working tree — modify+save shows a blue bar, add+save
-shows a green bar, delete+save shows a red notch at the boundary, undo
-back to clean removes the marks, close/reopen reflects the current diff
-immediately, and an on-disk change while the tab is open and clean
-refreshes the marks without an explicit save) confirmed working by the
-user.
+Gutter painting (`widgets::editor::diff_gutter`, sibling to `folding`)
+reserves an extra 4px column flush against the gutter's own inner edge,
+only when `doc.diff_hunks` is non-empty — same "only reserve it when
+there's something to show" rule `folding::FOLD_GUTTER_WIDTH` already
+established. `Added`/`Modified` paint a filled rect per line in
+`hunk.lines`; a `Removed` hunk's empty-range marker paints a thin 3px
+notch at a row boundary instead. Three new theme colors (`diff_added`/
+`diff_removed`/`diff_modified`, dark+light) reuse the same green/red/blue
+vocabulary every real diff gutter (VS Code, IntelliJ) already uses.
+Live-verified against this repo's own working tree.
 
 **Phase 2 — inline blame.** `git blame --porcelain` parsed per line,
 shown as a dimmed cursor-line annotation.
 
-**Checkpoint 2:** full suite green; live-verify the annotation updates as
-the cursor moves between lines with different blame authors/dates — code
-done: `fg_core::blame` (new) has `git_blame(path, root)` (`git blame
---porcelain -- <path>`, same "only needs to be inside the working tree"
-contract as `git_diff_hunks`) and the pure `parse_porcelain_blame`,
-producing one dense, 0-indexed `BlameLine { sha, author, author_time,
-summary }` per line of the file. Same "empty stdout, no `Err`" degrade for
-"not a git repository"/"untracked file" that `git_diff_hunks` already
-established — only a failed `git` launch is a real `Err`. `panels::
-git_diff` (renamed in spirit, not in module path, to cover both halves) now
-runs `git diff` **and** `git blame` on the same background thread per
-document (one `ScanResult` tuple of two independent `Result`s, so a failure
-on one half never discards the other's still-good result), applying each
-half to the matching open tab's `Document::diff_hunks`/`Document::blame`
-respectively — same trigger points (open/save/reload/`check_for_saves`)
-Phase 1 already wired, no new trigger plumbing needed since both scans ride
-together.
+**Checkpoint 2:** done — `fg_core::blame` has `git_blame(path, root)`
+(`git blame --porcelain -- <path>`, same "only needs to be inside the
+working tree" contract as `git_diff_hunks`) and the pure
+`parse_porcelain_blame`, producing one dense, 0-indexed `BlameLine { sha,
+author, author_time, summary }` per line of the file. Same "empty stdout,
+no `Err`" degrade for "not a git repository"/"untracked file" that
+`git_diff_hunks` already established. `panels::git_diff` (renamed in
+spirit, not in module path, to cover both halves) now runs `git diff`
+**and** `git blame` on the same background thread per document (one
+`ScanResult` tuple of two independent `Result`s, so a failure on one half
+never discards the other's still-good result) — same trigger points Phase
+1 already wired.
 
 `widgets::editor::painting` gained `paint_blame_annotation` (paints just
-past the cursor line's own shaped text, in `theme::line_number`'s color —
-already the palette's dimmest text-like color, so the annotation doesn't
-outcompete the code itself), `blame_annotation_text` (`"<author> •
-<relative time> • <summary>"`), and `relative_time` (coarse bucketed
-"Xm/h/d/mo/y ago" via integer division on two Unix-second timestamps, no
-date/time crate needed; a future timestamp — clock skew — clamps to "just
-now" rather than a negative duration). A blame-porcelain all-zero sha marks
-an uncommitted working-tree line; rather than surface git's own generated
-"Not Committed Yet"/"Version of X from X" text (accurate but reads as
-clutter next to a real commit's summary), `UNCOMMITTED_SHA` gets a short
-"Uncommitted change" label instead. View > Inline Blame (new
-`ViewSettings::show_inline_blame` checkbox, same "one flag, one menu
-toggle" shape as every other View submenu entry) lets it be turned off.
-
-8 new tests: 6 in `fg_core::blame` (porcelain-parser table tests against
-real captured `git blame --porcelain` output — a first-seen commit, a
-repeated commit reusing an earlier header, an uncommitted working-tree
-line — plus a real end-to-end run against a real temp repo) and 4 in
-`widgets::editor::painting` (`relative_time`'s bucket boundaries and
-future-clamp, `blame_annotation_text`'s normal and uncommitted-line cases),
-plus one `panels::git_diff` integration test (`run_then_poll_applies_real_
-blame_lines_to_the_matching_open_tab`, a real temp repo with one real
-commit) alongside the existing diff-scan test now also asserting the blame
-half degrades to empty the same way. Live click-through (moving the cursor
-across lines with different real commit authors/dates updates the
-annotation accordingly, an uncommitted edited line shows "Uncommitted
-change," View > Inline Blame hides/shows it) confirmed working by the
-user.
+past the cursor line's own shaped text, in `theme::line_number`'s color),
+`blame_annotation_text` (`"<author> • <relative time> • <summary>"`), and
+`relative_time` (coarse bucketed "Xm/h/d/mo/y ago" via integer division on
+two Unix-second timestamps, no date/time crate needed; a future timestamp
+— clock skew — clamps to "just now" rather than a negative duration). A
+blame-porcelain all-zero sha marks an uncommitted working-tree line;
+rather than surface git's own generated "Not Committed Yet"/"Version of X
+from X" text (accurate but reads as clutter next to a real commit's
+summary), `UNCOMMITTED_SHA` gets a short "Uncommitted change" label
+instead. View > Inline Blame (`ViewSettings::show_inline_blame` checkbox)
+lets it be turned off. Live-verified.
 
 **Phase 3 — stage/commit panel.** A dockable panel listing `git status
 --porcelain` as a checkbox tree, a commit-message box + Commit button
 (`git commit -F -`).
 
-**Checkpoint 3:** full suite green; live-verify staging a file and
-committing it via the panel produces a real commit matching what `git
-log` shows afterward — done: `fg_core::status`
-(new) has `git_status(root)` (`git status --porcelain -uall` — `-uall` so
-an entirely-new directory lists each file individually rather than
-collapsing to one `?? dir/` line, verified against a real run this
-session), the pure `parse_porcelain_status` (one `StatusEntry { path,
-index_status, worktree_status }` per line; a rename's `"old -> new"` keeps
-only `new`, since the panel only ever displays/toggles a file's *current*
-path), plus `git_add`/`git_reset_paths`/`git_commit` (the last piping the
-message over stdin via `git commit -F -`, sidestepping shell-escaping/
-argv-length concerns a multi-line message typed into the panel would
-otherwise raise). Unlike `diff`/`blame` (Phases 1-2, silent auto-refreshes
-where even "not a git repository" degrades to empty output), the three
-mutating calls are real user-triggered actions — a new `GitCommandError::
-Failed(String)` (real stderr, not just "`git` didn't launch") exists
-specifically so a real failure (nothing staged, no `user.name`/`user.email`
-configured, ...) reaches the user instead of silently degrading.
+**Checkpoint 3:** done — `fg_core::status` has `git_status(root)` (`git
+status --porcelain -uall` — `-uall` so an entirely-new directory lists
+each file individually rather than collapsing to one `?? dir/` line), the
+pure `parse_porcelain_status` (one `StatusEntry { path, index_status,
+worktree_status }` per line; a rename's `"old -> new"` keeps only `new`,
+since the panel only ever displays/toggles a file's *current* path), plus
+`git_add`/`git_reset_paths`/`git_commit` (the last piping the message over
+stdin via `git commit -F -`, sidestepping shell-escaping/argv-length
+concerns a multi-line message typed into the panel would otherwise raise).
+Unlike `diff`/`blame` (Phases 1-2, silent auto-refreshes where even "not a
+git repository" degrades to empty output), the three mutating calls are
+real user-triggered actions — a new `GitCommandError::Failed(String)`
+(real stderr, not just "`git` didn't launch") exists specifically so a
+real failure (nothing staged, no `user.name`/`user.email` configured, ...)
+reaches the user instead of silently degrading.
 
-`panels::git_stage::GitStageState` (new) mirrors `static_analysis`'s own
+`panels::git_stage::GitStageState` mirrors `static_analysis`'s own
 `spawn_scan`/`poll_scan` background-thread shape (one status slot, one
 shared add/reset/commit slot — the panel disables every checkbox and the
-Commit button while any of the three is in flight, so there's never more
-than one to track), applying a successful `git_status` result to its own
-`entries` directly (purely local book-keeping, unlike `static_analysis`'s
-findings, which have to route into `EditorState`'s open documents) rather
-than through `app.rs`. `poll_op` tracks whether the just-finished op was
-specifically a commit (`committing: bool`, set only by `commit()`) so a
-successful commit also clears `commit_message`, without `app.rs` needing
-to tell it which of the three ops just finished. The panel (`panels::
-git_stage::show`) kicks off stage/unstage/commit directly from the
-relevant click or checkbox toggle — same "already owns `&mut
-GitStageState`, no need to bubble a `menu_bar`-style outcome flag" reasoning
-`static_analysis::show_install_row` uses for its own Install/Check for
-Updates buttons — grouped into "Staged Changes"/"Changes" sections (not one
-flat mixed list) with a `ui.checkbox` per file (checking stages via `git
-add`, unchecking unstages via `git reset --`), a `[A]/[D]/[M]/[R]/[C]/[U]`
-badge per row, and a multi-line commit-message box + Commit button
-(disabled with nothing staged, an empty message, or an op already
-running).
+Commit button while any of the three is in flight). `poll_op` tracks
+whether the just-finished op was specifically a commit (`committing:
+bool`) so a successful commit also clears `commit_message`. The panel
+groups rows into "Staged Changes"/"Changes" sections with a
+`[A]/[D]/[M]/[R]/[C]/[U]` badge per row, and a multi-line commit-message
+box + Commit button (disabled with nothing staged, an empty message, or an
+op already running).
 
-Dock/persistence follows `terminal_panel_visible`'s own exact shape: View >
-"Source Control" checkbox (no keyboard shortcut added — none of Track 9's
-own spec calls for one, and every existing Ctrl-combo is already spoken
-for), `source_control_visible` persisted the same way (`SOURCE_CONTROL_
-PANEL_VISIBLE_KEY`), docked via `egui::Panel::right`. Unlike the terminal
-panel there's no session to resume, so `app.rs` instead detects a `false ->
-true` visibility transition each frame and fires one `git_stage.refresh`
-right then — the panel would otherwise open to a stale/empty list until the
-user found the Refresh button. A completed stage/unstage/commit
-(`poll_op`, alongside `app.rs`'s existing `poll_checkstyle`/`poll_pmd`/
-`diff.poll` calls) triggers a fresh `git_stage.refresh` on success, or
-writes `last_error` on failure — the same pattern Checkstyle/PMD already
-use for their own user-triggered runs, not `git_diff`'s silent one.
+Dock/persistence follows `terminal_panel_visible`'s own exact shape (View
+> "Source Control" checkbox, `egui::Panel::right`). Unlike the terminal
+panel there's no session to resume, so `app.rs` instead detects a `false
+-> true` visibility transition each frame and fires one
+`git_stage.refresh` right then — the panel would otherwise open to a
+stale/empty list until the user found the Refresh button.
 
-23 new tests: 9 in `fg_core::status` (porcelain-parser table tests
-covering every status-line kind — modify, staged-add, rename-with-follow-
-up-edit, untracked — against a real captured `-uall` fixture, plus five
-real end-to-end tests against a real temp repo: `git_status` itself, a
-full stage-then-commit round trip verified against `git log --format=%s`
-afterward, unstage reverting a file back to untracked, and a real "nothing
-staged" commit failure producing a real `GitCommandError::Failed`) and 5 in
-`panels::git_stage` (successful/failed `poll_status`, `poll_op`'s
-committing-clears-message/failed-commit-leaves-it-alone/stage-or-unstage-
-never-marked-as-committing cases). One unrelated flaky test fixed in
-passing while getting the full suite green for this checkpoint:
-`pty_session`'s `shell_command_falls_back_to_bin_sh_when_shell_unset`/
-`shell_command_uses_shell_env_var_when_set` were two separate `#[test]`s
-both mutating the same process-global `SHELL` env var — a genuine,
-observed race under `cargo test`'s default parallel execution (whichever
-ran last "won"), despite an existing comment claiming no other test in the
-crate touched `SHELL`; merged into one sequential test
-(`shell_command_reflects_the_shell_env_var_with_a_bin_sh_fallback`), which
-is the actual fix, not a rerun-until-green workaround.
-
-Live click-through caught a real bug: staging/unstaging via the checkbox
-felt like it hung — the op itself finishes almost instantly on its
-background thread, but this app runs in egui's reactive (not continuous)
-repaint mode, and `git_stage::show` wasn't calling `ctx.request_repaint()`
-while a scan/op was in flight, so nothing redrew the panel to show the
-result until some unrelated input event (a mouse move elsewhere) happened
-to trigger the next frame. Fixed the same way `spring_endpoints::show`
-already handles its own background scan: `show` now calls `ui.ctx().
-request_repaint()` whenever `status_running() || op_running()`. Full suite
-re-confirmed green after the fix, and the re-verify click-through (staging/
-unstaging via checkbox reflects instantly, staged→commit round trip matches
-`git log` afterward) confirmed working by the user.
+Live-verify caught a real, generally-applicable egui gotcha: staging/
+unstaging via the checkbox felt like it hung — the op finishes almost
+instantly on its background thread, but this app runs in egui's reactive
+(not continuous) repaint mode, and `git_stage::show` wasn't calling
+`ctx.request_repaint()` while a scan/op was in flight, so nothing redrew
+the panel until some unrelated input event happened to trigger the next
+frame. Fixed by calling `ui.ctx().request_repaint()` whenever
+`status_running() || op_running()` — the same pattern
+`spring_endpoints::show` already uses for its own background scan; any
+future background-op panel needs the same call.
 
 **Phase 4 — hunk-level staging + push.** Per-hunk stage via a hand-built
 patch + `git apply --cached`; a Push button surfacing real failure
 reasons (auth, no upstream, rejected) through the existing error modal.
 
-**Checkpoint 4:** full suite green; live-verify staging a single hunk
-(not the whole file) reflects correctly in `git diff --cached`, and Push
-against a real (test) remote succeeds/fails with an accurate message —
-done: `fg_core::diff` gained `RawHunk`/`FileDiff` (a hunk's real header +
-content lines, verbatim — unlike Phase 1's own `DiffHunk`, which only keeps
-the *line range* a hunk covers, this keeps the full text a hand-built patch
-needs), `parse_file_diff`/`git_file_diff`/`git_file_diff_cached` (the
-latter two `git diff --no-color [--cached] -- <path>`, deliberately real
-default 3-line context rather than Phase 1's own `-U0` — a hand-built hunk
-patch needs surrounding context for `git apply` to locate it unambiguously,
-verified against a real repo), and `hunk_patch` (rebuilds one hunk, by
-index, into a standalone single-hunk patch: the file's shared preamble plus
-just that hunk's own header/lines). `fg_core::status` gained
+**Checkpoint 4:** done — `fg_core::diff` gained `RawHunk`/`FileDiff` (a
+hunk's real header + content lines, verbatim — unlike Phase 1's own
+`DiffHunk`, which only keeps the *line range* a hunk covers, this keeps
+the full text a hand-built patch needs), `parse_file_diff`/`git_file_diff`/
+`git_file_diff_cached` (the latter two `git diff --no-color [--cached] --
+<path>`, deliberately real default 3-line context rather than Phase 1's own
+`-U0` — a hand-built hunk patch needs surrounding context for `git apply`
+to locate it unambiguously), and `hunk_patch` (rebuilds one hunk, by
+index, into a standalone single-hunk patch: the file's shared preamble
+plus just that hunk's own header/lines). `fg_core::status` gained
 `git_apply_cached(root, patch, reverse)` (`git apply --cached[--reverse]`,
 patch piped over stdin the same way `git_commit` already feeds its own
 message) and `git_push` (bare `git push`, relying entirely on the repo's
-own configured upstream) — both verified against real repos: staging then
-unstaging a single hunk out of a real two-hunk file via a real `git apply
---cached`/`--reverse` round trip, a real "no configured push destination"
-failure, and a real rejected push between two diverged clones of the same
-bare remote (confirmed real stderr text and exit codes first, per this
-project's own discipline, before writing any code against them).
+own configured upstream).
 
-App-side, `panels::git_stage::GitStageState` gained `expanded: Option<
-PathBuf>` (one file's hunk breakdown open at a time, same "one detail view"
-shape a lot of this app's panels already use) with its own background
-fetch (`toggle_expand`/`refresh_expanded`, both unstaged *and* staged
-`FileDiff`s together — a single `StatusEntry` can carry both a staged and a
-further-unstaged change at once, git's own `MM`-shaped status, and this
-view's whole point is the complete real hunk picture for that file, not
-just whichever half its row happens to be sorted into) and `stage_hunk`/
-`unstage_hunk`/`push` (all through the same shared `op_rx` slot stage/
-unstage/commit already established — a hunk op or a push in flight disables
-the panel's checkboxes/Commit button exactly like the other three already
-do). `poll_op`'s existing "refresh on success" follow-up (in `app.rs`) now
-also calls `refresh_expanded` when a row is open, since a hunk stage/
-unstage changes precisely that view's own data and shifts every later
-hunk's own index.
+App-side, `panels::git_stage::GitStageState` gained `expanded:
+Option<PathBuf>` (one file's hunk breakdown open at a time) with its own
+background fetch (`toggle_expand`/`refresh_expanded`, fetching both
+unstaged *and* staged `FileDiff`s together — a single `StatusEntry` can
+carry both a staged and a further-unstaged change at once, git's own
+`MM`-shaped status, and this view's whole point is the complete real hunk
+picture for that file) and `stage_hunk`/`unstage_hunk`/`push` (all through
+the same shared `op_rx` slot stage/unstage/commit already established).
+`poll_op`'s existing "refresh on success" follow-up now also calls
+`refresh_expanded` when a row is open, since a hunk stage/unstage shifts
+every later hunk's own index.
 
-The panel itself gained a collapse/expand control per non-untracked row
-(clicking it shows a "Stage Hunk"/"Unstage Hunk" row per hunk, staged
-hunks first) and a Push button next to Refresh. Live click-through caught a
-real bug here: the expand control was first built as a `▸`/`▾` text-glyph
-`small_button`, which rendered as a tofu box — neither the app's own
-bundled fonts nor egui's built-ins cover those glyphs (the same *class* of
-bug the terminal panel's own missing-Nerd-Font-glyph fix addressed
-earlier this session, but a different spot: the default UI font, not the
-editor font), and the broken button was also silently failing to expand
-the row at all. Fixed by dropping the glyph entirely in favor of a
-vector-painted triangle via egui's own `collapsing_header::
-paint_default_icon` — the same drawing `CollapsingHeader` uses for itself,
-immune to font coverage since nothing is being shaped as text.
-
-18 new tests: 8 in `fg_core::diff` (`parse_file_diff`'s preamble/hunk
-split and empty-diff case, `hunk_patch`'s rebuild and out-of-range `None`,
-plus real end-to-end `git_file_diff`/`git_file_diff_cached` runs against a
-real two-hunk repo), 6 in `fg_core::status` (real `git_apply_cached`
-stage/reverse-unstage round trips, a real no-remote push failure, a real
-successful-then-rejected push between two diverged clones), and 6 in
-`panels::git_stage` (`poll_expanded`'s successful-result application,
-`toggle_expand`'s collapse-on-second-call, `stage_hunk`/`unstage_hunk`/
-`refresh_expanded`'s no-op-with-nothing-expanded guards, and a real
-expand-then-stage-hunk round trip against a real repo confirming the right
-hunk, out of the right half, gets staged). Live click-through (expanding a
-real modified file with two separate hunks, staging just one and
-confirming via a terminal `git diff --cached` that only it landed, the row
-correctly flipping that hunk to "Unstage Hunk" and reverting it back,
-Push's real error text surfacing through the existing error modal) — first
-pass caught the tofu-box/dead-expand-control bug above; re-verified working
-by the user after the vector-icon fix.
+The panel gained a collapse/expand control per non-untracked row (a
+"Stage Hunk"/"Unstage Hunk" row per hunk, staged hunks first) and a Push
+button. Live-verify caught a reusable font-coverage gotcha: the expand
+control was first built as a `▸`/`▾` text-glyph `small_button`, which
+rendered as a tofu box — neither the app's bundled fonts nor egui's
+built-ins cover those glyphs (same *class* of bug as the terminal panel's
+earlier missing-Nerd-Font-glyph issue, but here in the default UI font,
+not the editor font) — and the broken button also silently failed to
+expand the row. Fixed by dropping the glyph in favor of a vector-painted
+triangle via egui's own `collapsing_header::paint_default_icon` (the same
+drawing `CollapsingHeader` uses for itself), which is immune to font
+coverage since nothing is shaped as text. Live-verified end to end
+afterward, including Push's real error text surfacing through the
+existing error modal.
 
 ---
 
@@ -803,72 +596,56 @@ code — don't write Phase 2 against an assumed answer.
 
 **Determination (this session):** `FEATURES.md`'s `[TODO]` for this track
 and `PLAN.md`'s own Build status were both stale — Phases 2 and 3 were
-already fully shipped for Java in an earlier, less-documented session
-(`crates/syntax/src/folding.rs`'s `foldable_ranges`, `crates/app/src/
-widgets/editor/folding.rs`'s gutter/toggle code, `Document::folded_lines`,
-and the Tools/View "Fold All"/"Expand All" menu items all already existed
-and are wired end to end — confirmed by reading the code directly, not
-assumed from the doc comments). `text_area::FoldMap` (`crates/app/src/
-widgets/editor/text_area.rs`) already generalizes to **arbitrary**
-user-toggled line ranges — it takes a plain sorted `&[Range<usize>]`, with
-no dependency on how those ranges were chosen — so no second mechanism is
-needed for any future arbitrary-region folding. `Track 19`'s full
-virtualization is confirmed **not** a hard prerequisite: folding already
-works today against the existing non-virtualized `text_area` widget, which
-is direct proof against `FEATURES.md`'s own conservative guess. The one
-real gap found: `syntax::node_kinds::foldable_kinds` returned `&[]` for
-Kotlin — only import-block folding worked for it; class/method/control-flow
-body folding was Java-only.
+already fully shipped for Java in an earlier session (`crates/syntax/src/
+folding.rs`'s `foldable_ranges`, `crates/app/src/widgets/editor/
+folding.rs`'s gutter/toggle code, `Document::folded_lines`, and the
+Tools/View "Fold All"/"Expand All" menu items all already existed and are
+wired end to end). `text_area::FoldMap` (`crates/app/src/widgets/editor/
+text_area.rs`) already generalizes to **arbitrary** user-toggled line
+ranges — it takes a plain sorted `&[Range<usize>]`, with no dependency on
+how those ranges were chosen — so no second mechanism is needed for any
+future arbitrary-region folding. `Track 19`'s full virtualization is
+confirmed **not** a hard prerequisite: folding already works today against
+the existing non-virtualized `text_area` widget, which is direct proof
+against `FEATURES.md`'s own conservative guess. The one real gap found:
+`syntax::node_kinds::foldable_kinds` returned `&[]` for Kotlin — only
+import-block folding worked for it; class/method/control-flow body folding
+was Java-only.
 
 **Phase 2 — fold-range computation.** Per-language tree-sitter query for
 foldable node kinds (class/method/interface bodies); a collapse/expand
 gutter marker at each range's opening line.
 
-**Checkpoint 2:** `cargo test -p syntax` green (fold ranges match
-expected line numbers per fixture); live-verify the gutter marker appears
-at the right lines on a real file — done: Java side already shipped
-(pre-existing). Kotlin's own gap (found in Phase 1's determination above)
-closed this session: `foldable_kinds(Language::Kotlin)` now returns
-`["class_body", "enum_class_body", "block", "block_comment"]`, verified
-fresh against `tree-sitter-kotlin-ng` 1.1.0's real parse output (a
-throwaway probe test dumping a real parse tree, per `TECHNICAL_DEBT.md`
-#3's established discipline — never assumed from the Java grammar or from
-`node-types.json` alone), not guessed. Real findings from that probe:
-Kotlin's grammar has no separate `interface_body`/`enum_body` node kinds
-the way Java does — `interface`/`object` declarations reuse
-`class_declaration`/`class_body`, distinguished only by keyword, so
-`class_body` alone already covers class, interface, and object bodies;
-`enum_class_body` is the one real exception with its own kind; a
-`function_body` node wraps a `block` node at the exact same span, so
-folding `block` alone (Java's own "method and control-flow bodies"
-convention) already covers method bodies without a second, redundant
-`function_body` entry — verified directly from the dumped tree, not
-inferred. Three new `crates/syntax/src/folding.rs` tests (nested class/
-method/if-block folding, enum class body, multi-line block comment); two
-pre-existing Kotlin import-folding tests (`kotlin_folds_a_run_of_
-consecutive_imports`, `kotlin_a_lone_import_is_not_foldable`) updated from
-a multi-line `class Foo {\n}\n` to a single-line `class Foo {}` body — they
-now also fold under the newly-added `class_body` kind, so the fixture was
-narrowed to keep those tests scoped to import-folding only, matching the
-single-line-body convention the Java import tests already use. Live
-click-through (a real `.kt` file with a block comment, class body, method
-body, `if`-block, and enum class body all showing fold arrows; collapsing
-each — including a nested collapse — and both Fold All/Expand All)
-confirmed working by the user.
+**Checkpoint 2:** done — Java side already shipped (pre-existing).
+Kotlin's own gap (found in Phase 1's determination above) closed this
+session: `foldable_kinds(Language::Kotlin)` now returns `["class_body",
+"enum_class_body", "block", "block_comment"]`, verified fresh against
+`tree-sitter-kotlin-ng` 1.1.0's real parse output (a throwaway probe test
+dumping a real parse tree, per `TECHNICAL_DEBT.md` #3's established
+discipline — never assumed from the Java grammar or from `node-types.json`
+alone). Real findings from that probe: Kotlin's grammar has no separate
+`interface_body`/`enum_body` node kinds the way Java does — `interface`/
+`object` declarations reuse `class_declaration`/`class_body`,
+distinguished only by keyword, so `class_body` alone already covers
+class, interface, and object bodies; `enum_class_body` is the one real
+exception with its own kind; a `function_body` node wraps a `block` node
+at the exact same span, so folding `block` alone (Java's own "method and
+control-flow bodies" convention) already covers method bodies without a
+second, redundant `function_body` entry. Live-verified against a real
+`.kt` file (block comment, class body, method body, `if`-block, enum
+class body, including a nested collapse and both Fold All/Expand All).
 
 **Phase 3 — fold state + toggle.** `folded_ranges: HashSet<usize>` per
 document (or per-tab side structure); toggling updates the layout fold-
 map (built from the union of this and the existing auto-import folding).
 
-**Checkpoint 3:** full suite green; live-verify clicking a fold marker
-collapses/expands the right region and scrolling/editing around a folded
-region doesn't corrupt layout — done (pre-existing, confirmed by reading
-`crates/core/src/document.rs`'s `Document::folded_lines` and `crates/app/
-src/widgets/editor/widget.rs`'s wiring directly): fold state is exactly
-this shape already; Java's own gutter/toggle behavior was already
-live-verified in the earlier session that shipped it, and the Kotlin
-gutter markers this session's fold-kind addition newly makes visible were
-live-verified this session too (see Checkpoint 2's own note above).
+**Checkpoint 3:** done (pre-existing, confirmed by reading `crates/core/
+src/document.rs`'s `Document::folded_lines` and `crates/app/src/widgets/
+editor/widget.rs`'s wiring directly): fold state is exactly this shape
+already. Java's own gutter/toggle behavior was live-verified in the
+earlier session that shipped it; the Kotlin gutter markers this session's
+fold-kind addition newly makes visible were live-verified this session
+too.
 
 ---
 
@@ -899,119 +676,75 @@ exists: scan resolved dependency jars for bundled `spring-configuration-
 metadata.json`, parse into completion candidates, feed the existing
 completion popup keyed by typed prefix.
 
-**Checkpoint 1:** full suite green (a fixture jar/metadata file producing
-expected candidates, headless); live-verify typing a partial property key
-in `application.properties`/`.yml` in a real Spring Boot project offers
-real completions — done:
+**Checkpoint 1:** done.
 
-`crates/core/src/spring_config_metadata.rs` (new) has `SpringConfigProperty
-{ name, type_name, description, default_value: Option<String> }`,
+`crates/core/src/spring_config_metadata.rs` has `SpringConfigProperty {
+name, type_name, description, default_value: Option<String> }`,
 `parse_metadata_json`, `scan_jar_for_metadata` (opens a jar as a zip via
-the `zip` crate — already a proven dependency in this exact codebase for
-`app::tool_manager`'s own archive extraction, now added to `core` too —
-and reads just its `META-INF/spring-configuration-metadata.json` entry
-without a full extraction), and `scan_classpath_for_metadata` (scans every
-jar in a resolved classpath, silently skipping one that can't be opened,
-same tolerance `static_analysis`'s own findings-to-diagnostics conversion
-already established for a file that can no longer be read). Verified
-against a real, currently-cached `spring-boot-autoconfigure-4.0.6.jar`:
-`properties[].defaultValue` is genuinely heterogeneous JSON (a bool,
-string, or number depending on the property's own type — confirmed by
-inspecting the real file directly, not assumed), handled via a custom
-`deserialize_with` that stringifies whatever value is there rather than
-modeling it as a fixed Rust type; a real end-to-end run (a throwaway,
-then-deleted probe, same convention as every other real-machine
-verification this session) found exactly 102 real properties including
-`spring.aop.auto`, and confirmed a plain `commons-io` jar (no bundled
-metadata at all) correctly degrades to an empty result rather than an
-error.
+the `zip` crate and reads just its `META-INF/spring-configuration-
+metadata.json` entry without a full extraction), and
+`scan_classpath_for_metadata` (scans every jar in a resolved classpath,
+silently skipping one that can't be opened). `properties[].defaultValue`
+is genuinely heterogeneous JSON (a bool, string, or number depending on
+the property's own type — confirmed against a real
+`spring-boot-autoconfigure` jar), handled via a custom `deserialize_with`
+that stringifies whatever value is there rather than modeling it as a
+fixed Rust type. A jar with no bundled metadata at all correctly degrades
+to an empty result rather than an error.
 
-App-side: `crates/app/src/panels/spring_config.rs` (new) has
-`SpringConfigState` — lazily triggered (`ensure_scanning`, called from the
-completion trigger itself the first time a `.properties`/`.yml` file
-actually needs candidates, not eagerly on every project open, since real
-classpath resolution shells out to `mvn`/`gradle` and can be genuinely
-slow) rather than following `static_analysis`'s own menu-triggered shape.
-`scan_project` detects the build tool by file presence and handles a real
-gap `maven_classpath`/`gradle_classpaths` (Track 21 Phase 3) left open on
+App-side: `crates/app/src/panels/spring_config.rs` has `SpringConfigState`
+— lazily triggered (`ensure_scanning`, called from the completion trigger
+itself the first time a `.properties`/`.yml` file actually needs
+candidates, not eagerly on every project open, since real classpath
+resolution shells out to `mvn`/`gradle` and can be genuinely slow) rather
+than following `static_analysis`'s own menu-triggered shape. `scan_project`
+detects the build tool by file presence and handles a real gap
+`maven_classpath`/`gradle_classpaths` (Track 21 Phase 3) left open on
 their own: a Maven **aggregator** `pom.xml` (`<packaging>pom</packaging>`,
-real multi-module `<modules>`, no dependencies of its own — the real
-`br.ufsc.bridge:pec` project on this machine is exactly this shape) has
-nothing for `mvn dependency:build-classpath` to resolve at its own root,
-so `maven_module_tree_classpath` reads the aggregator's own `<modules>`
+real multi-module `<modules>`, no dependencies of its own) has nothing for
+`mvn dependency:build-classpath` to resolve at its own root, so
+`maven_module_tree_classpath` reads the aggregator's own `<modules>`
 (`fg_core::parse_pom`) and unions each real module directory's own
-classpath instead; Gradle needs no such special-casing since `gradle_
-classpaths` already walks the whole multi-module tree from one root
-invocation (Track 21 Phase 3's own design).
+classpath instead; Gradle needs no such special-casing since
+`gradle_classpaths` already walks the whole multi-module tree from one
+root invocation.
 
-`crates/app/src/widgets/editor/spring_config_completion.rs` (new) is the
-pure candidate-generation half: `properties_completion_candidates` (flat,
-every property's full dotted name — `.properties`) and `yaml_completion_
-candidates` (one candidate per *distinct next segment* under a given
-ancestor prefix, deduped — offering `.yml`'s own `"servlet.jsp.class-
-name"` as one flat candidate at the `server:` nesting level would be
-invalid YAML if accepted verbatim, three more nested lines, not one, so
-this drills exactly one level at a time instead, matching how a user
-actually extends a mapping). `yaml_ancestor_path` reconstructs the dotted
-key path enclosing a given line via **indentation**, deliberately not a
+`crates/app/src/widgets/editor/spring_config_completion.rs` is the pure
+candidate-generation half: `properties_completion_candidates` (flat,
+every property's full dotted name — `.properties`) and
+`yaml_completion_candidates` (one candidate per *distinct next segment*
+under a given ancestor prefix, deduped — offering a deeply-nested key as
+one flat candidate would be invalid YAML if accepted verbatim, so this
+drills exactly one level at a time, matching how a user actually extends
+a mapping). `yaml_ancestor_path` reconstructs the dotted key path
+enclosing a given line via **indentation**, deliberately not a
 tree-sitter parse: the line actually being completed is, by construction,
 either not yet a valid `block_mapping_pair` at all or mid-being-typed, so
 a parse-tree walk would have to fight exactly the spot this needs to
 read, whereas every line above the one being typed is already complete,
-trustworthy text (confirmed real `tree-sitter-yaml` node shapes via a
-throwaway probe before choosing the indentation approach over it — same
-"verify grammar output directly" discipline this session's Kotlin-folding
-work already used). `key_segment_before_cursor` is a dash-inclusive
-sibling of `templates::word_before_cursor`: real Spring property key
-segments are routinely kebab-case (`context-path`, `pool-name`, both real
-names from the captured metadata above), which the existing alnum-or-
-underscore-only definition would incorrectly split mid-segment.
+trustworthy text. `key_segment_before_cursor` is a dash-inclusive sibling
+of `templates::word_before_cursor`: real Spring property key segments are
+routinely kebab-case (`context-path`, `pool-name`), which the existing
+alnum-or-underscore-only definition would incorrectly split mid-segment.
 
 Wired into `widget.rs`'s existing completion-trigger machinery as a new,
 mutually-exclusive-with-the-generic-one trigger gated on `Language::
-Properties`/`Language::Yaml`: anchored whole-line for `.properties`
-(a flat key's dots must all stay part of one filterable prefix — typing
+Properties`/`Language::Yaml`: anchored whole-line for `.properties` (a
+flat key's dots must all stay part of one filterable prefix — typing
 `server.po` has to match `server.port`) versus per-segment for `.yml`
 (`key_segment_before_cursor`, paired with `yaml_ancestor_path` to build
 the filter prefix); gated to key position only (nothing opens once a
-`=`/`:` has been typed on the current line, so a value being typed never
-triggers key completions). `CompletionKind` gained a `Property` variant
-(icon/kind distinction from `Word`/`Field`/etc.). As a real side effect of
-finally giving `CompletionItem::detail` a producer (a property's type and
-default, e.g. `"java.lang.Integer = 8080"`) — a field that had sat unread
-since long before this session, flagged by every earlier `cargo clippy`
-run this session — the popup's own paint function was extended
-(`row_text`, an `egui::text::LayoutJob`) to actually render `detail`
-dimmed after the label, via `ui.visuals().weak_text_color()` rather than
-threading a new `dark_mode` parameter through `paint` just for this.
+`=`/`:` has been typed on the current line). `CompletionKind` gained a
+`Property` variant. As a real side effect of finally giving
+`CompletionItem::detail` a producer (a property's type and default, e.g.
+`"java.lang.Integer = 8080"`), the popup's paint function was extended
+(`row_text`, an `egui::text::LayoutJob`) to render `detail` dimmed after
+the label, via `ui.visuals().weak_text_color()`.
 
-25 new tests: 6 in `fg_core::spring_config_metadata` (real captured-
-metadata parsing, heterogeneous-defaultValue handling, a missing-
-description/type property, a jar that can't be opened at all vs. one with
-genuinely no metadata entry — two different Ok/Err shapes, not conflated);
-11 pure tests in `spring_config_completion` (flat vs. per-segment
-candidate generation, leaf-vs-prefix-only detail attachment, and the
-`yaml_ancestor_path` reconstruction across several real nesting/comment/
-blank-line/list-item shapes); 3 real multi-frame integration tests in
-`widget/tests/completion.rs` via `typing_session` (a `.properties` file's
-whole-line-anchored trigger, confirming it does *not* fire past a typed
-`=`, and a `.yml` file's per-segment trigger correctly resolving a nested
-`server:` → `po` to just `port`) — a `SpringConfigState::with_properties`
-test-only constructor (`#[cfg(test)]`) injects known candidates without
-needing a real `mvn`/`gradle` process for these; 5 in `fg_core::maven`/
-`gradle` from earlier phases, already counted there. `cargo test
---workspace` deliberately does not shell out to a real `mvn`/`gradle`
-process for this feature either, mirroring Track 21's own established
-convention — the real end-to-end scans (both build tools, plus the actual
-jar-scan) were run this session as throwaway probes and deleted after
-confirming correct, real results.
-
-Live click-through (`/home/romulo2/bridge/boost`, a real Gradle/Kotlin/
-Spring Boot 4 project, opened as the project; typing a partial key in the
-real `backend/src/main/resources/application.properties` opened the
-popup with real candidates and their type/default shown; a scratch
-`.yml` file typing `server:` then a nested `po` correctly offered just
-`port`) confirmed working by the user.
+Live-verified against a real Gradle/Kotlin/Spring Boot 4 project: a
+partial key in a real `application.properties` opened the popup with real
+candidates and their type/default shown; a `.yml` file typing `server:`
+then a nested `po` correctly offered just `port`.
 
 **Addendum — Spring annotation completion + auto-import (not in the
 original per-phase plan above; a second Spring-flavored completion source
@@ -1036,8 +769,8 @@ user@example.com`) via `syntax::highlight_spans`, recomputed fresh only on
 the frame `@` is actually typed.
 
 Accepting a candidate also inserts a matching `import`, if the file
-doesn't already have one — `crates/syntax/src/imports.rs` (new) is the
-shared primitive: `existing_imports` walks the root node's direct
+doesn't already have one — `crates/syntax/src/imports.rs` is the shared
+primitive: `existing_imports` walks the root node's direct
 `import_declaration`/`import` children (both languages' own grammars keep
 imports un-nested, so no recursive walk is needed) into an ordered
 `Vec<ExistingImport>`, and `import_insertion` does a pure string
@@ -1058,21 +791,9 @@ imports omit the trailing `;` Java's own get.
 shows the annotation's own import path so the popup doubles as a reminder
 of which package it comes from before accepting.
 
-15 new tests: 9 in `crates::imports` (path-stripping for a plain and a
-`static` Java import, Kotlin's no-terminator case, a language with no
-import vocabulary, and the `Before`/`AfterLast`/`AlreadyImported`/no-
-existing-imports branches of `import_insertion`), 6 in `spring_annotation_
-completion` (candidate labeling/detail, an unrecognized name, an
-already-imported name, first-import-after-package, first-import-with-no-
-package, alphabetical bracketing among existing imports, append-after-
-last, and Kotlin's terminator-free insertion), plus 2 real multi-frame
-integration tests in `widget/tests/completion.rs` via `typing_session`
-(accepting `@Compo` → `Component` inserts both the annotation and the
-import at the correct alphabetical slot; accepting it again when already
-imported does not duplicate the import). Live click-through (typing `@`
-in a real `.java` file, accepting a candidate, confirming the annotation
-and a correctly-placed `import` both land, and that an already-imported
-annotation doesn't duplicate its import) confirmed working by the user.
+Live-verified: typing `@` in a real `.java` file, accepting a candidate,
+confirms the annotation and a correctly-placed `import` both land, and
+that an already-imported annotation doesn't duplicate its import.
 
 ---
 
@@ -1152,77 +873,56 @@ mode: DiffMode)` using a line-level diff (verify the `similar` crate's
 current status before pinning it, or an equivalent) rendered as
 side-by-side or inline colored rows, via the editor's own font/theme.
 
-**Checkpoint 1:** `cargo test -p app` green (known old/new pairs producing
-expected diff ops, headless); live-verify both `DiffMode`s render legibly
-against a real changed file — done: `crates/app/src/widgets/diff_view.rs`
-(new) has `diff_line_ops` (the `similar` crate — verified current/actively
-maintained on crates.io this session before pinning `3.1.1`, per this
-project's own discipline for external dependencies — `TextDiff::from_lines`'s
-`ops()` mapped 1:1 into this module's own `DiffLineOp::{Equal,Delete,Insert,
-Replace}`, each carrying 0-based line-*index* ranges verified to match
-`old.lines()`/`new.lines()` directly, no further translation needed) and
-`show_diff(ui, old, new, mode, editor_font, font_size, dark_mode)` — the
-font/theme parameters `SPEC.md`'s own minimal shape didn't spell out but
-every other font-aware widget here already takes, following that existing
-convention rather than the doc's own illustrative signature literally.
-`SideBySide` (an `egui::Grid`, two columns, a `Replace`'s uneven old/new
-line counts padding the shorter side with blank rows so both columns stay
-aligned) and `Inline` (one column, unified-style `+`/`-`/`  `-prefixed rows,
-a `Replace`'s old lines immediately followed by its new lines per `SPEC.md`
-§18's own "paired red/green row" wording) both build from the same pure,
-independently-tested `side_by_side_rows`/`inline_rows` row-builder functions
-— `theme::diff_added`/`diff_removed` (`PLAN.md` Track 9 Phase 1's own diff
-gutter colors) reused as a translucent row-background wash rather than the
-gutter's own full-opacity bar, since a full-strength fill behind text would
-overwhelm it; the text itself stays `theme::default_text` throughout, the
-background alone carrying the added/removed distinction (the same
-convention every mainstream diff view already uses).
+**Checkpoint 1:** done — `crates/app/src/widgets/diff_view.rs` has
+`diff_line_ops` (the `similar` crate, pinned `3.1.1`; `TextDiff::
+from_lines`'s `ops()` mapped 1:1 into this module's own `DiffLineOp::
+{Equal,Delete,Insert,Replace}`, each carrying 0-based line-*index* ranges
+matching `old.lines()`/`new.lines()` directly) and `show_diff(ui, old,
+new, mode, editor_font, font_size, dark_mode)`. `SideBySide` (an
+`egui::Grid`, two columns, a `Replace`'s uneven old/new line counts
+padding the shorter side with blank rows so both columns stay aligned)
+and `Inline` (one column, unified-style `+`/`-`/`  `-prefixed rows, a
+`Replace`'s old lines immediately followed by its new lines) both build
+from the same pure `side_by_side_rows`/`inline_rows` row-builder functions
+— `theme::diff_added`/`diff_removed` (Track 9 Phase 1's own diff gutter
+colors) reused as a translucent row-background wash rather than the
+gutter's own full-opacity bar, since a full-strength fill behind text
+would overwhelm it; the text itself stays `theme::default_text`
+throughout, the background alone carrying the added/removed distinction.
 
-Live click-through (a real changed file, both `DiffMode`s) surfaced a real
-follow-up ask: a long untouched stretch showed every single line rather
-than being abridged the way a real `git diff`'s own limited context already
-is. Fixed by making `side_by_side_rows`/`inline_rows` collapse the middle
-of any `Equal` run longer than `2 * context` lines to a single `Collapsed`
-placeholder (both row-builder return types became small enums —
-`SideBySideRow::{Line, Collapsed}`/`InlineRow::{Line, Collapsed}` — rather
-than adding an `Option` field to what had been plain structs), keeping
+Live-verify surfaced a real follow-up: a long untouched stretch showed
+every single line rather than being abridged the way a real `git diff`'s
+own limited context already is. Fixed by making `side_by_side_rows`/
+`inline_rows` collapse the middle of any `Equal` run longer than `2 *
+context` lines to a single `Collapsed` placeholder (`SideBySideRow::
+{Line, Collapsed}`/`InlineRow::{Line, Collapsed}`), keeping
 `DEFAULT_CONTEXT_LINES = 3` lines bordering each side — git's own `-U3`
 default, already this codebase's own choice for `fg_core::git_file_diff`'s
-real context (Track 9 Phase 4), so a long unchanged stretch now reads the
-same "abridged" way here as it already does in a real `git diff`. The
-collapsed marker's own label (`"... N unchanged lines ..."`) is
-deliberately plain ASCII, not a Unicode ellipsis/box-drawing glyph — this
-session's own live-verified tofu-box bug (the Source Control panel's
-`▸`/`▾` expand arrow, Track 9 Phase 4) confirmed neither this app's bundled
-fonts nor egui's built-ins can be trusted to cover an arbitrary glyph in
-the default UI font, and a small text label like this is exactly where
-that bug would silently recur.
+real context (Track 9 Phase 4), so this widget now abridges the same way
+a real `git diff` does. The collapsed marker's own label (`"... N
+unchanged lines ..."`) is deliberately plain ASCII, not a Unicode
+ellipsis/box-drawing glyph — the Source Control panel's `▸`/`▾` tofu-box
+bug (Track 9 Phase 4) already proved neither this app's bundled fonts nor
+egui's built-ins can be trusted to cover an arbitrary glyph in the default
+UI font.
 
-A second live follow-up ask: stage a hunk directly from inside the diff
+A second live follow-up: stage a hunk directly from inside the diff
 window, rather than needing to close it and use the row's own separate
-inline hunk list. `panels::git_stage`'s "Full Diff" window (`open_full_diff`/
-`show_full_diff_window`, `DiffMode` toggle above a `show_diff` render of
-the file's `HEAD`-vs-disk content) gained a "Hunks" section below the
-abridged overview, reusing `show_hunks` — the *exact* same function, and
-critically the exact same underlying `expanded_diffs` data (from `fg_core::
-git_file_diff`/`git_file_diff_cached`, a real `git diff`/`git diff --cached`
-run), the row's own inline expand arrow already renders. `open_full_diff`
-now also calls a new `ensure_expanded` (factored out of `toggle_expand`,
-which never collapses, unlike the toggle) so both entry points populate the
-same `expanded_diffs` rather than each fetching an independent copy. This
-was a deliberate design choice, not a shortcut: `show_diff`'s own diff is
-computed by the `similar` crate, a *different* diffing algorithm than git's
-own, and while both would very likely group the same two texts' changes
-identically in the common case, "very likely" isn't a safe foundation for
-deriving a `git apply --cached` patch — a mismatched hunk boundary could
-stage the wrong lines. Sourcing the stage/unstage action from `expanded_
-diffs`' real, git-sourced hunks instead (already the exact mechanism Track
-9 Phase 4 built and live-verified) sidesteps that risk entirely rather than
-trying to reconcile two independent diff engines. Live click-through (a
-real large file with one small change abridged correctly in both `DiffMode`s;
-opening the Hunks section inside the same window and staging/unstaging a
-hunk from there, confirmed via `git diff --cached`) confirmed working by
-the user.
+inline hunk list. `panels::git_stage`'s "Full Diff" window
+(`open_full_diff`/`show_full_diff_window`) gained a "Hunks" section
+reusing `show_hunks` and the exact same underlying `expanded_diffs` data
+(from `fg_core::git_file_diff`/`git_file_diff_cached`, a real `git
+diff`/`git diff --cached` run) the row's own inline expand arrow already
+renders. This was a deliberate design choice, not a shortcut: `show_diff`'s
+own diff is computed by the `similar` crate, a *different* diffing
+algorithm than git's own, and while both would very likely group the same
+two texts' changes identically in the common case, "very likely" isn't a
+safe foundation for deriving a `git apply --cached` patch — a mismatched
+hunk boundary could stage the wrong lines. Sourcing the stage/unstage
+action from `expanded_diffs`' real, git-sourced hunks instead sidesteps
+that risk entirely rather than trying to reconcile two independent diff
+engines. Live-verified, including staging/unstaging a hunk from inside the
+window and confirming via `git diff --cached`.
 
 ---
 
@@ -1276,53 +976,41 @@ stdio JSON-RPC framing read/write loop on a background thread per server
 (mirroring `PtySession`'s own background-reader-thread shape).
 `initialize`/`initialized` handshake, no user-visible feature yet.
 
-**Checkpoint 1:** `cargo test -p app` green (a fake-server-process
-handshake test, headless where possible); live-verify a real `jdtls`
-process launches and completes its handshake against a real Java project
-(inspectable via logging, not yet any visible feature) — done:
-`lsp_client::LspSession` (JSON-RPC-over-stdio framing, a background reader
-thread routing responses/server-originated messages, `initialize`/
-`initialized`) plus `lsp_state::LspState`, the app-owned lifecycle
-deciding whether/when a session should exist at all — at most one
-`jdtls`/`kotlin-language-server` process for the one open project,
-strictly behind `LspSettings::enabled`, retried/retired as the project's
-open documents or the settings themselves change. Live-verified against a
-real `jdtls` 1.43.0 (Eclipse JDT Language Server, Java 17) launched with
-no extra args beyond its own auto-derived `-data` workspace, against a
-real single-file Java project with no build file — its own
-`.metadata/.log` recorded the full `>> initialize` → `Workspace
-initialized` → `>> initialized` sequence completing against this client.
+**Checkpoint 1:** done — `lsp_client::LspSession` (JSON-RPC-over-stdio
+framing, a background reader thread routing responses/server-originated
+messages, `initialize`/`initialized`) plus `lsp_state::LspState`, the
+app-owned lifecycle deciding whether/when a session should exist at all —
+at most one `jdtls`/`kotlin-language-server` process for the one open
+project, strictly behind `LspSettings::enabled`, retried/retired as the
+project's open documents or the settings themselves change. Live-verified
+against a real `jdtls` 1.43.0 (Java 17) completing the full handshake
+against a real single-file Java project with no build file.
 
 **Phase 2 — diagnostics.** `textDocument/publishDiagnostics` feeds the
 existing `Diagnostic`/squiggle pipeline as a second source.
 
-**Checkpoint 2:** full suite green; live-verify a real semantic error
-(not just a syntax error) shows a squiggle, with a message
-`javac`/`kotlinc` — not just this codebase's own parser — actually
-produced. Done: `textDocument/didOpen`/`didChange`/`didClose` (full-text
-sync; `Document::lsp_version`/`lsp_sync_pending` track which open document
-still needs a resend) and `textDocument/publishDiagnostics` (UTF-16
-position → byte range via `lsp_state::utf16_range_to_bytes`) feed
+**Checkpoint 2:** done — `textDocument/didOpen`/`didChange`/`didClose`
+(full-text sync; `Document::lsp_version`/`lsp_sync_pending` track which
+open document still needs a resend) and `textDocument/publishDiagnostics`
+(UTF-16 position → byte range via `lsp_state::utf16_range_to_bytes`) feed
 `Document::lsp_diagnostics`, chained into the existing squiggle-paint
-pipeline (`widgets/editor/widget.rs`) right alongside
-`checkstyle_diagnostics`/`pmd_diagnostics`. Live-verified: a real `jdtls`
-process against a real `Main.java` calling an undefined method
-(`undefinedHelper()` — valid syntax, so this codebase's own tree-sitter
-parser reports nothing there) rendered a real squiggle whose hover tooltip
-reads "The method undefinedHelper() is undefined for the type Main" —
-genuine ECJ output, not this codebase's own diagnostics.
+pipeline (`widgets/editor/widget.rs`) right alongside `checkstyle_
+diagnostics`/`pmd_diagnostics`. Live-verified: a real `jdtls` process
+against code calling an undefined method (valid syntax, so this
+codebase's own tree-sitter parser reports nothing) rendered a real
+squiggle with genuine ECJ-produced hover text, not this codebase's own
+diagnostics.
 
-One real bug this same live-verify surfaced and fixed: nothing requested
-a repaint after handing work to `LspState::sync`, so a real server's own
-*unprompted* `publishDiagnostics` (`jdtls` validates and reports right
-after `didOpen`, with no further client action to react to) sat unread on
-the background channel until some unrelated input event happened to
-repaint the window — confirmed live (the squiggle only appeared after a
-synthetic mouse nudge) and fixed by `LspState::wants_repaint` plus
-`ui.ctx().request_repaint_after(...)` in `app.rs`'s own update loop, the
-same throttled-polling shape `pty_session`/`terminal_widget` already use
-for their own background work; re-verified afterward with the squiggle
-appearing on its own, no synthetic input at all.
+One real, generally-applicable gotcha this live-verify surfaced: nothing
+requested a repaint after handing work to `LspState::sync`, so a real
+server's own *unprompted* `publishDiagnostics` (`jdtls` validates and
+reports right after `didOpen`, with no further client action to react to)
+sat unread on the background channel until some unrelated input event
+happened to repaint the window. Fixed by `LspState::wants_repaint` plus
+`ui.ctx().request_repaint_after(...)` in `app.rs`'s update loop — the same
+throttled-polling shape `pty_session`/`terminal_widget` already use for
+background work; any future background-driven UI update needs the same
+treatment.
 
 **Phase 3 — hover docs.** `textDocument/hover` feeds a tooltip,
 structurally mirroring the existing syntax-error hover.
@@ -1341,38 +1029,32 @@ lookups can't handle today.
 **Phase 5 — autocomplete.** `textDocument/completion` as a second
 candidate source merged into the existing completion popup.
 
-**Checkpoint 5:** full suite green; live-verify LSP candidates and this
-codebase's own existing candidates appear together, sensibly ranked, with
-no visible duplication. Done (Java side): `LspState::request_completion`
-(`lsp_state.rs`) sends `textDocument/completion`, flushing the
-document's own pending edit first via a new `sync_one_document` (split
-out of `sync_documents` so a single-document flush doesn't misdetect
-every *other* open document of that language as closed) — necessary
-because this frame's `sync()` already ran *before* the keystroke that
-both lands the triggering `.` and calls `request_completion`, so without
-an explicit flush the request would race ahead of its own `didChange` on
-the same ordered stdin pipe. Decode/merge (`completion.rs`) derives a
-bare insertable name and a real `has_params` signal straight from the
-server's own `label` text (`bare_label_and_has_params`) rather than
-trusting `insertText`/`textEdit`, since real servers (jdtls) routinely
+**Checkpoint 5:** done (Java side) — `LspState::request_completion`
+(`lsp_state.rs`) sends `textDocument/completion`, flushing the document's
+own pending edit first via `sync_one_document` (split out of
+`sync_documents` so a single-document flush doesn't misdetect every
+*other* open document of that language as closed) — necessary because
+this frame's `sync()` already ran *before* the keystroke that both lands
+the triggering `.` and calls `request_completion`, so without an explicit
+flush the request would race ahead of its own `didChange` on the same
+ordered stdin pipe. Decode/merge (`completion.rs`) derives a bare
+insertable name and a real `has_params` signal straight from the server's
+own `label` text (`bare_label_and_has_params`) rather than trusting
+`insertText`/`textEdit`, since real servers (jdtls) routinely
 signature-decorate `label` and may format `insertText` as an unsupported
 `Snippet` — this sidesteps ever inserting broken `$1`/`${1:x}` syntax.
-Two real bugs surfaced and fixed during live-verify, not just unit tests:
-(1) a JDK-typed receiver's popup opened empty (no local candidates) and
-was then closed the same or next frame by *two* separate "close if empty"
-checks that predate this phase, neither of which knew an async LSP reply
-could still populate it — both gained a `has_pending_lsp()` guard;
-(2) confirmed via `jdtls` 1.43.0 (already running this session) that
-`list.`/`array.` on `List<String>`/`int[]` now show real JDK members
-(`add`, `get`, `size`, `clone`, `length`, ...) with clean names, not
-signature-decorated garbage. Kotlin side: a raw JSON-RPC probe (bypassing
-FoxGarden entirely) confirmed `kotlin-language-server` itself returns
-correct, well-formed completions for `MutableList<String>` — but the
-in-app GUI check for the same case was inconclusive (real completions
-never appeared in the popup); recorded as `TECHNICAL_DEBT.md` #18 rather
-than assumed fixed, since the root cause (likely a request-vs-indexing
-timing race specific to a just-opened document, not a message-ordering
-bug) wasn't confirmed before time ran out this session.
+Two real bugs surfaced and fixed during live-verify: (1) a JDK-typed
+receiver's popup opened empty and was then closed the same or next frame
+by *two* separate "close if empty" checks that predate this phase,
+neither of which knew an async LSP reply could still populate it — both
+gained a `has_pending_lsp()` guard; (2) confirmed via a real `jdtls` that
+`list.`/`array.` on `List<String>`/`int[]` show real JDK members with
+clean names, not signature-decorated garbage. Kotlin side: a raw
+JSON-RPC probe (bypassing FoxGarden entirely) confirmed `kotlin-
+language-server` itself returns correct completions for
+`MutableList<String>`, but the in-app GUI check was inconclusive —
+recorded as `TECHNICAL_DEBT.md` #18 rather than assumed fixed (later
+resolved — see Build status).
 
 **Phase 6 — find-references.** `textDocument/references`, a results-list
 UI (popup or panel depending on typical result count observed live).
@@ -1395,60 +1077,36 @@ files that weren't open in a tab beforehand.
 `<dependencies>`/`<modules>`/`<properties>` via `quick-xml`/`roxmltree`
 (verify current crate health before pinning).
 
-**Checkpoint 1:** `cargo test -p fg-core` green against real-world
-`pom.xml` fixtures (a simple project, a multi-module parent) — done:
-`crates/core/src/maven.rs` (new) has `parse_pom`, a pure/no-I/O
-`Event`-driven `quick-xml` walk (`quick-xml` 0.39.4 — already a `core`
-dependency, already proven on real XML in this exact codebase by
-`static_analysis`'s own Checkstyle/PMD report parsers, so reused rather
-than adding `roxmltree` as a second XML crate) into `MavenProject {
-group_id: Option<String>, artifact_id: String, version: Option<String>,
-packaging: String, parent: Option<MavenParent>, properties:
-HashMap<String, String>, modules: Vec<String>, dependencies:
+**Checkpoint 1:** done — `crates/core/src/maven.rs` has `parse_pom`, a
+pure/no-I/O `Event`-driven `quick-xml` walk (`quick-xml` — already a
+`core` dependency, reused rather than adding a second XML crate) into
+`MavenProject { group_id: Option<String>, artifact_id: String, version:
+Option<String>, packaging: String, parent: Option<MavenParent>,
+properties: HashMap<String, String>, modules: Vec<String>, dependencies:
 Vec<MavenDependency> }`. Deliberately scoped to what Phase 1 actually asks
 for — no property substitution (a `${foo.version}` placeholder is kept
 verbatim, unresolved) and no reading of `<dependencyManagement>` at all;
 real version *resolution* is Phase 3's job via `mvn dependency:
-build-classpath`, which sidesteps reimplementing Maven's own
-effective-POM/BOM computation entirely.
+build-classpath`, sidestepping reimplementing Maven's own effective-POM/
+BOM computation entirely.
 
-Verified against five real `pom.xml` files pulled from this machine, not
-synthesized (`SPEC.md`'s and this codebase's own established discipline):
-a real simple single-module project with no parent and every dependency
-fully versioned (MegaBasterd's own `pom.xml`), and a real multi-module
-Spring Boot parent (`br.ufsc.bridge:pec`, 11 `<modules>`, 45
-`<properties>`, a `<dependencyManagement>` block) plus three of its real
-child modules (`backend`/`api`/`database` — 87/28/19 real dependencies
-respectively). A from-scratch throwaway `#[ignore]`d probe test ran
-`parse_pom` against all five *full, un-trimmed* files directly off disk
-(not just the embedded excerpts the checked-in tests use) before this
-phase was called done, then was deleted — real absolute paths outside the
-repo have no business staying in a permanent test.
-
-Real complications this parser had to handle, found by reading the actual
-files rather than assumed from the Maven POM schema: a child module's
-`pom.xml` routinely declares no `<version>` (and sometimes no `<groupId>`)
-of its own at all, inheriting both from `<parent>`; most of a child
-module's own `<dependency>` entries carry no `<version>` either, resolved
-transitively via the parent's inherited BOM (`spring-boot-starter-parent`
-here) — both recorded as `None` rather than guessed at, per this module's
-own explicit non-goal above. `<dependencyManagement>` wraps a second,
+Verified against real multi-module `pom.xml` files pulled from this
+machine, not synthesized. Real complications the parser had to handle: a
+child module's `pom.xml` routinely declares no `<version>` (and sometimes
+no `<groupId>`) of its own, inheriting both from `<parent>`; most of a
+child module's own `<dependency>` entries carry no `<version>` either,
+resolved transitively via the parent's inherited BOM — both recorded as
+`None` rather than guessed at. `<dependencyManagement>` wraps a second,
 differently-scoped `<dependencies>`/`<dependency>` structure that looks
 identical to the project's own real dependencies at the tag-name level; a
-`<plugin>` (e.g. `kotlin-maven-plugin`) can carry a *third* such block
-(compiler-plugin artifacts, not project dependencies at all). Getting all
-three right needed tracking the full element path from `<project>` down
-(`["project", "dependencies", "dependency", ...]` vs. `["project",
-"dependencyManagement", "dependencies", "dependency", ...]` vs. `["project",
-"build", "plugins", "plugin", "dependencies", "dependency", ...]`), not
-just matching on tag name the way Checkstyle's/PMD's flatter report
-formats could get away with. Comments interspersed between `<properties>`
-children and values wrapped across multiple lines (real, not
-hypothetical, in the captured parent POM) also had to not corrupt
-neighboring properties — handled by the same clear-on-`Start`/read-and-
-clear-on-`End` accumulator shape, no special-casing needed. No live
-click-through for this checkpoint (per its own text, headless-only —
-nothing in the UI reads a `MavenProject` yet).
+`<plugin>` can carry a *third* such block (compiler-plugin artifacts, not
+project dependencies at all). Getting all three right needed tracking the
+full element path from `<project>` down, not just matching on tag name.
+Comments interspersed between `<properties>` children and multi-line
+values also had to not corrupt neighboring properties — handled by a
+clear-on-`Start`/read-and-clear-on-`End` accumulator, no special-casing
+needed. Headless-only checkpoint — nothing in the UI reads a
+`MavenProject` yet.
 
 **Phase 2 — Gradle model extraction.** Validate the offline-init-script-
 dump approach against a real multi-module Gradle project before
@@ -1457,114 +1115,81 @@ rather than attempting to parse Groovy/Kotlin DSL as text.
 
 **Validation (this session, before writing any production code, per this
 phase's own instruction):** confirmed against a real multi-module Kotlin/
-Spring Gradle project found on this machine (`bridge.ufsc.tech:boost` —
-root + `frontend`/`database`/`backend` subprojects, real Spring Boot 4 +
+Spring Gradle project on this machine (Spring Boot 4 +
 `io.spring.dependency-management` + Kotlin JPA/Spring plugins, Kotlin DSL
 build scripts). A hand-written Groovy init script registering a task via
 `allprojects { tasks.register(...) { doLast { ... } } }`, run as `gradle
 --offline --init-script <script> -q <task>`, successfully walked every
 project's own `configurations`/`dependencies` and printed a JSON dump —
-confirmed working both via the system `gradle` (9.6.1) and via the
-project's own `./gradlew` (pinned to 9.4.1, its actually-cached wrapper
-distribution), and confirmed `--offline` alone is sufficient (no network
-access needed at all, since only each configuration's *declared*
-dependency notation is read, never real artifact resolution). This
-directly disproves needing to parse Groovy/Kotlin DSL as text, the
-alternative this phase's own instruction named. One real API break hit
-and fixed during validation: `ProjectDependency.dependencyProject` (the
-API an older/more-commonly-documented approach uses to resolve a
-`project(":foo")` reference back to a `Project` object) has been removed
-as of this Gradle version — `dependencyProject.path` needed to become
-plain `dep.path` instead, caught by an actual failed run, not a docs read.
-A second real finding: a naive first dump also surfaced a pile of purely
-internal tooling configurations (`kotlinCompilerPluginClasspathMain`,
-`kotlinBuildToolsApiClasspath`, every plain `*Classpath` resolvable
+confirmed working via both the system `gradle` and the project's own
+`./gradlew` wrapper, and confirmed `--offline` alone is sufficient (only
+each configuration's *declared* dependency notation is read, never real
+artifact resolution). This directly disproves needing to parse
+Groovy/Kotlin DSL as text, the alternative this phase's own instruction
+named.
+
+Two real findings during validation: (1) `ProjectDependency.
+dependencyProject` (the API an older/more-commonly-documented approach
+uses to resolve a `project(":foo")` reference back to a `Project` object)
+has been removed as of this Gradle version — `dependencyProject.path`
+needed to become plain `dep.path` instead. (2) A naive first dump
+surfaced a pile of purely internal tooling configurations
+(`kotlinCompilerPluginClasspathMain`, every plain `*Classpath` resolvable
 configuration duplicating what `implementation`/`testImplementation` etc.
 already declare) that have nothing to do with a user's own `dependencies
 { }` block — an allow-list filter (`is_dependency_configuration`, kept as
-a hand-synced Rust/Groovy pair — see below) was needed before the dump was
-usable at all.
+a hand-synced Rust/Groovy pair) was needed before the dump was usable at
+all.
 
-**Checkpoint 2:** `cargo test -p fg-core` green against real Gradle
-project fixtures; live-verify against an actual local Gradle project (not
-just a fixture) since this phase's own approach depends on shelling out
-to a real Gradle wrapper — done: `crates/core/src/gradle.rs` (new) has
+**Checkpoint 2:** done — `crates/core/src/gradle.rs` has
 `gradle_projects(project_root)`, which writes the validated init script
-(`INIT_SCRIPT`, a Rust string constant with the dump task name substituted
-in) to a temp file, runs `<gradlew-or-gradle> --offline --init-script
-<path> -q foxgardenGradleModelDump` in `project_root`, deletes the temp
-script, and parses stdout into `Vec<GradleProject>` — each with `path`/
-`name`/`group`/`version`/`project_dir` plus `Vec<GradleDependency>` (an
-enum: `Project { configuration, path }` for an inter-module `project(":x")`
-reference, or `Module { configuration, group, artifact, version:
-Option<String> }` for an external coordinate, `version: None` when
-unspecified — resolved elsewhere, e.g. via `io.spring.dependency-
-management`'s inherited BOM, the same explicit "don't chase it down here"
-non-goal `maven.rs`'s own `MavenDependency::version` already established
-for `pom.xml`, Phase 3's job instead). `gradle_command` prefers a
-project's own `<root>/gradlew` when present over a bare `gradle` on
-`PATH`, mirroring `static_analysis::command_for_binary`'s own "prefer what
-the project actually specifies" reasoning for a different concrete
-problem. Each project's dump is wrapped in `FOXGARDEN_JSON_BEGIN`/
-`FOXGARDEN_JSON_END` text markers rather than assembled into one combined
-JSON document across every project — Gradle's own configuration-phase
-logging (and any plugin's own stray stdout) is guaranteed to land *outside*
-those markers, which a single top-level JSON document would have no way
-to recover from if any of it landed mid-document.
+(`INIT_SCRIPT`) to a temp file, runs `<gradlew-or-gradle> --offline
+--init-script <path> -q foxgardenGradleModelDump` in `project_root`,
+deletes the temp script, and parses stdout into `Vec<GradleProject>` —
+each with `path`/`name`/`group`/`version`/`project_dir` plus
+`Vec<GradleDependency>` (an enum: `Project { configuration, path }` for
+an inter-module `project(":x")` reference, or `Module { configuration,
+group, artifact, version: Option<String> }` for an external coordinate,
+`version: None` when unspecified — resolved elsewhere, e.g. via
+`io.spring.dependency-management`'s inherited BOM, same explicit "don't
+chase it down here" non-goal `maven.rs` established for `pom.xml`, Phase
+3's job instead). `gradle_command` prefers a project's own
+`<root>/gradlew` when present over a bare `gradle` on `PATH`. Each
+project's dump is wrapped in `FOXGARDEN_JSON_BEGIN`/`FOXGARDEN_JSON_END`
+text markers rather than assembled into one combined JSON document across
+every project — Gradle's own configuration-phase logging (and any
+plugin's own stray stdout) is guaranteed to land *outside* those markers,
+which a single top-level JSON document would have no way to recover from
+if any of it landed mid-document.
 
-13 new tests: 7 pure-parser/pure-decision tests in `crates/core/src/
-gradle.rs` (the configuration allow-list's real-vs-noise cases, `gradle_
-command`'s wrapper-preferred/fallback cases, and — the Checkpoint's own
-"against real Gradle project fixtures" requirement — `parse_dump_output`
-against real captured JSON from the `boost` validation run above,
-including its real unversioned-vs-versioned and inter-project-reference
-dependencies). A from-scratch, real, end-to-end invocation of `gradle_
-projects` itself (not just the parser) against the real `boost` project —
-confirming the temp-script-write/real-process-invoke/parse/cleanup
-pipeline works together, not just each piece in isolation — was run this
-session as a throwaway `#[ignore]`d test, confirmed correct (`:backend`
-reporting all 22 real, correctly-filtered dependencies), then deleted, the
-same "real absolute paths outside the repo don't belong in a permanent
-test" call Phase 1's own probe test made. `cargo test --workspace`
-deliberately does **not** shell out to a real `gradle`/`gradlew` process
-(unlike Track 9's `git`-based end-to-end tests, since `git` is a safe
-universal assumption this codebase already leans on elsewhere, but a
-`gradle` install is not) — mirrors `static_analysis`'s own established
-convention of testing Checkstyle's/PMD's *parsers* unconditionally while
-leaving the real-binary-invocation path to manual/live verification only.
-No live click-through beyond the validation/real-invocation testing
-above (per this checkpoint's own text and Phase 1's precedent — nothing in
-the UI reads a `GradleProject` yet).
+`cargo test --workspace` deliberately does **not** shell out to a real
+`gradle`/`gradlew` process (unlike Track 9's `git`-based end-to-end
+tests, since `git` is a safe universal assumption this codebase already
+leans on, but a `gradle` install is not) — mirrors `static_analysis`'s
+own convention of testing parsers unconditionally while leaving the
+real-binary-invocation path to manual/live verification only.
+Headless-only checkpoint.
 
 **Real bug found and fixed while validating Phase 3** (surfaced by a
-_different_ init-script probe — a classpath-resolution one, real work
-slow enough for it to actually manifest, unlike Phase 2's near-instant
-declared-dependency read): the real `boost` project has
-`org.gradle.parallel=true` in its own `gradle.properties`, which runs each
-project's `doLast` concurrently — their `println` output interleaves
-**line-by-line** across projects, confirmed by a real captured run where
-another project's own `FOXGARDEN_JSON_BEGIN`/`FOXGARDEN_JSON_END` markers
-landed spliced in the middle of a different project's block, silently
+slower classpath-resolution probe, unlike Phase 2's near-instant
+declared-dependency read): a project with `org.gradle.parallel=true` in
+its own `gradle.properties` runs each project's `doLast` concurrently —
+their `println` output interleaves **line-by-line** across projects, so
+one project's own `FOXGARDEN_JSON_BEGIN`/`FOXGARDEN_JSON_END` markers can
+land spliced in the middle of a different project's block, silently
 corrupting `parse_dump_output`'s assumption that a project's block is
 contiguous. This was a latent bug in the already-shipped Phase 2 code too
-(it just hadn't manifested — Phase 2's own `boost` validation run was fast
-enough across all 4 tiny projects that the race never actually lost).
-Fixed by adding `--no-parallel` to `gradle_projects`' own invocation
-(forces this one read-only metadata dump to run serially regardless of
-the target project's own setting — harmless, since it isn't a real build);
-re-verified end-to-end against the real `boost` project afterward
-(`:backend` still correctly reporting all 22 dependencies, this time with
-`--no-parallel` in effect) via another throwaway `#[ignore]`d probe test,
-then deleted, same convention as every other real-machine probe this
-session.
+— it just hadn't manifested on a small/fast enough validation project for
+the race to lose. Fixed by adding `--no-parallel` to `gradle_projects`'
+own invocation (forces this one read-only metadata dump to run serially
+regardless of the target project's own setting — harmless, since it isn't
+a real build).
 
 **Phase 3 — dependency-aware classpath resolution.** `mvn
 dependency:build-classpath` / Gradle's own resolution task, parsed into a
 resolved jar-file list.
 
-**Checkpoint 3:** full suite green; live-verify against a real project
-with actual third-party dependencies that the resolved classpath contains
-real, correct jar paths on disk — done:
+**Checkpoint 3:** done.
 
 Maven side: `crates/core/src/maven.rs` gained `maven_classpath(module_root)`,
 shelling `mvn -q dependency:build-classpath -Dmdep.outputFile=<temp file>`
@@ -1573,64 +1198,38 @@ separator (`:`/`;` — not `std::path::MAIN_SEPARATOR`, a different
 character entirely, for the directory separator, not the classpath-list
 one). Deliberately reuses Maven's own dependency-resolution machinery
 rather than reimplementing effective-POM/BOM/version-conflict resolution
-(this module's own top-level doc comment named this as the reason Phase 1
-stayed scoped to declared-only data). Verified against a real, minimal,
-cleanly-resolvable Maven project (`commons-io:2.14.0` +
-`commons-collections4:4.4`, a real `mvn` 3.9.3 run against the real local
-`~/.m2/repository`) via a throwaway probe test (a portable one, unlike
-this session's other machine-specific probes — it only needed `tempfile`
-and a real `mvn`, no absolute paths outside the repo — but still deleted
-after confirming it passed, to match this codebase's established "don't
-keep a real-external-tool-invoking test in the permanent, unconditionally-
-run suite" convention from `static_analysis`'s own Checkstyle/PMD tests):
-both resolved paths existed on disk and matched the expected jar names
-exactly.
+(the reason Phase 1 stayed scoped to declared-only data). Verified
+against a real, cleanly-resolvable Maven project against the real local
+`~/.m2/repository` — resolved paths existed on disk and matched the
+expected jar names exactly.
 
-Gradle side: `crates/core/src/gradle.rs` gained `gradle_classpaths
-(project_root)` and its own `CLASSPATH_INIT_SCRIPT`/`GradleClasspath {
-path, compile: Vec<PathBuf>, runtime: Vec<PathBuf> }`, resolving each
-project's real `compileClasspath`/`runtimeClasspath` configurations
-(`configuration.resolve()`, a real filesystem/network-triggering call,
-unlike Phase 2's declared-only reads) rather than reimplementing Gradle's
-own dependency graph. `write_init_script`/the marker-splitting loop inside
-`parse_dump_output` were both generalized (`write_temp_script`/
-`split_marked_blocks`) so this second init-script-driven dump could reuse
-them instead of duplicating that plumbing a second time. A project with
-neither configuration at all (a non-JVM module, e.g. the real `boost`
-project's own `frontend`) is simply absent from the result rather than
-appearing with two empty lists, so a caller can't mistake "not a JVM
-module" for "a JVM module with zero dependencies." Verified against a
-real, minimal, single-module Gradle project (`plugins { id 'java' }`,
-`implementation 'commons-io:commons-io:2.14.0'`) via the same kind of
-throwaway probe (also deleted after confirming it passed) — both `compile`
-and `runtime` resolved to the same real, existing jar path in the local
-Gradle module cache. `gradle_classpaths` deliberately omits `--offline`
-(unlike `gradle_projects`), since real resolution has to be allowed to
-actually download anything not yet cached, the same way a real `gradle
-build` would.
+Gradle side: `crates/core/src/gradle.rs` gained
+`gradle_classpaths(project_root)` and its own `CLASSPATH_INIT_SCRIPT`/
+`GradleClasspath { path, compile: Vec<PathBuf>, runtime: Vec<PathBuf> }`,
+resolving each project's real `compileClasspath`/`runtimeClasspath`
+configurations (`configuration.resolve()`, a real filesystem/network-
+triggering call, unlike Phase 2's declared-only reads) rather than
+reimplementing Gradle's own dependency graph. `write_init_script`/the
+marker-splitting loop inside `parse_dump_output` were both generalized
+(`write_temp_script`/`split_marked_blocks`) so this second init-script-
+driven dump could reuse them instead of duplicating that plumbing. A
+project with neither configuration at all (a non-JVM module) is simply
+absent from the result rather than appearing with two empty lists, so a
+caller can't mistake "not a JVM module" for "a JVM module with zero
+dependencies." Verified against a real, minimal, single-module Gradle
+project — both `compile` and `runtime` resolved to the same real,
+existing jar path in the local Gradle module cache. `gradle_classpaths`
+deliberately omits `--offline` (unlike `gradle_projects`), since real
+resolution has to be allowed to actually download anything not yet
+cached, the same way a real `gradle build` would.
 
-Real bug found and fixed during this same validation, surfacing in
-_both_ Maven and Gradle work: none in the classpath-resolution logic
-itself, but see Phase 2's own "real bug found and fixed while validating
-Phase 3" note above — the `--no-parallel` fix that phase's own retroactive
-fix needed was actually discovered by _this_ phase's classpath-resolution
-probe (slow enough for the interleaving race to manifest), not Phase 2's
-own faster declared-dependency probe.
+The `--no-parallel` fix noted under Phase 2 above was actually discovered
+by this phase's own classpath-resolution probe (slow enough for the
+interleaving race to manifest), not Phase 2's faster declared-dependency
+probe.
 
-7 new tests: 2 in `maven.rs` covering the list-separator split behavior
-implicitly through `maven_classpath`'s own real probe (not a checked-in
-test — no pure/deterministic unit worth keeping beyond the real
-end-to-end confirmation, since the function's only real logic is "shell
-out, read a file, split on a separator," already covered by the
-real-tool-invoking probe) and 5 in `gradle.rs` (`parse_classpath_output`
-against real captured output from the real single-module probe project,
-an empty-input case, plus reuse of the already-existing `split_marked_
-blocks`/`write_temp_script` refactor's own coverage via `gradle_projects`'
-own existing tests, which continue passing unchanged after the
-generalization). No live click-through beyond the two real end-to-end
-probes above (nothing in the UI reads a `MavenClasspathError`/
-`GradleClasspath` yet — the same "headless-only, nothing downstream
-consumes this" note every earlier phase in this track has made).
+Headless-only checkpoint — nothing in the UI reads a
+`MavenClasspathError`/`GradleClasspath` yet.
 
 With Phase 3 done, Track 21 is complete: Track 12 (Spring config property
 autocomplete), Track 20's own classpath feed into `jdtls`'s init config,
@@ -1641,22 +1240,49 @@ unblocked.
 
 ## Track 22 — Build/run/test integration
 
-**Phase 1 — output-panel infra + plain run.** Shared dockable output
-panel (reused by Track 14 if it lands after this); Run/Test actions
-invoke the project's `RunConfig` via its build tool's wrapper script,
-streaming stdout/stderr.
+Split into 3 phases along the track's own name — Build, Run, Test — each a
+self-contained capability with its own checkpoint, rather than one
+combined build+run pass followed by a matcher pass bolted on afterward.
+Phase 1 lands the shared output-panel infra (reused by Track 14 if it
+lands after this) since Phases 2/3 both need it; Phases 2/3 are otherwise
+independent of each other and can land in either order.
 
-**Checkpoint 1:** full suite green; live-verify running a real Maven/
-Gradle project's build/test task streams real, live output.
+**Phase 1 — Build.** Shared dockable output panel; a Build action invokes
+the project's `RunConfig` via its build tool's wrapper script (`mvn
+compile`/`gradle compileJava` shape), streaming stdout/stderr live.
+Problem-matcher wiring lands here too, not as a separate phase — compiler
+errors are exactly this phase's own output to parse: per-tool regex
+patterns recognizing compiler-error line shapes (verified against real
+Maven/Gradle-wrapped build output, not just bare `javac`'s own format),
+clickable jump via `pending_navigation`.
 
-**Phase 2 — problem-matcher wiring.** Per-tool regex patterns recognizing
-compiler-error line shapes (verified against real Maven/Gradle-wrapped
-build output, not just bare `javac`'s own format); clickable jump via
-`pending_navigation`.
+**Checkpoint 1:** full suite green (fixture build-output strings matched
+into expected file/line); live-verify running a real Maven/Gradle
+project's build streams real, live output, and a real compile error
+produces a clickable entry that jumps to the right line.
 
-**Checkpoint 2:** full suite green (fixture build-output strings matched
-into expected file/line); live-verify a real compile error in a real
-project produces a clickable entry that jumps to the right line.
+**Phase 2 — Run.** A Run action invokes the project's configured main
+class/application task (`mvn exec:java`/`gradle run` shape, reusing
+`RunConfig`), streaming to the same output panel; a Stop control kills the
+running process.
+
+**Checkpoint 2:** full suite green; live-verify running a real project's
+`main` prints real output live, and Stop actually terminates the process
+(not just detaches from it).
+
+**Phase 3 — Test.** A Test action invokes the project's test task (`mvn
+test`/`gradle test` shape), parsing the tool's own test-report output
+(Maven Surefire XML / Gradle's test XML — same "parse the real report
+format, not console text" approach `static_analysis`'s Checkstyle/PMD
+integration already established) into a pass/fail summary; a failing
+test's entry jumps to its source location the same way a build error's
+does.
+
+**Checkpoint 3:** full suite green (a fixture Surefire/Gradle test-report
+XML parsed into expected pass/fail counts, headless); live-verify running
+a real project's test suite (including at least one deliberately failing
+test) shows an accurate pass/fail summary and a failing test's entry jumps
+to the right line.
 
 ---
 
@@ -1726,8 +1352,7 @@ Revision 1 (below) built jdtls from source on demand; in practice that
 build resolves its Tycho target-platform dependencies straight off Maven
 Central, and behind a corporate mirror that doesn't proxy every artifact it
 touches (e.g. `com.jetbrains.intellij.java:java-decompiler-engine`), it
-fails outright — a failure with nothing to do with FoxGarden and no fix on
-this end. The fix: vendor both servers' real release archives directly into
+fails outright. The fix: vendor both servers' real release archives directly into
 `vendor/lsp-servers/` (tracked via Git LFS — plain git history would
 otherwise carry their ~135 MB combined weight forever) and `include_bytes!`
 them into the FoxGarden binary itself (`lsp_manager.rs`'s own header). This
@@ -1757,20 +1382,13 @@ an sdkman-managed one) without touching the system default `java`.
 **Revision 1 (superseded): built jdtls from its own GitHub repository** —
 shallow-clone the release tag, run the project's bundled `./mvnw clean
 verify -DskipTests=true`, take `org.eclipse.jdt.ls.product/target/
-repository/bin/jdtls` — because installing from each server's official
-GitHub repo, compiling where no binary is published, was the explicitly
-requested shape at the time. Two follow-ups that revision left open, both
-resolved by revision 2 above rather than by revisiting the build itself:
+repository/bin/jdtls`. Both of that approach's own open follow-ups
+(pinning `recommended_version` to a Java-17-runnable milestone; the
+source build never having run end-to-end under this machine's Java 17)
+are moot now — there's no source build left to run.
 
-- `recommended_version` 1.60.0 (not 1.44.0) needs a JDK 21 to run, which
-  this project's own dev machine (Java 17) doesn't have by default —
-  resolved by `jdtls_java_home` above, not by downgrading the pin.
-- The jdtls source build itself was never run end-to-end (this machine's
-  Java 17 correctly refused the pre-flight check every time). Moot now:
-  there's no source build left to run.
-
-The original research (still accurate — it's what revision 2 above actually
-implements) follows, unchanged.
+The original research below (still accurate — it's what revision 2 above
+actually implements) follows, unchanged.
 
 **Phase 1 — the installer + modal.** Real research already done this
 session (downloads/diffs actually run, not assumed — same discipline
@@ -1858,13 +1476,12 @@ completions against the freshly-*installed* (not just the pre-existing
 
 ## Track 29 — Java-version-aware editing + new-project scaffolding
 
-**Reconciliation note (found merging a local branch that had fallen
-behind `origin/ide-henshin` by several days of already-pushed commits):**
-this track's Phase 0 finding and Phase 2 below were written without
-knowledge of "Detect the JDK and the project's Java release for jdt.ls"
-(`f5c4931`, landed on `origin/ide-henshin` days before this track was
-started locally) — which already ships almost exactly what Phase 2
-describes: `fg_core::java_release::detect` reads a project's own
+**Reconciliation note:** this track's Phase 0 finding and Phase 2 below
+were written without knowledge of "Detect the JDK and the project's Java
+release for jdt.ls" (`f5c4931`, landed on `origin/ide-henshin` before
+this track was started locally) — which already ships almost exactly
+what Phase 2 describes: `fg_core::java_release::detect` reads a project's
+own
 `pom.xml`/`build.gradle(.kts)`/`.java-version`/`.sdkmanrc` for its real
 compiler release, and `lsp_state.rs` already sends jdt.ls
 `java.configuration.runtimes` built from every JDK `lsp_manager::
@@ -1902,11 +1519,8 @@ can build, analyzed by jdt.ls at the right language level.
 Done — finding recorded below, confirmed via a real jdtls 1.60.0 process.**
 Method: a raw JSON-RPC probe (bypassing FoxGarden entirely, same technique
 TECHNICAL_DEBT.md #17/#18 already used) against the real vendored jdtls
-1.60.0, run under a JDK 21 (`~/.sdkman/candidates/java/21.0.12-zulu`,
-installed this session purely as an SDKMAN candidate — the shell default
-was left at the machine's own pre-existing 17 throughout), sending exactly
-what `lsp_state.rs`'s real `initialize_params` sends today (no
-`java.configuration.*` at all).
+1.60.0, run under a JDK 21, sending exactly what `lsp_state.rs`'s real
+`initialize_params` sends today (no `java.configuration.*` at all).
 
 - **Managed case (a real `pom.xml` with `<maven.compiler.release>8`
   `</maven.compiler.release>`):** a fixture with a `record` (Java 16+) and
@@ -1950,23 +1564,20 @@ folder picker + auto-detect, list with remove) under its own new
 "Settings > JDKs…" entry — deliberately separate from the Language Servers
 modal, since `jdtls_java_home` is "which JVM runs jdt.ls" (always 21+) and
 this is "which JDKs exist to target" (any version).
-**Checkpoint 1 — done.** `cargo test --workspace` green (829 passed in
-`crates/app`, including `detect_and_add`/`closest_for`/`add_known` against
-fake `java_home` dirs). Live-verify of the Settings > JDKs… dialog itself
-(menu wiring, modal, empty state, Add JDK button) confirmed working under
-a real (if sandboxed) `xdg-desktop-portal`/`xdg-desktop-portal-gtk` pair —
-which also surfaced and closed TECHNICAL_DEBT.md #23: `pick_folder()` was
-called synchronously on the UI thread with no timeout, freezing the whole
-app if the portal didn't answer promptly; now backgrounded on a thread and
-polled like every other slow op in this codebase (`git_stage.rs`'s own
-`spawn`/`poll` shape). The literal "add a JDK, restart the app, confirm
-it's still there" step — not confirmed via the native folder picker
-itself, which the sandboxed portal never resolved a real pick through
-(see #23's "What was found") — is now confirmed end-to-end a different
-way: the Auto-detect button added closing TECHNICAL_DEBT.md #24 exercises
-the identical add → persist → reload path without a native dialog, and
-was live-verified through a real quit (File > Sair) and relaunch, finding
-this machine's own SDKMAN-managed JDK 17 both times.
+**Checkpoint 1 — done.** `cargo test --workspace` green (including
+`detect_and_add`/`closest_for`/`add_known` against fake `java_home`
+dirs). Live-verify of the Settings > JDKs… dialog surfaced and closed
+TECHNICAL_DEBT.md #23: `pick_folder()` was called synchronously on the UI
+thread with no timeout, freezing the whole app if the portal didn't
+answer promptly; now backgrounded on a thread and polled like every other
+slow op in this codebase (`git_stage.rs`'s own `spawn`/`poll` shape). The
+"add a JDK, restart the app, confirm it's still there" step wasn't
+confirmable through the native folder picker in this sandboxed
+environment, so it was instead confirmed via the Auto-detect button
+(closing TECHNICAL_DEBT.md #24) exercising the identical add → persist →
+reload path without a native dialog — live-verified through a real quit
+and relaunch, finding this machine's own SDKMAN-managed JDK 17 both
+times.
 
 **Phase 2 — done, shipped independently as `f5c4931` before this track was
 even started locally (see this track's own "Reconciliation note" above).**
@@ -1983,14 +1594,12 @@ planned, and a superset of it (still correct for the managed case, since
 jdt.ls's own import already agreed with the marked default there).
 `SessionConfig` already carries `java_release`/`runtimes` and restarts the
 session on either changing, same mechanism `java_home` uses.
-**Checkpoint 2 — done.** `f5c4931`'s own commit message states, in the
-present tense consistent with this codebase's own "don't claim it works
-without checking" discipline: "A Java 8 codebase is now linted as Java 8
-— var and records are errors again — while jdt.ls itself keeps running on
-21," i.e. live-verified at the time, not merely implemented. Not
-re-verified freshly in this session — no reason to doubt a claim written
-in that voice, and TECHNICAL_DEBT.md's own entries are the place a
-regression here would show up if the claim turns out stale.
+**Checkpoint 2 — done.** `f5c4931`'s own commit message records it as
+live-verified at the time ("A Java 8 codebase is now linted as Java 8 —
+var and records are errors again — while jdt.ls itself keeps running on
+21"), not merely implemented. Not re-verified freshly in this session —
+TECHNICAL_DEBT.md's own entries are the place a regression here would
+show up if the claim turns out stale.
 
 **Phase 3 — Capability B, part 1: New Project wizard + Maven+Java.** New
 `crates/core/src/scaffold.rs` (pure generation, mirrors `gradle.rs::
@@ -2014,30 +1623,26 @@ Create: `scaffold::write_scaffold` → `project_config::save_project_config`
 → `EditorState::open_project` (the exact function "Open Folder…" already
 calls). `MenuBarOutcome` gains `open_new_project_wizard_request`; File
 menu gets "New Project…" right after "Open Folder…".
-**Checkpoint 3 — done.** `cargo test --workspace` green (835 passed in
-`crates/app`; `scaffold_files`/`write_scaffold` exact-output and
+**Checkpoint 3 — done.** `cargo test --workspace` green
+(`scaffold_files`/`write_scaffold` exact-output and
 non-empty-directory-refusal tests, `project_config.rs` round-trip tests
 mirroring `run_config.rs`'s own suite, `new_project.rs`'s own
 `create_and_open` tests). Live-verified under a fresh isolated FoxGarden
 instance: filled the wizard (`com.example.demo`/`demo-app`, Java 8),
 clicked Create, watched it open into the side panel with the exact
-generated tree (`pom.xml`, `.gitignore`, `src/main/java/com/example/demo/
-Main.java`, `.foxgarden/project.json`). Confirmed on disk: `pom.xml`
-states `<maven.compiler.release>8</maven.compiler.release>` and a real
-`mvn -q compile` (Maven 3.9.3) against it outside FoxGarden succeeds,
-producing `target/classes/com/example/demo/Main.class`. Did **not**
-separately re-verify jdt.ls actually diagnosing this specific scaffolded
-project at Java 8 — Phase 2's own wiring (`java_release::detect` reading
-this exact `pom.xml` shape, already unit-tested against it in
-`scaffold.rs`'s own `pom_xml_release_reads_back_through_java_release_
-detect_at_the_requested_value`) is the same code path already live-
-verified generically by `f5c4931`; nothing in this wizard introduces a new
-one. One real caveat found along the way, not a regression: `xdotool
-type` needs `xdotool windowfocus` first under a bare Xvfb with no window
-manager — a mouse click alone focuses the widget inside egui but not the
-X11 window itself, so keystrokes silently went nowhere until that was
-added to this session's own test setup; not a FoxGarden bug, purely a
-sandboxed-testing-environment note for next time.
+generated tree. Confirmed on disk: `pom.xml` states
+`<maven.compiler.release>8</maven.compiler.release>` and a real `mvn -q
+compile` against it outside FoxGarden succeeds, producing
+`target/classes/com/example/demo/Main.class`. Did **not** separately
+re-verify jdt.ls actually diagnosing this specific scaffolded project at
+Java 8 — Phase 2's own wiring (`java_release::detect` reading this exact
+`pom.xml` shape, already unit-tested against it) is the same code path
+already live-verified generically by `f5c4931`; nothing in this wizard
+introduces a new one. One real, reusable testing gotcha found along the
+way, not a FoxGarden bug: `xdotool type` needs `xdotool windowfocus`
+first under a bare Xvfb with no window manager — a mouse click alone
+focuses the widget inside egui but not the X11 window itself, so
+keystrokes silently go nowhere without it.
 
 **Phase 4 — Capability B, part 2: Gradle (Kotlin DSL) + Java.**
 `scaffold.rs` gains `BuildTool::Gradle`: `settings.gradle.kts`,
@@ -2135,9 +1740,9 @@ how correct the generated skeleton is.
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-
-      server installer (landed; jdtls builds from its GitHub repo rather
-      than downloading an Eclipse milestone tarball — see that track for
-      the deviation and its two open follow-ups)
+      server installer (landed; both servers are now vendored directly
+      into the binary rather than built or downloaded on demand — see
+      that track for the revision history)
 - [ ] Track 29 — Java-version-aware editing + new-project scaffolding
       (Phase 0 live-verified: jdt.ls already enforces a Maven project's own
       declared compliance level with zero client-side help; Phase 1 — JDK
@@ -2147,8 +1752,7 @@ how correct the generated skeleton is.
       TECHNICAL_DEBT.md #23 (UI-thread-blocking folder picker) and #24
       (duplicate JDK-detection code paths) found along the way; Phase 2 —
       correct analysis across Java levels — already shipped and
-      live-verified independently as `f5c4931`, discovered reconciling a
-      branch that had fallen behind; Phase 3 — New Project wizard,
+      live-verified independently as `f5c4931`; Phase 3 — New Project wizard,
       Maven+Java scaffolding — shipped and live-verified: a real
       `com.example.demo`/`demo-app` Java-8 project created through the
       wizard, opened correctly, and a real `mvn -q compile` against it
