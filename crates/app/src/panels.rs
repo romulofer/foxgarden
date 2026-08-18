@@ -8,6 +8,7 @@ pub mod go_to_file;
 pub mod jdk_registry;
 pub mod lsp_servers;
 pub mod menu_bar;
+pub mod new_project;
 pub mod quick_switcher;
 pub mod run_configs;
 pub mod side_panel;

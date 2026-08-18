@@ -36,6 +36,7 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 25 | `[OPEN]` | No extension/plugin architecture — every language, panel, and LSP integration is hardcoded into the app crate itself |
 | 24 | `[RESOLVED]` | Two independent "find the JDKs on this machine" code paths now exist, from parallel unsynced work |
 | 23 | `[OPEN]` | `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it |
 | 22 | `[OPEN]` | Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it |
@@ -64,6 +65,81 @@ rewritten or removed, not blindly executed.
 ---
 
 # Open
+
+## 25. [OPEN] No extension/plugin architecture — every language, panel, and LSP integration is hardcoded into the app crate itself
+
+**Where:** `fg_core::Language` (`crates/core/src/language.rs`, a fixed
+`enum` — Java, Kotlin, Properties, Yaml, Xml, Dockerfile), `syntax`'s own
+grammar registration (tree-sitter grammars compiled into the `syntax`
+crate, `highlights_*.scm` files bundled as `include_str!`), `lsp_manager::
+ServerKind`/`Server` (`crates/app/src/lsp_manager.rs`, an `enum` naming
+exactly jdtls and kotlin-language-server, each with its own hardcoded
+install/launch logic), and every panel (`crates/app/src/panels/*.rs`,
+compiled Rust modules with no dynamic loading of any kind).
+
+**Status:** Open — recorded per the user's own request while other work
+was in progress; not investigated or scoped beyond this survey of where
+the hardcoding actually lives.
+
+### What was found
+
+Nothing here is pluggable. Adding support for a new language today means
+touching the `Language` enum, adding/vendoring a tree-sitter grammar and
+its own `highlights_*.scm` inside the `syntax` crate, teaching
+`lsp_manager` a new `ServerKind` variant with its own install/launch
+shape, and wiring any language-specific panel behavior (codegen,
+boilerplate, Spring-config awareness) by hand into each relevant module.
+Same story for a wholly new *kind* of feature (a new panel, a new static-
+analysis tool beyond Checkstyle/PMD/SpotBugs, a new external-tool
+integration) — every one of those is first-party code in this repo, not
+something a third party (or a future version of this project itself)
+could add without a FoxGarden release. `CLAUDE.md`'s own project overview
+already frames the current Java/Kotlin-only scope as a deliberate first
+checkpoint toward "a full fledged... Spring Boot IDE," which makes this
+gap load-bearing for that stated direction, not a hypothetical.
+
+### Why it wasn't fixed on the spot
+
+Not a bug — a real architecture question with several credible shapes and
+no clearly-right answer yet, exactly the kind of decision that shouldn't
+get picked unilaterally mid an unrelated feature session:
+
+- **Config-driven extensibility, no dynamic loading at all.** Let a
+  `.foxgarden`-style file describe an LSP server (command, args,
+  install source) and a tree-sitter grammar (a `.wasm` grammar file
+  tree-sitter can already load at runtime, plus a `highlights.scm`) for a
+  new language without a Rust code change — cheapest to build, covers the
+  two most-requested extension points (a language, an LSP), doesn't cover
+  a genuinely new panel/feature.
+- **WASM plugins** (`wasmtime`/`extism`-style) for real code, sandboxed,
+  cross-platform, no `dlopen` ABI-stability problem — the heaviest lift,
+  and this project's own stated performance bar (Zed-class startup/frame
+  cost) makes the runtime cost of a WASM boundary a real design constraint
+  to measure, not assume away.
+- **Native Rust plugin crates** loaded via `dlopen`/`abi_stable` — fastest
+  at runtime, but Rust's lack of a stable ABI makes this brittle across
+  compiler versions in a way the other two options aren't; probably only
+  viable if plugins are always built from source against the exact
+  FoxGarden version they target.
+
+### Proposed fix
+
+Start with the config-driven route for languages/LSP servers specifically
+— it's the smallest change that unblocks the most common real request
+("FoxGarden doesn't support my language yet") without committing to a
+full plugin runtime before this project has any plugins to learn from.
+Revisit WASM/native plugins once there's a concrete second or third
+feature (beyond language support) someone actually wants to add from
+outside this repo — designing a general plugin API against zero real
+consumers tends to guess wrong.
+
+### Trigger condition
+
+The first real request (from the user or elsewhere) to support a language
+beyond Java/Kotlin, or to build a feature that doesn't obviously belong
+as first-party code in this repo.
+
+---
 
 ## 23. [OPEN] `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it
 

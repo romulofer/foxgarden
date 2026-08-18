@@ -2014,12 +2014,30 @@ Create: `scaffold::write_scaffold` → `project_config::save_project_config`
 → `EditorState::open_project` (the exact function "Open Folder…" already
 calls). `MenuBarOutcome` gains `open_new_project_wizard_request`; File
 menu gets "New Project…" right after "Open Folder…".
-**Checkpoint 3:** `cargo test --workspace` green (`scaffold_files` exact
-output per spec; `project_config.rs` round-trip tests mirroring
-`run_config.rs`'s own suite); live-verify: create a real Maven+Java
-project targeting Java 8 through the wizard, confirm the generated files,
-confirm a real `mvn -q compile` succeeds against it outside FoxGarden,
-confirm FoxGarden opens it and jdt.ls (Phase 2) treats it as Java 8.
+**Checkpoint 3 — done.** `cargo test --workspace` green (835 passed in
+`crates/app`; `scaffold_files`/`write_scaffold` exact-output and
+non-empty-directory-refusal tests, `project_config.rs` round-trip tests
+mirroring `run_config.rs`'s own suite, `new_project.rs`'s own
+`create_and_open` tests). Live-verified under a fresh isolated FoxGarden
+instance: filled the wizard (`com.example.demo`/`demo-app`, Java 8),
+clicked Create, watched it open into the side panel with the exact
+generated tree (`pom.xml`, `.gitignore`, `src/main/java/com/example/demo/
+Main.java`, `.foxgarden/project.json`). Confirmed on disk: `pom.xml`
+states `<maven.compiler.release>8</maven.compiler.release>` and a real
+`mvn -q compile` (Maven 3.9.3) against it outside FoxGarden succeeds,
+producing `target/classes/com/example/demo/Main.class`. Did **not**
+separately re-verify jdt.ls actually diagnosing this specific scaffolded
+project at Java 8 — Phase 2's own wiring (`java_release::detect` reading
+this exact `pom.xml` shape, already unit-tested against it in
+`scaffold.rs`'s own `pom_xml_release_reads_back_through_java_release_
+detect_at_the_requested_value`) is the same code path already live-
+verified generically by `f5c4931`; nothing in this wizard introduces a new
+one. One real caveat found along the way, not a regression: `xdotool
+type` needs `xdotool windowfocus` first under a bare Xvfb with no window
+manager — a mouse click alone focuses the widget inside egui but not the
+X11 window itself, so keystrokes silently went nowhere until that was
+added to this session's own test setup; not a FoxGarden bug, purely a
+sandboxed-testing-environment note for next time.
 
 **Phase 4 — Capability B, part 2: Gradle (Kotlin DSL) + Java.**
 `scaffold.rs` gains `BuildTool::Gradle`: `settings.gradle.kts`,
@@ -2130,5 +2148,9 @@ how correct the generated skeleton is.
       (duplicate JDK-detection code paths) found along the way; Phase 2 —
       correct analysis across Java levels — already shipped and
       live-verified independently as `f5c4931`, discovered reconciling a
-      branch that had fallen behind; Phases 3+ (New Project wizard/
-      scaffolding) not started)
+      branch that had fallen behind; Phase 3 — New Project wizard,
+      Maven+Java scaffolding — shipped and live-verified: a real
+      `com.example.demo`/`demo-app` Java-8 project created through the
+      wizard, opened correctly, and a real `mvn -q compile` against it
+      outside FoxGarden succeeded; Phases 4+ (Gradle, Kotlin scaffolding)
+      not started)

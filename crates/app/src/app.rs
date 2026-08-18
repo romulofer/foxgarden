@@ -18,6 +18,7 @@ use crate::panels::go_to_file::{self, GoToFileState};
 use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
 use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::menu_bar::{self, MenuBarState};
+use crate::panels::new_project::{self, NewProjectWizardState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
@@ -306,6 +307,10 @@ pub struct FoxGardenApp {
     /// Settings > JDKs… — the dialog that edits `jdk_registry` above.
     /// Runtime-only, same reasoning as `lsp_servers` above.
     jdk_registry_ui: JdkRegistryState,
+    /// File > New Project… — `PLAN.md` Track 29 Phase 3. Runtime-only, same
+    /// reasoning as `lsp_servers`/`jdk_registry_ui` above: nothing here is
+    /// meaningful to resume across a restart.
+    new_project_wizard: NewProjectWizardState,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
     /// runtime-only, never persisted (there's nothing meaningful to resume
     /// across a restart: `was_focused` starts however the OS hands focus to
@@ -1108,6 +1113,7 @@ impl FoxGardenApp {
             lsp_servers: LspServersState::default(),
             jdk_registry,
             jdk_registry_ui: JdkRegistryState::default(),
+            new_project_wizard: NewProjectWizardState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
         };
@@ -1445,6 +1451,9 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.open_jdk_registry_settings_request {
             self.jdk_registry_ui.open_settings();
         }
+        if menu_outcome.open_new_project_wizard_request {
+            self.new_project_wizard.open();
+        }
         if menu_outcome.run_checkstyle_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
@@ -1647,6 +1656,7 @@ impl eframe::App for FoxGardenApp {
         static_analysis::show_settings(ui, &mut self.static_analysis, &mut self.external_tool_paths);
         lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
         jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
+        new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
 
         show_error_modal(ui, &mut self.last_error);
     }

@@ -9,7 +9,9 @@ mod java_release;
 mod language;
 mod maven;
 mod project;
+mod project_config;
 mod run_config;
+mod scaffold;
 mod spring_config_metadata;
 mod static_analysis;
 mod status;
@@ -31,7 +33,11 @@ pub use java_release::{
 pub use language::Language;
 pub use maven::{MavenClasspathError, MavenDependency, MavenParent, MavenProject, maven_classpath, parse_pom};
 pub use project::{FileKind, FileNode, Project};
+pub use project_config::{
+    ProjectConfig, load_project_config, parse_project_config, save_project_config, serialize_project_config,
+};
 pub use run_config::{RunConfig, load_run_configs, parse_run_configs, save_run_configs, serialize_run_configs};
+pub use scaffold::{BuildTool, ProjectLanguage, ScaffoldSpec, scaffold_files, write_scaffold};
 pub use spring_config_metadata::{
     SpringConfigProperty, parse_metadata_json, scan_classpath_for_metadata, scan_jar_for_metadata,
 };

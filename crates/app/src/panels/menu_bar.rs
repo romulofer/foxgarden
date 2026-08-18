@@ -55,6 +55,9 @@ pub struct MenuBarOutcome {
     /// `LspSettings::jdtls_java_home` is "which JVM runs jdt.ls itself"
     /// (always 21+), this is "which JDKs exist to *target*" (any version).
     pub open_jdk_registry_settings_request: bool,
+    /// File > New Project… — opens `panels::new_project`'s wizard
+    /// (`PLAN.md` Track 29 Phase 3).
+    pub open_new_project_wizard_request: bool,
     /// Settings > External Tools… — opens `static_analysis::
     /// StaticAnalysisState`'s dialog, which lives on `FoxGardenApp` rather
     /// than `MenuBarState`, same "the feature's own state, not menu_bar's"
@@ -125,6 +128,10 @@ pub fn show(
                 {
                     *last_error = Some(msg::failed_to_open_project(&err.to_string()));
                 }
+                ui.close();
+            }
+            if ui.button(t().menu.new_project).clicked() {
+                outcome.open_new_project_wizard_request = true;
                 ui.close();
             }
             ui.separator();
