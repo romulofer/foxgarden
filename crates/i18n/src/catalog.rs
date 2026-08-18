@@ -82,12 +82,14 @@ pub struct Menu {
 
     pub run: &'static str,
     pub edit_configurations: &'static str,
+    pub build: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
     pub side_panel: &'static str,
     pub terminal_panel: &'static str,
     pub source_control: &'static str,
+    pub build_output: &'static str,
     pub word_wrap: &'static str,
     pub render_whitespace: &'static str,
     pub indentation_guides: &'static str,
@@ -290,6 +292,7 @@ pub struct Errors {
     pub override_no_tree: &'static str,
     pub checkstyle_not_configured: &'static str,
     pub pmd_not_configured: &'static str,
+    pub no_build_tool_detected: &'static str,
     pub rename_empty_name: &'static str,
     pub rename_no_parent: &'static str,
 }
@@ -318,6 +321,11 @@ pub struct Common {
     /// same words — one string, so the two can't drift apart.
     pub running_checkstyle: &'static str,
     pub running_pmd: &'static str,
+    /// The Run menu shows this in place of `menu.build` while a build is in
+    /// flight, and the status bar reports the same build with the same
+    /// words — same "one string, so the two can't drift apart" shape as
+    /// `running_checkstyle`/`running_pmd`.
+    pub running_build: &'static str,
 }
 
 /// Brazilian Portuguese — the primary language.
@@ -368,12 +376,14 @@ pub const PT_BR: Strings = Strings {
 
         run: "Executar",
         edit_configurations: "Editar Configurações…",
+        build: "Compilar",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
         side_panel: "Painel Lateral",
         terminal_panel: "Painel do Terminal",
         source_control: "Controle de Versão",
+        build_output: "Saída da Compilação",
         word_wrap: "Quebra Automática de Linha",
         render_whitespace: "Exibir Espaços em Branco",
         indentation_guides: "Guias de Indentação",
@@ -547,6 +557,7 @@ pub const PT_BR: Strings = Strings {
         override_needs_class: "Posicione o cursor dentro de uma classe para sobrescrever um método.",
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
         checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
+        no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
         pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
         rename_empty_name: "falha ao renomear: nome vazio",
         rename_no_parent: "falha ao renomear: sem diretório pai",
@@ -571,6 +582,7 @@ pub const PT_BR: Strings = Strings {
         no_matches: "Nenhum resultado",
         running_checkstyle: "Executando Checkstyle…",
         running_pmd: "Executando PMD…",
+        running_build: "Compilando…",
     },
 };
 
@@ -622,12 +634,14 @@ pub const EN_US: Strings = Strings {
 
         run: "Run",
         edit_configurations: "Edit Configurations…",
+        build: "Build",
 
         view: "View",
         zen_mode: "Zen Mode",
         side_panel: "Side Panel",
         terminal_panel: "Terminal Panel",
         source_control: "Source Control",
+        build_output: "Build Output",
         word_wrap: "Word Wrap",
         render_whitespace: "Render Whitespace",
         indentation_guides: "Indentation Guides",
@@ -801,6 +815,7 @@ pub const EN_US: Strings = Strings {
         override_needs_class: "Place the cursor inside a class to override a method.",
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
         checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",
+        no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
         pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
         rename_empty_name: "rename failed: empty name",
         rename_no_parent: "rename failed: no parent directory",
@@ -825,5 +840,6 @@ pub const EN_US: Strings = Strings {
         no_matches: "No matches",
         running_checkstyle: "Running Checkstyle…",
         running_pmd: "Running PMD…",
+        running_build: "Building…",
     },
 };

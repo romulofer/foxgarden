@@ -1256,10 +1256,57 @@ patterns recognizing compiler-error line shapes (verified against real
 Maven/Gradle-wrapped build output, not just bare `javac`'s own format),
 clickable jump via `pending_navigation`.
 
-**Checkpoint 1:** full suite green (fixture build-output strings matched
-into expected file/line); live-verify running a real Maven/Gradle
-project's build streams real, live output, and a real compile error
-produces a clickable entry that jumps to the right line.
+**Checkpoint 1:** done — `fg_core::build_output` has `detect_build_tool`
+(the same `pom.xml` vs `build.gradle[.kts]` file-presence check
+`spring_config::scan_project` already established, no other precedent
+existed), `build_command` (assembles `mvn -B compile`/`gradle
+--console=plain compileJava`, preferring a project's own `mvnw` the same
+way `gradle_command` already prefers `gradlew` — that function's own
+visibility widened to `pub(crate)` for this reuse), and `parse_build_
+output_line`. One real, found-not-assumed asymmetry between the two
+tools, verified against real `mvn 3.9.3`/`gradle 9.6.1` runs against a
+deliberately broken two-error fixture: Maven's own `[ERROR] path:[line,
+col] message` lines land on **stdout**; Gradle's `compileJava` prints
+plain unwrapped javac output (`path:line: error: message`, no column at
+all — a caret line points at it instead) on **stderr**. `crates/app/src/
+panels/build_panel.rs`'s `BuildState` spawns the real child with both
+streams piped, one reader thread per stream feeding a shared `mpsc`
+channel — genuine live streaming (`BufReader::lines()`), not the
+spawn-wait-`Command::output()` shape every earlier background job in this
+codebase (`static_analysis`, `gradle_classpaths`, ...) already uses, since
+none of those needed to show partial progress while still running.
+
+Deliberate deviation from this phase's own text above: Build does **not**
+go through `RunConfig` — a compile has no main-class/args/env to configure,
+so there's nothing in `RunConfig` for it to read; `RunConfig` stays
+reserved for Phase 2's Run action, which actually needs it. Run > Build
+(a new `MenuBarOutcome::build_request`) auto-shows the new View > "Build
+Output" bottom-docked panel (a new `build_panel_visible` bool, same
+`terminal_panel_visible`-shaped persisted toggle) the same way `Ctrl+\``'s
+terminal handler already auto-starts its own session on first open. A
+clicked problem row hands back the compiler's own raw `(path, line,
+column)` — not a byte offset — since unlike the Spring endpoint map (which
+already has a byte offset at scan time), there's no live buffer to convert
+against until `open_path` runs; `app.rs`'s own click-site opens the path
+first, then reads the byte offset straight off that document's real
+`Rope` (`line_to_char`/`char_to_byte`) before setting `pending_navigation`,
+reusing that exact mechanism unchanged.
+
+Live-verified end to end against a real broken two-error Maven fixture
+(screenshots, not just described): Build Output panel opens automatically
+on Run > Build, real `mvn -B compile` output streams in live (confirmed
+mid-build, not just the finished log), both compiler-error lines render in
+the error color while every surrounding line (`[INFO]`, `symbol:`,
+`location:`) stays plain text, and clicking each one opens `Foo.java` with
+the caret landing exactly on the offending identifier (`undefinedSymbol`
+line 5, `anotherUndefined` line 6). Driven this once via `xdotool` at the
+user's own explicit request despite `AGENTS.md`'s own standing "don't
+automate clicks" guidance — and it surfaced a real, live reproduction of
+`TECHNICAL_DEBT.md` #23 in the process: File > Open Folder's native picker
+genuinely froze the whole window on this machine, confirming that entry
+isn't hypothetical. Worked around by pre-seeding `eframe`'s own
+`last_project` storage key under an isolated `XDG_DATA_HOME` instead of
+driving that dialog — not a fix for #23 itself, still open.
 
 **Phase 2 — Run.** A Run action invokes the project's configured main
 class/application task (`mvn exec:java`/`gradle run` shape, reusing
@@ -1736,7 +1783,9 @@ how correct the generated skeleton is.
       for both build tools verified end-to-end against real, resolvable
       projects with real jars landing on disk. Unblocks Track 12, Track
       20's classpath feed, and Track 27.)
-- [ ] Track 22 — Build/run/test integration
+- [ ] Track 22 — Build/run/test integration (Phase 1/Build shipped and
+      live-verified — real `mvn`/`gradle` compile streamed live with
+      clickable error rows; Phases 2/3 — Run, Test — not started)
 - [ ] Track 23 — Debugger
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-

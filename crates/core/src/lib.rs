@@ -1,5 +1,6 @@
 mod blame;
 mod boilerplate;
+mod build_output;
 mod diagnostic;
 mod diff;
 mod document;
@@ -18,6 +19,7 @@ mod status;
 
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
+pub use build_output::{BuildProblem, build_command, detect_build_tool, parse_build_output_line};
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,

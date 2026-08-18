@@ -251,6 +251,16 @@ msg! {
 }
 
 msg! {
+    /// A build's own `Command::spawn` failing (`mvn`/`gradle` missing from
+    /// `PATH`, e.g.) — not the build itself failing, which instead shows up
+    /// as ordinary compiler-error rows in the build output panel.
+    failed_to_start_build(err: &str) {
+        pt: "falha ao iniciar a compilação: {err}",
+        en: "failed to start build: {err}",
+    }
+}
+
+msg! {
     pmd_failed(err: &str) {
         pt: "o PMD falhou: {err}",
         en: "PMD failed: {err}",

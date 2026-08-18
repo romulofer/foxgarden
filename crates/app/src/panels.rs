@@ -2,6 +2,7 @@
 //! status bar, and the tab bar (which also owns tab/parser lifecycle — see
 //! `tabs::open_parser_for`).
 
+pub mod build_panel;
 pub mod git_diff;
 pub mod git_stage;
 pub mod go_to_file;

@@ -71,6 +71,8 @@ pub struct MenuBarOutcome {
     pub run_checkstyle_request: bool,
     /// Tools > Run PMD.
     pub run_pmd_request: bool,
+    /// Run > Build (`PLAN.md` Track 22 Phase 1).
+    pub build_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -104,10 +106,12 @@ pub fn show(
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
     source_control_visible: &mut bool,
+    build_panel_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
     checkstyle_running: bool,
     pmd_running: bool,
+    build_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -420,6 +424,16 @@ pub fn show(
                 outcome.open_run_configs_request = true;
                 ui.close();
             }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !build_running,
+                    egui::Button::new(if build_running { t().common.running_build } else { t().menu.build }),
+                )
+                .clicked()
+            {
+                outcome.build_request = true;
+                ui.close();
+            }
         });
 
         ui.menu_button(t().menu.view, |ui| {
@@ -433,6 +447,9 @@ pub fn show(
                 ui.close();
             }
             if ui.checkbox(source_control_visible, t().menu.source_control).changed() {
+                ui.close();
+            }
+            if ui.checkbox(build_panel_visible, t().menu.build_output).changed() {
                 ui.close();
             }
             ui.separator();

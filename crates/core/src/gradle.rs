@@ -183,7 +183,7 @@ allprojects {
 /// the project actually specifies" reasoning in `static_analysis.rs`,
 /// though for a different concrete problem (a wrapper script vs. a bare
 /// `.jar`, not a JVM-launcher distinction).
-fn gradle_command(project_root: &Path) -> Command {
+pub(crate) fn gradle_command(project_root: &Path) -> Command {
     let wrapper = project_root.join("gradlew");
     if wrapper.is_file() {
         Command::new(wrapper)

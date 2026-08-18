@@ -12,6 +12,7 @@ use crate::file_watch::{self, ReconcileOutcome};
 use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
+use crate::panels::build_panel;
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
@@ -69,6 +70,7 @@ const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
 const SHOW_INLINE_BLAME_KEY: &str = "show_inline_blame";
 const TERMINAL_PANEL_VISIBLE_KEY: &str = "terminal_panel_visible";
 const SOURCE_CONTROL_PANEL_VISIBLE_KEY: &str = "source_control_panel_visible";
+const BUILD_PANEL_VISIBLE_KEY: &str = "build_panel_visible";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
@@ -334,6 +336,18 @@ pub struct FoxGardenApp {
     /// Runtime-only, same as `diff`: a fresh launch just runs a fresh
     /// `git status` once the panel's shown rather than resuming anything.
     git_stage: GitStageState,
+    /// Whether the Build Output panel is docked open at the bottom —
+    /// toggled by the View menu's "Build Output" checkbox, or automatically
+    /// whenever Run > Build starts a new build (`PLAN.md` Track 22 Phase
+    /// 1), same "one flag, several triggers" shape `terminal_panel_visible`
+    /// already established. Persisted across restarts the same way — like
+    /// the Source Control panel, there's no running process worth resuming
+    /// on relaunch, just the panel being open at all.
+    build_panel_visible: bool,
+    /// The Build Output panel's own accumulated log lines plus any
+    /// in-flight `mvn`/`gradle` build — see `panels::build_panel::
+    /// BuildState`. Runtime-only: a fresh launch has no build to resume.
+    build_state: build_panel::BuildState,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
@@ -773,6 +787,7 @@ fn restore_settings(
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
     source_control_visible: &mut bool,
+    build_panel_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
@@ -834,6 +849,9 @@ fn restore_settings(
     }
     if let Some(visible) = storage.get_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY) {
         *source_control_visible = visible == "true";
+    }
+    if let Some(visible) = storage.get_string(BUILD_PANEL_VISIBLE_KEY) {
+        *build_panel_visible = visible == "true";
     }
     if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
         custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
@@ -922,6 +940,7 @@ fn persist_settings(
     side_panel_visible: bool,
     terminal_panel_visible: bool,
     source_control_visible: bool,
+    build_panel_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
@@ -949,6 +968,7 @@ fn persist_settings(
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
     storage.set_string(TERMINAL_PANEL_VISIBLE_KEY, terminal_panel_visible.to_string());
     storage.set_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY, source_control_visible.to_string());
+    storage.set_string(BUILD_PANEL_VISIBLE_KEY, build_panel_visible.to_string());
     storage.set_string(
         CUSTOM_JAVA_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.java),
@@ -1020,6 +1040,7 @@ impl FoxGardenApp {
         let mut side_panel_visible = true;
         let mut terminal_panel_visible = false;
         let mut source_control_visible = false;
+        let mut build_panel_visible = false;
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
@@ -1055,6 +1076,7 @@ impl FoxGardenApp {
                 &mut side_panel_visible,
                 &mut terminal_panel_visible,
                 &mut source_control_visible,
+                &mut build_panel_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
@@ -1085,6 +1107,8 @@ impl FoxGardenApp {
             terminal_panel_visible,
             source_control_visible,
             git_stage: GitStageState::default(),
+            build_panel_visible,
+            build_state: build_panel::BuildState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -1288,6 +1312,12 @@ impl eframe::App for FoxGardenApp {
         let mut outcome = side_panel::SidePanelOutcome::default();
         let mut menu_outcome = menu_bar::MenuBarOutcome::default();
         let mut terminal_outcome = terminal_panel::TerminalPanelOutcome::default();
+        // Set by `build_panel::show` the frame a clickable compiler-error
+        // row is clicked — resolved into `pending_navigation` further down,
+        // once `open_path` has made the target file's real buffer available
+        // to convert its line/column into a byte offset (see that call
+        // site's own comment).
+        let mut build_click: Option<(PathBuf, usize, usize)> = None;
         // Compared against `self.source_control_visible` after `menu_bar::
         // show` runs (which mutates it directly, same "one flag, two
         // triggers" shape every other View checkbox here already uses) to
@@ -1317,10 +1347,12 @@ impl eframe::App for FoxGardenApp {
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
                         &mut self.source_control_visible,
+                        &mut self.build_panel_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
                         self.static_analysis.pmd_running(),
+                        self.build_state.running(),
                     )
                 })
                 .inner;
@@ -1378,6 +1410,15 @@ impl eframe::App for FoxGardenApp {
                     });
             }
 
+            if self.build_panel_visible {
+                egui::Panel::bottom("build_output_panel")
+                    .resizable(true)
+                    .default_size(220.0)
+                    .show(ui, |ui| {
+                        build_click = build_panel::show(ui, &mut self.build_state);
+                    });
+            }
+
             if self.source_control_visible
                 && let Some(root) = diff_root.clone()
             {
@@ -1423,6 +1464,34 @@ impl eframe::App for FoxGardenApp {
                 path,
             );
         }
+        // `build_panel::show` only hands back the compiler's own 1-based
+        // line/column, not a byte offset (`pending_navigation`'s own unit) —
+        // unlike the Spring endpoint map, which already knows a raw byte
+        // offset at scan time, a build-output row has no buffer to convert
+        // against until its file is actually open. `open_path` first, then
+        // read the byte offset straight off that now-live `Rope` — no
+        // separate on-disk read, and correct even if the buffer's content
+        // differs slightly from what was just compiled (an unsaved edit
+        // since the build started).
+        if let Some((path, line, column)) = build_click {
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
+            if let Some(doc) = self.state.open_tabs.iter().find(|d| d.path() == path.as_path()) {
+                let line_idx = (line.saturating_sub(1)).min(doc.buffer.len_lines().saturating_sub(1));
+                let line_start_char = doc.buffer.line_to_char(line_idx);
+                let line_len_chars = doc.buffer.line(line_idx).len_chars();
+                let char_idx = line_start_char + (column.saturating_sub(1)).min(line_len_chars);
+                let byte = doc.buffer.char_to_byte(char_idx);
+                self.pending_navigation = Some((path, byte));
+            }
+        }
+
         for (old, new) in &outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, old, new);
         }
@@ -1437,6 +1506,18 @@ impl eframe::App for FoxGardenApp {
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
             self.run_configs_dialog.open(&root);
+        }
+
+        if menu_outcome.build_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            match fg_core::detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start(&root, tool) {
+                    Ok(()) => self.build_panel_visible = true,
+                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                },
+                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+            }
         }
 
         if menu_outcome.open_external_tools_settings_request {
@@ -1674,6 +1755,7 @@ impl eframe::App for FoxGardenApp {
             self.side_panel_visible,
             self.terminal_panel_visible,
             self.source_control_visible,
+            self.build_panel_visible,
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,
