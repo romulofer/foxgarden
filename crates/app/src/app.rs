@@ -1352,6 +1352,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
                         self.static_analysis.pmd_running(),
+                        self.static_analysis.spotbugs_running(),
                         self.build_state.is_build_running(),
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
@@ -1591,6 +1592,26 @@ impl eframe::App for FoxGardenApp {
                     .run_pmd(PathBuf::from(binary), ruleset.to_string(), root);
             }
         }
+        if menu_outcome.run_spotbugs_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            let binary = self.external_tool_paths.spotbugs_binary.trim();
+            if binary.is_empty() {
+                self.last_error = Some(t().errors.spotbugs_not_configured.to_string());
+            } else {
+                match fg_core::detect_build_tool(&root) {
+                    Some(tool) => {
+                        let classes_dir = fg_core::default_classes_dir(&root, tool);
+                        if classes_dir.is_dir() {
+                            self.static_analysis.run_spotbugs(PathBuf::from(binary), classes_dir, root);
+                        } else {
+                            self.last_error = Some(t().errors.spotbugs_no_compiled_classes.to_string());
+                        }
+                    }
+                    None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                }
+            }
+        }
         if let Some(result) = self.static_analysis.poll_checkstyle() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_checkstyle_results(&mut self.state, &diagnostics),
@@ -1601,6 +1622,12 @@ impl eframe::App for FoxGardenApp {
             match result {
                 Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
                 Err(err) => self.last_error = Some(msg::pmd_failed(&err.to_string())),
+            }
+        }
+        if let Some(result) = self.static_analysis.poll_spotbugs() {
+            match result {
+                Ok(diagnostics) => static_analysis::apply_spotbugs_results(&mut self.state, &diagnostics),
+                Err(err) => self.last_error = Some(msg::spotbugs_failed(&err.to_string())),
             }
         }
         self.spring_config.poll();

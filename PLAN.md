@@ -28,6 +28,13 @@ plus a live click-through for anything with a UI-facing surface, per
 green, then hand the user exact numbered steps and wait for them to
 report back, never claim a click-through passed without that.
 
+**Next up: Track 17 (`Peek definition`)** — per the user's own explicit
+direction. Its hard dependency, Track 20's own go-to-definition (Phase 4,
+`textDocument/definition`), is **not yet started** (Track 20's currently
+shipped scope is Phases 1/2/3/5 only) — so Track 20 Phase 4 needs to land
+first, immediately before Track 17 itself, not as a separately-scheduled
+track.
+
 **Cross-track dependency graph** (only the tracks with a real dependency
 on another track are shown; everything else is independent):
 
@@ -253,27 +260,80 @@ running correctly off the freshly-installed binaries afterward).
 based — verify it reports source line numbers accurately enough to map
 back to a `Diagnostic` range before assuming parity with the other two).
 
-**Deferred, not started** — investigated this session (real download,
-real compile-then-analyze run against a fixture, not assumed) and found a
-real blocker: unlike Checkstyle/PMD, SpotBugs analyzes **compiled `.class`
-files**, not source — there's no `project_root`-shaped entry point at all,
-and this app has no build step yet (`Maven/Gradle awareness`, §21, and
-`Build/run/test integration`, §22, are both still un-started) to produce
-one. User's own call: defer the actual analysis wiring until §22 lands.
-SpotBugs' own _binary_ is still installable today via the tool-manager
-addendum above (`Tool::SpotBugs`, `bin/fb` launcher) — that part doesn't
-depend on the classes-directory question, only "Run SpotBugs" and its
-Diagnostic-conversion parser do. Also verified and worth keeping for
-whenever this phase resumes: `-xml:withMessages` (not bare `-xml`) is
-needed for a `<LongMessage>` at all; each `<BugInstance>` carries several
-`<SourceLine>` elements (class range, method range, the specific culprit
-line) and the useful one is the _last_ direct child of `<BugInstance>`
-itself, not any of the ones nested inside `<Class>`/`<Method>`/`<Type>`/
-etc. — real depth-tracking during parsing, not a flat structure like
-Checkstyle's/PMD's own reports.
+**Checkpoint 3:** done — unblocked by Track 22 (`Build/run/test
+integration`) landing, which finally gave SpotBugs a real compiled-classes
+directory to analyze (`fg_core::default_classes_dir`, factored out of
+`run::run_command`'s own classpath-prefix logic so both share the exact
+`target/classes`/`build/classes/java/main` convention rather than
+duplicating it). `fg_core::static_analysis` gained `SpotBugsFinding`,
+`parse_spotbugs_xml`, `spotbugs_severity`, `spotbugs_source_file`, and
+`spotbugs_diagnostics` — verified against a real `fb analyze
+-xml:withMessages -output report.xml <classes_dir>` run (SpotBugs 4.10.3,
+a real fixture class compiled with `javac`, both a real
+`ES_COMPARING_PARAMETER_STRING_WITH_EQ` and a real
+`OBL_UNSATISFIED_OBLIGATION` finding), not assumed.
 
-**Checkpoint 3:** same as above, SpotBugs-specific fixture + live-verify.
-Not reached.
+Two real, found-not-assumed corrections to this section's own earlier
+notes, from checking that real report side by side rather than trusting
+the prior session's guess:
+
+1. **The "useful `<SourceLine>` is the last direct child of
+   `<BugInstance>`" claim above was wrong.** The real
+   `OBL_UNSATISFIED_OBLIGATION` finding has *three* direct-child
+   `<SourceLine>`s (an "obligation created" line plus two "path continues"
+   lines) — the real primary one is the *first*, distinguished only by its
+   own `primary="true"` attribute, not by position. `parse_spotbugs_xml`
+   tracks nesting depth relative to the enclosing `<BugInstance>` and
+   only accepts a depth-`0` `<Class>`/`<SourceLine>` that also carries
+   `primary="true"`, which correctly rejects every nested occurrence
+   inside `<Class>`/`<Method>`/`<Type>`/`<Int>`/`<String>` along the way.
+2. **SpotBugs' own exit code is a real success/failure signal**, unlike
+   Checkstyle's/PMD's (both of which encode their violation count as the
+   exit code — `SPEC.md` §5's "judge success by whether stdout parses, not
+   the exit code" pattern). Verified live: a run against a nonexistent
+   classes directory exits `1` with a Java stack trace on stderr and no
+   report written; a real run — with findings or without — exits `0`
+   either way. `run_spotbugs_process` treats a non-zero exit as the real
+   failure signal (`StaticAnalysisError::Report`, carrying stderr), not by
+   whether the `-output` file parses.
+
+Also unlike Checkstyle/PMD, SpotBugs reports no column (bytecode has no
+character offsets) and no real absolute file path — only a class name and
+a bytecode-debug-info source filename. `spotbugs_source_file` resolves a
+finding's own primary `classname` back onto `src/main/java/<package/path>/
+<ClassName>.java` (same standard-layout convention `test_report::
+test_source_file` already established for `src/test/java`), reducing a
+nested/inner/anonymous class (`Outer$Inner`) to its outer class first —
+Java always compiles those into the outer class's own `.java` file. A
+finding whose class can't be resolved this way is silently dropped, same
+degrade `diagnostics_from_findings` already establishes for an unreadable
+file.
+
+App-side (`panels::static_analysis`): `StaticAnalysisState` gained a third,
+independent `spotbugs_scan_rx` slot (`run_spotbugs`/`poll_spotbugs`/
+`spotbugs_running`, same shape as Checkstyle's/PMD's own) and
+`apply_spotbugs_results` writes into `Document`'s new, independent
+`spotbugs_diagnostics` field — same "its own field, not a shared bucket"
+reasoning `checkstyle_diagnostics`/`pmd_diagnostics` already established,
+now chained into `widget.rs`'s squiggle pipeline alongside the other two.
+Tools > "Run SpotBugs" (`menu_bar.rs`) requires the binary to be configured
+*and* a real, already-built classes directory to exist
+(`fg_core::detect_build_tool` + `default_classes_dir`, `.is_dir()`
+checked before spawning) — surfacing "run Build first" as its own distinct
+error rather than a confusing SpotBugs failure when there's nothing to
+analyze yet. Settings > External Tools' SpotBugs row needed no changes: its
+Install/Reinstall + Check for Updates buttons (`crate::tool_manager`) were
+already wired in Phase 1's "shared plumbing" addendum, unused until now.
+
+Full `cargo build --workspace`/`cargo test --workspace` green (`fg_core`
+gained real-report-fixture unit tests proving the primary-vs-last-child
+correction above, plus `spotbugs_source_file`/`spotbugs_findings_to_
+diagnostics` coverage; `panels::static_analysis` gained the same
+run/poll/independence/apply-results test shape Checkstyle's/PMD's own
+tests already have). Live click-through (Tools > Run SpotBugs against a
+real built project, confirming real squiggles land and Settings' Install
+row still works) not yet done — owed before this checkpoint is fully
+closed, per this project's own testing discipline.
 
 ---
 
@@ -1810,10 +1870,12 @@ how correct the generated skeleton is.
 - [ ] Track 4 — Local (non-git) file history
 - [ ] Track 5 — Static analysis integration (Phase 1/Checkstyle and Phase
       2/PMD both live-verified, including the in-app install/update
-      addition for all three tools' binaries; Phase 3/SpotBugs analysis
-      wiring deferred until Track 22 — Build/run/test integration —
-      lands, per the user's own call once the compiled-classes-directory
-      blocker surfaced)
+      addition for all three tools' binaries; Phase 3/SpotBugs — unblocked
+      once Track 22 landed — code green (full `cargo build`/`test`/
+      `clippy --workspace` pass, real-report-fixture tests included) but
+      its own live click-through (Tools > Run SpotBugs against a real
+      built project) not yet done, so the track as a whole stays open
+      until that happens)
 - [x] Track 6 — Auto-save (both phases shipped and live-verified)
 - [x] Track 7 — Rectangular (block) paste (all 3 phases shipped and
       live-verified)

@@ -268,6 +268,13 @@ msg! {
 }
 
 msg! {
+    spotbugs_failed(err: &str) {
+        pt: "o SpotBugs falhou: {err}",
+        en: "SpotBugs failed: {err}",
+    }
+}
+
+msg! {
     install_failed(err: &str) {
         pt: "a instalação falhou: {err}",
         en: "Install failed: {err}",

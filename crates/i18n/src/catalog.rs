@@ -79,6 +79,7 @@ pub struct Menu {
     pub unique_lines: &'static str,
     pub run_checkstyle: &'static str,
     pub run_pmd: &'static str,
+    pub run_spotbugs: &'static str,
 
     pub run: &'static str,
     pub edit_configurations: &'static str,
@@ -294,6 +295,8 @@ pub struct Errors {
     pub override_no_tree: &'static str,
     pub checkstyle_not_configured: &'static str,
     pub pmd_not_configured: &'static str,
+    pub spotbugs_not_configured: &'static str,
+    pub spotbugs_no_compiled_classes: &'static str,
     pub no_build_tool_detected: &'static str,
     pub no_run_config: &'static str,
     pub rename_empty_name: &'static str,
@@ -324,6 +327,7 @@ pub struct Common {
     /// same words — one string, so the two can't drift apart.
     pub running_checkstyle: &'static str,
     pub running_pmd: &'static str,
+    pub running_spotbugs: &'static str,
     /// The Run menu shows this in place of `menu.build` while a build is in
     /// flight, and the status bar reports the same build with the same
     /// words — same "one string, so the two can't drift apart" shape as
@@ -384,6 +388,7 @@ pub const PT_BR: Strings = Strings {
         unique_lines: "Remover Linhas Duplicadas",
         run_checkstyle: "Executar Checkstyle",
         run_pmd: "Executar PMD",
+        run_spotbugs: "Executar SpotBugs",
 
         run: "Executar",
         edit_configurations: "Editar Configurações…",
@@ -573,6 +578,8 @@ pub const PT_BR: Strings = Strings {
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
         pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
+        spotbugs_not_configured: "Defina o binário do SpotBugs em Configurações > Ferramentas Externas primeiro.",
+        spotbugs_no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
         rename_empty_name: "falha ao renomear: nome vazio",
         rename_no_parent: "falha ao renomear: sem diretório pai",
     },
@@ -596,6 +603,7 @@ pub const PT_BR: Strings = Strings {
         no_matches: "Nenhum resultado",
         running_checkstyle: "Executando Checkstyle…",
         running_pmd: "Executando PMD…",
+        running_spotbugs: "Executando SpotBugs…",
         running_build: "Compilando…",
         running_run: "Executando…",
         running_tests: "Executando Testes…",
@@ -648,6 +656,7 @@ pub const EN_US: Strings = Strings {
         unique_lines: "Unique Lines",
         run_checkstyle: "Run Checkstyle",
         run_pmd: "Run PMD",
+        run_spotbugs: "Run SpotBugs",
 
         run: "Run",
         edit_configurations: "Edit Configurations…",
@@ -837,6 +846,8 @@ pub const EN_US: Strings = Strings {
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
         pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
+        spotbugs_not_configured: "Set the SpotBugs binary in Settings > External Tools first.",
+        spotbugs_no_compiled_classes: "No compiled classes found. Run Run > Build first.",
         rename_empty_name: "rename failed: empty name",
         rename_no_parent: "rename failed: no parent directory",
     },
@@ -860,6 +871,7 @@ pub const EN_US: Strings = Strings {
         no_matches: "No matches",
         running_checkstyle: "Running Checkstyle…",
         running_pmd: "Running PMD…",
+        running_spotbugs: "Running SpotBugs…",
         running_build: "Building…",
         running_run: "Running…",
         running_tests: "Running Tests…",

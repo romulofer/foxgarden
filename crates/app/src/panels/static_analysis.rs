@@ -1,11 +1,9 @@
-//! Tools > "Run Checkstyle"/"Run PMD" (`PLAN.md` Track 5, Phases 1-2 —
-//! SpotBugs analysis itself is deferred until `Build/run/test integration`
-//! lands, since SpotBugs needs a compiled-classes directory this app has no
-//! way to produce yet) plus their shared Settings > External Tools…
-//! dialog, including installing/updating the tools themselves (`crate::
-//! tool_manager`). Running each tool itself lives in `fg_core::
-//! checkstyle_diagnostics`/`fg_core::pmd_diagnostics`; this module is the
-//! app-side wiring: persisted binary/config paths, each tool's own
+//! Tools > "Run Checkstyle"/"Run PMD"/"Run SpotBugs" (`PLAN.md` Track 5, all
+//! 3 phases) plus their shared Settings > External Tools… dialog, including
+//! installing/updating the tools themselves (`crate::tool_manager`).
+//! Running each tool itself lives in `fg_core::checkstyle_diagnostics`/
+//! `fg_core::pmd_diagnostics`/`fg_core::spotbugs_diagnostics`; this module
+//! is the app-side wiring: persisted binary/config paths, each tool's own
 //! background scan, and applying a completed scan's findings to open
 //! documents.
 
@@ -41,10 +39,6 @@ pub struct ExternalToolPaths {
     /// the same way `checkstyle_config` is, PMD also has no usable default.
     pub pmd_ruleset: String,
     pub pmd_installed_version: String,
-    /// Unused by any Tools-menu action until `PLAN.md` Track 5 Phase 3
-    /// lands — present now (same as `spotbugs_installed_version` below) so
-    /// Settings > External Tools shows every tool's row, install button
-    /// included, up front rather than growing new UI piecemeal per phase.
     pub spotbugs_binary: String,
     pub spotbugs_installed_version: String,
 }
@@ -80,16 +74,17 @@ impl ExternalToolPaths {
 type ScanResult = Result<Vec<(PathBuf, Diagnostic)>, String>;
 
 /// Settings > External Tools… dialog open flag, plus a still-running
-/// Checkstyle and/or PMD scan (if any) — see `run_checkstyle`/`run_pmd` and
-/// `poll_checkstyle`/`poll_pmd`. Two independent slots (not one shared
-/// "a scan is running" flag): Checkstyle and PMD are separate Tools-menu
-/// actions with separate outcomes, so one running doesn't block the other
-/// from starting.
+/// Checkstyle/PMD/SpotBugs scan (if any) — see `run_checkstyle`/`run_pmd`/
+/// `run_spotbugs` and `poll_checkstyle`/`poll_pmd`/`poll_spotbugs`. Three
+/// independent slots (not one shared "a scan is running" flag): each tool
+/// is a separate Tools-menu action with its own outcome, so one running
+/// doesn't block another from starting.
 #[derive(Default)]
 pub struct StaticAnalysisState {
     settings_open: bool,
     checkstyle_scan_rx: Option<Receiver<ScanResult>>,
     pmd_scan_rx: Option<Receiver<ScanResult>>,
+    spotbugs_scan_rx: Option<Receiver<ScanResult>>,
     /// Backs the Settings > External Tools… dialog's own Install/Check for
     /// Updates buttons — a separate concern from the two scan slots above
     /// (installing a tool vs. running it), so it's its own type rather than
@@ -156,6 +151,11 @@ impl StaticAnalysisState {
         self.pmd_scan_rx.is_some()
     }
 
+    /// Same as `checkstyle_running`, for SpotBugs.
+    pub fn spotbugs_running(&self) -> bool {
+        self.spotbugs_scan_rx.is_some()
+    }
+
     /// Kicks off a Checkstyle run against `project_root` on a background
     /// thread.
     pub fn run_checkstyle(&mut self, binary: PathBuf, config: PathBuf, project_root: PathBuf) {
@@ -171,6 +171,18 @@ impl StaticAnalysisState {
         }));
     }
 
+    /// Kicks off a SpotBugs run against `classes_dir` (the project's own
+    /// build tool's default compiled-classes output directory — the
+    /// caller's job to compute and confirm exists, via `fg_core::
+    /// default_classes_dir`, since "no compiled classes yet" is a distinct,
+    /// more actionable error — "run Build first" — than anything this scan
+    /// itself can express) on a background thread.
+    pub fn run_spotbugs(&mut self, binary: PathBuf, classes_dir: PathBuf, project_root: PathBuf) {
+        self.spotbugs_scan_rx = Some(spawn_scan(move || {
+            fg_core::spotbugs_diagnostics(&binary, &classes_dir, &project_root).map_err(|e| e.to_string())
+        }));
+    }
+
     /// Drains a completed Checkstyle scan's result, if any finished since
     /// the last poll — called once per frame from `FoxGardenApp::ui`.
     pub fn poll_checkstyle(&mut self) -> Option<ScanResult> {
@@ -180,6 +192,11 @@ impl StaticAnalysisState {
     /// Same as `poll_checkstyle`, for PMD.
     pub fn poll_pmd(&mut self) -> Option<ScanResult> {
         poll_scan(&mut self.pmd_scan_rx)
+    }
+
+    /// Same as `poll_checkstyle`, for SpotBugs.
+    pub fn poll_spotbugs(&mut self) -> Option<ScanResult> {
+        poll_scan(&mut self.spotbugs_scan_rx)
     }
 
     /// Records a completed "Check for Updates" result for the Settings
@@ -228,12 +245,16 @@ pub fn apply_pmd_results(state: &mut EditorState, results: &[(PathBuf, Diagnosti
     apply_results(state, results, |doc| &mut doc.pmd_diagnostics);
 }
 
+pub fn apply_spotbugs_results(state: &mut EditorState, results: &[(PathBuf, Diagnostic)]) {
+    apply_results(state, results, |doc| &mut doc.spotbugs_diagnostics);
+}
+
 /// Settings > External Tools… dialog — one binary/config path field per
 /// tool, plus an Install/Update row backed by `crate::tool_manager`: a
 /// tool doesn't have to already be on the user's system for these fields
-/// to get filled in. SpotBugs' row is still shown (install-only — no "Run
-/// SpotBugs" menu item yet) even though its own analysis phase hasn't
-/// landed, per this track's own Phase 1 "shared plumbing" scope.
+/// to get filled in. SpotBugs has no config/ruleset field of its own (it
+/// takes a compiled-classes directory, computed at Run time, not a
+/// user-set path) — just the binary field, same as the other two.
 pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut ExternalToolPaths) {
     let outcome = show_modal(ui, "external_tools_dialog", state.settings_open.then_some(()), |ui, ()| {
         ui.set_min_width(460.0);
@@ -391,8 +412,26 @@ mod tests {
         let mut state = StaticAnalysisState::default();
         assert!(!state.checkstyle_running());
         assert!(!state.pmd_running());
+        assert!(!state.spotbugs_running());
         assert!(state.poll_checkstyle().is_none());
         assert!(state.poll_pmd().is_none());
+        assert!(state.poll_spotbugs().is_none());
+    }
+
+    #[test]
+    fn apply_spotbugs_results_leaves_checkstyle_and_pmd_untouched() {
+        let (_dir, doc) = test_support::temp_document("A.java", "class A {}");
+        let path = doc.path.clone();
+        let mut state = EditorState { open_tabs: vec![doc], ..Default::default() };
+
+        apply_checkstyle_results(&mut state, &[(path.clone(), diag("from checkstyle"))]);
+        apply_pmd_results(&mut state, &[(path.clone(), diag("from pmd"))]);
+        apply_spotbugs_results(&mut state, &[(path, diag("from spotbugs"))]);
+
+        assert_eq!(state.open_tabs[0].checkstyle_diagnostics[0].message, "from checkstyle");
+        assert_eq!(state.open_tabs[0].pmd_diagnostics[0].message, "from pmd");
+        assert_eq!(state.open_tabs[0].spotbugs_diagnostics.len(), 1);
+        assert_eq!(state.open_tabs[0].spotbugs_diagnostics[0].message, "from spotbugs");
     }
 
     #[test]
@@ -438,11 +477,28 @@ mod tests {
     }
 
     #[test]
-    fn checkstyle_and_pmd_scans_run_independently() {
+    fn run_spotbugs_marks_running_until_polled_after_completion() {
+        let mut state = StaticAnalysisState::default();
+        state.run_spotbugs(PathBuf::from("/nonexistent/spotbugs-binary"), PathBuf::from("/nonexistent/classes"), PathBuf::from("."));
+        assert!(state.spotbugs_running());
+
+        let result = loop {
+            if let Some(result) = state.poll_spotbugs() {
+                break result;
+            }
+        };
+        assert!(result.is_err());
+        assert!(!state.spotbugs_running());
+    }
+
+    #[test]
+    fn checkstyle_pmd_and_spotbugs_scans_run_independently() {
         let mut state = StaticAnalysisState::default();
         state.run_checkstyle(PathBuf::from("/nonexistent/checkstyle"), PathBuf::from("/nonexistent/config"), PathBuf::from("."));
         state.run_pmd(PathBuf::from("/nonexistent/pmd"), "quickstart".to_string(), PathBuf::from("."));
+        state.run_spotbugs(PathBuf::from("/nonexistent/spotbugs"), PathBuf::from("/nonexistent/classes"), PathBuf::from("."));
         assert!(state.checkstyle_running());
         assert!(state.pmd_running());
+        assert!(state.spotbugs_running());
     }
 }

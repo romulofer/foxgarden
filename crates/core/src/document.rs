@@ -52,6 +52,12 @@ pub struct Document {
     /// "static analysis" bucket, so re-running one tool doesn't clear the
     /// other's still-valid findings.
     pub pmd_diagnostics: Vec<Diagnostic>,
+    /// Same as `checkstyle_diagnostics`/`pmd_diagnostics`, for an externally-
+    /// run SpotBugs scan (`fg_core::spotbugs_diagnostics`) — its own field
+    /// for the same reason: SpotBugs analyzes compiled bytecode on a
+    /// separate, user-triggered lifecycle (`PLAN.md` Track 5 Phase 3), not
+    /// something that should clear or be cleared by the other two.
+    pub spotbugs_diagnostics: Vec<Diagnostic>,
     /// Semantic diagnostics published by the opt-in language server. Kept
     /// separate from syntax and batch-tool findings because each source has
     /// its own replacement/staleness lifecycle.
@@ -151,6 +157,7 @@ impl Document {
             diagnostics: Vec::new(),
             checkstyle_diagnostics: Vec::new(),
             pmd_diagnostics: Vec::new(),
+            spotbugs_diagnostics: Vec::new(),
             lsp_diagnostics: Vec::new(),
             lsp_version: 0,
             lsp_sync_pending: false,

@@ -71,6 +71,8 @@ pub struct MenuBarOutcome {
     pub run_checkstyle_request: bool,
     /// Tools > Run PMD.
     pub run_pmd_request: bool,
+    /// Tools > Run SpotBugs (`PLAN.md` Track 5 Phase 3).
+    pub run_spotbugs_request: bool,
     /// Run > Build (`PLAN.md` Track 22 Phase 1).
     pub build_request: bool,
     /// Run > Run Project (`PLAN.md` Track 22 Phase 2).
@@ -115,6 +117,7 @@ pub fn show(
     custom_templates: &mut UserTemplates,
     checkstyle_running: bool,
     pmd_running: bool,
+    spotbugs_running: bool,
     build_running: bool,
     run_running: bool,
     test_running: bool,
@@ -418,6 +421,20 @@ pub fn show(
                 .clicked()
             {
                 outcome.run_pmd_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !spotbugs_running,
+                    egui::Button::new(if spotbugs_running {
+                        t().common.running_spotbugs
+                    } else {
+                        t().menu.run_spotbugs
+                    }),
+                )
+                .clicked()
+            {
+                outcome.run_spotbugs_request = true;
                 ui.close();
             }
         });

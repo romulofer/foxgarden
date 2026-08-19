@@ -70,6 +70,21 @@ pub fn build_command(project_root: &Path, tool: BuildTool) -> Command {
     command
 }
 
+/// `tool`'s own default compiled-classes output directory under
+/// `project_root` — `run::run_command`'s own classpath-prefix logic
+/// (`PLAN.md` Track 22 Phase 2), pulled out so `spotbugs_diagnostics`'s
+/// caller (`PLAN.md` Track 5 Phase 3, which needs the *same* directory to
+/// point SpotBugs' bytecode analysis at) doesn't duplicate it. Not verified
+/// to exist on disk — a `Build` that hasn't run yet (or that failed) simply
+/// means an empty/missing directory; callers decide what that means for
+/// them.
+pub fn default_classes_dir(project_root: &Path, tool: BuildTool) -> PathBuf {
+    match tool {
+        BuildTool::Maven => project_root.join("target").join("classes"),
+        BuildTool::Gradle => project_root.join("build").join("classes").join("java").join("main"),
+    }
+}
+
 /// One compiler diagnostic parsed out of a build's own output — enough to
 /// paint a row and jump to it, not a full `Diagnostic` (whose `range` needs
 /// a byte offset this only has line/column for). The app-side click

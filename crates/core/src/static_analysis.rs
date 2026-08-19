@@ -1,15 +1,17 @@
 //! Shared plumbing for shelling out to external static-analysis tools
-//! (Checkstyle and PMD; SpotBugs lands in a later phase per `PLAN.md` Track
-//! 5) and converting each finding into the same `Diagnostic` shape the
-//! syntax-error squiggle pipeline already uses — a second diagnostic
-//! *source* feeding the existing pipeline, not a new rendering path. Each
-//! tool gets its own report parser (`SPEC.md` §5: "each needs its own
-//! parser, not a shared one, the formats aren't related" — confirmed by
-//! Checkstyle and PMD's real output: attribute-only vs. text-content
-//! messages, a point column vs. a real begin/end range, `severity=".."` vs.
-//! a numeric `priority`), but share the "read each referenced file once,
-//! convert line/column into a byte range" tail end via
-//! `diagnostics_from_findings`.
+//! (Checkstyle, PMD, and SpotBugs — `PLAN.md` Track 5) and converting each
+//! finding into the same `Diagnostic` shape the syntax-error squiggle
+//! pipeline already uses — a third diagnostic *source* feeding the existing
+//! pipeline, not a new rendering path. Each tool gets its own report parser
+//! (`SPEC.md` §5: "each needs its own parser, not a shared one, the formats
+//! aren't related" — confirmed by all three tools' real output: attribute-
+//! only vs. text-content messages, a point column vs. a real begin/end
+//! range vs. no column at all, `severity=".."` vs. a numeric `priority` vs.
+//! SpotBugs' own numeric `priority` with a completely different report
+//! shape — bug-pattern metadata plus a deeply-nested per-instance structure,
+//! since it analyzes compiled bytecode rather than source text), but share
+//! the "read each referenced file once, convert line/column into a byte
+//! range" tail end via `diagnostics_from_findings`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -301,6 +303,239 @@ pub fn parse_pmd_xml(xml: &str) -> Result<Vec<PmdFinding>, String> {
     Ok(findings)
 }
 
+/// Captures `<Class classname="..." primary="true">`/`<SourceLine
+/// start="..." primary="true">` into `classname`/`line` when `e` is one of
+/// those two tags and carries `primary="true"` — shared by
+/// `parse_spotbugs_xml`'s `Start`/`Empty` arms, both of which need the
+/// exact same check at depth `0`.
+fn capture_if_primary(e: &BytesStart<'_>, classname: &mut Option<String>, line: &mut Option<usize>) -> Result<(), String> {
+    match e.local_name().as_ref() {
+        b"Class" if attr(e, b"primary")?.as_deref() == Some("true") => {
+            *classname = attr(e, b"classname")?;
+        }
+        b"SourceLine" if attr(e, b"primary")?.as_deref() == Some("true") => {
+            *line = attr(e, b"start")?.and_then(|s| s.parse().ok());
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// One `<BugInstance>` entry from a SpotBugs XML report, already reduced to
+/// what a squiggle needs: `classname` is the bug's own *primary* `<Class>`
+/// (`classname="..." primary="true"` — verified against a real report to be
+/// present regardless of bug shape, whether the actual finding site is a
+/// class-, method-, or field-level detector), `line` is the primary
+/// `<SourceLine>`'s own `start` attribute (SpotBugs reports no column at
+/// all — bytecode has no character offsets to report), and `priority` is
+/// SpotBugs' own 1 (High) through at least 3 (Low) scale, read directly off
+/// `<BugInstance priority="...">`. Unlike Checkstyle's/PMD's findings,
+/// there's no real file path here yet — SpotBugs only knows a class name
+/// and a bytecode-debug-info source filename, not where that source lives
+/// on disk; resolving that is `spotbugs_source_file`'s job, done separately
+/// since it needs a `project_root` this type has no reason to carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotBugsFinding {
+    pub classname: String,
+    pub line: usize,
+    pub priority: u8,
+    pub message: String,
+}
+
+/// SpotBugs priority 1 (`High`) reads as `Error`; 2 (`Normal`) and lower
+/// (`Low`, `Experimental`, ...) as `Warning`. Same "this codebase's own
+/// threshold, not a documented convention of the tool itself" judgment call
+/// `pmd_severity` already makes, chosen for the same reason: a 2/`Normal`
+/// finding (e.g. this module's own real-report fixture's "may fail to close
+/// stream") not reading as a hard error by default felt like the right
+/// starting point.
+fn spotbugs_severity(priority: u8) -> Severity {
+    if priority <= 1 { Severity::Error } else { Severity::Warning }
+}
+
+/// Runs `binary analyze -xml:withMessages -output <tmp> classes_dir` and
+/// converts the resulting report into `Diagnostic`s keyed by the absolute
+/// path of the file each belongs to, resolved via `spotbugs_source_file`
+/// against `project_root`. A finding whose class can't be mapped back to a
+/// real file on disk (a nonstandard source layout, a generated/synthetic
+/// class with no `.java` of its own) is silently dropped rather than
+/// failing the whole batch — same degrade `diagnostics_from_findings`
+/// already establishes for an unreadable file.
+///
+/// Unlike Checkstyle/PMD (`SPEC.md` §5's own "judge success by whether
+/// stdout parses, not the exit code" pattern — both tools' own exit codes
+/// double as their violation count), SpotBugs' exit code *is* a real
+/// success/failure signal: verified live (a real "no files to analyze"
+/// run against a nonexistent classes directory) exits `1` with a Java stack
+/// trace on stderr and no report written at all, while a real run with
+/// findings — or with none — both exit `0`. So a non-zero exit here is
+/// treated as a real failure (`StaticAnalysisError::Report`, carrying
+/// stderr), not judged by whether the report parses.
+pub fn spotbugs_diagnostics(
+    binary: &Path,
+    classes_dir: &Path,
+    project_root: &Path,
+) -> Result<Vec<(PathBuf, Diagnostic)>, StaticAnalysisError> {
+    let xml = run_spotbugs_process(binary, classes_dir)?;
+    let findings = parse_spotbugs_xml(&xml).map_err(StaticAnalysisError::Report)?;
+    Ok(spotbugs_findings_to_diagnostics(project_root, findings))
+}
+
+/// The parse-and-convert tail of `spotbugs_diagnostics`, split out so it's
+/// directly testable against a captured report without needing a real
+/// SpotBugs process to run (see this module's tests).
+fn spotbugs_findings_to_diagnostics(project_root: &Path, findings: Vec<SpotBugsFinding>) -> Vec<(PathBuf, Diagnostic)> {
+    let resolved: Vec<(PathBuf, SpotBugsFinding)> = findings
+        .into_iter()
+        .filter_map(|f| spotbugs_source_file(project_root, &f.classname).map(|path| (path, f)))
+        .collect();
+    diagnostics_from_findings(resolved, |(path, _)| path.as_path(), |buffer, (_, f)| {
+        let start = line_col_to_byte(buffer, f.line, None);
+        let end = (start + 1).min(buffer.len_bytes());
+        Diagnostic { range: start..end, severity: spotbugs_severity(f.priority), message: f.message.clone() }
+    })
+}
+
+/// The most likely source file for a bug's own `classname` — standard
+/// Maven/Gradle layout (`src/main/java/<package/path>/<ClassName>.java`),
+/// the same convention `test_report::test_source_file` already established
+/// for `src/test/java`. A nested/inner/anonymous class (`Outer$Inner`,
+/// `Outer$1`) is reduced to its outer class first — Java always compiles
+/// those into the *outer* class's own `.java` file, never their own.
+/// `None` when that exact file doesn't exist, same "don't guess further"
+/// degrade `test_source_file` already uses.
+fn spotbugs_source_file(project_root: &Path, classname: &str) -> Option<PathBuf> {
+    let outer = classname.split('$').next().unwrap_or(classname);
+    let relative = outer.replace('.', "/");
+    let candidate = project_root.join("src").join("main").join("java").join(format!("{relative}.java"));
+    candidate.is_file().then_some(candidate)
+}
+
+/// Spawns a real SpotBugs `analyze` run against `classes_dir`, writing its
+/// XML report to a process-scoped temp file (`-output`, not stdout — the
+/// same "a real file on disk, not piped stdout" shape `maven_classpath`'s
+/// own `-Dmdep.outputFile` already established, and for the same reason:
+/// the report format wasn't designed to also be a clean stdout stream) and
+/// reading it back once the process exits successfully. `-xml:withMessages`
+/// (not bare `-xml`) is required for a `<LongMessage>` to be present at all
+/// — verified live; the bare `-xml` form omits it entirely, which would
+/// leave every `Diagnostic` with no message text.
+fn run_spotbugs_process(binary: &Path, classes_dir: &Path) -> Result<String, StaticAnalysisError> {
+    let output_file = std::env::temp_dir().join(format!("foxgarden-spotbugs-report-{}.xml", std::process::id()));
+
+    let result = command_for_binary(binary)
+        .arg("analyze")
+        .arg("-xml:withMessages")
+        .arg("-output")
+        .arg(&output_file)
+        .arg(classes_dir)
+        .output();
+    let result = (|| -> Result<String, StaticAnalysisError> {
+        let output = result.map_err(|e| StaticAnalysisError::Spawn("SpotBugs", e))?;
+        if !output.status.success() {
+            return Err(StaticAnalysisError::Report(String::from_utf8_lossy(&output.stderr).into_owned()));
+        }
+        std::fs::read_to_string(&output_file).map_err(|e| {
+            StaticAnalysisError::Report(format!("SpotBugs exited successfully but its own -output report was never written: {e}"))
+        })
+    })();
+    let _ = std::fs::remove_file(&output_file);
+    result
+}
+
+/// Parses a SpotBugs XML report (the `-xml:withMessages` format) into one
+/// `SpotBugsFinding` per `<BugInstance>`. Pure/no I/O — verified against a
+/// real `fb analyze -xml:withMessages` run (SpotBugs 4.10.3, see this
+/// module's tests), not a guessed schema. Unlike Checkstyle's/PMD's flat
+/// finding shape, a `<BugInstance>` nests several *other* elements
+/// (`<Class>`, `<Method>`, `<Type>`, `<Int>`, `<String>`, ...) that carry
+/// their *own* nested `<SourceLine>`/`<Message>` children describing
+/// secondary/contextual locations, not the bug's own primary one — a naive
+/// "first `<SourceLine>` seen" or "last direct child" (an earlier, *wrong*
+/// guess this project made before checking a real report side by side: a
+/// bug with more than one direct-child `<SourceLine>` — e.g. an
+/// `OBL_UNSATISFIED_OBLIGATION` finding's own "obligation created" plus
+/// "path continues" trail — has its real primary line *first*, not last)
+/// would as often as not pick a wrong location. This tracks nesting depth
+/// relative to the current `<BugInstance>` and only accepts a `<Class>`/
+/// `<SourceLine>` reading at depth `0` (a *direct* child) that also carries
+/// `primary="true"` — the one attribute SpotBugs itself uses to mark which
+/// of several same-shaped elements is the real one.
+pub fn parse_spotbugs_xml(xml: &str) -> Result<Vec<SpotBugsFinding>, String> {
+    let mut reader = Reader::from_str(xml);
+    let mut findings = Vec::new();
+
+    let mut in_bug = false;
+    let mut depth: i32 = 0;
+    let mut priority: Option<u8> = None;
+    let mut classname: Option<String> = None;
+    let mut line: Option<usize> = None;
+    let mut message = String::new();
+    let mut in_long_message = false;
+
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Eof => break,
+
+            Event::Start(e) if !in_bug && e.local_name().as_ref() == b"BugInstance" => {
+                in_bug = true;
+                depth = 0;
+                priority = Some(
+                    attr(&e, b"priority")?
+                        .ok_or_else(|| "<BugInstance> missing priority".to_string())?
+                        .parse::<u8>()
+                        .map_err(|e| e.to_string())?,
+                );
+                classname = None;
+                line = None;
+                message.clear();
+            }
+
+            Event::Start(e) if in_bug => {
+                if depth == 0 {
+                    if e.local_name().as_ref() == b"LongMessage" {
+                        in_long_message = true;
+                    }
+                    capture_if_primary(&e, &mut classname, &mut line)?;
+                }
+                depth += 1;
+            }
+
+            Event::Empty(e) if in_bug && depth == 0 => {
+                capture_if_primary(&e, &mut classname, &mut line)?;
+            }
+
+            Event::Text(t) if in_long_message => {
+                let text = t.decode().map_err(|e| e.to_string())?;
+                let unescaped = quick_xml::escape::unescape(&text).map_err(|e| e.to_string())?;
+                message.push_str(unescaped.trim());
+            }
+
+            Event::End(e) if in_bug => {
+                depth -= 1;
+                if e.local_name().as_ref() == b"LongMessage" {
+                    in_long_message = false;
+                }
+                if e.local_name().as_ref() == b"BugInstance" {
+                    in_bug = false;
+                    if let (Some(classname), Some(line)) = (classname.take(), line.take()) {
+                        findings.push(SpotBugsFinding {
+                            classname,
+                            line,
+                            priority: priority.expect("set when entering <BugInstance>"),
+                            message: message.clone(),
+                        });
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    Ok(findings)
+}
+
 pub(crate) fn attr(start: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>, String> {
     for a in start.attributes() {
         let a = a.map_err(|e| e.to_string())?;
@@ -571,5 +806,186 @@ Avoid unused local variables such as 's'.
         // (char index 18, 'b') so the range extends one past it -> byte 63.
         let line5_start = "package demo;\n\nclass Bad2 {\n    void m() {\n".len();
         assert_eq!(diagnostics[0].1.range, (line5_start + 12)..(line5_start + 19));
+    }
+
+    #[test]
+    fn command_for_binary_runs_the_spotbugs_launcher_script_directly() {
+        let cmd = command_for_binary(Path::new("/tools/spotbugs-4.10.3/bin/fb"));
+        assert_eq!(cmd.get_program(), "/tools/spotbugs-4.10.3/bin/fb");
+    }
+
+    /// Captured verbatim from a real
+    /// `fb analyze -xml:withMessages -output report.xml <classes_dir>` run
+    /// (SpotBugs 4.10.3) against a small fixture class compiled with
+    /// `javac`, with a real `ES_COMPARING_PARAMETER_STRING_WITH_EQ` and a
+    /// real `OBL_UNSATISFIED_OBLIGATION` violation. The latter is the
+    /// specific case that disproves this codebase's own earlier, unverified
+    /// guess (`PLAN.md` Track 5's "Deferred" note) that the useful
+    /// `<SourceLine>` is the *last* direct child of `<BugInstance>` — here
+    /// it's the *first* of three direct-child `<SourceLine>`s, distinguished
+    /// only by its own `primary="true"` attribute. Trimmed of a third,
+    /// redundant `OS_OPEN_STREAM` violation and the `<BugPattern>`/
+    /// `<BugCode>`/`<FindBugsProfile>` tail (real but not read by this
+    /// parser), same "trim what the parser doesn't touch, keep what it
+    /// does" discipline `maven.rs`'s own `SIMPLE_POM` fixture already uses.
+    const REAL_SPOTBUGS_REPORT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<BugCollection version="4.10.3" sequence="0" timestamp="1787176559473" analysisTimestamp="1787176564882" release="">
+  <Project projectName="">
+    <Jar>/tmp/fixture/classes</Jar>
+  </Project>
+  <BugInstance type="ES_COMPARING_PARAMETER_STRING_WITH_EQ" priority="1" rank="14" abbrev="ES" category="BAD_PRACTICE" instanceHash="2718e3b7372e8143aea58a129489a108" instanceOccurrenceNum="0" instanceOccurrenceMax="0" cweid="595">
+    <ShortMessage>Comparison of String parameter using == or !=</ShortMessage>
+    <LongMessage>Comparison of String parameter using == or != in demo.Bad.compareStrings(String, String)</LongMessage>
+    <Class classname="demo.Bad" primary="true">
+      <SourceLine classname="demo.Bad" start="6" end="13" sourcefile="Bad.java" sourcepath="demo/Bad.java">
+        <Message>At Bad.java:[lines 6-13]</Message>
+      </SourceLine>
+      <Message>In class demo.Bad</Message>
+    </Class>
+    <Method classname="demo.Bad" name="compareStrings" signature="(Ljava/lang/String;Ljava/lang/String;)Z" isStatic="true" primary="true">
+      <SourceLine classname="demo.Bad" start="13" end="13" startBytecode="0" endBytecode="6" sourcefile="Bad.java" sourcepath="demo/Bad.java"/>
+      <Message>In method demo.Bad.compareStrings(String, String)</Message>
+    </Method>
+    <Type descriptor="Ljava/lang/String;" role="TYPE_FOUND">
+      <SourceLine classname="java.lang.String" start="140" end="4655" sourcefile="String.java" sourcepath="java/lang/String.java">
+        <Message>At String.java:[lines 140-4655]</Message>
+      </SourceLine>
+      <Message>Actual type String</Message>
+    </Type>
+    <LocalVariable name="?" register="1" pc="1" role="LOCAL_VARIABLE_VALUE_OF">
+      <Message>Value loaded from ?</Message>
+    </LocalVariable>
+    <SourceLine classname="demo.Bad" primary="true" start="13" end="13" startBytecode="2" endBytecode="2" sourcefile="Bad.java" sourcepath="demo/Bad.java">
+      <Message>At Bad.java:[line 13]</Message>
+    </SourceLine>
+    <Property name="edu.umd.cs.findbugs.detect.RefComparisonWarningProperty.STATIC_AND_PARAMETER_IN_PUBLIC_METHOD" value="true"/>
+  </BugInstance>
+  <BugInstance type="OBL_UNSATISFIED_OBLIGATION" priority="2" rank="20" abbrev="OBL" category="EXPERIMENTAL" instanceHash="3c5b83a65d2ead90689f8a346a094d35" instanceOccurrenceNum="0" instanceOccurrenceMax="0">
+    <ShortMessage>Method may fail to clean up stream or resource</ShortMessage>
+    <LongMessage>demo.Bad.unclosedStream(String) may fail to clean up java.io.InputStream</LongMessage>
+    <Class classname="demo.Bad" primary="true">
+      <SourceLine classname="demo.Bad" start="6" end="13" sourcefile="Bad.java" sourcepath="demo/Bad.java">
+        <Message>At Bad.java:[lines 6-13]</Message>
+      </SourceLine>
+      <Message>In class demo.Bad</Message>
+    </Class>
+    <Method classname="demo.Bad" name="unclosedStream" signature="(Ljava/lang/String;)V" isStatic="true" primary="true">
+      <SourceLine classname="demo.Bad" start="8" end="10" startBytecode="0" endBytecode="46" sourcefile="Bad.java" sourcepath="demo/Bad.java"/>
+      <Message>In method demo.Bad.unclosedStream(String)</Message>
+    </Method>
+    <Class classname="java.io.InputStream" role="CLASS_REFTYPE">
+      <SourceLine classname="java.io.InputStream" start="61" end="786" sourcefile="InputStream.java" sourcepath="java/io/InputStream.java">
+        <Message>At InputStream.java:[lines 61-786]</Message>
+      </SourceLine>
+      <Message>Reference type java.io.InputStream</Message>
+    </Class>
+    <Int value="1" role="INT_OBLIGATIONS_REMAINING">
+      <Message>1 instances of obligation remaining</Message>
+    </Int>
+    <SourceLine classname="demo.Bad" primary="true" start="8" end="8" startBytecode="5" endBytecode="5" sourcefile="Bad.java" sourcepath="demo/Bad.java" role="SOURCE_LINE_OBLIGATION_CREATED">
+      <Message>Obligation to clean up resource created at Bad.java:[line 8] is not discharged</Message>
+    </SourceLine>
+    <SourceLine classname="demo.Bad" start="9" end="9" startBytecode="9" endBytecode="9" sourcefile="Bad.java" sourcepath="demo/Bad.java" role="SOURCE_LINE_PATH_CONTINUES">
+      <Message>Path continues at Bad.java:[line 9]</Message>
+    </SourceLine>
+    <SourceLine classname="demo.Bad" start="10" end="10" startBytecode="14" endBytecode="14" sourcefile="Bad.java" sourcepath="demo/Bad.java" role="SOURCE_LINE_PATH_CONTINUES">
+      <Message>Path continues at Bad.java:[line 10]</Message>
+    </SourceLine>
+    <String value="{InputStream x 1}" role="STRING_REMAINING_OBLIGATIONS">
+      <Message>Remaining obligations: {InputStream x 1}</Message>
+    </String>
+  </BugInstance>
+  <Errors errors="0" missingClasses="0"></Errors>
+</BugCollection>
+"#;
+
+    #[test]
+    fn parse_spotbugs_xml_extracts_every_bug_instance() {
+        let findings = parse_spotbugs_xml(REAL_SPOTBUGS_REPORT).expect("parses");
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].classname, "demo.Bad");
+        assert_eq!(findings[0].priority, 1);
+        assert_eq!(
+            findings[0].message,
+            "Comparison of String parameter using == or != in demo.Bad.compareStrings(String, String)"
+        );
+    }
+
+    #[test]
+    fn parse_spotbugs_xml_picks_the_primary_source_line_not_the_last_direct_child() {
+        let findings = parse_spotbugs_xml(REAL_SPOTBUGS_REPORT).expect("parses");
+        // The OBL_UNSATISFIED_OBLIGATION finding has three direct-child
+        // <SourceLine>s (lines 8, 9, 10) — only the first (line 8) carries
+        // primary="true"; a "last direct child" heuristic would wrongly
+        // pick line 10.
+        assert_eq!(findings[1].classname, "demo.Bad");
+        assert_eq!(findings[1].line, 8);
+        assert_eq!(findings[1].priority, 2);
+    }
+
+    #[test]
+    fn parse_spotbugs_xml_ignores_source_lines_nested_inside_class_and_method() {
+        let findings = parse_spotbugs_xml(REAL_SPOTBUGS_REPORT).expect("parses");
+        // The ES_COMPARING_PARAMETER_STRING_WITH_EQ finding's own primary
+        // <SourceLine> (line 13) is a direct child; several other
+        // <SourceLine>s nested inside <Class>/<Method>/<Type> (lines 6, 13
+        // again, 140) must not be picked up as separate findings or override
+        // the real one.
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].line, 13);
+    }
+
+    #[test]
+    fn spotbugs_severity_maps_high_to_error_and_the_rest_to_warning() {
+        assert_eq!(spotbugs_severity(1), Severity::Error);
+        assert_eq!(spotbugs_severity(2), Severity::Warning);
+        assert_eq!(spotbugs_severity(3), Severity::Warning);
+    }
+
+    #[test]
+    fn spotbugs_source_file_finds_the_standard_main_layout_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src/main/java/demo");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let file = src_dir.join("Bad.java");
+        std::fs::write(&file, "package demo;\nclass Bad {}\n").unwrap();
+
+        assert_eq!(spotbugs_source_file(dir.path(), "demo.Bad"), Some(file));
+    }
+
+    #[test]
+    fn spotbugs_source_file_reduces_a_nested_class_to_its_outer_java_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src/main/java/demo");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let file = src_dir.join("Bad.java");
+        std::fs::write(&file, "package demo;\nclass Bad { class Inner {} }\n").unwrap();
+
+        assert_eq!(spotbugs_source_file(dir.path(), "demo.Bad$Inner"), Some(file));
+    }
+
+    #[test]
+    fn spotbugs_source_file_is_none_when_the_file_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(spotbugs_source_file(dir.path(), "demo.DoesNotExist"), None);
+    }
+
+    #[test]
+    fn spotbugs_findings_to_diagnostics_resolves_against_the_real_file_and_drops_unresolvable_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src/main/java/demo");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let file = src_dir.join("Bad.java");
+        std::fs::write(&file, "package demo;\n\nclass Bad {\n    void m() {\n        int x = 1;\n    }\n}\n").unwrap();
+
+        let findings = vec![
+            SpotBugsFinding { classname: "demo.Bad".to_string(), line: 5, priority: 1, message: "found".to_string() },
+            SpotBugsFinding { classname: "demo.Ghost".to_string(), line: 1, priority: 1, message: "unresolvable".to_string() },
+        ];
+        let diagnostics = spotbugs_findings_to_diagnostics(dir.path(), findings);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].0, file);
+        assert_eq!(diagnostics[0].1.severity, Severity::Error);
+        assert_eq!(diagnostics[0].1.message, "found");
     }
 }

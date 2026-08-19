@@ -52,6 +52,7 @@ pub struct BackgroundWork {
     pub detecting_java_home: bool,
     pub running_checkstyle: bool,
     pub running_pmd: bool,
+    pub running_spotbugs: bool,
     /// A `mvn`/`gradle` classpath resolution feeding Spring config
     /// completion.
     pub scanning_classpath: bool,
@@ -84,6 +85,7 @@ impl BackgroundWork {
             detecting_java_home: servers.detecting_java_home(),
             running_checkstyle: static_analysis.checkstyle_running(),
             running_pmd: static_analysis.pmd_running(),
+            running_spotbugs: static_analysis.spotbugs_running(),
             scanning_classpath: spring_config.scanning(),
             running_git: diff.running()
                 || git_stage.status_running()
@@ -164,6 +166,9 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
     }
     if work.running_pmd {
         activities.push(Activity::new(t().common.running_pmd.to_string()));
+    }
+    if work.running_spotbugs {
+        activities.push(Activity::new(t().common.running_spotbugs.to_string()));
     }
     if work.scanning_classpath {
         activities.push(Activity::new(t().status_bar.scanning_classpath.to_string()));

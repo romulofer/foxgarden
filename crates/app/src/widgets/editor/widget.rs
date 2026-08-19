@@ -1953,16 +1953,17 @@ pub fn show(
         paint_whitespace(ui, &shell_out.base, &doc.buffer);
     }
 
-    // Three independent sources feeding one squiggle pipeline (see
+    // Several independent sources feeding one squiggle pipeline (see
     // `Document::checkstyle_diagnostics`'s own doc comment for why they're
     // separate fields) — collected into one slice here, at paint time,
-    // rather than a fourth stored field, since the cost scales with this
+    // rather than a fifth stored field, since the cost scales with this
     // one document's own diagnostic count, not project size.
     let all_diagnostics: Vec<Diagnostic> = doc
         .diagnostics
         .iter()
         .chain(doc.checkstyle_diagnostics.iter())
         .chain(doc.pmd_diagnostics.iter())
+        .chain(doc.spotbugs_diagnostics.iter())
         .chain(doc.lsp_diagnostics.iter())
         .cloned()
         .collect();

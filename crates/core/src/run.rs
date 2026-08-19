@@ -21,6 +21,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::build_output::default_classes_dir;
 use crate::gradle::gradle_classpaths;
 use crate::maven::maven_classpath;
 use crate::run_config::RunConfig;
@@ -61,14 +62,14 @@ pub fn run_command(project_root: &Path, tool: BuildTool, config: &RunConfig) -> 
     let classpath = match tool {
         BuildTool::Maven => {
             let mut cp = maven_classpath(project_root).map_err(|e| RunSetupError::Classpath(e.to_string()))?;
-            cp.insert(0, project_root.join("target").join("classes"));
+            cp.insert(0, default_classes_dir(project_root, tool));
             cp
         }
         BuildTool::Gradle => {
             let classpaths = gradle_classpaths(project_root).map_err(|e| RunSetupError::Classpath(e.to_string()))?;
             let root = classpaths.into_iter().find(|c| c.path == ":").ok_or(RunSetupError::NoRootModule)?;
             let mut cp = root.runtime;
-            cp.insert(0, project_root.join("build").join("classes").join("java").join("main"));
+            cp.insert(0, default_classes_dir(project_root, tool));
             cp
         }
     };
