@@ -36,6 +36,7 @@ rewritten or removed, not blindly executed.
 
 | # | Tag | Entry |
 |---|-----|-------|
+| 26 | `[OPEN]` | `kotlin-language-server` throws an internal exception instead of returning empty completions when completion is requested at a syntactically invalid class-body position |
 | 25 | `[OPEN]` | No extension/plugin architecture — every language, panel, and LSP integration is hardcoded into the app crate itself |
 | 23 | `[OPEN]` | `rfd::FileDialog::pick_folder()` blocks the whole UI thread with no timeout — fixed for Settings > JDKs…, three other call sites still do it |
 | 22 | `[OPEN]` | Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it |
@@ -52,6 +53,94 @@ rewritten or removed, not blindly executed.
 ---
 
 # Open
+
+## 26. [OPEN] `kotlin-language-server` throws an internal exception instead of returning empty completions when completion is requested at a syntactically invalid class-body position
+
+**Where:** Not this repo's own code — `kotlin-language-server`'s own
+`org.javacs.kt.completion.CompletionsKt.completions`/
+`org.javacs.kt.CompiledFile.bindingContextOf`, the vendored real-server
+binary FoxGarden's LSP client (`crates/app/src/lsp_client.rs`/`lsp_state.rs`)
+talks to. Recorded here anyway per this file's own "known-and-deferred"
+purpose, since it's a real, reproduced behavior worth not re-discovering
+from scratch even though the fix (if any) belongs upstream, not in this
+repo.
+
+**Status:** Open. Reported live against a real project (`~/bridge/pec`)
+via a user-supplied kotlin-language-server log.
+
+### What was found
+
+Real log, not assumed: `KotlinFrontEndException` /
+`UnsupportedOperationException: Should not be called` thrown from
+`NoTopLevelDescriptorProvider.getPackageFragment`, deep inside KLS' own
+`Compiler.compileKtExpression` → `ExpressionTypingVisitorDispatcher.
+getTypeInfo` → `LocalClassifierAnalyzer.processClassOrObject` →
+`DeclarationResolver.checkRedeclarationsInPackages` chain, triggered by a
+completion request (`textDocument/completion`) right after typing `.`
+directly in a class body with no enclosing function/`init` block —
+concretely:
+
+```kotlin
+class FileSystemGetConfiguracaoService(
+    private val configuracaoAnexoArquivosLoad: ConfiguracaoAnexoArquivosLoad,
+    private val fsUtils: FileSystemUtils
+) {
+    configuracaoAnexoArquivosLoad.
+    // ^ bare statement directly in the class body — invalid Kotlin outside
+    //   an `init { }` block, a property initializer, or a function body.
+
+    fun execute(...) { ... }
+}
+```
+
+FoxGarden's own syntax pipeline already correctly flags this exact
+position as a syntax error (a real squiggle, confirmed in the same
+screenshot the report came with) — the position genuinely has no valid
+enclosing scope for KLS to resolve `configuracaoAnexoArquivosLoad`'s own
+type against, since it isn't inside anything Kotlin allows a statement to
+live in. KLS builds a synthetic `dummy.virtual.kt` wrapping the enclosing
+declaration to analyze the expression in isolation (visible in the log's
+own `<ELEMENT>` dump), and its front-end throws rather than degrading to
+an empty completion list when that synthetic file itself doesn't type-check.
+
+**Not an app crash** — `KotlinTextDocumentService.completion` catches
+this server-side into a JSON-RPC internal-error response (the log's own
+`fallbackResponseError`/`GRAVE: Internal error` lines), which FoxGarden's
+own LSP client already treats as "no completions this time" — the visible
+symptom is just no completion popup, the same as the correct behavior for
+genuinely invalid code would look like anyway. No FoxGarden-side state
+corruption, hang, or crash resulted.
+
+### Why it wasn't fixed
+
+Third-party server code (`kotlin-language-server`'s own Kotlin compiler
+front-end), not something this repo can patch directly — the vendored
+binary is built from the upstream project's own source
+(`crates/app/src/lsp_manager.rs`'s own `KOTLIN_LANGUAGE_SERVER_ARCHIVE`).
+The triggering position is also genuinely invalid Kotlin, so "no
+completions" is arguably the *correct* end-user-visible outcome regardless
+— the only real gap is an internal exception logged noisily on KLS' own
+side instead of a clean empty response, which has no visible effect on
+FoxGarden's own UI or state.
+
+### Proposed fix
+
+None actionable in this repo. If this exact crash shape is ever reproduced
+at a *syntactically valid* position (not just this one invalid-position
+case), that would be a real regression worth chasing with a fresh repro —
+a valid position degrading to no completions, rather than just a noisy log
+at an already-invalid one, would be a genuine loss of functionality.
+Otherwise, only worth filing upstream against `kotlin-language-server`
+itself if it recurs and someone wants to invest in a fix there.
+
+### Trigger condition
+
+Reported again at a syntactically *valid* Kotlin position, or a future
+`kotlin-language-server` version changes this behavior in a way worth
+re-verifying doesn't regress the graceful (from FoxGarden's own
+perspective) degrade this entry already confirms.
+
+---
 
 ## 25. [OPEN] No extension/plugin architecture — every language, panel, and LSP integration is hardcoded into the app crate itself
 
