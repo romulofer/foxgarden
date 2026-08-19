@@ -530,15 +530,50 @@ recurring.
   is actually installed — no per-terminal `--working-directory`-shaped flag
   needed, since every one of them starts its default shell inheriting the
   *terminal binary's own* working directory rather than resetting it.
-  Everything else in this codebase already runs on Windows/macOS/Linux
-  without special-casing — `Path`/`PathBuf` (including `.join("a/b")` with
-  a forward slash literal, which Rust resolves correctly on Windows too),
-  `std::fs`, and every dependency in use (`egui`/`eframe`, `rfd`, `ropey`,
-  `tree-sitter`, `arboard`) are already cross-platform by design — so
-  `terminal.rs` is the *only* place that needs to know which OS it's on.
-  Keep it that way: reach for a portable `std`/existing-dependency API
-  before adding a second `#[cfg(target_os = ...)]` site anywhere else in
-  the app.
+  Most of this codebase runs on Windows/macOS/Linux without special-casing
+  — `Path`/`PathBuf` (including `.join("a/b")` with a forward slash
+  literal, which Rust resolves correctly on Windows too), `std::fs`, and
+  every dependency in use (`egui`/`eframe`, `rfd`, `ropey`, `tree-sitter`,
+  `arboard`) are already cross-platform by design — but `terminal.rs` is
+  **not** the only place that needs to know which OS it's on; that claim
+  was true when first written and has since gone stale as later tracks
+  landed real platform differences. The full current list, each verified
+  by a real cross-compile against `x86_64-pc-windows-gnu` (`rustup target
+  add x86_64-pc-windows-gnu` + a `mingw-w64` linker; `cargo check --target
+  x86_64-pc-windows-gnu` type-checks without one, but linking a real binary
+  needs it), not just `#[cfg(...)]` eyeballing:
+  - `terminal.rs` (above).
+  - `pty_session.rs` — the integrated terminal's own shell selection
+    (`$SHELL` env var on Unix vs. a Windows-specific default) and its
+    `portable-pty` backend choice.
+  - `jdk_registry.rs`/`lsp_manager.rs` — `#[cfg(unix)]` `chmod`
+    (`PermissionsExt`) after writing an executable script; skipped
+    entirely on Windows, which has no permission-bit concept for this.
+  - `crates/core/src/build_output.rs`'s `maven_command`/`crates/core/src/
+    gradle.rs`'s `gradle_command` — a project-pinned wrapper is `mvnw`/
+    `gradlew` (a POSIX shell script, no PE header) on Unix but
+    `mvnw.cmd`/`gradlew.bat` on Windows; `Command::new`ing the wrong one
+    fails outright rather than falling back to the bare `mvn`/`gradle` on
+    `PATH`, the same distinction `../references/java`'s own
+    `task_helper::build_tool::which_wrapper` already draws.
+  - `tool_manager.rs`'s `Tool::launcher_script_name` — PMD's Windows
+    launcher is `pmd.bat` (a real extension swap on the same base name,
+    verified against a real extracted archive), SpotBugs' is `spotbugs.bat`
+    (a genuinely different basename from `fb`, not just an extension).
+  - `lsp_manager.rs`'s `jdk_search_roots` — Windows JDK installs default to
+    a vendor-named directory directly under `%ProgramFiles%`/
+    `%ProgramFiles(x86)%` (Oracle, Eclipse Adoptium, Amazon Corretto,
+    Microsoft Build of OpenJDK, Azul Zulu), unlike Unix's `/usr/lib/jvm`-
+    style roots — this one root list is **not** verified against a real
+    Windows install, only each vendor's own installer docs; flag and
+    correct if a real Windows run finds a different actual default.
+  Reach for a portable `std`/existing-dependency API before adding a new
+  `#[cfg(target_os = ...)]`/`#[cfg(windows)]`/`#[cfg(unix)]` site — but
+  when a real platform difference exists (a wrapper script's own
+  extension, an installer's own default directory, a permission model that
+  doesn't exist on the other platform), add the split and verify it against
+  a real cross-compile rather than assuming `Command::new` or a path guess
+  "just works" everywhere.
 
 ## Testing conventions
 

@@ -33,11 +33,29 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
     }
 }
 
-/// Prefers a project-pinned `mvnw` over a bare `mvn` on `PATH` — unlike
-/// `maven_classpath` (always a bare `mvn`, a read-only classpath dump where
-/// the exact Maven version doesn't matter), mirroring `gradle_command`'s
+/// Prefers a project-pinned `mvnw`/`mvnw.cmd` over a bare `mvn` on `PATH` —
+/// unlike `maven_classpath` (always a bare `mvn`, a read-only classpath dump
+/// where the exact Maven version doesn't matter), mirroring `gradle_command`'s
 /// own "prefer what the project actually specifies" wrapper-first choice,
-/// now that this is a real build.
+/// now that this is a real build. Two platform-gated bodies, not one that
+/// picks the extension internally: `mvnw` is a POSIX shell script with no
+/// PE header, so `Command::new`ing it directly on Windows fails outright
+/// (`CreateProcess` has no shebang support) rather than falling through to
+/// the bare-`mvn` branch — the wrapper generator always emits *both*
+/// `mvnw`/`mvnw.cmd`, so picking the right one per-OS, the same split
+/// `../references/java`'s own `task_helper::build_tool::which_wrapper`
+/// already uses, is correct rather than a guess.
+#[cfg(windows)]
+fn maven_command(project_root: &Path) -> Command {
+    let wrapper = project_root.join("mvnw.cmd");
+    if wrapper.is_file() {
+        Command::new(wrapper)
+    } else {
+        Command::new("mvn")
+    }
+}
+
+#[cfg(not(windows))]
 fn maven_command(project_root: &Path) -> Command {
     let wrapper = project_root.join("mvnw");
     if wrapper.is_file() {
@@ -219,6 +237,54 @@ mod tests {
     fn detects_neither_with_no_build_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(detect_build_tool(dir.path()), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn maven_command_prefers_a_real_mvnw_over_the_bare_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mvnw"), "#!/bin/sh\n").unwrap();
+        let cmd = maven_command(dir.path());
+        assert_eq!(cmd.get_program(), dir.path().join("mvnw").as_os_str());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn maven_command_falls_back_to_the_bare_binary_with_no_wrapper_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = maven_command(dir.path());
+        assert_eq!(cmd.get_program(), "mvn");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn maven_command_prefers_a_real_mvnw_cmd_over_the_bare_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mvnw.cmd"), "@echo off\r\n").unwrap();
+        let cmd = maven_command(dir.path());
+        assert_eq!(cmd.get_program(), dir.path().join("mvnw.cmd").as_os_str());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn maven_command_falls_back_to_the_bare_binary_with_no_wrapper_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = maven_command(dir.path());
+        assert_eq!(cmd.get_program(), "mvn");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn maven_command_ignores_a_unix_only_mvnw_with_no_cmd_counterpart() {
+        // A wrapper-generated project always ships both `mvnw`/`mvnw.cmd`
+        // together, but a hand-rolled or stripped-down one might not —
+        // `Command::new`ing the extensionless POSIX script directly would
+        // fail outright on Windows (no shebang support), so this must fall
+        // back to the bare `mvn` on PATH instead of trying it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mvnw"), "#!/bin/sh\n").unwrap();
+        let cmd = maven_command(dir.path());
+        assert_eq!(cmd.get_program(), "mvn");
     }
 
     // --- Maven: real `mvn -B compile` output against a deliberately broken

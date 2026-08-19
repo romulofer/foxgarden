@@ -177,12 +177,30 @@ allprojects {
 }
 "#;
 
-/// Picks `<project_root>/gradlew` when present (a project's own pinned
-/// wrapper — the right version to actually build with) over a bare
-/// `gradle` on `PATH`, mirroring `command_for_binary`'s own "prefer what
-/// the project actually specifies" reasoning in `static_analysis.rs`,
+/// Picks `<project_root>/gradlew`/`gradlew.bat` when present (a project's
+/// own pinned wrapper — the right version to actually build with) over a
+/// bare `gradle` on `PATH`, mirroring `command_for_binary`'s own "prefer
+/// what the project actually specifies" reasoning in `static_analysis.rs`,
 /// though for a different concrete problem (a wrapper script vs. a bare
-/// `.jar`, not a JVM-launcher distinction).
+/// `.jar`, not a JVM-launcher distinction). Two platform-gated bodies, not
+/// one that picks the extension internally: `gradlew` is a POSIX shell
+/// script with no PE header, so `Command::new`ing it directly on Windows
+/// fails outright rather than falling through to the bare-`gradle` branch —
+/// the wrapper generator always emits *both* `gradlew`/`gradlew.bat`
+/// together, so picking the right one per-OS, the same split
+/// `../references/java`'s own `task_helper::build_tool::which_wrapper`
+/// already uses, is correct rather than a guess.
+#[cfg(windows)]
+pub(crate) fn gradle_command(project_root: &Path) -> Command {
+    let wrapper = project_root.join("gradlew.bat");
+    if wrapper.is_file() {
+        Command::new(wrapper)
+    } else {
+        Command::new("gradle")
+    }
+}
+
+#[cfg(not(windows))]
 pub(crate) fn gradle_command(project_root: &Path) -> Command {
     let wrapper = project_root.join("gradlew");
     if wrapper.is_file() {
@@ -396,6 +414,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn gradle_command_prefers_a_real_gradlew_over_the_bare_binary() {
         let dir = tempfile::tempdir().unwrap();
@@ -404,9 +423,36 @@ mod tests {
         assert_eq!(cmd.get_program(), dir.path().join("gradlew").as_os_str());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn gradle_command_falls_back_to_the_bare_binary_with_no_wrapper_present() {
         let dir = tempfile::tempdir().unwrap();
+        let cmd = gradle_command(dir.path());
+        assert_eq!(cmd.get_program(), "gradle");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gradle_command_prefers_a_real_gradlew_bat_over_the_bare_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gradlew.bat"), "@echo off\r\n").unwrap();
+        let cmd = gradle_command(dir.path());
+        assert_eq!(cmd.get_program(), dir.path().join("gradlew.bat").as_os_str());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gradle_command_falls_back_to_the_bare_binary_with_no_wrapper_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = gradle_command(dir.path());
+        assert_eq!(cmd.get_program(), "gradle");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gradle_command_ignores_a_unix_only_gradlew_with_no_bat_counterpart() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gradlew"), "#!/bin/sh\n").unwrap();
         let cmd = gradle_command(dir.path());
         assert_eq!(cmd.get_program(), "gradle");
     }

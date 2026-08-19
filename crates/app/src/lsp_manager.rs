@@ -296,7 +296,14 @@ fn java_on_path() -> Option<PathBuf> {
 /// directories full of one-JDK-each subdirectories. Deliberately includes
 /// the version-manager layouts (sdkman, asdf, jenv/jabba), since a machine
 /// whose *default* `java` isn't 21 is exactly the case this detection has to
-/// answer for — see `LspSettings::jdtls_java_home`.
+/// answer for — see `LspSettings::jdtls_java_home`. Windows roots are one
+/// per major-vendor installer under each of `%ProgramFiles%`/
+/// `%ProgramFiles(x86)%` (Oracle's own installer, Eclipse Temurin, Amazon
+/// Corretto, Microsoft Build of OpenJDK, and Azul Zulu all default to a
+/// vendor-named directory directly under Program Files) — **not verified
+/// against a real Windows install**, only against each vendor's own
+/// published installer documentation, unlike every other root in this list;
+/// flag and correct if a real Windows run finds a different actual default.
 fn jdk_search_roots() -> Vec<PathBuf> {
     let mut roots = vec![
         PathBuf::from("/usr/lib/jvm"),
@@ -309,6 +316,20 @@ fn jdk_search_roots() -> Vec<PathBuf> {
         roots.push(home.join(".asdf/installs/java"));
         roots.push(home.join(".jdks"));
         roots.push(home.join("Library/Java/JavaVirtualMachines"));
+    }
+    #[cfg(windows)]
+    {
+        for program_files in [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")]
+            .into_iter()
+            .flatten()
+        {
+            let base = PathBuf::from(program_files);
+            roots.push(base.join("Java"));
+            roots.push(base.join("Eclipse Adoptium"));
+            roots.push(base.join("Amazon Corretto"));
+            roots.push(base.join("Microsoft"));
+            roots.push(base.join("Zulu"));
+        }
     }
     roots
 }

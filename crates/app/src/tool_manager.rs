@@ -115,7 +115,24 @@ impl Tool {
 
     /// The `bin/<script>` launcher name inside PMD's/SpotBugs' own
     /// extracted directory. Checkstyle has no launcher script (it's a bare
-    /// jar, invoked via `java -jar`) — never called for it.
+    /// jar, invoked via `java -jar`) — never called for it. Platform-gated:
+    /// both archives ship a `.bat` launcher for Windows alongside the POSIX
+    /// one (verified directly against a real extracted `4.10.3`/`7.26.0`
+    /// archive — `bin/pmd.bat` sits right next to `bin/pmd`), but SpotBugs'
+    /// Windows launcher isn't just `fb` with an extension swapped on — it's
+    /// a *differently-named* script, `spotbugs.bat` (there's no `fb.bat` in
+    /// the archive at all), so this can't be a single suffix-conditional
+    /// string the way PMD's can.
+    #[cfg(windows)]
+    fn launcher_script_name(self) -> &'static str {
+        match self {
+            Tool::Pmd => "pmd.bat",
+            Tool::SpotBugs => "spotbugs.bat",
+            Tool::Checkstyle => unreachable!("Checkstyle has no zip archive/launcher to locate"),
+        }
+    }
+
+    #[cfg(not(windows))]
     fn launcher_script_name(self) -> &'static str {
         match self {
             Tool::Pmd => "pmd",
@@ -363,6 +380,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn extract_zip_and_locate_launcher_finds_a_real_pmd_archive_s_launcher() {
         // A minimal but real zip, built in-memory, shaped exactly like
@@ -380,6 +398,26 @@ mod tests {
 
         let launcher = extract_zip_and_locate_launcher(Tool::Pmd, dir.path(), &buf).expect("locates the launcher");
         assert_eq!(launcher, dir.path().join("pmd-bin-7.26.0").join("bin").join("pmd"));
+        assert!(launcher.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extract_zip_and_locate_launcher_finds_a_real_pmd_archive_s_windows_launcher() {
+        // Same real archive shape, but PMD's own zip ships `bin/pmd.bat`
+        // alongside `bin/pmd` — the Windows-native one.
+        let dir = test_support::tempdir();
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("pmd-bin-7.26.0/bin/pmd.bat", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"@echo off\r\necho fake pmd\r\n").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let launcher = extract_zip_and_locate_launcher(Tool::Pmd, dir.path(), &buf).expect("locates the launcher");
+        assert_eq!(launcher, dir.path().join("pmd-bin-7.26.0").join("bin").join("pmd.bat"));
         assert!(launcher.exists());
     }
 
