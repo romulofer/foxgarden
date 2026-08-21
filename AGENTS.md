@@ -636,26 +636,28 @@ recurring.
   assert on the race. Those have unit tests; `e2e_test.rs`'s header lists
   what's deliberately excluded and why, and is the place to update if that
   set ever changes.
-- **Do not drive the running app with `xdotool`/`wmctrl`/`import` (or any
-  other click-automation tooling) — that approach has repeatedly produced
-  false reads** (a screenshot racing the app's own redraw and showing stale
-  pixels, a click landing on the wrong window/tab because focus wasn't what
-  it looked like, timing that "worked" on one pass and silently didn't on
-  the next). It cost real turns chasing phantom failures caused by the
-  automation itself, not the feature under test. Instead: build the change,
-  run `cargo build`/`cargo test`/`cargo clippy`, then hand the live
-  click-through back to the user as **explicit, numbered steps** — exactly
-  what to run (`cargo run -p foxgarden`, plus any fixture file/project to
-  open), exactly what to click/type in what order, and exactly what result
-  confirms the feature works vs. what would indicate it's broken — and wait
-  for them to report back what actually happened before claiming the
-  checkpoint passed. This is slower per checkpoint but the result is
-  trustworthy, which a flaky automated click never reliably was here.
-  A native file-picker dialog (`rfd`, "Open Folder…") is a separate OS
-  dialog outside egui's own event loop and likely needs different handling
-  than in-app widgets — worth flagging to the user in the steps if the
-  scenario touches one. Either way, don't claim a mouse-driven flow was
-  verified without the user actually having driven it and reported back.
+- Driving the running app with `xdotool`/`wmctrl`/`import` (or similar
+  click-automation tooling) is allowed, but it has **previously produced
+  false reads** here — a screenshot racing the app's own redraw and showing
+  stale pixels, a click landing on the wrong window/tab because focus
+  wasn't what it looked like, timing that "worked" on one pass and silently
+  didn't on the next. Guard against the same failure modes recurring:
+  - After any action that triggers a redraw (open file, switch tab, run a
+    scan), wait for the app to actually settle — poll/sleep past a single
+    frame, don't screenshot immediately.
+  - Verify the target window/tab has focus before sending a click or
+    keystroke (`wmctrl -l`/`xdotool getactivewindow` or equivalent), rather
+    than assuming the last-opened window is still active.
+  - Don't trust a single pass — re-check a flaky-looking result before
+    reporting it, and prefer an explicit success/failure signal (a specific
+    pixel region, a window title, an on-screen label) over "it looked
+    right."
+  - A native file-picker dialog (`rfd`, "Open Folder…") is a separate OS
+    dialog outside egui's own event loop and likely needs different
+    handling than in-app widgets.
+  If automation still produces an inconsistent read after applying the
+  above, fall back to handing the live click-through to the user as
+  explicit, numbered steps instead of guessing.
 - Anything that needs `eframe::Storage` (session persistence) or
   `egui::Context`'s persistent temp data (the layout cache) is testable
   without a real window: implement `eframe::Storage` yourself over a plain

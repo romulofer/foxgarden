@@ -1,6 +1,7 @@
 mod app;
 mod auto_save;
 mod file_watch;
+mod goto_definition;
 mod jdk;
 mod jdk_registry;
 mod lsp_client;
@@ -9,6 +10,7 @@ mod lsp_settings;
 mod lsp_state;
 mod panels;
 mod pty_session;
+mod rename;
 mod style;
 mod terminal;
 mod tool_manager;

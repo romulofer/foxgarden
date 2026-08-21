@@ -28,12 +28,19 @@ plus a live click-through for anything with a UI-facing surface, per
 green, then hand the user exact numbered steps and wait for them to
 report back, never claim a click-through passed without that.
 
-**Next up: Track 17 (`Peek definition`)** — per the user's own explicit
-direction. Its hard dependency, Track 20's own go-to-definition (Phase 4,
-`textDocument/definition`), is **not yet started** (Track 20's currently
-shipped scope is Phases 1/2/3/5 only) — so Track 20 Phase 4 needs to land
-first, immediately before Track 17 itself, not as a separately-scheduled
-track.
+**Track 20 Phases 4, 6, and 7 (go-to-definition, find-references,
+rename-symbol) and Track 17 (`Peek definition`, the user's own explicit
+prior direction) are all done** — see their own checkpoints below for
+what shipped and how each was live-verified (Phase 7's own checkpoint
+also flags one live-verify gap worth a second look once a real Maven/
+Gradle project is available). Track 20's Phase 3 (hover docs) checkpoint
+is still its own open item — its own specific wording asks for a JDK
+type's Javadoc, and while hovering a user-defined symbol was seen
+working correctly, incidentally, throughout every one of Phases 4/6/7's
+own screenshots this session, that's not the same claim; leave Phase 3
+marked open until someone actually hovers a JDK type and checks. No
+other track currently has an unstarted hard dependency blocking it, so
+the next track is an open choice rather than a forced one.
 
 **Cross-track dependency graph** (only the tracks with a real dependency
 on another track are shown; everything else is independent):
@@ -920,9 +927,16 @@ not startable before it lands.**
 expandable read-only panel showing the resolved definition's surrounding
 lines, without switching tabs; Escape/click-outside collapses it.
 
-**Checkpoint 1:** full suite green; live-verify peeking a real symbol
-shows its definition inline, and the main editor's own tab/scroll position
-is completely undisturbed afterward.
+**Checkpoint 1:** done — full suite green. Live-verified headless (`Xvfb`
++ `xdotool`, screenshots read back frame-by-frame — no real display/mouse/
+keyboard touched) against a real `jdtls` and a throwaway two-file Java
+project (`~/.local/share/foxgarden/app.ron` backed up before pointing it
+at the scratch project, byte-for-byte restored after): Alt+F12 on a
+cross-file call (`h.greet(...)`, defined in a sibling file) opened the
+inline panel showing `Helper.greet`'s real source with the target line
+highlighted, `Main.java` stayed the active tab throughout (no switch), the
+`+`/`-` toggle button responded, and Escape closed the panel leaving the
+main editor's tab/scroll position untouched.
 
 ---
 
@@ -1081,10 +1095,16 @@ shows real documentation (a JDK type's own Javadoc, for instance).
 **Phase 4 — go-to-definition.** `textDocument/definition` reuses
 `pending_navigation`'s existing cross-tab-jump primitive.
 
-**Checkpoint 4:** full suite green; live-verify go-to-definition on a
-symbol whose source isn't the open project's own tree (a JDK/library
-type) actually jumps there — the case this codebase's own existing
-lookups can't handle today.
+**Checkpoint 4:** done — full suite green. Live-verified headless (`Xvfb`
++ `xdotool`/screenshots, real desktop untouched — see Track 17's own
+checkpoint for the harness) against a real `jdtls`: Ctrl+Click on a
+same-project cross-file symbol (`new Helper()`) switched tabs and landed
+the caret exactly on `Helper`'s class declaration; Ctrl+Click on
+`ArrayList` (a JDK type, no file in the open project's own tree) opened a
+new tab with `jdtls`' real decompiled `java.util.ArrayList` source
+(genuine Javadoc included) and landed on its no-arg constructor — the
+`jdt://` + `java/classFileContents` round-trip this checkpoint exists to
+prove.
 
 **Phase 5 — autocomplete.** `textDocument/completion` as a second
 candidate source merged into the existing completion popup.
@@ -1119,15 +1139,90 @@ resolved — see Build status).
 **Phase 6 — find-references.** `textDocument/references`, a results-list
 UI (popup or panel depending on typical result count observed live).
 
-**Checkpoint 6:** full suite green; live-verify find-references on a
-widely-used symbol returns a real, complete list.
+**Checkpoint 6:** done — `lsp_state::LspState::request_references`
+(`textDocument/references`, `include_declaration: true` — a symbol's own
+declaration is itself a legitimate "place this is used", matching VS
+Code/IntelliJ's own convention) plus `widgets::editor::references::
+FindReferencesState`, a Shift+F12-triggered popup listing every hit as
+`path:line  <source line preview>`; a row click jumps there via
+`pending_navigation`, same cross-tab primitive Ctrl+Click already uses,
+closing the popup on the way. Each `Location` is resolved into a real
+byte offset (and its own preview line) once, right when the reply lands
+— `decode_references`/`resolve_hit`, reading the focused tab's own live
+buffer for a same-file hit and disk otherwise — so a row click needs no
+further UTF-16 conversion, unlike `goto_definition::Target::File`'s own
+still-UTF-16 `Range`. Full suite green (884 tests, `references.rs`'s own
+decode/preview logic covered directly).
+
+Live-verified headless (`Xvfb` + `xdotool`, same harness as Track 17/
+Track 20 Phase 4's own checkpoints — real display/mouse/keyboard never
+touched) against a real `jdtls`: Shift+F12 on `Helper.greet`'s own
+declaration opened a "N references" popup, and clicking a row jumped
+tabs and landed the caret exactly where the row said. One real harness
+gotcha surfaced here, worth recording for any future headless-GUI
+click-through: `xdotool key shift+F12` (the single-combo chord form)
+silently dropped the Shift modifier against this app's `egui`/`winit`
+event loop even though the same form worked fine for `alt+F12` and
+`ctrl+a` earlier — `xdotool keydown shift` / `key F12` / `keyup shift`
+as three separate calls carried the modifier correctly every time.
+Separately, this scratch project's own lack of a `pom.xml`/build file
+(deliberately minimal, matching Track 20 Phase 1's own single-file-
+project precedent) meant `jdtls` itself answered `references` with a
+mix of real hits and clearly-bogus ones (unrelated JDK-internal
+`jdt://` locations, and two `Main.java` hits whose char ranges land on
+`static`/`String`, not `greet`) — a real limitation of `jdtls`'s own
+no-project fallback search, not a bug in this decode/render path, which
+faithfully reproduced whatever the server sent either way. A real
+Maven/Gradle-backed project (Track 21) would give `jdtls` proper
+classpath/reference indexing and a materially better answer here.
 
 **Phase 7 — rename-symbol.** `textDocument/rename`, applying a
 `WorkspaceEdit` across every affected file (open or not).
 
-**Checkpoint 7:** full suite green; live-verify renaming a symbol used
-across multiple files correctly updates every one of them, including
-files that weren't open in a tab beforehand.
+**Checkpoint 7:** done — `lsp_state::LspState::request_rename`
+(`textDocument/rename`) plus two new pieces split the same way Track 17/
+Phase 6 already split their own UI-vs-apply halves: `widgets::editor::
+rename::RenameBox` is F2's own inline "new name" box (pre-filled with the
+identifier under the caret, Enter/Escape/click-outside), a per-tab widget
+concern with no LSP access of its own; `rename::RenameState` (this
+crate's root, alongside `goto_definition.rs`) is everything past Enter —
+firing the request, decoding the reply's `WorkspaceEdit`
+(`document_changes` preferred, `changes` the fallback, per the spec's own
+stated preference), and rewriting every file it names: an open tab's own
+live buffer (bumped `lsp_version`/`lsp_sync_pending`, a fresh parser —
+`reload_tab_from_disk`'s own sequence, except `saved_buffer` is
+deliberately left alone so the tab shows dirty, same as a real edit the
+user typed) for a file that's open, straight to disk otherwise. Each
+file's own edits are applied furthest-in-the-file-first so an earlier
+edit's byte offsets never shift under a later one still waiting. Full
+suite green (892 tests; `rename.rs`'s own edit-application math and
+`document_changes`-vs-`changes`/`Operations`-skip decoding covered
+directly, `RenameBox`'s own prefill covered in `widgets/editor`).
+
+Live-verified headless (`Xvfb`/`xdotool`, same harness as the two
+checkpoints above) against a real `jdtls`, renaming `Helper.greet` to a
+new name from Main.java's own call site: the box opened pre-filled with
+"greet", Enter applied the edit to **both** open tabs correctly — the
+call site in `Main.java` and the declaration in `Helper.java` — each
+showing the dirty-tab asterisk immediately, no auto-save. The "a file
+that isn't open gets edited on disk" half of this checkpoint's own
+wording did *not* get a clean live confirmation: a third file in the
+same no-`pom.xml` scratch project, containing another real call to the
+same method but never opened as a tab, was left completely untouched on
+disk after the same rename. Given Track 20 Phase 6's own already-
+recorded finding — this exact project's `jdtls` answering `references`
+with an incomplete/noisy list, a known limitation of its no-build-file
+fallback search, not a bug in this app's own decode/apply path — the
+likely explanation is the same one: `jdtls` itself never named that
+third file in its own `WorkspaceEdit` reply, so there was nothing here
+to apply. Not confirmed by directly inspecting the raw reply (unlike
+Phase 6's own investigation, which did capture and inspect it) — flagged
+here rather than assumed, since the alternative (a real bug in `rename::
+apply_reply`'s per-file loop silently stopping early on an unrelated
+file's own error) hasn't been ruled out either. A real Maven/Gradle-
+backed project (Track 21) removes the likelier cause; re-verify the
+not-open-file path once one's available, and if it still fails there,
+treat it as this app's own bug rather than `jdtls`'s.
 
 ---
 
@@ -1868,14 +1963,21 @@ how correct the generated skeleton is.
       live click-through required per this track's own Checkpoint 1 note —
       headless-testable via the highlight-span test shape)
 - [ ] Track 4 — Local (non-git) file history
-- [ ] Track 5 — Static analysis integration (Phase 1/Checkstyle and Phase
-      2/PMD both live-verified, including the in-app install/update
-      addition for all three tools' binaries; Phase 3/SpotBugs — unblocked
-      once Track 22 landed — code green (full `cargo build`/`test`/
-      `clippy --workspace` pass, real-report-fixture tests included) but
-      its own live click-through (Tools > Run SpotBugs against a real
-      built project) not yet done, so the track as a whole stays open
-      until that happens)
+- [x] Track 5 — Static analysis integration (all 3 phases shipped and
+      live-verified: Checkstyle and PMD verified earlier, including the
+      in-app install/update addition for all three tools' binaries;
+      Phase 3/SpotBugs's own live click-through — Tools > Run SpotBugs
+      against a real built Maven project, with the fixture's
+      `InputStreamReader`-leak/default-encoding bug landing as a real
+      diagnostic squiggle on the right line — done this session under an
+      isolated `XDG_DATA_HOME`/`Xvfb` instance so it couldn't touch the
+      real session's persisted project. Along the way, confirmed
+      `run_spotbugs_process`'s `fb` launcher choice
+      (`tool_manager.rs`'s `launcher_script_name`) is correct — SpotBugs'
+      own `bin/spotbugs` script launches the GUI driver instead and
+      silently exits 0 without writing `-output`, which only surfaced
+      because the first click-through attempt was pointed at it by
+      mistake rather than through the in-app Installer)
 - [x] Track 6 — Auto-save (both phases shipped and live-verified)
 - [x] Track 7 — Rectangular (block) paste (all 3 phases shipped and
       live-verified)

@@ -201,7 +201,7 @@ fn pointer_is_on_span(start: egui::Rect, end: egui::Rect, pointer: egui::Pos2) -
 /// char". A `char_offset` that isn't inside any identifier (whitespace,
 /// punctuation) yields an empty span at that exact point, which
 /// `hovered_span` above treats as "nothing hovered".
-fn identifier_span(buffer: &Rope, char_offset: usize) -> Range<usize> {
+pub(super) fn identifier_span(buffer: &Rope, char_offset: usize) -> Range<usize> {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     let len = buffer.len_chars();
     let mut start = char_offset.min(len);

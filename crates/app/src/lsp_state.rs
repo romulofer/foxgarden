@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fg_core::{Diagnostic, Document, Language, Severity};
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics};
-use lsp_types::request::{Completion, HoverRequest};
+use lsp_types::request::{Completion, GotoDefinition, HoverRequest, References, Rename};
 use lsp_types::{DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem, Uri, WorkspaceFolder};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
@@ -294,6 +294,121 @@ impl LspState {
             work_done_progress_params: Default::default(),
         };
         session.send_request(HoverRequest::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends a `textDocument/definition` request at `byte_offset` in `doc` —
+    /// same session-lookup/flush-then-send shape as `request_hover` above,
+    /// just a different LSP method. `goto_definition::GotoDefinitionState`
+    /// owns decoding the reply (`PLAN.md` Track 20 Phase 4).
+    pub fn request_definition(&mut self, doc: &mut Document, byte_offset: usize) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let kind = match doc.language {
+            Some(Language::Java) => ServerKind::Java,
+            Some(Language::Kotlin) => ServerKind::Kotlin,
+            _ => return None,
+        };
+        let slot = match kind {
+            ServerKind::Java => &mut self.java,
+            ServerKind::Kotlin => &mut self.kotlin,
+        };
+        let mut errors = Vec::new();
+        if !sync_one_document(slot, kind, doc, &mut errors) {
+            return None;
+        }
+        let Slot::Ready { session, .. } = slot else { return None };
+        let uri = file_uri(&doc.path).ok()?;
+        let position = byte_to_utf16_position(&doc.buffer.to_string(), byte_offset);
+        let params = lsp_types::GotoDefinitionParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri }, position },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+        session.send_request(GotoDefinition::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends a `textDocument/references` request at `byte_offset` in
+    /// `doc` — same session-lookup/flush-then-send shape as
+    /// `request_definition` above, just a different LSP method and params
+    /// type. `include_declaration: true` (`PLAN.md` Track 20 Phase 6): a
+    /// symbol's own declaration is itself a legitimate "place this is
+    /// used", and a real server's own reply list either includes or omits
+    /// it consistently based on this flag rather than always including
+    /// it, so it has to be requested explicitly to get a genuinely
+    /// complete list. `references::FindReferencesState` owns decoding the
+    /// reply.
+    pub fn request_references(&mut self, doc: &mut Document, byte_offset: usize) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let kind = match doc.language {
+            Some(Language::Java) => ServerKind::Java,
+            Some(Language::Kotlin) => ServerKind::Kotlin,
+            _ => return None,
+        };
+        let slot = match kind {
+            ServerKind::Java => &mut self.java,
+            ServerKind::Kotlin => &mut self.kotlin,
+        };
+        let mut errors = Vec::new();
+        if !sync_one_document(slot, kind, doc, &mut errors) {
+            return None;
+        }
+        let Slot::Ready { session, .. } = slot else { return None };
+        let uri = file_uri(&doc.path).ok()?;
+        let position = byte_to_utf16_position(&doc.buffer.to_string(), byte_offset);
+        let params = lsp_types::ReferenceParams {
+            text_document_position: lsp_types::TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri }, position },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: lsp_types::ReferenceContext { include_declaration: true },
+        };
+        session.send_request(References::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends a `textDocument/rename` request at `byte_offset` in `doc`,
+    /// asking the server to rename that symbol to `new_name` — same
+    /// session-lookup/flush-then-send shape as `request_references`
+    /// above, just a different LSP method and an extra plain-string
+    /// argument. `crate::rename::RenameState` owns decoding the reply
+    /// (an `Option<WorkspaceEdit>`) and actually applying it.
+    pub fn request_rename(
+        &mut self,
+        doc: &mut Document,
+        byte_offset: usize,
+        new_name: &str,
+    ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let kind = match doc.language {
+            Some(Language::Java) => ServerKind::Java,
+            Some(Language::Kotlin) => ServerKind::Kotlin,
+            _ => return None,
+        };
+        let slot = match kind {
+            ServerKind::Java => &mut self.java,
+            ServerKind::Kotlin => &mut self.kotlin,
+        };
+        let mut errors = Vec::new();
+        if !sync_one_document(slot, kind, doc, &mut errors) {
+            return None;
+        }
+        let Slot::Ready { session, .. } = slot else { return None };
+        let uri = file_uri(&doc.path).ok()?;
+        let position = byte_to_utf16_position(&doc.buffer.to_string(), byte_offset);
+        let params = lsp_types::RenameParams {
+            text_document_position: lsp_types::TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri }, position },
+            new_name: new_name.to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        session.send_request(Rename::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends jdt.ls' own `java/classFileContents` extension request — the
+    /// only way to read a JDK/library type's decompiled source, since a
+    /// `jdt://` URI (what a `textDocument/definition` reply points a
+    /// project-external Java symbol at) names no real file on disk.
+    /// Java-only: `kotlin-language-server` never emits this scheme, and
+    /// jdt.ls is the only server this app declares `classFileContentsSupport`
+    /// to (`ServerKind::initialization_options`). `None` whenever the Java
+    /// session isn't `Ready` — same best-effort degrade every other LSP path
+    /// here already has.
+    pub fn request_class_file_contents(&mut self, uri: &str) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let Slot::Ready { session, .. } = &mut self.java else { return None };
+        session.send_request("java/classFileContents", json!({ "uri": uri })).ok()
     }
 
     fn poll_retiring(&mut self) -> Vec<String> {
@@ -591,7 +706,7 @@ fn apply_diagnostics(slot: &mut Slot, documents: &mut [Document], errors: &mut V
     }
 }
 
-fn utf16_range_to_bytes(text: &str, range: lsp_types::Range) -> Option<std::ops::Range<usize>> {
+pub(crate) fn utf16_range_to_bytes(text: &str, range: lsp_types::Range) -> Option<std::ops::Range<usize>> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let point = |position: lsp_types::Position| -> Option<usize> {
         // `{line: lines.len(), character: 0}` is LSP's own legal way to
@@ -748,6 +863,42 @@ fn file_uri(path: &Path) -> Result<Uri, String> {
     Uri::from_str(&uri).map_err(|error| format!("invalid LSP file URI: {error}"))
 }
 
+/// `file_uri`'s own reverse direction — decodes a `file`-scheme URI (as a
+/// real server's `textDocument/definition` reply carries) back to a
+/// filesystem `PathBuf`. `None` for anything not `file`-scheme: a `jdt://`
+/// decompiled-class reference is `goto_definition`'s own job to resolve via
+/// `request_class_file_contents` instead, never a real path here.
+pub(crate) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
+    let text = uri.as_str();
+    let rest = text.strip_prefix("file://")?;
+    let rest = if cfg!(windows) { rest.strip_prefix('/').unwrap_or(rest) } else { rest };
+    Some(PathBuf::from(percent_decode(rest)))
+}
+
+/// `file_uri`'s own percent-*encode* step, reversed. Malformed `%XX`
+/// escapes (a stray `%` not followed by two hex digits) pass through
+/// verbatim rather than erroring — real servers only ever emit escapes
+/// `file_uri` itself could have produced, so this only needs to undo those,
+/// not validate arbitrary input.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 3 <= bytes.len()
+            && let Ok(byte) = u8::from_str_radix(&text[i + 1..i + 3], 16)
+        {
+            out.push(byte);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,6 +1025,32 @@ mod tests {
         let root = dir.path().join("project with space");
         std::fs::create_dir(&root).unwrap();
         assert!(file_uri(&root).unwrap().as_str().contains("project%20with%20space"));
+    }
+
+    #[test]
+    fn uri_to_path_round_trips_through_file_uri_including_a_percent_encoded_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project with space");
+        std::fs::create_dir_all(&root).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let uri = file_uri(&root).unwrap();
+        assert_eq!(uri_to_path(&uri).unwrap(), canonical);
+    }
+
+    #[test]
+    fn uri_to_path_rejects_a_non_file_scheme() {
+        let uri = Uri::from_str("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
+        assert!(uri_to_path(&uri).is_none());
+    }
+
+    #[test]
+    fn percent_decode_undoes_file_uris_own_encoding() {
+        assert_eq!(percent_decode("project%20with%20space"), "project with space");
+    }
+
+    #[test]
+    fn percent_decode_leaves_a_malformed_escape_verbatim() {
+        assert_eq!(percent_decode("100%_off"), "100%_off");
     }
 
     #[test]

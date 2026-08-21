@@ -83,6 +83,8 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -94,6 +96,8 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -112,6 +116,8 @@ pub(super) fn typing_session(
     completion: &mut Option<CompletionState>,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
     lsp: &mut crate::lsp_state::LspState,
+    find_references: &mut FindReferencesState,
+    rename_box: &mut RenameBox,
     initial_caret: usize,
     frames_events: Vec<Vec<egui::Event>>,
 ) {
@@ -139,6 +145,8 @@ pub(super) fn typing_session(
                 &mut None,
                 completion,
                 &mut HoverState::default(),
+                &mut GotoDefinitionState::default(),
+                &mut PeekState::default(),
                 None,
                 false,
                 false,
@@ -150,6 +158,8 @@ pub(super) fn typing_session(
                 &UserTemplates::default(),
                 spring_config,
                 lsp,
+                find_references,
+                rename_box,
             );
         });
     };
@@ -228,6 +238,8 @@ pub(super) fn focused_frame_with_selection(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -239,6 +251,8 @@ pub(super) fn focused_frame_with_selection(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -287,6 +301,8 @@ pub(super) fn focused_frame_with_selection(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -298,6 +314,8 @@ pub(super) fn focused_frame_with_selection(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -335,6 +353,8 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -346,6 +366,8 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -389,6 +411,8 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -400,6 +424,8 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -447,6 +473,8 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -458,6 +486,8 @@ pub(super) fn focused_frame_with_extra_selections(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -494,6 +524,8 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -505,6 +537,8 @@ pub(super) fn focused_frame_with_extra_selections(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -546,6 +580,8 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -557,6 +593,8 @@ pub(super) fn focused_frame_with_indent_settings(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -591,6 +629,8 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -602,6 +642,8 @@ pub(super) fn focused_frame_with_indent_settings(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -642,6 +684,8 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -653,6 +697,8 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -696,6 +742,8 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -707,6 +755,8 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -802,6 +852,8 @@ pub(super) fn run_frame_reading_selection(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -813,6 +865,8 @@ pub(super) fn run_frame_reading_selection(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     text_area::peek_caret(ctx, id)
@@ -930,6 +984,8 @@ pub(super) fn focused_frame_with_generate_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -941,6 +997,8 @@ pub(super) fn focused_frame_with_generate_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     last_error
@@ -982,6 +1040,8 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -993,6 +1053,8 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -1037,6 +1099,8 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             case_conversion_request,
             false,
             false,
@@ -1048,6 +1112,8 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     last_error
@@ -1088,6 +1154,8 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -1099,6 +1167,8 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -1130,6 +1200,8 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             sort_lines_request,
             unique_lines_request,
@@ -1141,6 +1213,8 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 }
@@ -1206,6 +1280,8 @@ pub(super) fn focused_frame_with_generate_method_request(
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -1217,6 +1293,8 @@ pub(super) fn focused_frame_with_generate_method_request(
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     last_error

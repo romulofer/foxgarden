@@ -9,6 +9,8 @@ use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::file_watch::{self, ReconcileOutcome};
+use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
+use crate::rename::RenameState;
 use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
@@ -35,8 +37,8 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    CompletionState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState, OverrideMethodDialog, UserTemplates,
-    jump_to,
+    CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState, OverrideMethodDialog,
+    PeekState, RenameBox, UserTemplates, jump_to,
 };
 use crate::widgets::modal::show_modal;
 
@@ -149,6 +151,38 @@ pub struct FoxGardenApp {
     /// Same "one field, not one per open tab" shape `completion` above
     /// already uses, for the same reason.
     hover: HoverState,
+    /// The go-to-definition request/reply for whichever tab is currently
+    /// focused — `goto_definition::GotoDefinitionState` (`PLAN.md` Track 20
+    /// Phase 4). Same "one field, not one per open tab" shape `hover` above
+    /// already uses, for the same reason; unlike `hover` it owns no popup
+    /// state, just the async request this frame's `resolve_pending_
+    /// navigation` block polls.
+    goto_definition: GotoDefinitionState,
+    /// The peek-definition popup for whichever tab is currently focused —
+    /// `widgets::editor::peek::PeekState` (`PLAN.md` Track 17 Phase 1). Same
+    /// "one field, not one per open tab" shape `hover`/`goto_definition`
+    /// above already use, for the same reason.
+    peek: PeekState,
+    /// The find-references results list for whichever tab is currently
+    /// focused — `widgets::editor::references::FindReferencesState`
+    /// (`PLAN.md` Track 20 Phase 6). Same "one field, not one per open
+    /// tab" shape `hover`/`goto_definition`/`peek` above already use, for
+    /// the same reason; a row click there is handed back through `take_
+    /// navigation`, polled the same frame as `goto_definition`'s own
+    /// `poll` right below.
+    find_references: FindReferencesState,
+    /// The "new name" input box for whichever tab is currently focused —
+    /// `widgets::editor::rename::RenameBox` (`PLAN.md` Track 20 Phase 7).
+    /// Same "one field, not one per open tab" shape `hover`/`goto_
+    /// definition`/`peek`/`find_references` above already use, for the
+    /// same reason.
+    rename_box: RenameBox,
+    /// The async `textDocument/rename` request/reply and `WorkspaceEdit`
+    /// application for whichever tab is currently focused —
+    /// `rename::RenameState` (`PLAN.md` Track 20 Phase 7). Unlike `rename_
+    /// box` this owns no popup of its own, just the request `resolve_
+    /// pending_rename` (this file's own update loop) polls.
+    rename: RenameState,
     /// Synthetic key events (Undo/Redo/Select All) queued by the editor's
     /// right-click menu, drained back into real input at the top of the
     /// very next frame — see `widgets::editor::show`'s doc comment on why
@@ -442,6 +476,14 @@ fn resolve_pending_navigation(
 ) -> Option<(PathBuf, usize)> {
     let (path, byte) = pending_navigation.clone()?;
     let doc = state.open_tabs.iter().find(|d| d.path == path)?;
+    // `byte` was resolved against the target buffer's text at the moment
+    // the navigation was queued; an edit (this document's own, or an
+    // external reload) landing before this frame gets to resolve it can
+    // shrink the buffer out from under that offset. `Rope::byte_to_char`
+    // panics on an out-of-bounds offset, so clamp to the buffer's current
+    // length first — same defensive clamp `build_click`'s own line/column
+    // resolution already applies for the identical "stale target" shape.
+    let byte = byte.min(doc.buffer.len_bytes());
     let char_offset = doc.buffer.byte_to_char(byte);
     *pending_navigation = None;
     Some((path, char_offset))
@@ -1098,6 +1140,11 @@ impl FoxGardenApp {
             override_method_dialog: None,
             completion: None,
             hover: HoverState::default(),
+            goto_definition: GotoDefinitionState::default(),
+            peek: PeekState::default(),
+            find_references: FindReferencesState::default(),
+            rename_box: RenameBox::default(),
+            rename: RenameState::default(),
             pending_editor_input: Vec::new(),
             cached_clipboard_text: None,
             pending_navigation: None,
@@ -1287,7 +1334,13 @@ impl eframe::App for FoxGardenApp {
         // reply to a keystroke — without this, a session sitting between
         // user input events would have its own replies sit unread in the
         // channel until some unrelated repaint happened to come along.
-        if self.lsp.wants_repaint() || self.hover.wants_repaint() {
+        if self.lsp.wants_repaint()
+            || self.hover.wants_repaint()
+            || self.goto_definition.wants_repaint()
+            || self.peek.wants_repaint()
+            || self.find_references.wants_repaint()
+            || self.rename.wants_repaint()
+        {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
 
@@ -1735,6 +1788,8 @@ impl eframe::App for FoxGardenApp {
                 &mut self.override_method_dialog,
                 &mut self.completion,
                 &mut self.hover,
+                &mut self.goto_definition,
+                &mut self.peek,
                 menu_outcome.case_conversion_request,
                 menu_outcome.sort_lines_request,
                 menu_outcome.unique_lines_request,
@@ -1747,8 +1802,74 @@ impl eframe::App for FoxGardenApp {
                 &self.custom_templates,
                 &mut self.spring_config,
                 &mut self.lsp,
+                &mut self.find_references,
+                &mut self.rename_box,
             );
         });
+
+        // Find references (`PLAN.md` Track 20 Phase 6): a row clicked in
+        // `find_references`'s own results popup inside `tabs::show` just
+        // above hands its target straight back here, rather than owning
+        // `pending_navigation`/`open_path` itself — same cross-tab jump
+        // primitive Ctrl+Click uses just below, and already a real byte
+        // offset (each `ReferenceHit` resolved its own target file's text
+        // once, back when the reply first landed), so no further UTF-16
+        // conversion is needed the way `goto_definition`'s own `Target::
+        // File` still requires below.
+        if let Some((path, byte)) = self.find_references.take_navigation() {
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            self.pending_navigation = Some((path, byte));
+        }
+
+        // Rename symbol (`PLAN.md` Track 20 Phase 7): a confirmed Enter
+        // inside `rename_box`'s own popup (`tabs::show` above) fires the
+        // actual request here, against the focused tab's own `Document`
+        // — the widget itself has no way to reach that other than
+        // through this exact `(char_offset, new_name)` handoff.
+        if let Some((char_offset, new_name)) = self.rename_box.take_confirmed()
+            && let Some(index) = self.state.active_tab
+        {
+            self.rename.request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
+        }
+        if let Some(Err(err)) = self.rename.poll(&mut self.state, &mut self.parsers) {
+            self.last_error = Some(msg::failed_to_rename(&err));
+        }
+
+        // Go to definition (`PLAN.md` Track 20 Phase 4): a Ctrl+Click inside
+        // `tabs::show` just above (this frame, or an earlier one still
+        // awaiting a reply) may have just resolved. `open_path` first, same
+        // "no buffer to convert a server's line/column against until the
+        // target file is actually open" shape `build_click` below already
+        // has; a `Target::Ready` decompiled-source file needs no such
+        // conversion (its own byte offset was already computed against the
+        // exact text just written to it) but still gets marked `read_only`
+        // — editing a jdt.ls decompilation and expecting Save to do
+        // anything meaningful would be actively misleading.
+        if let Some(target) = self.goto_definition.poll(&mut self.lsp) {
+            let is_decompiled = matches!(target, GotoDefinitionTarget::Ready { .. });
+            let (path, byte) = match target {
+                GotoDefinitionTarget::Ready { path, byte_offset } => (path, Some(byte_offset)),
+                GotoDefinitionTarget::File { path, range } => {
+                    let byte = self
+                        .state
+                        .open_tabs
+                        .iter()
+                        .find(|doc| doc.path() == path.as_path())
+                        .and_then(|doc| crate::lsp_state::utf16_range_to_bytes(&doc.buffer.to_string(), range))
+                        .map(|range| range.start);
+                    (path, byte)
+                }
+            };
+            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            if let Some(byte) = byte {
+                self.pending_navigation = Some((path.clone(), byte));
+            }
+            if is_decompiled
+                && let Some(doc) = self.state.open_tabs.iter_mut().find(|doc| doc.path() == path.as_path())
+            {
+                doc.read_only = true;
+            }
+        }
 
         // The frame's own `Ctrl+S`/File > Save/close-confirmation-modal
         // Save/right-click Save/auto-save outcomes have all already landed

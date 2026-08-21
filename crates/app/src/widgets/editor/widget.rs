@@ -24,6 +24,9 @@ use super::diff_gutter;
 use super::folding;
 use super::hover::HoverState;
 use super::multi_cursor::{self, MultiEditOp};
+use super::peek::PeekState;
+use super::references::FindReferencesState;
+use super::rename::RenameBox;
 use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
     paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
@@ -33,6 +36,7 @@ use super::spring_config_completion;
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
 use super::text_offset::{byte_to_char, char_to_byte};
+use crate::goto_definition::GotoDefinitionState;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
@@ -359,6 +363,8 @@ pub fn show(
     override_method_dialog: &mut Option<OverrideMethodDialog>,
     completion: &mut Option<CompletionState>,
     hover: &mut HoverState,
+    goto_definition: &mut GotoDefinitionState,
+    peek: &mut PeekState,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -370,6 +376,8 @@ pub fn show(
     custom_templates: &UserTemplates,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
     lsp: &mut crate::lsp_state::LspState,
+    find_references: &mut FindReferencesState,
+    rename_box: &mut RenameBox,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1908,6 +1916,86 @@ pub fn show(
         }
         hover.paint(ui, hover_id, &shell_out.base, &doc.buffer, editor_rect);
     }
+
+    // While Ctrl is held over an identifier the Ctrl+Click below would
+    // actually act on, swap the cursor to a pointing hand — the same
+    // hovered-span test the click handler itself uses (`hover_pos()`, not
+    // `interact_pointer_pos()`, so this reacts to the pointer just resting
+    // there, no click needed), giving the same "this is clickable" cue a
+    // browser gives over a real hyperlink before Ctrl+Click resolves
+    // anywhere. `set_cursor_icon` only takes effect for the rest of this
+    // frame — egui resets it to the default every frame — so this has to
+    // run on every frame the condition holds, not just once.
+    if ui.input(|i| i.modifiers.command)
+        && let Some(pos) = shell_out.base.response.hover_pos()
+        && super::hover::hovered_span(&shell_out.base, &doc.buffer, pos).is_some()
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    // Go to definition (`PLAN.md` Track 20 Phase 4): Ctrl+Click an
+    // identifier to request `textDocument/definition` and jump there via
+    // `pending_navigation` (`app.rs`), the same cross-tab jump primitive
+    // the Spring endpoint map and a clicked compiler-error row both already
+    // use. Resolving *which* identifier was clicked reuses `hover`'s own
+    // span logic (`hovered_span`) rather than duplicating it — the "is the
+    // pointer really on a symbol, not just nearest one" problem is
+    // identical either way, just against `interact_pointer_pos()` (the
+    // click's own position) instead of `hover_pos()`. `goto_definition`
+    // itself only tracks the async request/reply; nothing is painted here.
+    if ui.input(|i| i.modifiers.command && i.pointer.primary_clicked())
+        && let Some(pos) = shell_out.base.response.interact_pointer_pos()
+        && let Some(span) = super::hover::hovered_span(&shell_out.base, &doc.buffer, pos)
+    {
+        let text = doc.buffer.to_string();
+        goto_definition.request(doc, char_to_byte(&text, span.start), lsp);
+    }
+
+    // Peek definition (`PLAN.md` Track 17 Phase 1): Alt+F12 requests
+    // `textDocument/definition` at the current caret and shows the result
+    // inline via `peek.paint` below, rather than jumping there — unlike
+    // Ctrl+Click above, this never touches `pending_navigation` or opens/
+    // switches a tab, so the main editor's own tab and scroll position stay
+    // completely undisturbed, exactly the point of a *peek*. `text_area::
+    // peek_caret` (not `shell_out.caret`, which is only set on an edit/
+    // click this exact frame) is this widget's own "read the persisted
+    // caret regardless of what happened this frame" accessor — the same one
+    // `alt_click_prior_primary` above already uses for the same reason.
+    if ui.input(|i| i.modifiers.alt && i.key_pressed(Key::F12))
+        && let Some(caret) = text_area::peek_caret(ui.ctx(), widget_id)
+    {
+        let text = doc.buffer.to_string();
+        peek.request(doc, caret.primary, char_to_byte(&text, caret.primary), lsp);
+    }
+    peek.update(lsp, doc);
+    peek.paint(ui, egui::Id::new(("peek_popup", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
+
+    // Find references (`PLAN.md` Track 20 Phase 6): Shift+F12 requests
+    // `textDocument/references` at the current caret and lists every hit
+    // in a popup (`find_references.paint` below) — same caret-source
+    // reasoning as Alt+F12's own Peek definition just above.
+    if ui.input(|i| i.modifiers.shift && i.key_pressed(Key::F12))
+        && let Some(caret) = text_area::peek_caret(ui.ctx(), widget_id)
+    {
+        let text = doc.buffer.to_string();
+        find_references.request(doc, caret.primary, char_to_byte(&text, caret.primary), lsp);
+    }
+    find_references.update(lsp, doc);
+    find_references.paint(ui, egui::Id::new(("find_references_popup", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
+
+    // Rename symbol (`PLAN.md` Track 20 Phase 7): F2 opens an inline "new
+    // name" box pre-filled with the identifier under the caret —
+    // `rename_box.paint` below renders it and hands a confirmed Enter
+    // back through `take_confirmed`, which `app.rs` polls once a frame to
+    // actually fire `textDocument/rename` (`crate::rename::RenameState`,
+    // an app.rs-level concern since applying the reply's `WorkspaceEdit`
+    // can touch files well beyond this one tab).
+    if ui.input(|i| i.key_pressed(Key::F2))
+        && let Some(caret) = text_area::peek_caret(ui.ctx(), widget_id)
+    {
+        rename_box.start(doc, caret.primary);
+    }
+    rename_box.paint(ui, egui::Id::new(("rename_box", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
 
     // Passive, read-only highlight of every occurrence of the word under
     // (or touching) the cursor — distinct from `Ctrl+D`'s *active*

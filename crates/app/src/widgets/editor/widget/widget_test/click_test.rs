@@ -1,4 +1,10 @@
 //! Mouse-driven selection: Alt+Click's bare extra cursor, double-click word select, triple-click line select.
+//!
+//! Also covers the Ctrl+hover cursor-icon affordance for the Ctrl+Click
+//! go-to-definition gesture (`widget.rs`, right before `goto_definition`
+//! itself is fired) — not a selection change, but driven by the same
+//! pointer-position-plus-modifier mechanics as everything else in this
+//! file.
 
 use super::super::*;
 use super::common_test::*;
@@ -36,6 +42,8 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -47,6 +55,8 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
@@ -90,6 +100,8 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -101,6 +113,8 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -155,6 +169,8 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -166,6 +182,8 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     let widget_rect = ctx
@@ -203,6 +221,8 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 &mut None,
                 &mut None,
                 &mut HoverState::default(),
+                &mut GotoDefinitionState::default(),
+                &mut PeekState::default(),
                 None,
                 false,
                 false,
@@ -214,6 +234,8 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
             );
         });
     }
@@ -267,6 +289,8 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -278,6 +302,8 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     let widget_rect = ctx
@@ -309,6 +335,8 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -320,6 +348,8 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -375,6 +405,8 @@ fn triple_click_selects_the_whole_line() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -386,6 +418,8 @@ fn triple_click_selects_the_whole_line() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     let widget_rect = ctx
@@ -417,6 +451,8 @@ fn triple_click_selects_the_whole_line() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -428,6 +464,8 @@ fn triple_click_selects_the_whole_line() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
 
@@ -438,5 +476,221 @@ fn triple_click_selects_the_whole_line() {
         &full_text[start..end],
         full_text.as_str(),
         "triple-click should select the whole current line"
+    );
+}
+
+#[test]
+fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
+    let (_dir, mut doc) = open_fixture("hello world", "notes.txt");
+    let mut parser: Option<IncrementalParser> = None;
+
+    let ctx = egui::Context::default();
+    // Unlike the other tests in this file, `hovered_span`'s own geometry
+    // check (`pointer_is_on_span`) needs real glyph widths to make a
+    // pixel offset actually land on (or off) a specific identifier —
+    // `FontDefinitions::empty()` degenerates every glyph to zero width,
+    // which the coarser click-to-caret math the sibling tests exercise
+    // tolerates, but this test's `hover_pos` math can't.
+    ctx.set_fonts(egui::FontDefinitions::default());
+    let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.memory_mut(|mem| mem.request_focus(id));
+        show(
+            ui,
+            &mut doc,
+            &mut parser,
+            EditorFont::Default,
+            14.0,
+            IndentSettings::default(),
+            ViewSettings::default(),
+            None,
+            &mut None,
+            None,
+            &mut None,
+            None,
+            false,
+            &mut None,
+            &mut None,
+            &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            &mut None,
+            &mut Vec::new(),
+            &mut None,
+            &UserTemplates::default(),
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        );
+    });
+    let widget_rect = ctx
+        .read_response(id)
+        .expect("TextEdit response cached after a frame")
+        .rect;
+
+    // Inside the first identifier ("hello") — same offset the sibling
+    // Alt+Click test above lands its own click at, just resting there
+    // rather than clicking.
+    let hover_pos = widget_rect.left_top() + egui::vec2(2.0, 2.0);
+    let raw_input = egui::RawInput {
+        events: vec![egui::Event::PointerMoved(hover_pos)],
+        modifiers: egui::Modifiers {
+            command: true,
+            ..egui::Modifiers::NONE
+        },
+        ..Default::default()
+    };
+    let full_output = ctx.run_ui(raw_input, |ui| {
+        ui.memory_mut(|mem| mem.request_focus(id));
+        show(
+            ui,
+            &mut doc,
+            &mut parser,
+            EditorFont::Default,
+            14.0,
+            IndentSettings::default(),
+            ViewSettings::default(),
+            None,
+            &mut None,
+            None,
+            &mut None,
+            None,
+            false,
+            &mut None,
+            &mut None,
+            &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            &mut None,
+            &mut Vec::new(),
+            &mut None,
+            &UserTemplates::default(),
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        );
+    });
+
+    // `ctx.output()` (unlike `run_ui`'s own return value) reflects
+    // whatever the *next* frame has accumulated so far — effectively
+    // empty right after `run_ui` returns, since `run_ui` itself already
+    // took this frame's output into the `FullOutput` it hands back. The
+    // cursor icon this frame actually set has to be read from there.
+    assert_eq!(
+        full_output.platform_output.cursor_icon,
+        egui::CursorIcon::PointingHand,
+        "Ctrl+hover over an identifier should show the pointing-hand cursor"
+    );
+}
+
+#[test]
+fn hover_without_ctrl_leaves_the_default_cursor() {
+    let (_dir, mut doc) = open_fixture("hello world", "notes.txt");
+    let mut parser: Option<IncrementalParser> = None;
+
+    let ctx = egui::Context::default();
+    ctx.set_fonts(egui::FontDefinitions::empty());
+    let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
+
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.memory_mut(|mem| mem.request_focus(id));
+        show(
+            ui,
+            &mut doc,
+            &mut parser,
+            EditorFont::Default,
+            14.0,
+            IndentSettings::default(),
+            ViewSettings::default(),
+            None,
+            &mut None,
+            None,
+            &mut None,
+            None,
+            false,
+            &mut None,
+            &mut None,
+            &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            &mut None,
+            &mut Vec::new(),
+            &mut None,
+            &UserTemplates::default(),
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        );
+    });
+    let widget_rect = ctx
+        .read_response(id)
+        .expect("TextEdit response cached after a frame")
+        .rect;
+
+    let hover_pos = widget_rect.left_top() + egui::vec2(2.0, 2.0);
+    let raw_input = egui::RawInput {
+        events: vec![egui::Event::PointerMoved(hover_pos)],
+        ..Default::default()
+    };
+    let full_output = ctx.run_ui(raw_input, |ui| {
+        ui.memory_mut(|mem| mem.request_focus(id));
+        show(
+            ui,
+            &mut doc,
+            &mut parser,
+            EditorFont::Default,
+            14.0,
+            IndentSettings::default(),
+            ViewSettings::default(),
+            None,
+            &mut None,
+            None,
+            &mut None,
+            None,
+            false,
+            &mut None,
+            &mut None,
+            &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
+            None,
+            false,
+            false,
+            false,
+            false,
+            &mut None,
+            &mut Vec::new(),
+            &mut None,
+            &UserTemplates::default(),
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        );
+    });
+
+    assert_ne!(
+        full_output.platform_output.cursor_icon,
+        egui::CursorIcon::PointingHand,
+        "without Ctrl held, hovering an identifier must not change the cursor"
     );
 }

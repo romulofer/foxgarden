@@ -270,6 +270,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -281,6 +283,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
     text_area::set_caret(
@@ -313,6 +317,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut override_method_dialog,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -324,6 +330,8 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
 
@@ -373,6 +381,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -384,6 +394,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
     text_area::set_caret(
@@ -415,6 +427,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut override_method_dialog,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -426,6 +440,8 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
 
@@ -469,6 +485,8 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -480,6 +498,8 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
     text_area::set_caret(
@@ -512,6 +532,8 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut override_method_dialog,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -523,6 +545,8 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
         );
     });
 

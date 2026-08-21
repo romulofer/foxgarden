@@ -34,6 +34,8 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -45,6 +47,8 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     text_area::set_caret(
@@ -126,6 +130,8 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             &mut None,
             &mut None,
             &mut HoverState::default(),
+            &mut GotoDefinitionState::default(),
+            &mut PeekState::default(),
             None,
             false,
             false,
@@ -137,6 +143,8 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             &UserTemplates::default(),
         &mut crate::panels::spring_config::SpringConfigState::default(),
         &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
         );
     });
     text_area::set_caret(

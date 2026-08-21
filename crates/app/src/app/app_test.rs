@@ -938,3 +938,24 @@ fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
         "an unconflicted dirty tab still saves normally"
     );
 }
+
+#[test]
+fn resolve_pending_navigation_clamps_a_byte_offset_stale_past_the_buffers_current_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
+    let mut state = EditorState::new();
+    let index = state.open_tab(path.clone()).unwrap();
+    let len_bytes = state.open_tabs[index].buffer.len_bytes();
+
+    // Queued when the buffer was longer (or the navigation target was
+    // computed against a different version of it) — now points well past
+    // this buffer's own current end.
+    let mut pending_navigation = Some((path.clone(), len_bytes + 1_000));
+
+    let resolved = resolve_pending_navigation(&state, &mut pending_navigation);
+
+    let (resolved_path, char_offset) = resolved.expect("the target document is open");
+    assert_eq!(resolved_path, path);
+    assert_eq!(char_offset, state.open_tabs[index].buffer.len_chars());
+    assert!(pending_navigation.is_none(), "resolving clears the pending navigation");
+}

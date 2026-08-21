@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use fg_core::{Document, EditorState};
 use syntax::IncrementalParser;
 
+use crate::goto_definition::GotoDefinitionState;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
     self, AccessorKind, CaseConversion, CompletionState, GenerateAccessorsDialog, GenerateMethodDialog,
-    GenerateMethodKind, HoverState, OverrideMethodDialog, UserTemplates,
+    GenerateMethodKind, HoverState, OverrideMethodDialog, PeekState, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
 
@@ -123,6 +124,8 @@ pub fn show(
     override_method_dialog: &mut Option<OverrideMethodDialog>,
     completion: &mut Option<CompletionState>,
     hover: &mut HoverState,
+    goto_definition: &mut GotoDefinitionState,
+    peek: &mut PeekState,
     case_conversion_request: Option<CaseConversion>,
     sort_lines_request: bool,
     unique_lines_request: bool,
@@ -135,6 +138,8 @@ pub fn show(
     custom_templates: &UserTemplates,
     spring_config: &mut crate::panels::spring_config::SpringConfigState,
     lsp: &mut crate::lsp_state::LspState,
+    find_references: &mut crate::widgets::editor::FindReferencesState,
+    rename_box: &mut crate::widgets::editor::RenameBox,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -189,6 +194,9 @@ pub fn show(
         // an open dialog.
         *completion = None;
         hover.clear();
+        peek.clear();
+        find_references.clear();
+        rename_box.clear();
     }
 
     if let Some(index) = close_request {
@@ -277,6 +285,8 @@ pub fn show(
             override_method_dialog,
             completion,
             hover,
+            goto_definition,
+            peek,
             case_conversion_request,
             sort_lines_request,
             unique_lines_request,
@@ -288,6 +298,8 @@ pub fn show(
             custom_templates,
             spring_config,
             lsp,
+            find_references,
+            rename_box,
         );
     });
 }

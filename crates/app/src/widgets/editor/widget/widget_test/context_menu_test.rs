@@ -58,6 +58,8 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 &mut None,
                 &mut None,
                 &mut HoverState::default(),
+                &mut GotoDefinitionState::default(),
+                &mut PeekState::default(),
                 None,
                 false,
                 false,
@@ -69,6 +71,8 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 &UserTemplates::default(),
             &mut crate::panels::spring_config::SpringConfigState::default(),
             &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
             );
         });
     };
