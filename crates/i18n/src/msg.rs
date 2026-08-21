@@ -136,6 +136,16 @@ msg! {
 }
 
 msg! {
+    /// New File/rename box rejected `..`, an absolute path, or (Windows) a
+    /// drive prefix — anything that would land the result outside the
+    /// target directory.
+    invalid_path_name(name: &str) {
+        pt: "nome inválido: {name}",
+        en: "invalid name: {name}",
+    }
+}
+
+msg! {
     failed_to_create_file(err: &str) {
         pt: "falha ao criar o arquivo: {err}",
         en: "failed to create file: {err}",

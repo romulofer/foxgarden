@@ -716,7 +716,7 @@ fn process_events(
                 pressed: true,
                 modifiers,
                 ..
-            } if modifiers.command && !modifiers.shift => {
+            } if modifiers.command && !modifiers.shift && !read_only => {
                 if let Some(restored) = state.history.undo(Snapshot {
                     text: current.clone(),
                     caret: state.caret,
@@ -732,7 +732,7 @@ fn process_events(
                 pressed: true,
                 modifiers,
                 ..
-            } if modifiers.command && ((modifiers.shift && *key == Key::Z) || (!modifiers.shift && *key == Key::Y)) => {
+            } if modifiers.command && ((modifiers.shift && *key == Key::Z) || (!modifiers.shift && *key == Key::Y)) && !read_only => {
                 if let Some(restored) = state.history.redo(Snapshot {
                     text: current.clone(),
                     caret: state.caret,

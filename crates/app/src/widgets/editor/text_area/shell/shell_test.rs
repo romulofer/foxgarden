@@ -270,6 +270,44 @@ fn redo_reapplies_what_undo_just_undid() {
 }
 
 #[test]
+fn undo_is_a_no_op_once_the_widget_turns_read_only() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("read_only_undo");
+
+    let mut buffer = Rope::from_str("");
+    let out = frame(&ctx, id, &buffer, vec![Event::Text("a".into())], false);
+    buffer = Rope::from_str(out.new_text.as_deref().expect("typed while still editable"));
+    assert_eq!(buffer.to_string(), "a");
+
+    // Same `ShellState` (same `ctx`/`id`) as above, so its `History` from
+    // the still-editable frame carries over — the exact "editable earlier
+    // in the session, read-only now" shape a large-file guard or an
+    // external-change lock produces.
+    let undo = command_key_event(Key::Z, Modifiers::COMMAND);
+    let out = frame(&ctx, id, &buffer, vec![undo], true);
+    assert_eq!(out.new_text, None, "Ctrl+Z must not mutate a read-only buffer");
+}
+
+#[test]
+fn redo_is_a_no_op_once_the_widget_turns_read_only() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("read_only_redo");
+
+    let mut buffer = Rope::from_str("");
+    let out = frame(&ctx, id, &buffer, vec![Event::Text("a".into())], false);
+    buffer = Rope::from_str(out.new_text.as_deref().expect("typed"));
+
+    let undo = command_key_event(Key::Z, Modifiers::COMMAND);
+    let out = frame(&ctx, id, &buffer, vec![undo], false);
+    buffer = Rope::from_str(out.new_text.as_deref().expect("undo produced a snapshot"));
+    assert_eq!(buffer.to_string(), "");
+
+    let redo = command_key_event(Key::Y, Modifiers::COMMAND);
+    let out = frame(&ctx, id, &buffer, vec![redo], true);
+    assert_eq!(out.new_text, None, "Ctrl+Y must not mutate a read-only buffer");
+}
+
+#[test]
 fn paste_replaces_a_selection() {
     let ctx = egui::Context::default();
     let id = egui::Id::new("paste");

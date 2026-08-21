@@ -36,6 +36,91 @@ fn create_file_with_parents_leaves_already_existing_directories_alone() {
 }
 
 #[test]
+fn has_unsafe_path_component_accepts_a_plain_name() {
+    assert!(!has_unsafe_path_component("UserController.java"));
+}
+
+#[test]
+fn has_unsafe_path_component_accepts_a_nested_relative_path() {
+    assert!(!has_unsafe_path_component("controllers/UserController.java"));
+}
+
+#[test]
+fn has_unsafe_path_component_rejects_parent_dir_traversal() {
+    assert!(has_unsafe_path_component("../../etc/passwd"));
+    assert!(has_unsafe_path_component("controllers/../../outside.txt"));
+}
+
+#[test]
+fn has_unsafe_path_component_rejects_an_absolute_path() {
+    assert!(has_unsafe_path_component("/etc/passwd"));
+}
+
+#[test]
+fn apply_tree_actions_rejects_a_traversal_rename_and_leaves_the_file_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_path = dir.path().join("File.java");
+    std::fs::write(&old_path, "class File {}").unwrap();
+
+    let mut panel = SidePanelState::default();
+    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut outcome = SidePanelOutcome::default();
+    let actions = TreeActions {
+        confirm_rename: Some("../outside.txt".to_string()),
+        ..Default::default()
+    };
+
+    apply_tree_actions(&mut panel, actions, &mut outcome);
+
+    assert!(outcome.error.is_some(), "a traversal rename must surface an error");
+    assert!(old_path.exists(), "the original file must be untouched");
+    assert!(!dir.path().join("../outside.txt").exists());
+}
+
+#[test]
+fn apply_tree_actions_rejects_a_rename_containing_a_path_separator_even_without_traversal() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_path = dir.path().join("File.java");
+    std::fs::write(&old_path, "class File {}").unwrap();
+
+    let mut panel = SidePanelState::default();
+    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut outcome = SidePanelOutcome::default();
+    // No `..`, but still names a different directory entirely — rename is
+    // "give this exact node a new name," not "move it."
+    let actions = TreeActions {
+        confirm_rename: Some("sub/File.java".to_string()),
+        ..Default::default()
+    };
+
+    apply_tree_actions(&mut panel, actions, &mut outcome);
+
+    assert!(outcome.error.is_some());
+    assert!(old_path.exists());
+}
+
+#[test]
+fn apply_tree_actions_still_allows_an_ordinary_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_path = dir.path().join("File.java");
+    std::fs::write(&old_path, "class File {}").unwrap();
+
+    let mut panel = SidePanelState::default();
+    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut outcome = SidePanelOutcome::default();
+    let actions = TreeActions {
+        confirm_rename: Some("Renamed.java".to_string()),
+        ..Default::default()
+    };
+
+    apply_tree_actions(&mut panel, actions, &mut outcome);
+
+    assert!(outcome.error.is_none());
+    assert!(!old_path.exists());
+    assert!(dir.path().join("Renamed.java").exists());
+}
+
+#[test]
 fn delete_path_removes_a_single_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("File.java");

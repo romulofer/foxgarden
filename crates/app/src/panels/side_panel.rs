@@ -1,6 +1,6 @@
 use fg_i18n::{msg, t};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
 
@@ -250,13 +250,18 @@ fn show_new_file_row(
 
         if ui.button(t().side_panel.create).clicked() || confirmed {
             let trimmed = name.trim();
-            if !trimmed.is_empty() {
+            if has_unsafe_path_component(trimmed) {
+                outcome.error = Some(msg::invalid_path_name(trimmed));
+            } else if !trimmed.is_empty() {
                 // `trimmed` may itself contain `/` (e.g. "controllers/
                 // UserController.java") to create the file inside a new,
                 // not-yet-existing subdirectory in one step — `dir.join`
                 // already resolves that into the right nested path, it
                 // just needs its parent directories to actually exist
                 // before `fs::write` can create the file in them.
+                // `has_unsafe_path_component` above already rejected `..`,
+                // an absolute path, and a Windows drive prefix, so the
+                // joined result can't land outside `dir`.
                 let new_path = dir.join(trimmed);
                 if new_path.exists() {
                     outcome.error = Some(msg::file_already_exists(&new_path.display().to_string()));
@@ -296,6 +301,16 @@ fn show_new_file_row(
 /// "controllers/UserController.java" and have it just work, rather than
 /// failing because "controllers/" doesn't exist yet — `fs::write` alone
 /// only ever creates the final file, never its parent directories.
+/// True if `input`, parsed as a path, contains a component that could walk
+/// the joined result outside its intended base directory — `..`, a root
+/// (`/foo`), or (Windows) a drive prefix (`C:\foo`). A bare `Component::
+/// Normal` segment (including several joined by `/`, e.g. "controllers/
+/// UserController.java") is always safe; `.` is left alone too since it
+/// resolves to the same directory it's already in.
+fn has_unsafe_path_component(input: &str) -> bool {
+    Path::new(input).components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
 fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -385,6 +400,13 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
         let new_path = old_path.parent().map(|p| p.join(new_name));
         match new_path {
             _ if new_name.is_empty() => outcome.error = Some(t().errors.rename_empty_name.to_string()),
+            // A rename box is a single filename, not a path — unlike New
+            // File's own nested-subdirectory allowance, *any* separator
+            // here (not just `..`/absolute) means "move", which rename
+            // doesn't support and shouldn't silently attempt.
+            _ if Path::new(new_name).components().count() != 1 || has_unsafe_path_component(new_name) => {
+                outcome.error = Some(msg::invalid_path_name(new_name));
+            }
             Some(new_path) if new_path.exists() => {
                 outcome.error = Some(msg::rename_target_exists(&new_path.display().to_string()));
             }

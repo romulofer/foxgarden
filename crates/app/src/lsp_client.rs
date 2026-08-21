@@ -49,8 +49,13 @@ enum IncomingMessage {
     /// A notification (or request) the server itself originated — Phase 1
     /// has no handler for any of these yet (`textDocument/
     /// publishDiagnostics` is Phase 2's job), just the plumbing to not
-    /// drop them on the floor unrouted.
-    ServerMessage { method: String, params: Value },
+    /// drop them on the floor unrouted. `id` is `Some` only for a real
+    /// server-to-client *request* (e.g. `workspace/configuration`,
+    /// `client/registerCapability`) — those carry both `method` and `id`
+    /// and need a reply or a real server can stall waiting for one; a
+    /// bare notification (`textDocument/publishDiagnostics`) has no `id`
+    /// at all and expects none back.
+    ServerMessage { method: String, params: Value, id: Option<i64> },
     /// Neither of the above (missing both `id`+result/error and `method`)
     /// — not a message shape this client expects; dropped by the reader
     /// loop rather than panicking on a malformed/unexpected server message.
@@ -63,7 +68,8 @@ fn classify(value: Value) -> IncomingMessage {
     let Some(obj) = value.as_object() else { return IncomingMessage::Unroutable };
     if let Some(method) = obj.get("method").and_then(Value::as_str) {
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
-        return IncomingMessage::ServerMessage { method: method.to_string(), params };
+        let id = obj.get("id").and_then(Value::as_i64);
+        return IncomingMessage::ServerMessage { method: method.to_string(), params, id };
     }
     if let Some(id) = obj.get("id").and_then(Value::as_i64) {
         if let Some(error) = obj.get("error") {
@@ -75,6 +81,26 @@ fn classify(value: Value) -> IncomingMessage {
         return IncomingMessage::Response { id, result: Ok(result) };
     }
     IncomingMessage::Unroutable
+}
+
+/// The `result` value to auto-reply a server-to-client *request* with —
+/// this client has no real semantics for any of these yet (no settings UI
+/// to answer `workspace/configuration` from, no dynamic-capability
+/// tracking for `client/registerCapability`), so every reply here is a
+/// generic placeholder whose only job is to stop the server waiting on
+/// one. `workspace/configuration` is the one method whose result shape
+/// actually matters: the spec requires an array the same length as the
+/// request's own `items`, one settings value per item — everything else a
+/// real server sends here (`client/registerCapability`, `window/
+/// workDoneProgress/create`, ...) expects a bare `null`.
+fn default_server_request_reply(method: &str, params: &Value) -> Value {
+    match method {
+        "workspace/configuration" => {
+            let count = params.get("items").and_then(Value::as_array).map_or(1, Vec::len);
+            Value::Array(vec![Value::Null; count])
+        }
+        _ => Value::Null,
+    }
 }
 
 /// Reads one `Content-Length`-framed JSON-RPC message off `reader` — the
@@ -174,6 +200,16 @@ impl LspSession {
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let (server_tx, server_messages_rx) = mpsc::channel();
         let pending_for_thread = Arc::clone(&pending);
+
+        // Created ahead of the reader thread below (rather than after, as
+        // `send_request`/`send_notification`'s own writes do) so the
+        // reader thread can borrow its own clone: a server-to-client
+        // *request* (`ServerMessage { id: Some(_), .. }`) needs a reply
+        // written back on this same channel, or a real server (jdt.ls
+        // sends `workspace/configuration` right after `initialized`) can
+        // stall indefinitely waiting on one.
+        let (writer_tx, writer_rx) = mpsc::channel::<Value>();
+        let writer_tx_for_reader = writer_tx.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
@@ -184,7 +220,12 @@ impl LspSession {
                                 let _ = tx.send(result);
                             }
                         }
-                        IncomingMessage::ServerMessage { method, params } => {
+                        IncomingMessage::ServerMessage { method, params, id } => {
+                            if let Some(id) = id {
+                                let result = default_server_request_reply(&method, &params);
+                                let response = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                                let _ = writer_tx_for_reader.send(response);
+                            }
                             if server_tx.send((method, params)).is_err() {
                                 break; // LspSession (and its Receiver) dropped
                             }
@@ -214,7 +255,6 @@ impl LspSession {
         // only ever pushes onto an unbounded in-process queue (which
         // cannot block), while this thread absorbs whatever blocking the
         // real pipe write needs.
-        let (writer_tx, writer_rx) = mpsc::channel::<Value>();
         std::thread::spawn(move || {
             for message in writer_rx {
                 if write_message(&mut stdin, &message).is_err() {
@@ -413,15 +453,43 @@ mod tests {
     }
 
     #[test]
-    fn classify_reports_a_server_notification() {
+    fn classify_reports_a_server_notification_with_no_id() {
         let value = serde_json::json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": "file:///a"}});
         assert_eq!(
             classify(value),
             IncomingMessage::ServerMessage {
                 method: "textDocument/publishDiagnostics".to_string(),
-                params: serde_json::json!({"uri": "file:///a"})
+                params: serde_json::json!({"uri": "file:///a"}),
+                id: None,
             }
         );
+    }
+
+    #[test]
+    fn classify_reports_a_server_to_client_request_with_its_id() {
+        // Has both `method` and `id` — the shape that used to be
+        // misrouted as a fire-and-forget notification, silently dropping
+        // the `id` a real reply needs to be correlated against.
+        let value = serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "workspace/configuration", "params": {"items": []}});
+        assert_eq!(
+            classify(value),
+            IncomingMessage::ServerMessage {
+                method: "workspace/configuration".to_string(),
+                params: serde_json::json!({"items": []}),
+                id: Some(9),
+            }
+        );
+    }
+
+    #[test]
+    fn default_server_request_reply_answers_workspace_configuration_with_one_null_per_item() {
+        let params = serde_json::json!({"items": [{"section": "java"}, {"section": "kotlin"}]});
+        assert_eq!(default_server_request_reply("workspace/configuration", &params), serde_json::json!([null, null]));
+    }
+
+    #[test]
+    fn default_server_request_reply_answers_any_other_method_with_a_bare_null() {
+        assert_eq!(default_server_request_reply("client/registerCapability", &serde_json::json!({})), serde_json::Value::Null);
     }
 
     #[test]
