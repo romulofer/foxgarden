@@ -16,6 +16,7 @@ mod code_action;
 mod codegen;
 mod completion;
 mod context_menu;
+mod coverage_gutter;
 mod diff_gutter;
 mod folding;
 mod hover;

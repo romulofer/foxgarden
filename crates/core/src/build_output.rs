@@ -46,7 +46,7 @@ pub fn detect_build_tool(project_root: &Path) -> Option<BuildTool> {
 /// `../references/java`'s own `task_helper::build_tool::which_wrapper`
 /// already uses, is correct rather than a guess.
 #[cfg(windows)]
-fn maven_command(project_root: &Path) -> Command {
+pub(crate) fn maven_command(project_root: &Path) -> Command {
     let wrapper = project_root.join("mvnw.cmd");
     if wrapper.is_file() {
         Command::new(wrapper)
@@ -56,7 +56,7 @@ fn maven_command(project_root: &Path) -> Command {
 }
 
 #[cfg(not(windows))]
-fn maven_command(project_root: &Path) -> Command {
+pub(crate) fn maven_command(project_root: &Path) -> Command {
     let wrapper = project_root.join("mvnw");
     if wrapper.is_file() {
         Command::new(wrapper)

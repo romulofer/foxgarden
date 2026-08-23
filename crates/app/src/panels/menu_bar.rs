@@ -79,6 +79,8 @@ pub struct MenuBarOutcome {
     pub run_project_request: bool,
     /// Run > Run Tests (`PLAN.md` Track 22 Phase 3).
     pub run_tests_request: bool,
+    /// Run > Run with Coverage (`PLAN.md` Track 13 Phase 1, Maven-only).
+    pub run_with_coverage_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -121,6 +123,7 @@ pub fn show(
     build_running: bool,
     run_running: bool,
     test_running: bool,
+    coverage_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -447,7 +450,7 @@ pub fn show(
                 outcome.open_run_configs_request = true;
                 ui.close();
             }
-            let any_running = build_running || run_running || test_running;
+            let any_running = build_running || run_running || test_running || coverage_running;
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
@@ -476,6 +479,16 @@ pub fn show(
                 .clicked()
             {
                 outcome.run_tests_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && !any_running,
+                    egui::Button::new(if coverage_running { t().common.running_coverage } else { t().menu.run_with_coverage }),
+                )
+                .clicked()
+            {
+                outcome.run_with_coverage_request = true;
                 ui.close();
             }
         });

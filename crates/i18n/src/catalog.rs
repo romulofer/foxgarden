@@ -86,6 +86,7 @@ pub struct Menu {
     pub build: &'static str,
     pub run_project: &'static str,
     pub run_tests: &'static str,
+    pub run_with_coverage: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
@@ -299,6 +300,7 @@ pub struct Errors {
     pub spotbugs_no_compiled_classes: &'static str,
     pub no_build_tool_detected: &'static str,
     pub no_run_config: &'static str,
+    pub coverage_requires_maven: &'static str,
     pub rename_empty_name: &'static str,
     pub rename_no_parent: &'static str,
 }
@@ -335,6 +337,7 @@ pub struct Common {
     pub running_build: &'static str,
     pub running_run: &'static str,
     pub running_tests: &'static str,
+    pub running_coverage: &'static str,
     /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
     /// generic enough verb to belong here rather than under `Menu`/
     /// `RunConfigs`, matching this struct's own "shared by more than one
@@ -395,6 +398,7 @@ pub const PT_BR: Strings = Strings {
         build: "Compilar",
         run_project: "Executar Projeto",
         run_tests: "Executar Testes",
+        run_with_coverage: "Executar com Cobertura",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
@@ -577,6 +581,7 @@ pub const PT_BR: Strings = Strings {
         checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
+        coverage_requires_maven: "Cobertura de código só é suportada em projetos Maven no momento.",
         pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
         spotbugs_not_configured: "Defina o binário do SpotBugs em Configurações > Ferramentas Externas primeiro.",
         spotbugs_no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
@@ -607,6 +612,7 @@ pub const PT_BR: Strings = Strings {
         running_build: "Compilando…",
         running_run: "Executando…",
         running_tests: "Executando Testes…",
+        running_coverage: "Executando Cobertura…",
         stop: "Parar",
     },
 };
@@ -663,6 +669,7 @@ pub const EN_US: Strings = Strings {
         build: "Build",
         run_project: "Run Project",
         run_tests: "Run Tests",
+        run_with_coverage: "Run with Coverage",
 
         view: "View",
         zen_mode: "Zen Mode",
@@ -845,6 +852,7 @@ pub const EN_US: Strings = Strings {
         checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
+        coverage_requires_maven: "Code coverage is only supported for Maven projects right now.",
         pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
         spotbugs_not_configured: "Set the SpotBugs binary in Settings > External Tools first.",
         spotbugs_no_compiled_classes: "No compiled classes found. Run Run > Build first.",
@@ -875,6 +883,7 @@ pub const EN_US: Strings = Strings {
         running_build: "Building…",
         running_run: "Running…",
         running_tests: "Running Tests…",
+        running_coverage: "Running Coverage…",
         stop: "Stop",
     },
 };

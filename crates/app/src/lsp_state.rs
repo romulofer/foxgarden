@@ -143,7 +143,29 @@ enum Slot {
     #[default]
     Empty,
     Starting(RunningSession),
-    Ready { config: SessionConfig, session: LspSession, open_documents: HashSet<PathBuf> },
+    Ready {
+        config: SessionConfig,
+        session: LspSession,
+        open_documents: HashSet<PathBuf>,
+        /// The most recent `language/status` message jdt.ls sent since its
+        /// `initialize` response landed, if any — `None` once a
+        /// `"ServiceReady"` status arrives (the project import this
+        /// message tracks is actually done by then) or for a server (every
+        /// `ServiceKind::Kotlin` session) that never sends this jdt.ls-only
+        /// notification at all.
+        ///
+        /// This is the gap `starting_servers` alone leaves: this app's own
+        /// handshake (`initialize` request/response) finishes in a couple
+        /// of seconds regardless of project size, well before jdt.ls's own
+        /// project import does — on a real multi-module Maven reactor that
+        /// import alone measured 24s (`br.ufsc.bridge/pec`, ~40 modules).
+        /// Once `initialize` answers, this `Slot` is already `Ready`
+        /// (correctly — `didOpen`/requests are legal to send), so without
+        /// this field the status bar's "Starting…" line simply vanishes for
+        /// however long that import keeps running with nothing anywhere
+        /// to say completions/diagnostics are about to be wrong or empty.
+        status_message: Option<String>,
+    },
     Failed { config: SessionConfig },
 }
 
@@ -182,7 +204,7 @@ impl LspState {
             };
             reconcile_slot(slot, config, kind, &mut self.retiring, &mut errors);
             sync_documents(slot, kind, documents, &mut errors);
-            apply_diagnostics(slot, documents, &mut errors);
+            apply_server_messages(slot, kind, documents, &mut errors);
         }
         errors
     }
@@ -200,6 +222,24 @@ impl LspState {
             .into_iter()
             .filter(|(_, slot)| matches!(slot, Slot::Starting(_)))
             .map(|(kind, _)| kind.name())
+            .collect()
+    }
+
+    /// The display name plus latest `language/status` message of every
+    /// `Ready` server still importing its project, for the status bar to
+    /// report — `starting_servers`'s own blind spot: this app's `initialize`
+    /// handshake (what `starting_servers` tracks) finishes in a couple of
+    /// seconds regardless of project size, well before jdt.ls's own project
+    /// import does (24s measured on a real ~40-module Maven reactor), and
+    /// that gap used to run with nothing on screen to say completions/
+    /// diagnostics were still about to be wrong or missing.
+    pub fn indexing_servers(&self) -> Vec<(&'static str, &str)> {
+        [(ServerKind::Java, &self.java), (ServerKind::Kotlin, &self.kotlin)]
+            .into_iter()
+            .filter_map(|(kind, slot)| match slot {
+                Slot::Ready { status_message: Some(message), .. } => Some((kind.name(), message.as_str())),
+                _ => None,
+            })
             .collect()
     }
 
@@ -597,7 +637,12 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
                 } else {
                     let running = std::mem::replace(slot, Slot::Empty);
                     let Slot::Starting(running) = running else { unreachable!() };
-                    *slot = Slot::Ready { config: running.config, session: running.session, open_documents: HashSet::new() };
+                    *slot = Slot::Ready {
+                        config: running.config,
+                        session: running.session,
+                        open_documents: HashSet::new(),
+                        status_message: None,
+                    };
                 }
             }
             Ok(Err(error)) => {
@@ -731,33 +776,61 @@ fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, erro
     }
 }
 
-fn apply_diagnostics(slot: &mut Slot, documents: &mut [Document], errors: &mut Vec<String>) {
-    let Slot::Ready { session, .. } = slot else { return };
+/// jdt.ls' own custom `language/status` notification's params — `type` is
+/// one of `Starting`/`Started`/`Error`/`ServiceReady`/`ProjectStatus` in
+/// practice, none of them part of `lsp_types` since this is jdt.ls-specific,
+/// not standard LSP. `kotlin-language-server` never sends this at all, so a
+/// Kotlin session's `status_message` simply stays `None` throughout.
+#[derive(serde::Deserialize)]
+struct LanguageStatusParams {
+    #[serde(rename = "type")]
+    kind: String,
+    message: String,
+}
+
+fn apply_server_messages(slot: &mut Slot, kind: ServerKind, documents: &mut [Document], errors: &mut Vec<String>) {
+    let Slot::Ready { session, status_message, .. } = slot else { return };
     for (method, params) in session.poll_server_messages() {
-        if method != PublishDiagnostics::METHOD {
-            continue;
+        match method.as_str() {
+            m if m == PublishDiagnostics::METHOD => {
+                let Ok(published) = serde_json::from_value::<lsp_types::PublishDiagnosticsParams>(params) else {
+                    errors.push("language server sent malformed publishDiagnostics params".to_string());
+                    continue;
+                };
+                let Some(doc) = documents.iter_mut().find(|doc| file_uri(&doc.path).ok().as_ref() == Some(&published.uri)) else {
+                    continue;
+                };
+                if published.version.is_some_and(|version| version < doc.lsp_version) {
+                    continue;
+                }
+                let text = doc.buffer.to_string();
+                doc.lsp_diagnostics = published.diagnostics.into_iter().filter_map(|diagnostic| {
+                    utf16_range_to_bytes(&text, diagnostic.range).map(|range| Diagnostic {
+                        range,
+                        severity: match diagnostic.severity {
+                            Some(lsp_types::DiagnosticSeverity::ERROR) => Severity::Error,
+                            _ => Severity::Warning,
+                        },
+                        message: diagnostic.message,
+                    })
+                }).collect();
+            }
+            "language/status" => {
+                let Ok(status) = serde_json::from_value::<LanguageStatusParams>(params) else { continue };
+                match status.kind.as_str() {
+                    // The project import this message was tracking is done
+                    // (successfully or not — a prior `"Error"` status
+                    // already reported the failure) — nothing left to show.
+                    "ServiceReady" => *status_message = None,
+                    "Error" => {
+                        errors.push(format!("{}: {}", kind.name(), status.message));
+                        *status_message = Some(status.message);
+                    }
+                    _ => *status_message = Some(status.message),
+                }
+            }
+            _ => {}
         }
-        let Ok(published) = serde_json::from_value::<lsp_types::PublishDiagnosticsParams>(params) else {
-            errors.push("language server sent malformed publishDiagnostics params".to_string());
-            continue;
-        };
-        let Some(doc) = documents.iter_mut().find(|doc| file_uri(&doc.path).ok().as_ref() == Some(&published.uri)) else {
-            continue;
-        };
-        if published.version.is_some_and(|version| version < doc.lsp_version) {
-            continue;
-        }
-        let text = doc.buffer.to_string();
-        doc.lsp_diagnostics = published.diagnostics.into_iter().filter_map(|diagnostic| {
-            utf16_range_to_bytes(&text, diagnostic.range).map(|range| Diagnostic {
-                range,
-                severity: match diagnostic.severity {
-                    Some(lsp_types::DiagnosticSeverity::ERROR) => Severity::Error,
-                    _ => Severity::Warning,
-                },
-                message: diagnostic.message,
-            })
-        }).collect();
     }
 }
 
@@ -1236,6 +1309,7 @@ sys.stdin.buffer.read()
                 config: SessionConfig { binary: PathBuf::from("python3"), ..test_config(&root) },
                 session,
                 open_documents: HashSet::new(),
+                status_message: None,
             },
             kotlin: Slot::Empty,
             retiring: Vec::new(),
@@ -1245,6 +1319,97 @@ sys.stdin.buffer.read()
         let rx = state.request_completion(&mut doc, 0).expect("a Ready Java session should accept the request");
         let value = rx.recv().expect("the fake server's response arrives").expect("the fake server replied successfully");
         assert_eq!(value[0]["label"], "add(E e) : boolean");
+    }
+
+    /// A real child process (`sh -c printf`) that writes one canned
+    /// notification then blocks reading its own stdin — `lsp_client`'s own
+    /// `fake_server_returning` shape, reimplemented here since that helper
+    /// is private to `lsp_client`'s test module.
+    fn fake_server_sending(body: &str) -> LspSession {
+        let script = format!("printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null", body.len());
+        LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None).expect("sh is always available")
+    }
+
+    fn ready_slot_around(session: LspSession) -> Slot {
+        Slot::Ready {
+            config: test_config(Path::new(".")),
+            session,
+            open_documents: HashSet::new(),
+            status_message: None,
+        }
+    }
+
+    /// A plain (non-`"Error"`, non-`"ServiceReady"`) `language/status` —
+    /// what jdt.ls sends throughout a project import (`"Starting"`,
+    /// `"Started"`, `"ProjectStatus"`, ...) — lands as `status_message`,
+    /// polled until the background reader thread has actually delivered it
+    /// (same "loop until it shows up" shape `poll_server_messages_receives_
+    /// a_real_notification_from_a_real_process` in `lsp_client` already
+    /// uses for a bare notification with no response to block on instead).
+    #[test]
+    fn a_language_status_notification_becomes_the_slots_status_message() {
+        let session = fake_server_sending(
+            r#"{"jsonrpc":"2.0","method":"language/status","params":{"type":"Starting","message":"Importing project br.ufsc.bridge.pec-backend"}}"#,
+        );
+        let mut slot = ready_slot_around(session);
+        let mut documents = [];
+        let mut errors = Vec::new();
+        loop {
+            apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+            let Slot::Ready { status_message, .. } = &slot else { unreachable!() };
+            if status_message.is_some() {
+                assert_eq!(status_message.as_deref(), Some("Importing project br.ufsc.bridge.pec-backend"));
+                assert!(errors.is_empty(), "a non-Error status must never be reported as a lifecycle failure");
+                break;
+            }
+        }
+    }
+
+    /// `"ServiceReady"` — jdt.ls's own terminal "the import this status was
+    /// tracking is actually done" signal — clears `status_message` back to
+    /// `None` rather than leaving the last progress line stuck on screen.
+    #[test]
+    fn a_service_ready_status_clears_the_status_message() {
+        let session = fake_server_sending(r#"{"jsonrpc":"2.0","method":"language/status","params":{"type":"ServiceReady","message":"ServiceReady"}}"#);
+        let mut slot = ready_slot_around(session);
+        let Slot::Ready { status_message, .. } = &mut slot else { unreachable!() };
+        *status_message = Some("Importing project br.ufsc.bridge.pec-backend".to_string());
+        let mut documents = [];
+        let mut errors = Vec::new();
+        loop {
+            apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+            let Slot::Ready { status_message, .. } = &slot else { unreachable!() };
+            if status_message.is_none() {
+                break;
+            }
+        }
+    }
+
+    /// `"Error"` — jdt.ls's own report that a project import actually
+    /// failed (real, observed case: a stale `.project` file referencing an
+    /// unregistered `org.jetbrains.kotlin.core.filesystem` linked-resource
+    /// scheme aborts the whole reactor import) — is the one status type
+    /// that must also reach `errors`, this app's existing one-shot
+    /// lifecycle-failure channel (`sync`'s own doc comment), or it's
+    /// invisible: the JSON-RPC handshake still succeeds and the slot stays
+    /// `Ready` regardless, so nothing else here would ever surface it.
+    #[test]
+    fn an_error_status_is_reported_through_errors_too() {
+        let session = fake_server_sending(
+            r#"{"jsonrpc":"2.0","method":"language/status","params":{"type":"Error","message":"Failed to import projects"}}"#,
+        );
+        let mut slot = ready_slot_around(session);
+        let mut documents = [];
+        let mut errors = Vec::new();
+        loop {
+            apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+            if !errors.is_empty() {
+                assert_eq!(errors, vec!["JDTLS: Failed to import projects".to_string()]);
+                let Slot::Ready { status_message, .. } = &slot else { unreachable!() };
+                assert_eq!(status_message.as_deref(), Some("Failed to import projects"));
+                break;
+            }
+        }
     }
 
     /// Where the real-server tests below look for a binary: an environment

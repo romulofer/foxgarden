@@ -33,6 +33,21 @@ fn a_starting_language_server_is_named() {
     assert_eq!(texts(&work), vec!["Iniciando JDTLS…"]);
 }
 
+/// The status bar's own answer to jdt.ls's real-world gap between
+/// `initialize` answering (fast, `starting_servers`'s own window) and a real
+/// project's import actually finishing (24s measured on a ~40-module Maven
+/// reactor) — `indexing_servers` is what says something's still happening
+/// during that second, longer stretch, carrying jdt.ls's own progress text
+/// exactly like an install's own progress line does below.
+#[test]
+fn an_indexing_server_shows_its_latest_status_message() {
+    let work = BackgroundWork {
+        indexing_servers: vec![("JDTLS", "Importing project br.ufsc.bridge.pec-backend".to_string())],
+        ..BackgroundWork::default()
+    };
+    assert_eq!(texts(&work), vec!["Indexando JDTLS… Importing project br.ufsc.bridge.pec-backend"]);
+}
+
 /// An install's own progress line is the reason installs report more than
 /// a bare name: jdt.ls is built from source and takes minutes, so an
 /// unchanging "Instalando JDTLS…" would look indistinguishable from a hung

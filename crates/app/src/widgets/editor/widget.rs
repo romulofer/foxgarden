@@ -21,6 +21,7 @@ use super::completion::{CompletionItem, CompletionKind, CompletionState, insert_
 use super::context_menu;
 #[cfg(test)]
 use super::context_menu::synthetic_shortcut;
+use super::coverage_gutter;
 use super::diff_gutter;
 use super::folding;
 use super::hover::HoverState;
@@ -1191,6 +1192,15 @@ pub fn show(
         diff_gutter::DIFF_GUTTER_WIDTH
     };
     // Same "only reserve it when there's something to show" rule again —
+    // a file with no coverage data (never run "Run with Coverage", or a
+    // Gradle project, `PLAN.md` Track 13 Phase 1 is Maven-only) keeps
+    // exactly the gutter width it had before this feature existed.
+    let coverage_gutter_width = if doc.coverage_lines.is_empty() {
+        0.0
+    } else {
+        coverage_gutter::COVERAGE_GUTTER_WIDTH
+    };
+    // Same "only reserve it when there's something to show" rule again —
     // whether *this* frame has an offer to show is read from whatever
     // `code_action_gutter` already resolved as of an earlier frame (the
     // request itself fires later below, once `doc`/the caret are both in
@@ -1204,7 +1214,8 @@ pub fn show(
         + GUTTER_PADDING * 2.0
         + code_action_width
         + fold_gutter_width
-        + diff_gutter_width;
+        + diff_gutter_width
+        + coverage_gutter_width;
 
     // `text_area` shapes with real per-token colors (`HighlightSpan`) instead
     // of egui's own `layouter` closure — resolved here (against `old_text`'s
@@ -2099,11 +2110,18 @@ pub fn show(
     paint_line_numbers(
         ui,
         &shell_out.base,
-        gutter_left + gutter_width - diff_gutter_width - GUTTER_PADDING,
+        gutter_left + gutter_width - diff_gutter_width - coverage_gutter_width - GUTTER_PADDING,
         gutter_font_id,
         ui.visuals().dark_mode,
     );
     diff_gutter::paint_diff_gutter(ui, &shell_out.base, &doc.diff_hunks, gutter_left + gutter_width, dark_mode);
+    coverage_gutter::paint_coverage_gutter(
+        ui,
+        &shell_out.base,
+        &doc.coverage_lines,
+        gutter_left + gutter_width - diff_gutter_width,
+        dark_mode,
+    );
     if view_settings.show_inline_blame
         && let Some(primary_caret) = shell_out.caret
     {

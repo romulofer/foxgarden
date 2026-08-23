@@ -1420,6 +1420,7 @@ impl eframe::App for FoxGardenApp {
                         self.build_state.is_build_running(),
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
+                        self.build_state.is_coverage_running(),
                     )
                 })
                 .inner;
@@ -1484,6 +1485,12 @@ impl eframe::App for FoxGardenApp {
                     .show(ui, |ui| {
                         build_click = build_panel::show(ui, &mut self.build_state);
                     });
+                if let Some(result) = self.build_state.take_coverage_result() {
+                    match result {
+                        Ok(files) => build_panel::apply_coverage_results(&mut self.state, &files),
+                        Err(err) => self.last_error = Some(msg::coverage_report_failed(&err.to_string())),
+                    }
+                }
             }
 
             if self.source_control_visible
@@ -1613,6 +1620,19 @@ impl eframe::App for FoxGardenApp {
                     Ok(()) => self.build_panel_visible = true,
                     Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
                 },
+                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+            }
+        }
+
+        if menu_outcome.run_with_coverage_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            match fg_core::detect_build_tool(&root) {
+                Some(fg_core::BuildTool::Maven) => match self.build_state.start_coverage(&root) {
+                    Ok(()) => self.build_panel_visible = true,
+                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                },
+                Some(fg_core::BuildTool::Gradle) => self.last_error = Some(t().errors.coverage_requires_maven.to_string()),
                 None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
             }
         }

@@ -53,18 +53,106 @@ pub type EndpointCache = HashMap<PathBuf, CachedFileScan>;
 /// dropped at the end rather than lingering forever. Call with a fresh
 /// `EndpointCache::new()` for an uncached, always-read-every-file scan.
 pub fn scan_project_endpoints_cached(root: &FileNode, cache: &mut EndpointCache) -> Vec<(PathBuf, EndpointInfo)> {
+    let mut files = Vec::new();
+    collect_source_files(root, &mut files);
+
+    let mut seen = HashSet::with_capacity(files.len());
+    // One slot per file in `files`' order, so the read+parse work below can
+    // run out of order across threads while the final `out` is still
+    // assembled in a stable, deterministic order at the end.
+    let mut endpoints: Vec<Option<Vec<EndpointInfo>>> = Vec::with_capacity(files.len());
+    let mut fresh_mtimes: Vec<Option<SystemTime>> = vec![None; files.len()];
+    let mut needs_scan = Vec::new();
+
+    for (i, (path, _language)) in files.iter().enumerate() {
+        // A file whose metadata can't be read (deleted in a race with this
+        // scan, say) is left out of `seen` entirely, same as the rest of
+        // this loop skips it — `retain` below then drops any stale cache
+        // entry for it exactly as it would for a file no longer in the tree
+        // at all.
+        let Some(mtime) = std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) else {
+            endpoints.push(None);
+            continue;
+        };
+        seen.insert(path.clone());
+        match cache.get(path) {
+            Some(cached) if cached.mtime == mtime => {
+                endpoints.push(Some(cached.endpoints.clone()));
+            }
+            _ => {
+                endpoints.push(None);
+                fresh_mtimes[i] = Some(mtime);
+                needs_scan.push(i);
+            }
+        }
+    }
+
+    // The expensive part — read + throwaway-parse of every file that missed
+    // the cache — is embarrassingly parallel (each file is independent), so
+    // it's split across every available core the same way Zed's worktree
+    // scanner spreads its own directory walk across `num_cpus` workers,
+    // rather than running the whole project single-threaded on whichever
+    // thread called this function. Below a couple of files, though, thread
+    // spawning itself is the more expensive part (each `toggle()` already
+    // runs this whole function on its own background thread, so a same-file
+    // re-scan pays that overhead on top of a scope's under a real editing
+    // session's typical CPU contention), so a tiny miss set is just scanned
+    // inline on the calling thread instead.
+    let scanned: Vec<(usize, Option<Vec<EndpointInfo>>)> = if needs_scan.len() <= 1 {
+        needs_scan.iter().map(|&i| scan_file(&files, i)).collect()
+    } else {
+        let workers = std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(1);
+        let chunk_size = needs_scan.len().div_ceil(workers).max(1);
+        std::thread::scope(|scope| {
+            needs_scan
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    let files = &files;
+                    scope.spawn(move || chunk.iter().map(|&i| scan_file(files, i)).collect::<Vec<_>>())
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect()
+        })
+    };
+
+    for (i, result) in scanned {
+        endpoints[i] = result;
+    }
+
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    collect_endpoints(root, cache, &mut seen, &mut out);
+    for (i, (path, _language)) in files.iter().enumerate() {
+        let Some(file_endpoints) = &endpoints[i] else { continue };
+        out.extend(file_endpoints.iter().cloned().map(|e| (path.clone(), e)));
+        if let Some(mtime) = fresh_mtimes[i] {
+            cache.insert(path.clone(), CachedFileScan { mtime, endpoints: file_endpoints.clone() });
+        }
+    }
+
     cache.retain(|path, _| seen.contains(path));
     out
 }
 
-fn collect_endpoints(node: &FileNode, cache: &mut EndpointCache, seen: &mut HashSet<PathBuf>, out: &mut Vec<(PathBuf, EndpointInfo)>) {
+/// Reads + throwaway-parses `files[i]`, returning its endpoints alongside
+/// `i` so a caller that dispatched this across chunks out of order (the
+/// parallel path in `scan_project_endpoints_cached`) can still place the
+/// result back at the right slot.
+fn scan_file(files: &[(PathBuf, Language)], i: usize) -> (usize, Option<Vec<EndpointInfo>>) {
+    let (path, language) = &files[i];
+    let result = std::fs::read_to_string(path).ok().map(|source| {
+        let mut parser = IncrementalParser::new(*language);
+        let tree = parser.parse(&source).clone();
+        syntax::endpoints_in_file(*language, &tree, &source)
+    });
+    (i, result)
+}
+
+fn collect_source_files(node: &FileNode, out: &mut Vec<(PathBuf, Language)>) {
     match node.kind {
         FileKind::Dir => {
             for child in &node.children {
-                collect_endpoints(child, cache, seen, out);
+                collect_source_files(child, out);
             }
         }
         FileKind::File => {
@@ -79,29 +167,7 @@ fn collect_endpoints(node: &FileNode, cache: &mut EndpointCache, seen: &mut Hash
             if !matches!(language, Language::Java | Language::Kotlin) {
                 return;
             }
-            let Ok(metadata) = std::fs::metadata(&node.path) else {
-                return;
-            };
-            let Ok(mtime) = metadata.modified() else {
-                return;
-            };
-            seen.insert(node.path.clone());
-
-            if let Some(cached) = cache.get(&node.path)
-                && cached.mtime == mtime
-            {
-                out.extend(cached.endpoints.iter().cloned().map(|e| (node.path.clone(), e)));
-                return;
-            }
-
-            let Ok(source) = std::fs::read_to_string(&node.path) else {
-                return;
-            };
-            let mut parser = IncrementalParser::new(language);
-            let tree = parser.parse(&source).clone();
-            let endpoints = syntax::endpoints_in_file(language, &tree, &source);
-            out.extend(endpoints.iter().cloned().map(|e| (node.path.clone(), e)));
-            cache.insert(node.path.clone(), CachedFileScan { mtime, endpoints });
+            out.push((node.path.clone(), language));
         }
     }
 }
@@ -110,6 +176,20 @@ fn collect_endpoints(node: &FileNode, cache: &mut EndpointCache, seen: &mut Hash
 mod tests {
     use super::*;
     use fg_core::Project;
+
+    #[test]
+    #[ignore]
+    fn bench_scan_real_project() {
+        let path = std::env::var("FG_BENCH_PATH").expect("set FG_BENCH_PATH");
+        let project = Project::open(path.into()).unwrap();
+        let mut cache = EndpointCache::new();
+        let start = std::time::Instant::now();
+        let out = scan_project_endpoints_cached(&project.tree, &mut cache);
+        eprintln!("cold: endpoints={} elapsed={:?}", out.len(), start.elapsed());
+        let start = std::time::Instant::now();
+        let out = scan_project_endpoints_cached(&project.tree, &mut cache);
+        eprintln!("warm: endpoints={} elapsed={:?}", out.len(), start.elapsed());
+    }
 
     fn scan(files: &[(&str, &str)]) -> Vec<(PathBuf, EndpointInfo)> {
         let dir = tempfile::tempdir().unwrap();

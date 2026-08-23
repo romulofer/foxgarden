@@ -285,6 +285,18 @@ msg! {
 }
 
 msg! {
+    /// The `jacoco.xml` report couldn't be read/parsed after a "Run with
+    /// Coverage" run finished successfully (`PLAN.md` Track 13 Phase 1) —
+    /// a genuinely unexpected shape, not the ordinary "some tests failed"
+    /// case, which `build_panel::finish_coverage` already handles inline
+    /// via its own log row.
+    coverage_report_failed(err: &str) {
+        pt: "não foi possível ler o relatório de cobertura: {err}",
+        en: "coverage report couldn't be read: {err}",
+    }
+}
+
+msg! {
     spotbugs_failed(err: &str) {
         pt: "o SpotBugs falhou: {err}",
         en: "SpotBugs failed: {err}",
@@ -370,6 +382,19 @@ msg! {
     starting_language_server(name: &str) {
         pt: "Iniciando {name}…",
         en: "Starting {name}…",
+    }
+}
+
+msg! {
+    /// A `Ready` language server still importing the project in the
+    /// background (`LspState::indexing_servers`) — `name` is the server's
+    /// own product name, same as `starting_language_server`. Paired with
+    /// that job's own latest `language/status` message as the bar's
+    /// `Activity::detail`, exactly like `installing_named` pairs with an
+    /// install's own progress line.
+    indexing_language_server(name: &str) {
+        pt: "Indexando {name}…",
+        en: "Indexing {name}…",
     }
 }
 

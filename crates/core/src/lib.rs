@@ -1,6 +1,7 @@
 mod blame;
 mod boilerplate;
 mod build_output;
+mod coverage;
 mod diagnostic;
 mod diff;
 mod document;
@@ -22,6 +23,7 @@ mod test_report;
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
 pub use build_output::{BuildProblem, build_command, default_classes_dir, detect_build_tool, parse_build_output_line};
+pub use coverage::{CoverageStatus, LineCoverage, coverage_command, coverage_report_path, parse_jacoco_xml, resolve_coverage_paths};
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,

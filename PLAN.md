@@ -2187,7 +2187,22 @@ how correct the generated skeleton is.
       Gradle/Kotlin/Spring Boot project, both `.properties` and `.yml`;
       Addendum — Spring annotation completion + auto-import — shipped and
       live-verified)
-- [ ] Track 13 — Code coverage overlay
+- [x] Track 13 — Code coverage overlay (Phase 1, Maven-only — Gradle
+      deferred, no clean CLI-only JaCoCo injection point without a
+      `build.gradle` edit; shipped and live-verified: "Run with Coverage"
+      invokes `jacoco-maven-plugin`'s own `prepare-agent`+`test`+`report`
+      goals as bare plugin coordinates on one `mvn` command — no `pom.xml`
+      edits, no standalone jar downloads, `tool_manager.rs` untouched,
+      confirmed by decompiling the real `org.jacoco.jacoco-maven-plugin`/
+      `org.jacoco.core` jars already cached on this machine. Real-jar-
+      verified line-status algorithm (`mi=0` alone does *not* mean fully
+      covered — a split branch on an otherwise fully-covered line is still
+      `Partial`). Live-verified end to end against a real Maven project:
+      the covered/partial/missed gutter marks landed on the exact expected
+      lines, the build-panel summary line appeared, the Gradle-rejection
+      toast fired on a Gradle project with no process spawned, and the
+      build-failure path correctly skipped reading a nonexistent
+      `jacoco.xml`.)
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions
 - [x] Track 17 — Peek definition (Phase 1 shipped and live-verified:

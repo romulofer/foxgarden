@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use ropey::Rope;
 
 use crate::blame::BlameLine;
+use crate::coverage::LineCoverage;
 use crate::diagnostic::Diagnostic;
 use crate::diff::DiffHunk;
 use crate::language::Language;
@@ -107,6 +108,16 @@ pub struct Document {
     /// the collapsed set, rather than needing an explicit reconciliation
     /// pass (PLAN.md Phase 3e's "first cut").
     pub folded_lines: HashSet<usize>,
+    /// Per-line coverage from the last "Run with Coverage" (`PLAN.md`
+    /// Track 13 Phase 1, Maven-only) — sparse, one entry per line JaCoCo
+    /// itself reported instruction/branch data for, the same sparse-marks
+    /// shape `diff_hunks` already established (unlike `blame`, which
+    /// genuinely is dense). Empty until the first coverage run completes
+    /// this session; replaced wholesale by the next run for every open
+    /// document, including to empty for one no longer reported — the same
+    /// "a fresh run's results always supersede the previous one" rule
+    /// `checkstyle_diagnostics`'s own apply-results already established.
+    pub coverage_lines: Vec<LineCoverage>,
 }
 
 impl Document {
@@ -166,6 +177,7 @@ impl Document {
             extra_selections: Vec::new(),
             read_only: false,
             folded_lines: HashSet::new(),
+            coverage_lines: Vec::new(),
         })
     }
 

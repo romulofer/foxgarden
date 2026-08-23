@@ -62,6 +62,19 @@ const LIGHT_DIFF_REMOVED: Color32 = Color32::from_rgb(202, 42, 42);
 const DARK_DIFF_MODIFIED: Color32 = Color32::from_rgb(97, 175, 239);
 const LIGHT_DIFF_MODIFIED: Color32 = Color32::from_rgb(37, 106, 194);
 
+/// Coverage gutter colors (`PLAN.md` Track 13 Phase 1) — deliberately
+/// different hues from the diff gutter's own green/red/blue above (teal/
+/// orange/amber vs. green/red/blue) so a file that's both modified *and*
+/// covered, with both gutter columns visible at once, still reads as two
+/// distinct signals rather than one color coincidentally meaning two
+/// different things.
+const DARK_COVERAGE_COVERED: Color32 = Color32::from_rgb(38, 198, 148);
+const LIGHT_COVERAGE_COVERED: Color32 = Color32::from_rgb(0, 150, 110);
+const DARK_COVERAGE_MISSED: Color32 = Color32::from_rgb(255, 138, 101);
+const LIGHT_COVERAGE_MISSED: Color32 = Color32::from_rgb(191, 54, 12);
+const DARK_COVERAGE_PARTIAL: Color32 = Color32::from_rgb(255, 202, 58);
+const LIGHT_COVERAGE_PARTIAL: Color32 = Color32::from_rgb(179, 127, 0);
+
 /// A quick-fix lightbulb (`PLAN.md` Track 15 Phase 1) — amber, the same
 /// "actionable suggestion" hue real IDEs already use for this exact
 /// affordance, distinct from `error_squiggle`'s red/`DIFF_MODIFIED`'s blue
@@ -149,6 +162,18 @@ pub fn diff_removed(dark_mode: bool) -> Color32 {
 
 pub fn diff_modified(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_DIFF_MODIFIED } else { LIGHT_DIFF_MODIFIED }
+}
+
+pub fn coverage_covered(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_COVERAGE_COVERED } else { LIGHT_COVERAGE_COVERED }
+}
+
+pub fn coverage_missed(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_COVERAGE_MISSED } else { LIGHT_COVERAGE_MISSED }
+}
+
+pub fn coverage_partial(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_COVERAGE_PARTIAL } else { LIGHT_COVERAGE_PARTIAL }
 }
 
 pub fn lightbulb(dark_mode: bool) -> Color32 {
