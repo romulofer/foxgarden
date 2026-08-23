@@ -167,6 +167,13 @@ msg! {
 }
 
 msg! {
+    failed_to_apply_code_action(err: &str) {
+        pt: "falha ao aplicar correção: {err}",
+        en: "failed to apply quick fix: {err}",
+    }
+}
+
+msg! {
     /// `failures` is an already-joined, newline-separated list.
     failed_to_paste(failures: &str) {
         pt: "falha ao colar:\n{failures}",

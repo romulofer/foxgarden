@@ -325,6 +325,7 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         initial_caret,
         frames,
     );
@@ -360,6 +361,7 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         initial_caret,
         frames,
     );
@@ -398,6 +400,7 @@ fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         initial_caret,
         frames,
     );
@@ -437,6 +440,7 @@ fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         initial_caret,
         frames,
     );
@@ -465,7 +469,7 @@ fn typing_a_partial_key_in_application_properties_opens_spring_config_completion
     let initial_caret = 0;
     let frames: Vec<Vec<egui::Event>> = "server.po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), initial_caret, frames);
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
 
     let state = completion.expect("typing a partial dotted key in a .properties file should open Spring config completion");
     let text = doc.buffer.to_string();
@@ -488,7 +492,7 @@ fn typing_past_the_equals_sign_in_application_properties_does_not_open_completio
     let initial_caret = "server.port=".len();
     let frames = vec![vec![egui::Event::Text("8".to_string())], vec![egui::Event::Text("0".to_string())]];
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), initial_caret, frames);
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
 
     assert!(completion.is_none(), "typing a value after '=' must not open key completion");
 }
@@ -508,7 +512,7 @@ fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor
     let initial_caret = before.len();
     let frames: Vec<Vec<egui::Event>> = "po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), initial_caret, frames);
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
 
     let state = completion.expect("typing a partial key nested under server: in a .yml file should open completion");
     let text = doc.buffer.to_string();
@@ -534,7 +538,7 @@ fn accepting_a_spring_annotation_inserts_it_and_adds_the_import_alphabetically()
     let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
     frames.push(vec![key_event(egui::Key::Enter)]);
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), initial_caret, frames);
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
 
     assert!(completion.is_none(), "accepting the completion should close the popup");
     let text = doc.buffer.to_string();
@@ -559,7 +563,7 @@ fn accepting_a_spring_annotation_already_imported_does_not_duplicate_the_import(
     let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
     frames.push(vec![key_event(egui::Key::Enter)]);
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), initial_caret, frames);
+    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
 
     let text = doc.buffer.to_string();
     assert_eq!(text.matches("import org.springframework.stereotype.Component;").count(), 1);

@@ -28,19 +28,18 @@ plus a live click-through for anything with a UI-facing surface, per
 green, then hand the user exact numbered steps and wait for them to
 report back, never claim a click-through passed without that.
 
-**Track 20 Phases 4, 6, and 7 (go-to-definition, find-references,
-rename-symbol) and Track 17 (`Peek definition`, the user's own explicit
-prior direction) are all done** — see their own checkpoints below for
-what shipped and how each was live-verified (Phase 7's own checkpoint
-also flags one live-verify gap worth a second look once a real Maven/
-Gradle project is available). Track 20's Phase 3 (hover docs) checkpoint
-is still its own open item — its own specific wording asks for a JDK
-type's Javadoc, and while hovering a user-defined symbol was seen
-working correctly, incidentally, throughout every one of Phases 4/6/7's
-own screenshots this session, that's not the same claim; leave Phase 3
-marked open until someone actually hovers a JDK type and checks. No
-other track currently has an unstarted hard dependency blocking it, so
-the next track is an open choice rather than a forced one.
+**Track 20 is now fully done, all 7 phases** (go-to-definition, hover
+docs, find-references, rename-symbol among them) — see their own
+checkpoints below for what shipped and how each was live-verified
+(Phase 7's own checkpoint also flags one live-verify gap worth a second
+look once a real Maven/Gradle project is available). Phase 3 (hover
+docs) closed in a later session: live-verified against a real JDK type's
+Javadoc (`ArrayList`), which also closed `TECHNICAL_DEBT.md` #22 and
+surfaced/fixed one small real gap in its own Markdown-stripping (single-
+asterisk `*italic*` survived as literal punctuation; see that checkpoint
+and #22's own closing note). No other track currently has an unstarted
+hard dependency blocking it, so the next track is an open choice rather
+than a forced one.
 
 **Cross-track dependency graph** (only the tracks with a real dependency
 on another track are shown; everything else is independent):
@@ -912,9 +911,65 @@ everything still tracked.
 active diagnostic that has associated `CodeAction`s; picking one applies
 its `WorkspaceEdit` via the existing edit-application path.
 
-**Checkpoint 1:** full suite green; live-verify a real diagnostic with a
-known quick fix (e.g. an unused import a language server flags) offers
-and correctly applies it.
+**Checkpoint 1:** done — `cargo test -p foxgarden` green (905 passed).
+`lsp_state::LspState::request_code_action` sends `textDocument/codeAction`
+for a diagnostic's own range, reconstructing it as a real `lsp_types::
+Diagnostic` (range/severity/message only — `fg_core::Diagnostic` keeps no
+more) for `context.diagnostics`. `widgets::editor::code_action::
+CodeActionGutter` tracks the caret's own line (no dwell delay, unlike
+`hover` — re-requests the instant the line/its diagnostic changes),
+decodes the reply into `Offer { title, edit }` — only entries that already
+carry a real `WorkspaceEdit` are ever kept, per this phase's own stated
+scope — paints the lightbulb, and owns the picker popup. Applying a picked
+offer needed no new app.rs-level polling state (unlike rename): the edit
+is already resolved by the time it's picked, so `take_confirmed` hands the
+`WorkspaceEdit` straight to a newly shared `crate::workspace_edit::apply`
+— extracted from `rename.rs`'s own private per-file-edit logic (`edits_by_
+file`/`apply_file_edits`/`apply_text_edits`, unchanged) once a second real
+caller needed the exact same thing, rather than duplicating it.
+
+Two real, live-verify-driven findings, neither assumed:
+
+1. **jdtls' real quick fixes for the checkpoint's own named example (an
+   unused import) don't carry `CodeAction.edit` at all.** Every offer a
+   real jdtls 1.60.0 returned for `"The import java.util.List is never
+   used"` — "Organize imports" (×2), "Generate toString()", "Change
+   modifiers to final where possible" — came back as a bare `Command`
+   named `java.apply.workspaceEdit` whose single argument *is* the
+   `WorkspaceEdit`, meant to be applied client-side with nothing sent back
+   to the server. Found by dumping the actual raw reply (a first pass that
+   only accepted `CodeAction.edit` parsed **zero** offers from a real
+   4-offer reply). `offer_from_item` now special-cases exactly this
+   command name; every other bare `Command` (a genuine server-side
+   `workspace/executeCommand` action) is still correctly left out — this
+   app implements neither `workspace/executeCommand` nor a server-
+   initiated `workspace/applyEdit` reply, so attempting one would silently
+   do nothing.
+2. **Clicking the lightbulb itself used to make it vanish**, because the
+   gutter-width/lightbulb code originally gated on `shell_out.caret` —
+   which `ShellOutput`'s own doc comment states plainly is `None`
+   whenever the text area *isn't focused this exact frame*, and clicking a
+   separate `ui.interact` widget elsewhere in the same frame (the
+   lightbulb, in the gutter, is exactly this) clears that focus under
+   egui's default input handling. Switched to `text_area::peek_caret`
+   (the persisted caret, already what the gutter-width precomputation
+   correctly used) for the `update`/`clear` call too. Generally
+   applicable beyond this one feature: any future gutter-region clickable
+   (this codebase's fold-arrow gutter already has the same shape of
+   `ui.interact` call) needs the persisted caret, not `shell_out.caret`,
+   for anything that must survive being clicked itself.
+
+Live-verified end to end, headless (`Xvfb`+`xdotool`, same harness as
+Track 17/19/20; `app.ron` backed up/restored byte-for-byte around a
+throwaway single-file project with `import java.util.List;` genuinely
+unused) against the real jdtls 1.60.0 above: placing the caret on the
+diagnostic's line showed the amber lightbulb; clicking it opened a popup
+listing all four real titles; picking "Organize imports" removed the
+unused import from the *open tab's own buffer* (correctly left the disk
+file untouched — no open tab is what triggers a disk write, per
+`workspace_edit::apply_file_edits`'s own existing rule) and marked the tab
+dirty (`*Main.java`), exactly the existing edit-application path Checkpoint
+7 (rename) already established.
 
 ---
 
@@ -1010,34 +1065,145 @@ scales with total file size even after the tab-switch cache fix) replaced
 with an incrementally-maintained or viewport-bounded equivalent that
 doesn't need every line's row-count computed up front.
 
-**Checkpoint 1:** `cargo test -p app` green; a synthetic huge-file
-benchmark (documented, not necessarily a hard-asserted threshold) showing
-first-open/per-keystroke cost no longer scales with total file size.
+**Checkpoint 1:** done — `cached_row_counts` (`render.rs`) no longer shapes
+every line on a miss; it seeds a cheap "1 row per line" baseline
+(`default_row_counts`, `usize` writes only, no font layout) and lets
+`layout_visible_wrapped` write real counts back (`record_shaped_rows`) for
+just the lines it already shapes to paint, so a scroll-only sequence of
+frames progressively learns the file without ever shaping an off-screen
+line. `cargo test -p app` green (897 passed); new tests assert shaped-line
+count stays viewport-bounded and identical between a 2,000- and a
+200,000-line buffer, that a learned row count survives a scroll-only
+frame, and that a post-edit reshape stays bounded too. The synthetic
+benchmark (`huge_file_first_open_and_per_keystroke_cost_stays_bounded`,
+200,000 long lines, word-wrap on) measured **19 lines shaped / 14.865ms**
+on first open — not the 200,000 real `shape_line` calls the old path paid
+— with a post-edit reshape equally bounded. Live-verified headless
+(`Xvfb` + `xdotool`, screenshots read back — real display/mouse/keyboard
+never touched; the app's own `rfd::FileDialog::pick_folder()` routes
+through the system's `xdg-desktop-portal` rather than the app's own X
+display, so this session instead pre-seeded `app.ron`'s `last_project`/
+`open_tabs`/`active_tab` keys directly under an isolated `XDG_DATA_HOME`
+to open the scratch project with no dialog at all) against a real
+200,000-line file: instant open, smooth mouse-wheel scrolling with no
+stutter or redraw artifacts once settled, a keystroke registered instantly
+(dirty-tab asterisk), and Ctrl+End landed exactly on line 200001 (the
+file's true last, empty line after its final newline) — despite that line
+never having been shaped before, no imprecision was actually observed in
+practice, better than this phase's own accepted-approximation trade-off
+anticipated. Known, accepted limitations from this design (never
+observed as a live problem, but worth having read before touching this
+code again): a freshly opened huge file's scrollbar undercounts
+never-shaped wrapped lines until scrolled through; an off-screen keyboard
+jump landing on a never-visited wrapped line is only as accurate as the
+1-row baseline until a subsequent scroll settles it (same accepted class
+as `TECHNICAL_DEBT.md` #15's `tabs.rs` jump math). Separately, live-verify
+surfaced a pre-existing, unrelated crash: `xdotool windowclose` against a
+real running instance under Xvfb (no window manager) panics inside
+`winit::platform_impl::linux::x11::window` on `TranslateCoordinates`
+during shutdown — not touched by this phase, not investigated further,
+flagged here in case it resurfaces in a future headless click-through.
 
 **Phase 2 — hand-built widget: layout + click-to-position.** Replaces
 `egui::TextEdit` for the visible-row-only case, reusing `layout_visible`'s
 existing `char_rect`/`row_galleys` helpers for hit-testing, scoped to only
 the visible slice.
 
-**Checkpoint 2:** full suite green; live-verify clicking anywhere in a
-huge file positions the cursor correctly and instantly (no perceptible
-lag versus a small file).
+**Checkpoint 2:** done — turns out already shipped, ahead of this track's
+own numbering: `text_area::shell::show_interactive` (commit `27d78dc`,
+2026-07-25) replaced `egui::TextEdit` for the live editor entirely before
+this Track's own write-up (`a4178a2`, 2026-07-27) was drafted, using
+exactly `char_rect`/`row_galleys` for hit-testing as described. Re-verified
+live at this phase's actual target scale now that Phase 1 makes it
+meaningful: headless (`Xvfb`+`xdotool`) against the same real 200,000-line
+file, clicking (then `Home`) at a point deep in the file (~line 199978)
+placed the caret exactly there instantly, including live-triggering the
+completion popup on the next keystroke — no perceptible lag versus a small
+file, the checkpoint's own bar.
 
 **Phase 3 — drag-select.** Reimplemented against the new widget, studied
 against `../references/zed`'s own non-`TextEdit` editor as the concrete
 precedent (real production code, not egui's own internals, which never
 had to solve this at this file's own scale).
 
-**Checkpoint 3:** full suite green; live-verify drag-select across a
-scrolled viewport (crossing the visible/invisible boundary mid-drag)
-works correctly.
+**Checkpoint 3:** done, code-level — same pre-existing `show_interactive`
+covers this too (`response.dragged()`/`drag_started()`, `shell.rs`
+~292-313), including the block-selection case
+(`alt_drag_produces_a_rectangular_block_selection_spanning_multiple_rows`,
+a real egui-synthetic-event drag, not a mocked one). Live-verify against
+the huge file only partially landed this session: keyboard-driven
+selection (`Shift+Right` × 40 after `Ctrl+Home`) rendered a correct
+selection highlight instantly on line 1 of the real 200,000-line file,
+proving the selection/rendering half works at scale — but reproducing an
+actual mouse-button-held drag via `xdotool mousedown`/`mousemove`/
+`mouseup` as separate process invocations never once registered as a drag
+under this no-window-manager Xvfb session (each attempt landed as a plain
+click, no selection), despite click-to-position itself working reliably
+moments earlier with the same pointer-position pipeline. Not chased
+further — X11 motion-event coalescing/timing across separate `xdotool`
+process spawns is a plausible, mundane explanation, and the underlying
+drag code path already has real (non-mocked) coverage via Phase 3's own
+`alt_drag_...` test. Flagged rather than assumed: a genuine mouse-drag
+live-verify at huge-file scale, crossing a scrolled viewport boundary
+specifically, is still owed if a more reliable input-synthesis method
+becomes available (e.g. a real display instead of Xvfb, or a Playwright-
+style continuous-pointer driver).
+
+**Follow-up session (2026-08-23):** revisited specifically to close this
+gap. Found and fixed a real harness bug along the way: `xdotool click`
+(the single-shot subcommand) was silently non-functional against this
+app's window this session — no press/release ever reached the editor,
+menu, or side panel, only hover styling — while explicit
+`xdotool mousedown 1; sleep; mouseup 1` worked correctly every time
+(confirmed: File menu opened, editor accepted clicks and typed text).
+Recorded in memory for future sessions. With that fixed, a real
+mouse-button-held drag (`mousedown` → several `mousemove` steps with
+short sleeps → `mouseup`, all real X11 motion, not egui-synthetic)
+was reproduced exactly once, right after a fresh app launch, at the
+top of the file — a genuine blue selection spanning lines 2-5 of the
+wrapped huge file. Every subsequent attempt at the actual target scale
+(scrolled ~200,000 lines deep, crossing the viewport) landed as a plain
+click regardless of step count, spacing, or click-vs-mousedown/up choice
+— including immediately after a fresh relaunch with no prior interaction
+at all, ruling out stuck X server button/modifier state as the cause.
+Net: still not reliably reproducible at the scale that matters, and
+still not chased further — the code path's non-mocked test coverage
+stands unchanged, and this now reads as a genuine limitation of
+synthesizing a held drag via `xdotool` process calls against a
+WM-less Xvfb session, not an app defect. Same "still owed" verdict,
+now with a ruled-out cause (stuck server state) and a confirmed
+harness fix (mousedown/mouseup over click) that removed a confound
+from earlier attempts.
 
 **Phase 4 — IME composition.** Reimplemented against the new widget; same
 `../references/zed` precedent.
 
-**Checkpoint 4:** full suite green; live-verify IME composition (a CJK
-input method, if available to test with) works correctly in the new
-widget.
+**Checkpoint 4:** done, code-level — same pre-existing `show_interactive`
+handles this too (`ime_preedit_previews_text_then_commit_finalizes_it`,
+a real headless test of the preview/commit sequence). Not live-verified
+this session: no CJK input method is installed in this sandbox, and
+setting one up (ibus/fcitx + a CJK engine) was judged out of scope for
+this track's own time budget. Recorded as owed, not assumed, matching
+this file's own convention for a gap the environment — not the code —
+currently blocks (e.g. Track 20's own still-owed Kotlin GUI
+click-through).
+
+**Follow-up session (2026-08-23):** the sandbox gained `ibus-mozc` (user
+installed it with sudo mid-session, resolving the earlier no-apt-root
+blocker), so a real attempt became possible. Set up `ibus-daemon` on the
+same Xvfb display and `XMODIFIERS=@im=ibus` for the app process; an
+`ibus-xim` window appeared on the display, confirming the XIM server was
+live and registered. Typed romaji (`k`, `a`) with real pacing: no preedit
+text appeared in the app while composing (consistent with the app not
+implementing XIM's on-the-spot preedit callback, so if IBus was holding
+a composition buffer it was invisible rather than drawn inline), and on
+`Return` the literal string `ka` landed in the buffer — not a converted
+かな. That means real kana/kanji conversion was not demonstrated; the
+observed behavior is also consistent with the keys simply passing
+through as plain ASCII without IBus/mozc ever engaging. Inconclusive
+either way, cleaned up (undone, disk file unchanged). Still owed, same
+as before, now with a documented real-engine attempt on record instead
+of "no engine installed at all."
 
 ---
 
@@ -1089,8 +1255,30 @@ treatment.
 **Phase 3 — hover docs.** `textDocument/hover` feeds a tooltip,
 structurally mirroring the existing syntax-error hover.
 
-**Checkpoint 3:** full suite green; live-verify hovering a real symbol
-shows real documentation (a JDK type's own Javadoc, for instance).
+**Checkpoint 3:** done — `cargo test -p foxgarden` green. Live-verified
+headless (`Xvfb`+`xdotool`, same harness as Track 17/19/20's other
+checkpoints; `~/.local/share/foxgarden/app.ron` backed up before pointing
+it at a throwaway single-file `ArrayList` project, byte-for-byte restored
+after) against a real jdtls 1.60.0: hovering `ArrayList` rendered the real
+`java.util.ArrayList<String>` Javadoc, not this codebase's own diagnostics.
+One real harness gotcha worth keeping: nothing repaints on a *stationary*
+pointer (no cursor blink, no unrelated input) until `HoverState`'s own
+request lands, so a single `xdotool mousemove` to the target and a plain
+wait never crossed `HOVER_DELAY` — small in-place jitter (a couple of
+pixels, still inside the same identifier's span so `stays` keeps matching)
+every ~100ms for over 500ms was needed to keep frames flowing long enough
+for the dwell timer to actually fire.
+
+This live-verify also closed `TECHNICAL_DEBT.md` #22 (its own proposed
+stripping-route fix was already implemented in `hover_text_from_response`/
+`strip_markdown`, just never re-verified against a real reply): the real
+`ArrayList` Javadoc surfaced jdtls' single-asterisk `*word*` emphasis,
+distinct from the `**bold**` case #22's own fixture covered — `strip_
+inline_markdown` gained a `.replace('*', "")` pass (after the existing
+`**` one, so a bold marker's two leftover single asterisks are also
+caught), degrading both italic emphasis and a leading `* ` bullet marker
+to plain text. Re-verified live after the fix: the same tooltip renders
+with no stray asterisks. See #22 for the closing note.
 
 **Phase 4 — go-to-definition.** `textDocument/definition` reuses
 `pending_navigation`'s existing cross-tab-jump primitive.
@@ -2002,15 +2190,35 @@ how correct the generated skeleton is.
 - [ ] Track 13 — Code coverage overlay
 - [ ] Track 14 — Docker/container run integration
 - [ ] Track 15 — Quick-fix intention actions
-- [ ] Track 17 — Peek definition
+- [x] Track 17 — Peek definition (Phase 1 shipped and live-verified:
+      Alt+F12 on a cross-file call opened the inline panel with the
+      target line highlighted, active tab unchanged, Escape restored
+      state)
 - [x] Track 18 — Inline diff viewer widget (shipped and live-verified,
       including abridged-context and in-window hunk-staging follow-ups)
 
 ### Major tier
 
 - [ ] Track 19 — Large file handling — full viewport virtualization
-- [ ] Track 20 — LSP integration (Phases 1/2/3/5 shipped and verified
-      against real servers; Phases 4/6/7 not started.) Phase 3's own
+      (Phase 1 shipped and live-verified: word-wrap row-count computation
+      no longer shapes every line up front — see that phase's own
+      checkpoint for the measured 19-lines-shaped/14.865ms number against
+      a real 200,000-line file. Phases 2-4 — hand-built widget replacing
+      `egui::TextEdit`, drag-select, IME — turn out to have already
+      shipped ahead of this Track's own numbering (`show_interactive`,
+      2026-07-25); this session re-verified click-to-position live at
+      real huge-file scale (instant, exact) and confirmed drag-select/IME
+      both have real, non-mocked test coverage, but couldn't complete a
+      live mouse-drag or CJK-IME check in this sandbox — see Phases 3/4's
+      own checkpoints for exactly what's still owed and why.)
+- [x] Track 20 — LSP integration (all 7 phases shipped and verified
+      against real servers: Phase 4 go-to-definition — Ctrl+Click, both
+      same-project and JDK decompiled source, tab-switch/no-switch
+      confirmed; Phase 6 find-references — Shift+F12 popup, row click
+      jumps tabs correctly; Phase 7 rename-symbol — F2 inline box,
+      WorkspaceEdit applied across open tabs correctly, not-open-file
+      case unconfirmed pending a real Maven/Gradle project, see that
+      phase's own checkpoint for detail.) Phase 3's own
       Checkpoint 3 is satisfied: hover returns real documentation for
       both a project-owned symbol and a JDK type, proven by a permanent
       `#[ignore]`d real-jdtls test (`lsp_state::tests::java_hover_

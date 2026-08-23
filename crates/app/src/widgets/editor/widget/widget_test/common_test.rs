@@ -98,6 +98,7 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -118,6 +119,7 @@ pub(super) fn typing_session(
     lsp: &mut crate::lsp_state::LspState,
     find_references: &mut FindReferencesState,
     rename_box: &mut RenameBox,
+    code_action_gutter: &mut CodeActionGutter,
     initial_caret: usize,
     frames_events: Vec<Vec<egui::Event>>,
 ) {
@@ -160,6 +162,7 @@ pub(super) fn typing_session(
                 lsp,
                 find_references,
                 rename_box,
+                code_action_gutter,
             );
         });
     };
@@ -253,6 +256,7 @@ pub(super) fn focused_frame_with_selection(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -316,6 +320,7 @@ pub(super) fn focused_frame_with_selection(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -368,6 +373,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -426,6 +432,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -488,6 +495,7 @@ pub(super) fn focused_frame_with_extra_selections(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -539,6 +547,7 @@ pub(super) fn focused_frame_with_extra_selections(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -595,6 +604,7 @@ pub(super) fn focused_frame_with_indent_settings(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -644,6 +654,7 @@ pub(super) fn focused_frame_with_indent_settings(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -699,6 +710,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -757,6 +769,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -867,6 +880,7 @@ pub(super) fn run_frame_reading_selection(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     text_area::peek_caret(ctx, id)
@@ -999,6 +1013,7 @@ pub(super) fn focused_frame_with_generate_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     last_error
@@ -1055,6 +1070,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -1114,6 +1130,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     last_error
@@ -1169,6 +1186,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -1215,6 +1233,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 }
@@ -1295,6 +1314,7 @@ pub(super) fn focused_frame_with_generate_method_request(
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     last_error

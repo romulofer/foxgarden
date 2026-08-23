@@ -62,6 +62,13 @@ const LIGHT_DIFF_REMOVED: Color32 = Color32::from_rgb(202, 42, 42);
 const DARK_DIFF_MODIFIED: Color32 = Color32::from_rgb(97, 175, 239);
 const LIGHT_DIFF_MODIFIED: Color32 = Color32::from_rgb(37, 106, 194);
 
+/// A quick-fix lightbulb (`PLAN.md` Track 15 Phase 1) — amber, the same
+/// "actionable suggestion" hue real IDEs already use for this exact
+/// affordance, distinct from `error_squiggle`'s red/`DIFF_MODIFIED`'s blue
+/// so it never reads as a diagnostic severity of its own.
+const DARK_LIGHTBULB: Color32 = Color32::from_rgb(229, 192, 84);
+const LIGHT_LIGHTBULB: Color32 = Color32::from_rgb(181, 137, 0);
+
 /// A matched bracket pair's outline — distinct from `occurrence_highlight`'s
 /// fill (a box outline reads as "these two characters pair up," not "this
 /// span is selected/repeated," so it shouldn't share that fill's visual
@@ -142,6 +149,10 @@ pub fn diff_removed(dark_mode: bool) -> Color32 {
 
 pub fn diff_modified(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_DIFF_MODIFIED } else { LIGHT_DIFF_MODIFIED }
+}
+
+pub fn lightbulb(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_LIGHTBULB } else { LIGHT_LIGHTBULB }
 }
 
 /// `vt100`'s 16 indexed ANSI colors (0-7 normal, 8-15 bright), tinted per

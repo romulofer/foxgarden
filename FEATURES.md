@@ -246,6 +246,14 @@ or an external crate.
   `portable-pty`), render its scrollback. Distinct from the dedicated
   build/run output panel (Major tier, below) and from the existing "open
   an external terminal" button (shells out to the OS's own terminal).
+- `[TODO]` **Tab-controlled bottom panels** — the terminal panel and the
+  build/run output panel (`terminal_panel_visible`/`build_panel_visible`
+  in `app.rs`) are each their own independent boolean today, toggled by
+  separate shortcuts/menu entries. User request: unify them into one
+  tabbed dock — click the "Terminal" tab to show the terminal, click
+  "Run" (or "Build"/"Test") to show that instead, same click-a-tab
+  interaction the editor's own file tabs already use, rather than
+  separate show/hide toggles.
 - `[SKIP]` **Static analysis integration** (Checkstyle/PMD/SpotBugs) —
   shell out to the tool, parse its report format, surface through the
   existing `Diagnostic`/squiggle pipeline rather than inventing a new one.

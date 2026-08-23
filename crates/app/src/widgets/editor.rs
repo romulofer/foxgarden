@@ -12,6 +12,7 @@
 //! case-conversion are the only things used outside this module.
 
 mod auto_edit;
+mod code_action;
 mod codegen;
 mod completion;
 mod context_menu;
@@ -32,6 +33,7 @@ mod text_offset;
 mod widget;
 
 pub use auto_edit::CaseConversion;
+pub use code_action::CodeActionGutter;
 pub use codegen::{
     AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
 };

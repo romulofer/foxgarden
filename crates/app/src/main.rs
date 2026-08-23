@@ -15,6 +15,7 @@ mod style;
 mod terminal;
 mod tool_manager;
 mod widgets;
+mod workspace_edit;
 
 use app::FoxGardenApp;
 

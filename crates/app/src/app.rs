@@ -37,8 +37,8 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState, OverrideMethodDialog,
-    PeekState, RenameBox, UserTemplates, jump_to,
+    CodeActionGutter, CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState,
+    OverrideMethodDialog, PeekState, RenameBox, UserTemplates, jump_to,
 };
 use crate::widgets::modal::show_modal;
 
@@ -183,6 +183,15 @@ pub struct FoxGardenApp {
     /// box` this owns no popup of its own, just the request `resolve_
     /// pending_rename` (this file's own update loop) polls.
     rename: RenameState,
+    /// The gutter lightbulb + quick-fix picker for whichever tab is
+    /// currently focused — `widgets::editor::code_action::
+    /// CodeActionGutter` (`PLAN.md` Track 15 Phase 1). Owns its own
+    /// `textDocument/codeAction` request/reply, unlike `rename_box`/
+    /// `rename` above: picking an offer needs no further network
+    /// round-trip (the edit is already resolved), so there's no separate
+    /// app.rs-level polling state — `take_confirmed` (below) hands the
+    /// picked `WorkspaceEdit` straight to `workspace_edit::apply`.
+    code_action_gutter: CodeActionGutter,
     /// Synthetic key events (Undo/Redo/Select All) queued by the editor's
     /// right-click menu, drained back into real input at the top of the
     /// very next frame — see `widgets::editor::show`'s doc comment on why
@@ -1145,6 +1154,7 @@ impl FoxGardenApp {
             find_references: FindReferencesState::default(),
             rename_box: RenameBox::default(),
             rename: RenameState::default(),
+            code_action_gutter: CodeActionGutter::default(),
             pending_editor_input: Vec::new(),
             cached_clipboard_text: None,
             pending_navigation: None,
@@ -1340,6 +1350,7 @@ impl eframe::App for FoxGardenApp {
             || self.peek.wants_repaint()
             || self.find_references.wants_repaint()
             || self.rename.wants_repaint()
+            || self.code_action_gutter.wants_repaint()
         {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
@@ -1804,6 +1815,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.lsp,
                 &mut self.find_references,
                 &mut self.rename_box,
+                &mut self.code_action_gutter,
             );
         });
 
@@ -1833,6 +1845,18 @@ impl eframe::App for FoxGardenApp {
         }
         if let Some(Err(err)) = self.rename.poll(&mut self.state, &mut self.parsers) {
             self.last_error = Some(msg::failed_to_rename(&err));
+        }
+
+        // Quick-fix intention actions (`PLAN.md` Track 15 Phase 1): a
+        // title picked in `code_action_gutter`'s own popup (`tabs::show`
+        // above) hands back the offer's already-resolved `WorkspaceEdit`
+        // directly — unlike rename, no further request is needed here,
+        // just the same shared `workspace_edit::apply` primitive
+        // `rename.rs`'s own `apply_reply` uses.
+        if let Some(edit) = self.code_action_gutter.take_confirmed()
+            && let Err(err) = crate::workspace_edit::apply(edit, &mut self.state, &mut self.parsers)
+        {
+            self.last_error = Some(msg::failed_to_apply_code_action(&err));
         }
 
         // Go to definition (`PLAN.md` Track 20 Phase 4): a Ctrl+Click inside

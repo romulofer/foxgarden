@@ -12,6 +12,7 @@ use super::auto_edit::{
     current_line_range, duplicate_line, indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up,
     smart_home_target, sort_lines, toggle_line_comments, unique_lines, wrap_selection,
 };
+use super::code_action::{self, CodeActionGutter};
 use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
     generate_accessors, insert_at_class_end,
@@ -378,6 +379,7 @@ pub fn show(
     lsp: &mut crate::lsp_state::LspState,
     find_references: &mut FindReferencesState,
     rename_box: &mut RenameBox,
+    code_action_gutter: &mut CodeActionGutter,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1188,8 +1190,21 @@ pub fn show(
     } else {
         diff_gutter::DIFF_GUTTER_WIDTH
     };
-    let gutter_width =
-        digit_width * line_count.to_string().len() as f32 + GUTTER_PADDING * 2.0 + fold_gutter_width + diff_gutter_width;
+    // Same "only reserve it when there's something to show" rule again —
+    // whether *this* frame has an offer to show is read from whatever
+    // `code_action_gutter` already resolved as of an earlier frame (the
+    // request itself fires later below, once `doc`/the caret are both in
+    // scope for this frame); see `CodeActionGutter::has_offer`'s own doc
+    // comment for why that ordering is deliberate rather than a mistake.
+    let code_action_width = text_area::peek_caret(ui.ctx(), widget_id)
+        .map(|c| doc.buffer.char_to_line(c.primary.min(doc.buffer.len_chars())))
+        .filter(|&line| code_action_gutter.has_offer(&doc.path, line))
+        .map_or(0.0, |_| code_action::GUTTER_WIDTH);
+    let gutter_width = digit_width * line_count.to_string().len() as f32
+        + GUTTER_PADDING * 2.0
+        + code_action_width
+        + fold_gutter_width
+        + diff_gutter_width;
 
     // `text_area` shapes with real per-token colors (`HighlightSpan`) instead
     // of egui's own `layouter` closure — resolved here (against `old_text`'s
@@ -1917,6 +1932,25 @@ pub fn show(
         hover.paint(ui, hover_id, &shell_out.base, &doc.buffer, editor_rect);
     }
 
+    // Quick-fix intention actions (`PLAN.md` Track 15 Phase 1): re-requests
+    // whenever the caret's own line or its diagnostic changes; painting
+    // (which needs the gutter's own left edge, not available yet at this
+    // point in the frame) happens later, alongside the fold gutter.
+    // `text_area::peek_caret` (the *persisted* caret), not `shell_out.
+    // caret` — the latter is `None` exactly when the widget isn't focused
+    // this exact frame (`ShellOutput::caret`'s own doc comment), which
+    // clicking the lightbulb itself below causes: it's a separate `ui.
+    // interact` in the same frame, and egui clears the text area's own
+    // focus for any click outside its rect. Reading the persisted value
+    // instead means the lightbulb survives being clicked, rather than
+    // vanishing the instant it's interacted with.
+    if let Some(caret) = text_area::peek_caret(ui.ctx(), widget_id) {
+        let caret_line = doc.buffer.char_to_line(caret.primary.min(doc.buffer.len_chars()));
+        code_action_gutter.update(doc, caret_line, lsp);
+    } else {
+        code_action_gutter.clear();
+    }
+
     // While Ctrl is held over an identifier the Ctrl+Click below would
     // actually act on, swap the cursor to a pointing hand — the same
     // hovered-span test the click handler itself uses (`hover_pos()`, not
@@ -2094,10 +2128,12 @@ pub fn show(
         &folds,
         &mut doc.folded_lines,
         &id_salt,
-        gutter_left,
+        gutter_left + code_action_width,
         dark_mode,
     );
     folding::paint_collapsed_markers(ui, &shell_out.base, &folds, &doc.folded_lines, dark_mode);
+    let code_action_id = egui::Id::new(("code_action_popup", widget_id));
+    code_action_gutter.paint(ui, code_action_id, &shell_out.base, gutter_left, editor_rect, dark_mode);
 
     // Sticky scroll: pin the enclosing class/method header line(s) at the top
     // of the viewport while their body scrolls under them. Painted last so it

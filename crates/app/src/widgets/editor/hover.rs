@@ -282,11 +282,15 @@ fn strip_blockquote_marker(line: &str) -> &str {
 
 /// One line's worth of inline Markdown noise removed: `[text](url)` links
 /// collapse to just `text` (the target, often several-hundred-char `jdt://`
-/// URLs, is never useful in a hover tooltip), `**bold**` markers and inline
-/// `` `code` `` backticks are dropped outright rather than represented some
-/// other way — this is a plain-text tooltip, not a themed rich-text one.
+/// URLs, is never useful in a hover tooltip), `**bold**`/`*italic*` markers
+/// and inline `` `code` `` backticks are dropped outright rather than
+/// represented some other way — this is a plain-text tooltip, not a themed
+/// rich-text one. `**` is stripped before the lone-`*` pass below so a bold
+/// marker doesn't survive as two leftover single asterisks; a leading `* `
+/// bullet marker falls to the same lone-`*` pass, degrading to plain
+/// (slightly indented) text rather than a rendered bullet.
 fn strip_inline_markdown(line: &str) -> String {
-    strip_links(line).replace("**", "").replace('`', "")
+    strip_links(line).replace("**", "").replace(['*', '`'], "")
 }
 
 fn strip_links(mut s: &str) -> String {
@@ -505,6 +509,15 @@ mod tests {
     fn strip_markdown_removes_fenced_code_block_markers_but_keeps_their_content() {
         let text = "```java\njava.lang.String\n```\n\nsome docs";
         assert_eq!(strip_markdown(text).trim(), "java.lang.String\n\nsome docs");
+    }
+
+    #[test]
+    fn strip_markdown_drops_single_asterisk_italic_markers() {
+        // Real captured jdtls output (found live-verifying #20 against
+        // `java.util.ArrayList`'s own Javadoc): `*capacity*`-style single-
+        // asterisk emphasis, distinct from the `**bold**` case above.
+        let text = "The *capacity* of an ArrayList grows automatically.";
+        assert_eq!(strip_markdown(text).trim(), "The capacity of an ArrayList grows automatically.");
     }
 
     #[test]

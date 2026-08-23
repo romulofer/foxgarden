@@ -411,6 +411,14 @@ pub fn show(
     // word-wrap case. A click/drag is never affected (it only ever lands on
     // an already-visible row), so this only ever fires for genuinely
     // off-screen keyboard motion.
+    // Track 19 Phase 1: `cached_row_counts` no longer guarantees every
+    // line's row count is real (a never-shaped line reads as its "1 row"
+    // baseline guess until scrolled past). A jump landing on/through such a
+    // line is only as accurate as that guess until a subsequent small
+    // scroll settles it — the same accepted approximation class
+    // TECHNICAL_DEBT.md #15 already documents for `tabs.rs`'s own
+    // wrap-unaware jump-to-handler scroll math, now shared by this call
+    // site too rather than a novel kind of imprecision.
     if has_focus && caret_moved {
         let line = final_buffer.char_to_line(state.caret.primary.min(final_buffer.len_chars()));
         let visual_row = if word_wrap {

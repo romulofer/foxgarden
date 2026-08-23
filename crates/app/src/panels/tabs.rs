@@ -140,6 +140,7 @@ pub fn show(
     lsp: &mut crate::lsp_state::LspState,
     find_references: &mut crate::widgets::editor::FindReferencesState,
     rename_box: &mut crate::widgets::editor::RenameBox,
+    code_action_gutter: &mut crate::widgets::editor::CodeActionGutter,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -197,6 +198,7 @@ pub fn show(
         peek.clear();
         find_references.clear();
         rename_box.clear();
+        code_action_gutter.clear();
     }
 
     if let Some(index) = close_request {
@@ -300,6 +302,7 @@ pub fn show(
             lsp,
             find_references,
             rename_box,
+            code_action_gutter,
         );
     });
 }

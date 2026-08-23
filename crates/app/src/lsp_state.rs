@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fg_core::{Diagnostic, Document, Language, Severity};
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics};
-use lsp_types::request::{Completion, GotoDefinition, HoverRequest, References, Rename};
+use lsp_types::request::{CodeActionRequest, Completion, GotoDefinition, HoverRequest, References, Rename};
 use lsp_types::{DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem, Uri, WorkspaceFolder};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
@@ -395,6 +395,61 @@ impl LspState {
             work_done_progress_params: Default::default(),
         };
         session.send_request(Rename::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
+    /// Sends a `textDocument/codeAction` request for `diagnostic`'s own
+    /// range in `doc` — same session-lookup/flush-then-send shape as
+    /// `request_rename` above. `context.diagnostics` carries `diagnostic`
+    /// reconstructed as a real `lsp_types::Diagnostic`: this app's own
+    /// `fg_core::Diagnostic` only keeps range/severity/message (not
+    /// `code`/`source`/`related_information`), which is what every quick
+    /// fix observed in practice keys off; a server that needs the fuller
+    /// shape to propose a fix would need those retained too, not attempted
+    /// here (`PLAN.md` Track 15 Phase 1's own stated scope).
+    /// `widgets::editor::code_action::CodeActionGutter` owns decoding the
+    /// reply and offering it.
+    pub fn request_code_action(
+        &mut self,
+        doc: &mut Document,
+        diagnostic: &Diagnostic,
+    ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let kind = match doc.language {
+            Some(Language::Java) => ServerKind::Java,
+            Some(Language::Kotlin) => ServerKind::Kotlin,
+            _ => return None,
+        };
+        let slot = match kind {
+            ServerKind::Java => &mut self.java,
+            ServerKind::Kotlin => &mut self.kotlin,
+        };
+        let mut errors = Vec::new();
+        if !sync_one_document(slot, kind, doc, &mut errors) {
+            return None;
+        }
+        let Slot::Ready { session, .. } = slot else { return None };
+        let uri = file_uri(&doc.path).ok()?;
+        let text = doc.buffer.to_string();
+        let range = lsp_types::Range {
+            start: byte_to_utf16_position(&text, diagnostic.range.start),
+            end: byte_to_utf16_position(&text, diagnostic.range.end),
+        };
+        let lsp_diagnostic = lsp_types::Diagnostic {
+            range,
+            severity: Some(match diagnostic.severity {
+                Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
+                Severity::Warning => lsp_types::DiagnosticSeverity::WARNING,
+            }),
+            message: diagnostic.message.clone(),
+            ..Default::default()
+        };
+        let params = lsp_types::CodeActionParams {
+            text_document: TextDocumentIdentifier { uri },
+            range,
+            context: lsp_types::CodeActionContext { diagnostics: vec![lsp_diagnostic], only: None, trigger_kind: None },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+        session.send_request(CodeActionRequest::METHOD, serde_json::to_value(params).ok()?).ok()
     }
 
     /// Sends jdt.ls' own `java/classFileContents` extension request — the

@@ -310,7 +310,7 @@ reason, or a user reports FoxGarden hanging on "Open Folder…"/"Browse…".
 
 ---
 
-## 22. [OPEN] Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it
+## 22. [CLOSED] Hover tooltips paint jdtls' Markdown as literal punctuation — declaring a `PlainText` preference didn't stop it
 
 **Where:** `crates/app/src/widgets/editor/hover.rs`
 (`hover_text_from_response`, `HoverState::paint`) and
@@ -358,6 +358,20 @@ convert `>`-indented blocks and `*` bullets to plain indentation. Keep it
 in `hover_text_from_response` so it's covered by that function's existing
 unit-test shape, with the real captured jdtls reply as a fixture. Only
 reach for a Markdown renderer if that proves insufficient in practice.
+
+### Closing note (`PLAN.md` Track 20 Checkpoint 3)
+
+The stripping route above was already implemented (`hover_text_from_response`/
+`strip_markdown`/`strip_inline_markdown`/`strip_links` in `hover.rs`) — code
+existed with unit-test coverage, just never re-verified against a real
+server reply. Live-verifying Checkpoint 3 against a real jdtls 1.60.0
+(`ArrayList`'s own Javadoc) confirmed links/bold/code/blockquotes all strip
+correctly, and surfaced one real gap this entry's own fixture didn't
+happen to cover: jdtls' single-asterisk `*word*` emphasis (distinct from
+`**bold**`) survived as literal asterisks. Fixed in the same session —
+`strip_inline_markdown` now also strips lone `*` after the `**` pass —
+and re-verified live. No `jdt://` link text, `>` blockquote marker, or
+stray Markdown punctuation observed in the real tooltip afterward.
 
 ### Trigger condition
 

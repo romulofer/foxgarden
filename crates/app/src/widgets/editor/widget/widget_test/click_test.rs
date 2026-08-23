@@ -57,6 +57,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
@@ -115,6 +116,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -184,6 +186,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     let widget_rect = ctx
@@ -236,6 +239,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &mut crate::lsp_state::LspState::default(),
             &mut FindReferencesState::default(),
             &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
             );
         });
     }
@@ -304,6 +308,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     let widget_rect = ctx
@@ -350,6 +355,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -420,6 +426,7 @@ fn triple_click_selects_the_whole_line() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     let widget_rect = ctx
@@ -466,6 +473,7 @@ fn triple_click_selects_the_whole_line() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -528,6 +536,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     let widget_rect = ctx
@@ -581,6 +590,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 
@@ -639,6 +649,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
     let widget_rect = ctx
@@ -685,6 +696,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
         );
     });
 

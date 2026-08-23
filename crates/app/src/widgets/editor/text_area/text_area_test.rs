@@ -380,3 +380,211 @@ fn readonly_render_handles_an_empty_buffer() {
     // negative/huge row count.
     assert!(rows <= 1, "empty buffer shaped {rows} rows");
 }
+
+// --- Track 19 Phase 1: bounded word-wrap row-count computation ---
+
+#[test]
+fn default_row_counts_assumes_one_row_and_zeroes_hidden_lines() {
+    assert_eq!(super::render::default_row_counts(5, &[]), vec![1, 1, 1, 1, 1]);
+    assert_eq!(super::render::default_row_counts(6, &[2..4]), vec![1, 1, 0, 0, 1, 1]);
+    assert_eq!(super::render::default_row_counts(0, &[]), Vec::<usize>::new());
+}
+
+/// A long-line buffer, run through `layout_visible_wrapped` inside a
+/// narrowed `ui` so word-wrap actually triggers, returning how many logical
+/// lines got shaped (`out.row_galleys.len()`) — a direct proxy for how many
+/// real `shape_line` calls this frame made.
+fn wrapped_shaped_count(total_lines: usize) -> usize {
+    let text: String = (0..total_lines).map(|i| format!("line {i} {}\n", "x".repeat(120))).collect();
+    let buffer = ropey::Rope::from_str(&text);
+    let ctx = egui::Context::default();
+    let mut shaped = 0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let out = super::render::layout_visible_wrapped(
+                ui,
+                egui::Id::new("test"),
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+            shaped = out.row_galleys.len();
+        });
+    });
+    shaped
+}
+
+#[test]
+fn wrapped_layout_shapes_only_visible_lines_not_the_whole_buffer() {
+    // The load-bearing claim of this phase: how many lines get shaped
+    // depends on the viewport, not on total file size.
+    let shaped_small = wrapped_shaped_count(2_000);
+    let shaped_huge = wrapped_shaped_count(200_000);
+    assert_eq!(
+        shaped_small, shaped_huge,
+        "shaping must not scale with total file size"
+    );
+    assert!(shaped_huge > 0, "some lines should still shape into the viewport");
+    assert!(
+        shaped_huge < 2_000,
+        "virtualization must not shape every line, got {shaped_huge}"
+    );
+}
+
+#[test]
+fn wrapped_layout_reuses_a_learned_row_count_across_scroll_only_frames() {
+    // Line 0 is long enough to wrap across several rows; everything after it
+    // is short (1 row each). First frame shapes line 0 (learning its real
+    // row count) plus whatever else is visible near the top.
+    let mut text = format!("start {}\n", "x".repeat(400));
+    text.push_str(&(1..2_000).map(|i| format!("line {i}\n")).collect::<String>());
+    let buffer = ropey::Rope::from_str(&text);
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("scroll-reuse");
+
+    let mut first_prefix_at_line_1 = 0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let _ = super::render::layout_visible_wrapped(
+                ui,
+                id,
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+            let counts =
+                super::render::cached_row_counts(ui, id, &buffer, &egui::FontId::monospace(14.0), 100.0, &[], 2_000);
+            first_prefix_at_line_1 = prefix_rows(&counts)[1];
+        });
+    });
+
+    // Line 0 really does wrap to more than one row — otherwise this test
+    // isn't exercising the correction path at all.
+    assert!(
+        first_prefix_at_line_1 > 1,
+        "expected line 0 to wrap to multiple rows, prefix at line 1 was {first_prefix_at_line_1}"
+    );
+
+    // A second frame, no edit (same buffer, same id): the cache key is
+    // unchanged, so the learned correction from the first frame must still
+    // be there without line 0 needing to be shaped again.
+    let mut second_prefix_at_line_1 = 0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let counts =
+                super::render::cached_row_counts(ui, id, &buffer, &egui::FontId::monospace(14.0), 100.0, &[], 2_000);
+            second_prefix_at_line_1 = prefix_rows(&counts)[1];
+        });
+    });
+    assert_eq!(
+        first_prefix_at_line_1, second_prefix_at_line_1,
+        "a learned row count must survive a scroll-only frame with no edit"
+    );
+}
+
+#[test]
+fn wrapped_layout_after_an_edit_reshapes_only_the_new_visible_slice() {
+    let text: String = (0..2_000).map(|i| format!("line {i} {}\n", "x".repeat(120))).collect();
+    let buffer = ropey::Rope::from_str(&text);
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("edit-reshape");
+
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let _ = super::render::layout_visible_wrapped(
+                ui,
+                id,
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+        });
+    });
+
+    // Simulate an edit: a different buffer, same widget id.
+    let edited = ropey::Rope::from_str(&(text + "one more line\n"));
+    let mut shaped_after_edit = 0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let out = super::render::layout_visible_wrapped(
+                ui,
+                id,
+                &edited,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+            shaped_after_edit = out.row_galleys.len();
+        });
+    });
+    assert!(
+        shaped_after_edit < 2_000,
+        "post-edit reshape scaled with file size: {shaped_after_edit}"
+    );
+}
+
+#[test]
+fn huge_file_first_open_and_per_keystroke_cost_stays_bounded() {
+    // 200_000 deliberately long lines so word-wrap actually triggers.
+    let huge_text: String = (0..200_000).map(|i| format!("line {i} {}\n", "x".repeat(120))).collect();
+    let buffer = ropey::Rope::from_str(&huge_text);
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("huge");
+
+    let mut first_open_shaped = 0;
+    let mut first_open_ms = 0.0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let start = std::time::Instant::now();
+            let out = super::render::layout_visible_wrapped(
+                ui,
+                id,
+                &buffer,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+            first_open_ms = start.elapsed().as_secs_f64() * 1000.0;
+            first_open_shaped = out.row_galleys.len();
+        });
+    });
+
+    // Hard, deterministic assertion: shaping is viewport-bounded, not
+    // file-size-bounded, regardless of the machine running this test.
+    assert!(
+        first_open_shaped < 200,
+        "first open shaped {first_open_shaped} lines out of 200_000 — virtualization regressed"
+    );
+    // Documented, not asserted (machine/CI-load dependent) — see PLAN.md's
+    // Track 19 Checkpoint 1 note for a real measured number.
+    println!("first_open_shaped={first_open_shaped} first_open_ms={first_open_ms:.3}");
+
+    // Per-keystroke: a simulated edit (new Rope, same id) must be equally
+    // bounded, not cumulative with the first open.
+    let edited = ropey::Rope::from_str(&(huge_text + "x"));
+    let mut edit_shaped = 0;
+    let _ = ctx.run_ui(sized_input(), |ui| {
+        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+            ui.set_max_width(100.0);
+            let out = super::render::layout_visible_wrapped(
+                ui,
+                id,
+                &edited,
+                egui::FontId::monospace(14.0),
+                &[],
+                &[],
+            );
+            edit_shaped = out.row_galleys.len();
+        });
+    });
+    assert!(edit_shaped < 200, "post-edit reshape scaled with file size: {edit_shaped}");
+}

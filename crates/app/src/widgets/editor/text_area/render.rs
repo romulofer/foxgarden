@@ -342,6 +342,17 @@ pub(super) fn layout_visible_wrapped(
     let visible_rows =
         prefix.get(lines.start).copied().unwrap_or(0)..prefix.get(lines.end).copied().unwrap_or(total_rows);
 
+    // Feed back what shaping-for-paint just learned for real, so a later
+    // frame at the same cache key (pure scroll, no edit) doesn't have to
+    // guess `default_row_counts`' baseline for a line already visited.
+    let key = RowCountsKey {
+        content_hash: hash_rope_content(buffer),
+        hidden_hash: hash_hidden(hidden),
+        wrap_width_bits: width.to_bits(),
+        font_size_bits: font_id.size.to_bits(),
+    };
+    record_shaped_rows(ui, id, &key, counts, &row_galleys);
+
     TextAreaOutput {
         response,
         row_height,
@@ -366,20 +377,40 @@ struct CachedRowCounts {
     counts: Arc<Vec<usize>>,
 }
 
-/// How many visual rows each logical line in `buffer` occupies at
-/// `wrap_width` (`0` for a line inside `hidden`) — needed up front to build
-/// `layout_visible_wrapped`'s prefix sum, and there's no way to learn a
-/// line's wrap point other than actually laying it out. Cached in `ctx.data`
+/// `1` row for every non-hidden logical line, `0` for one inside `hidden` —
+/// the cheap baseline `cached_row_counts` starts from on a miss instead of
+/// actually shaping anything. Pure and `ui`/font-independent so it stays
+/// unit-testable on its own (Track 19 Phase 1).
+pub(super) fn default_row_counts(total_lines: usize, hidden: &[Range<usize>]) -> Vec<usize> {
+    let mut counts = vec![1usize; total_lines];
+    for range in hidden {
+        for i in range.clone().filter(|i| *i < total_lines) {
+            counts[i] = 0;
+        }
+    }
+    counts
+}
+
+/// How many visual rows each logical line in `buffer` is currently believed
+/// to occupy at `wrap_width` (`0` for a line inside `hidden`) — needed up
+/// front to build `layout_visible_wrapped`'s prefix sum. Cached in `ctx.data`
 /// keyed by `id` plus a hash of everything that can invalidate it (buffer
 /// content, the fold set, wrap width, font size), so a frame where none of
 /// those changed — by far the common case: idle repaints, pure scrolling,
-/// an edit to a *different* tab's document — reuses last frame's table
-/// instead of reshaping the whole buffer again. This is the "rebuilt on
-/// content/wrap-width change" scope PLAN.md's own Phase 4 entry calls for,
-/// not the fully incremental patch-on-edit structure that entry also
-/// gestures at — an editing frame still pays for a whole-buffer pass here
-/// (unlike the virtualized *painting* path, which never has), a deliberate
-/// first-cut trade-off flagged rather than silently accepted.
+/// an edit to a *different* tab's document — reuses last frame's table.
+///
+/// Track 19 Phase 1: a cache **miss** no longer shapes every line to learn
+/// its real row count (that was the whole-buffer-pass-per-edit cost PLAN.md
+/// flagged). It instead seeds the table with `default_row_counts`' "1 row
+/// per line" guess — real values are filled in lazily by `record_shaped_
+/// rows`, called from `layout_visible_wrapped` right after it shapes the
+/// *visible* slice for painting anyway, so no line is ever shaped just to
+/// learn its row count. A scroll-only sequence of frames (same cache key)
+/// keeps whatever's already been corrected and layers in whatever's newly
+/// visible, converging toward exact for whatever's been scrolled through;
+/// an edit resets to the cheap baseline (see `record_shaped_rows` and
+/// PLAN.md's Track 19 Phase 1 entry for the accepted scrollbar/jump-target
+/// approximation this trades for).
 pub(super) fn cached_row_counts(
     ui: &egui::Ui,
     id: egui::Id,
@@ -403,16 +434,7 @@ pub(super) fn cached_row_counts(
         return cached.counts;
     }
 
-    let counts: Vec<usize> = (0..total_lines)
-        .map(|line| {
-            if hidden.iter().any(|h| h.contains(&line)) {
-                0
-            } else {
-                shape_line(ui, buffer, line, font_id, &[], wrap_width).rows.len()
-            }
-        })
-        .collect();
-    let counts = Arc::new(counts);
+    let counts = Arc::new(default_row_counts(total_lines, hidden));
     ui.ctx().data_mut(|d| {
         d.insert_temp(
             cache_id,
@@ -423,4 +445,43 @@ pub(super) fn cached_row_counts(
         )
     });
     counts
+}
+
+/// Writes real, just-shaped row counts (`galley.rows.len()`, learned as a
+/// side effect of shaping `shaped` for painting — never a second shaping
+/// pass of its own) back into the cached table `cached_row_counts` reads,
+/// for whichever lines `layout_visible_wrapped` actually shaped this frame.
+/// A no-op past the initial index reads when every visible line's cached
+/// count already matches (steady-state scrolling through an
+/// already-corrected region, or an idle repaint): no allocation, no
+/// `ctx().data_mut()` write-lock. `Arc::make_mut` clones the table at most
+/// once per call, only when a correction is actually needed.
+fn record_shaped_rows(
+    ui: &egui::Ui,
+    id: egui::Id,
+    key: &RowCountsKey,
+    counts: Arc<Vec<usize>>,
+    shaped: &[(usize, Arc<Galley>)],
+) {
+    let cache_id = egui::Id::new(("text_area_row_counts", id));
+    let mut counts = counts;
+    let mut changed = false;
+    for (line, galley) in shaped {
+        let real = galley.rows.len().max(1);
+        if counts.get(*line).copied() != Some(real) {
+            changed = true;
+            Arc::make_mut(&mut counts)[*line] = real;
+        }
+    }
+    if changed {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                cache_id,
+                CachedRowCounts {
+                    key: key.clone(),
+                    counts,
+                },
+            )
+        });
+    }
 }
