@@ -382,6 +382,12 @@ pub struct FoxGardenApp {
     /// Runtime-only, same as `diff`: a fresh launch just runs a fresh
     /// `git status` once the panel's shown rather than resuming anything.
     git_stage: GitStageState,
+    /// The tab context menu's "File History…" window (`PLAN.md` Track 4
+    /// Phase 2) — see `panels::file_history::FileHistoryState`. Runtime-
+    /// only, same as `git_stage`: nothing here is worth resuming across a
+    /// relaunch, a snapshot list is cheap to re-scan the next time it's
+    /// opened.
+    file_history: crate::panels::file_history::FileHistoryState,
     /// Whether the Build Output panel is docked open at the bottom —
     /// toggled by the View menu's "Build Output" checkbox, or automatically
     /// whenever Run > Build starts a new build (`PLAN.md` Track 22 Phase
@@ -1172,6 +1178,7 @@ impl FoxGardenApp {
             terminal_panel_visible,
             source_control_visible,
             git_stage: GitStageState::default(),
+            file_history: crate::panels::file_history::FileHistoryState::default(),
             build_panel_visible,
             build_state: build_panel::BuildState::default(),
             debug_state: debug_state::DebugState::default(),
@@ -1957,6 +1964,8 @@ impl eframe::App for FoxGardenApp {
                 &mut self.rename_box,
                 &mut self.code_action_gutter,
                 &self.debug_state,
+                &mut self.file_history,
+                self.dark_mode,
             );
         });
 

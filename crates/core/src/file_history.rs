@@ -50,6 +50,19 @@ pub fn write_snapshot(project_root: &Path, file_path: &Path, content: &str) -> s
     prune_snapshots(&dir)
 }
 
+/// A filename is `<timestamp>.snapshot` or, on a same-timestamp collision
+/// (`write_snapshot`'s own suffix loop), `<timestamp>-<suffix>.snapshot`.
+/// Shared by `prune_snapshots` and `list_snapshots` — both need the same
+/// `(timestamp, suffix)` ordering key, the former to find the oldest
+/// entries, the latter to show the newest first.
+fn parse_snapshot_filename(path: &Path) -> Option<(u128, u32)> {
+    let stem = path.file_stem()?.to_str()?;
+    match stem.split_once('-') {
+        Some((timestamp, suffix)) => Some((timestamp.parse().ok()?, suffix.parse().ok()?)),
+        None => Some((stem.parse().ok()?, 0)),
+    }
+}
+
 /// Removes every snapshot in `dir` beyond `SNAPSHOT_CAP`, oldest first.
 /// Sorts by the numeric nanosecond timestamp each filename encodes
 /// (`write_snapshot`'s own naming), not lexically — a plain string sort
@@ -57,20 +70,11 @@ pub fn write_snapshot(project_root: &Path, file_path: &Path, content: &str) -> s
 /// the same digit length, which won't stay true forever; sorting the
 /// parsed number instead means this doesn't depend on that.
 fn prune_snapshots(dir: &Path) -> std::io::Result<()> {
-    // A filename is `<timestamp>.snapshot` or, on a same-timestamp
-    // collision (`write_snapshot`'s own suffix loop), `<timestamp>-
-    // <suffix>.snapshot` — sorting on `(timestamp, suffix)` keeps a
-    // collided pair in the order they were actually written even though
-    // their timestamps alone are equal.
     let mut snapshots: Vec<(u128, u32, PathBuf)> = std::fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter_map(|path| {
-            let stem = path.file_stem()?.to_str()?;
-            let (timestamp, suffix) = match stem.split_once('-') {
-                Some((timestamp, suffix)) => (timestamp.parse().ok()?, suffix.parse().ok()?),
-                None => (stem.parse().ok()?, 0),
-            };
+            let (timestamp, suffix) = parse_snapshot_filename(&path)?;
             Some((timestamp, suffix, path))
         })
         .collect();
@@ -85,6 +89,48 @@ fn prune_snapshots(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// One saved version of a file, as `write_snapshot` left it — just the
+/// path and the timestamp parsed back out of its own name; reading a
+/// snapshot's actual *content* is left to the caller (`list_snapshots`
+/// itself never opens a single one, so listing a file with a full 50-entry
+/// history costs 50 `readdir` entries, not 50 file reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub path: PathBuf,
+    /// Nanoseconds since the Unix epoch — `write_snapshot`'s own clock
+    /// reading at the moment this snapshot was written, not a file's mtime
+    /// (which a filesystem operation unrelated to this app, like a backup
+    /// tool touching the file, could otherwise disturb).
+    pub timestamp_nanos: u128,
+}
+
+/// Every snapshot saved for `file_path` under `project_root`, most recent
+/// first — the order a browsable history list wants, opposite of `prune_
+/// snapshots`'s own oldest-first. Empty, not an error, both when `file_
+/// path` has never been snapshotted and when it falls outside `project_
+/// root` entirely (see `snapshot_dir`) — either way there's nothing to
+/// show, which isn't a failure a caller needs to handle differently from
+/// "no history yet".
+pub fn list_snapshots(project_root: &Path, file_path: &Path) -> Vec<Snapshot> {
+    let Some(dir) = snapshot_dir(project_root, file_path) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut snapshots: Vec<Snapshot> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter_map(|path| {
+            let (timestamp_nanos, suffix) = parse_snapshot_filename(&path)?;
+            Some((timestamp_nanos, suffix, path))
+        })
+        .map(|(timestamp_nanos, _, path)| Snapshot { path, timestamp_nanos })
+        .collect();
+    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.timestamp_nanos));
+    snapshots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +140,38 @@ mod tests {
             std::fs::read_dir(dir).map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect()).unwrap_or_default();
         files.sort();
         files
+    }
+
+    #[test]
+    fn list_snapshots_is_empty_with_no_history_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(list_snapshots(root, &root.join("Main.java")), vec![]);
+    }
+
+    #[test]
+    fn list_snapshots_is_empty_outside_the_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(list_snapshots(&root, &dir.path().join("elsewhere/Main.java")), vec![]);
+    }
+
+    #[test]
+    fn list_snapshots_returns_every_write_most_recent_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file_path = root.join("Main.java");
+
+        write_snapshot(root, &file_path, "v1").unwrap();
+        write_snapshot(root, &file_path, "v2").unwrap();
+        write_snapshot(root, &file_path, "v3").unwrap();
+
+        let snapshots = list_snapshots(root, &file_path);
+        assert_eq!(snapshots.len(), 3);
+        assert!(snapshots.windows(2).all(|pair| pair[0].timestamp_nanos >= pair[1].timestamp_nanos));
+        assert_eq!(std::fs::read_to_string(&snapshots[0].path).unwrap(), "v3");
+        assert_eq!(std::fs::read_to_string(&snapshots[2].path).unwrap(), "v1");
     }
 
     #[test]

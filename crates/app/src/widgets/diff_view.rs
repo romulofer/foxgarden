@@ -66,6 +66,20 @@ pub fn diff_line_ops(old: &str, new: &str) -> Vec<DiffLineOp> {
         .collect()
 }
 
+/// Line-level added/removed counts between `old` and `new` — the same
+/// `diff_line_ops` a full render would use, reduced to just the two totals
+/// a compact "+N -M" summary needs (e.g. one row of a file-history snapshot
+/// list, `PLAN.md` Track 4 Phase 2) where a full rendered diff would be
+/// far more than that one row has room for.
+pub fn diff_stat(old: &str, new: &str) -> (usize, usize) {
+    diff_line_ops(old, new).into_iter().fold((0, 0), |(added, removed), op| match op {
+        DiffLineOp::Insert { new } => (added + new.len(), removed),
+        DiffLineOp::Delete { old } => (added, removed + old.len()),
+        DiffLineOp::Replace { old, new } => (added + new.len(), removed + old.len()),
+        DiffLineOp::Equal { .. } => (added, removed),
+    })
+}
+
 /// Splits an `Equal` run of `len` lines into `(leading, hidden, trailing)`
 /// *local* offsets within the run — `context` lines kept at each end, the
 /// `hidden` count of lines in between collapsed away — or `None` when
@@ -349,6 +363,26 @@ mod tests {
     fn diff_line_ops_reports_a_pure_insertion() {
         let ops = diff_line_ops("", "a\nb\n");
         assert_eq!(ops, vec![DiffLineOp::Insert { new: 0..2 }]);
+    }
+
+    #[test]
+    fn diff_stat_counts_a_pure_modification_as_one_added_and_one_removed() {
+        assert_eq!(diff_stat("l1\nl2\nl3\n", "l1\nCHANGED\nl3\n"), (1, 1));
+    }
+
+    #[test]
+    fn diff_stat_counts_a_pure_deletion() {
+        assert_eq!(diff_stat("l1\nl2\nl3\nl4\n", "l1\nl3\nl4\n"), (0, 1));
+    }
+
+    #[test]
+    fn diff_stat_counts_a_pure_insertion() {
+        assert_eq!(diff_stat("", "a\nb\n"), (2, 0));
+    }
+
+    #[test]
+    fn diff_stat_is_zero_for_identical_text() {
+        assert_eq!(diff_stat("same\n", "same\n"), (0, 0));
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub use diff::{
 };
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
+pub use file_history::{Snapshot, list_snapshots};
 pub use gradle::{GradleClasspath, GradleDependency, GradleError, GradleProject, gradle_classpaths, gradle_projects};
 pub use java_release::{
     JavaRelease, build_files as java_release_build_files, detect as detect_java_release, parse_release_token,

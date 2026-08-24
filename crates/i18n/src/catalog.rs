@@ -20,6 +20,7 @@ pub struct Strings {
     pub about: About,
     pub side_panel: SidePanel,
     pub tabs: Tabs,
+    pub file_history: FileHistory,
     pub git: Git,
     pub lsp: Lsp,
     pub external_tools: ExternalTools,
@@ -156,6 +157,19 @@ pub struct Tabs {
     pub no_file_open: &'static str,
     pub allow_editing: &'static str,
     pub discard: &'static str,
+}
+
+/// The tab context menu's "File History…" window (`PLAN.md` Track 4 Phase
+/// 2): every `.foxgarden/history/` snapshot for one file, diffed against
+/// its own currently open (possibly unsaved) buffer.
+pub struct FileHistory {
+    pub menu_item: &'static str,
+    pub heading_prefix: &'static str,
+    pub loading: &'static str,
+    pub empty: &'static str,
+    pub revert: &'static str,
+    pub side_by_side: &'static str,
+    pub inline: &'static str,
 }
 
 /// The Source Control panel. `commit`, `push`, `stage` and `hunk` stay in
@@ -490,6 +504,15 @@ pub const PT_BR: Strings = Strings {
         allow_editing: "Permitir Edição",
         discard: "Descartar",
     },
+    file_history: FileHistory {
+        menu_item: "Histórico do Arquivo…",
+        heading_prefix: "Histórico: ",
+        loading: "Carregando…",
+        empty: "Nenhum snapshot ainda",
+        revert: "Reverter para Esta Versão",
+        side_by_side: "Lado a Lado",
+        inline: "Em Linha",
+    },
     git: Git {
         heading: "Controle de Versão",
         refresh: "Atualizar",
@@ -766,6 +789,15 @@ pub const EN_US: Strings = Strings {
         no_file_open: "No file open",
         allow_editing: "Allow Editing",
         discard: "Discard",
+    },
+    file_history: FileHistory {
+        menu_item: "File History…",
+        heading_prefix: "History: ",
+        loading: "Loading…",
+        empty: "No snapshots yet",
+        revert: "Revert to This Version",
+        side_by_side: "Side by Side",
+        inline: "Inline",
     },
     git: Git {
         heading: "Source Control",

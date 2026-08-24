@@ -5,6 +5,7 @@
 pub mod build_panel;
 pub mod debug_panel;
 pub mod debug_toolbar;
+pub mod file_history;
 pub mod git_diff;
 pub mod git_stage;
 pub mod go_to_file;

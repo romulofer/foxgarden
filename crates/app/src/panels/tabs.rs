@@ -3,9 +3,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use fg_core::{Document, EditorState};
+use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::goto_definition::GotoDefinitionState;
+use crate::panels::file_history::{self, FileHistoryState};
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
@@ -142,10 +144,13 @@ pub fn show(
     rename_box: &mut crate::widgets::editor::RenameBox,
     code_action_gutter: &mut crate::widgets::editor::CodeActionGutter,
     debug_state: &crate::debug_state::DebugState,
+    file_history: &mut FileHistoryState,
+    dark_mode: bool,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
     let mut toggle_read_only_request = None;
+    let mut file_history_request: Option<usize> = None;
 
     ui.horizontal_wrapped(|ui| {
         for (index, doc) in state.open_tabs.iter().enumerate() {
@@ -176,6 +181,14 @@ pub fn show(
                     let toggle_label = if doc.read_only { t().tabs.allow_editing } else { t().menu.read_only };
                     if ui.button(toggle_label).clicked() {
                         toggle_read_only_request = Some(index);
+                        ui.close();
+                    }
+                    // Only a file living under the currently open project
+                    // has anywhere to snapshot into (`Document::project_
+                    // root`, `PLAN.md` Track 4 Phase 1) — no point offering
+                    // a history browser that would always open empty.
+                    if doc.project_root.is_some() && ui.button(t().file_history.menu_item).clicked() {
+                        file_history_request = Some(index);
                         ui.close();
                     }
                 });
@@ -210,6 +223,23 @@ pub fn show(
         && let Some(doc) = state.open_tabs.get_mut(index)
     {
         doc.read_only = !doc.read_only;
+    }
+
+    if let Some(index) = file_history_request
+        && let Some(doc) = state.open_tabs.get(index)
+        && let Some(project_root) = doc.project_root.clone()
+    {
+        file_history.open(project_root, doc.path.clone(), doc.buffer.to_string());
+    }
+    if let Some(content) = file_history::show(ui.ctx(), file_history, editor_font, font_size, dark_mode)
+        && let Some(path) = file_history.open_path()
+        && let Some(index) = state.find_tab(path)
+    {
+        let doc = &mut state.open_tabs[index];
+        doc.buffer = Rope::from_str(&content);
+        doc.lsp_version += 1;
+        doc.lsp_sync_pending = true;
+        parsers[index] = open_parser_for(doc);
     }
 
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
