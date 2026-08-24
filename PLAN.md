@@ -185,15 +185,29 @@ written.
 this phase's own checkpoint — no UI reads `.foxgarden/history/` until
 Phase 2.
 
-**Phase 2 — history UI + revert.** Tab context-menu "File History…" lists
-snapshots (timestamp + diff-stat); selecting one shows Track 18's diff
-widget (snapshot vs. live buffer); "Revert to this version" replaces the
-live buffer through the normal edit path.
+**Phase 2 — history UI + revert. Done.** Tab context-menu "File History…"
+lists snapshots (timestamp + diff-stat); selecting one shows Track 18's
+diff widget (snapshot vs. live buffer); "Revert to this version" replaces
+the live buffer through the normal edit path. New `crates/app/src/panels/
+file_history.rs`: `FileHistoryState` mirrors `GitStageState`'s own
+background-thread-plus-`Receiver` shape for the "read real files off the
+UI thread, poll once a frame" problem — one background scan per `open`
+call reads every `fg_core::list_snapshots` entry's content and computes
+its `widgets::diff_view::diff_stat` against the live buffer captured at
+open time, so the open window never re-reads/re-diffs on every frame.
+`fg_core::file_history` gained `list_snapshots`/`Snapshot`, factoring the
+filename-parsing `prune_snapshots` already had into a shared `parse_
+snapshot_filename` both now call.
 
-**Checkpoint 2:** full suite green; live-verify saving a file several
-times populates history, opening it shows a real diff against each past
-version, and Revert actually restores that version's content (undoably,
-via a normal Ctrl+Z afterward).
+**Checkpoint 2 — done.** `cargo test --workspace` green (`fg-core` 206
+passed, `foxgarden` 948 passed/4 ignored, `fg-i18n` 8 passed); `cargo
+clippy --workspace --all-targets` clean of any new warnings. Live-verified
+under Xvfb: saving a file three times with distinct content populated
+`.foxgarden/history/`; opening "Histórico do Arquivo…" listed both older
+snapshots with their own `+N -M` against the live buffer; selecting a row
+rendered its real side-by-side diff; "Reverter para Esta Versão" replaced
+the live buffer with that snapshot's content (tab starred as unsaved), and
+Ctrl+Z afterward walked back through it on the normal undo stack.
 
 ---
 
