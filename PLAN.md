@@ -1765,29 +1765,224 @@ line 14, the failing `assertEquals` call itself.
 
 Depends on Track 22 (`Build/run/test integration`) for process launch.
 
-**Phase 1 — DAP client + launch.** JSON-RPC-over-stdio client (shared
-framing code with Track 20's LSP client where genuinely reusable); launch
-`java-debug` (verify its Kotlin support concretely, per `SPEC.md` §23,
-before assuming one adapter covers both languages).
+**Phase 1 — DAP client + launch. Done, live-verified.** `dap_client.rs`
+reuses `lsp_client::read_message`/`write_message` (`Content-Length`-framed
+JSON is identical between LSP and DAP; the message *shape* on top isn't, so
+`classify`/`IncomingMessage` are new) over a `TcpStream`, not a child
+process: `java-debug` (`com.microsoft.java.debug.plugin`) runs *inside* the
+already-running jdt.ls JVM as a loaded OSGi bundle, started via a
+`workspace/executeCommand` call for `vscode.java.startDebugSession`
+(`lsp_state::LspState::request_start_debug_session`) that hands back a TCP
+port — verified concretely against the real `vscjava.vscode-java-debug`
+extension's own bundled client code (its `.vsix`, downloaded from Open VSX
+and sha256-checked against its own published hash), not assumed from
+documentation. The plugin jar itself isn't published anywhere as a build
+artifact (`microsoft/java-debug`'s own GitHub Releases are empty, same
+absent-releases situation `lsp_manager`'s own header already found for
+jdt.ls) — extracted from that same verified `.vsix` and vendored at
+`vendor/lsp-servers/java-debug-plugin-0.53.2.jar`, materialized to a real
+file on disk at Java-session-start time (`lsp_manager::
+ensure_debug_plugin_jar`, best-effort exactly like `ensure_kotlin_stdlib_
+override_for`) and passed to jdt.ls via `initializationOptions.bundles`.
+`debug_state.rs` drives the real DAP `initialize`/`launch`/
+`configurationDone` handshake as a small non-blocking phase machine, polled
+once a frame like every other background op here. `SPEC.md`'s own "verify
+Kotlin support concretely" caution: confirmed real — the extension's
+`readme.md`/`changelog.md`/`Configuration.md` mention Kotlin nowhere at
+all, so Phase 1 targets Java only; Kotlin debugging stays an explicitly
+open question, not a "probably fine, same bytecode" assumption.
 
-**Checkpoint 1:** full suite green; live-verify launching a real Java
-program under the debugger successfully attaches (no breakpoints/stepping
-yet — just a running, attached, controllable process).
+Two real, live-server findings corrected code that looked reasonable but
+wasn't: `vscode.java.startDebugSession`'s response body is a bare JSON
+number (`33267`), not the quoted string its own TypeScript types implied;
+and a DAP request with no real arguments needs `{}`, not `null` — real
+java-debug's own server-side Gson deserializer rejects `null` outright
+(`Expected a JsonObject but was JsonNull`). Neither was guessable from
+documentation alone, which is exactly why this phase's own checkpoint asks
+for a live-verify rather than a green test suite alone.
 
-**Phase 2 — breakpoints + stepping.** Gutter breakpoint markers; a debug
-toolbar (Continue/Step Over/Step Into/Step Out/Stop); inline
-current-line highlight while paused.
+**Checkpoint 1 — done.** `cargo test --workspace` green (929 passed, 4
+ignored — one of them this phase's own new real-server test). Live-verified
+end to end, not mocked: a real fixture Maven project (`pom.xml` + a `Main`
+that sleeps so there's something to observe), compiled with a real `mvn`,
+opened by a real jdtls 1.60.0 session under a real JDK 21 with the vendored
+debug bundle loaded, a real `vscode.java.startDebugSession` call, a real
+socket connection, and the real `initialize`/`launch`/`configurationDone`
+sequence reaching `Attached` — jdt.ls' own log confirms it: `"Launching
+debuggee VM succeeded."` A full GUI click-through (Run > Debug Project) was
+attempted under Xvfb but abandoned partway: the virtual display turned out
+to be shared with a real, already-running FoxGarden session (a different
+project, a long-lived real jdtls process) rather than exclusively available
+for this session's own isolated testing — continuing risked a stray
+`xdotool` click landing on that real window instead of the intended one,
+exactly the failure mode `AGENTS.md`'s own xdotool section warns about, so
+this stopped rather than guessing. The menu/UI wiring itself (`Run > Debug
+Project`) is mechanically identical to the already-proven Run/Test/Coverage
+menu code (same `MenuBarOutcome` pattern, same `any_running`-gated button
+shape) — low risk, but not itself live-verified through a real click; worth
+a real click-through next time an exclusive display is available.
 
-**Checkpoint 2:** full suite green; live-verify setting a real breakpoint
-actually pauses execution there, and every stepping command moves
-execution as expected.
+**Phase 2 — breakpoints + stepping. Done, live-verified against the real
+protocol; GUI click-through still owed.** `Document` gained `breakpoints:
+HashSet<usize>` (0-indexed, same session-only membership-set shape
+`folded_lines` already established). Breakpoints reach the adapter two
+ways: a snapshot taken at `start` time (`DebugState::start`'s new
+`initial_breakpoints` parameter) is sent the instant the adapter's own
+`initialized` event first arrives — deliberately *before*
+`configurationDone`, since java-debug may resume the JVM as soon as that
+lands, so an early-line breakpoint would otherwise race the debuggee
+actually reaching it; and live toggles while attached go through
+`DebugState::sync_breakpoints`, called once a frame from `app.rs`, which
+diffs every open document's current set against `last_sent_breakpoints`
+(pure `breakpoints_to_resend` helper, unit-tested headlessly) and re-sends
+`setBreakpoints` only for files that actually changed.
 
-**Phase 3 — variable/call-stack panel.** A dockable panel showing local
-variables and the call stack while paused.
+`Phase::Attached` grew `paused: Option<PausedFrame>` and an in-flight
+`stack_trace_rx` — a real `"stopped"` event's `threadId` (`parse_stopped_
+thread_id`) triggers a `stackTrace` request, and its top frame (`parse_
+top_stack_frame`, `- 1` to undo `linesStartAt1`) becomes the paused
+location `DebugState::paused_location()` exposes; a `"continued"` event
+clears it. `continue_`/`step_over`/`step_into`/`step_out` send `"continue"`/
+`"next"`/`"stepIn"`/`"stepOut"` with the paused thread id and clear `paused`
+optimistically (the highlight disappears the instant the button is
+clicked, not after a round-trip) — all four are harmless no-ops outside a
+paused session, same contract `stop` already holds itself to.
 
-**Checkpoint 3:** full suite green; live-verify the panel shows accurate,
-live variable values and an accurate call stack while paused at a real
-breakpoint.
+`crates/app/src/widgets/editor/breakpoint_gutter.rs` is a new gutter
+column, leftmost in the gutter (ahead of the code-action/fold columns,
+which shifted right by its width) — deliberately **not** built like
+`folding::show_fold_gutter` (which only makes a row interactive if it
+already has a fold marker): every currently-shaped row gets a click
+target here, since the whole point is letting the user create the first
+breakpoint on a line that has none yet. Reserved whenever `doc.language ==
+Some(Language::Java)`, regardless of whether a breakpoint already exists —
+unlike every other gutter column here, which only reserves its width once
+there's something to show. Kotlin is excluded: Phase 1's own research
+found no evidence java-debug supports it. The current-line highlight
+(`painting::paint_paused_line_highlight`, new — no existing whole-row
+painter to reuse; `paint_occurrence_highlights` is span-width and
+`paint_blame_annotation` draws past the line, neither fills a full row)
+paints a translucent amber band across the *full editor content width*
+(`out.response.rect`, not a glyph-derived width) on `debug_state.paused_
+location()`'s own line, only in the document it's actually paused in.
+
+`crates/app/src/panels/debug_toolbar.rs` is a new, non-dockable panel
+(`egui::Panel::top`, shown exactly while `DebugState::is_running()` — not
+a `View`-menu-toggled dock like the build/terminal panels, since its
+whole purpose is 1:1 tied to a live session existing) with Continue/Step
+Over/Step Into/Step Out (enabled only while `DebugState::is_paused()`) and
+Stop (always enabled).
+
+**Checkpoint 2 — done, including the GUI click-through.**
+`cargo build --workspace`/`cargo test --workspace`/`cargo clippy
+--workspace --all-targets` all green (938 passed, 4 ignored — one of them
+this phase's own extended real-server test; two unrelated tests
+— `app::e2e_test::navigation_test::ctrl_shift_e_lists_the_projects_
+spring_endpoints_and_jumps_to_one` and `jdk_registry::tests::detect_and_
+add_records_the_real_detected_version` — were observed flaking only under
+the default parallel test run, both passing reliably under `--test-
+threads=1`; a pre-existing test-isolation issue, not caused by this
+track, not investigated further here). The existing Phase 1 real-server
+test (`lsp_state::tests::java_debug_launch_against_a_real_server_
+attaches_to_a_real_process`) was extended, not duplicated: it now sets a
+real breakpoint on the fixture's own `println` line via `initial_
+breakpoints`, asserts the session actually pauses there (`paused_
+location()` resolving to the exact file and 0-indexed line 3), sends a
+real `step_over` and asserts it lands on the very next source line, then
+a real `continue_` and asserts the debuggee runs to real completion
+(`Thread.sleep(5000)` included, not skipped) — live-verified against a
+real jdtls 1.60.0 + java-debug 0.53.2 + JDK 21, not mocked. Every new pure
+helper (`parse_stopped_thread_id`, `parse_top_stack_frame`, `breakpoints_
+to_resend`) also has its own fast, no-I/O unit tests.
+
+The GUI half's owed click-through (flagged twice before — Phase 1's own
+checkpoint and this phase's first pass — both times because the shared
+Xvfb `:99` turned out to be running someone else's real FoxGarden
+session) closed this session on a dedicated Xvfb instance confirmed
+exclusive first (`ps aux`/`xdotool getactivewindow` checked clean before
+touching it). A real persistent fixture Maven project (same shape as the
+real-server test's own throwaway one) was opened, a breakpoint toggled
+via a real gutter click on `System.out.println("debug fixture
+running")`, a run configuration created through Executar > Editar
+Configurações, then Executar > Depurar Projeto: the pause highlight
+landed on the exact breakpointed line, Passar Por Cima (Step Over) landed
+on the very next line, and Continuar ran the debuggee to completion with
+the toolbar cleanly disappearing afterward — every button in the
+toolbar's real button row exercised, not just asserted to exist.
+
+One real, found-not-assumed environment gotcha, worth keeping for future
+GUI testing sessions here: **FoxGarden's native folder-open dialog (via
+`rfd`) does not honor the child process's `DISPLAY` — it opened on the
+real physical desktop instead of the dedicated Xvfb display**, almost
+certainly because `rfd`'s Linux backend goes through an XDG desktop
+portal (a D-Bus service scoped to the user's actual active session)
+rather than a plain GTK file chooser that would have respected `DISPLAY`
+directly. This means File > Open Folder specifically cannot be driven
+from an isolated virtual display the way every other menu/dialog in this
+app can. Worked around this session by editing `~/.local/share/foxgarden/
+app.ron`'s `last_project` key directly (the same `eframe::Storage` file
+`restore_session`/`persist_session` already read/write) rather than
+clicking through the picker — real session data was backed up first and
+restored afterward. Any future click-through that needs to switch
+projects should reach for the same storage-file edit rather than the
+Open Folder menu item.
+
+**Phase 3 — variable/call-stack panel. Done, live-verified against the real
+protocol; GUI click-through still owed.** `DebugState`'s `PausedFrame` grew
+`frame_id` (the top frame's own DAP `id`, needed by `scopes`), `stack: Vec<
+StackFrameSummary>` (the full call stack — the `stackTrace` request's own
+`levels` argument is no longer sent at all, since an absent/zero `levels`
+is DAP's own "every remaining frame from `startFrame`", where Phase 2 only
+ever asked for the top one), and `variables: Vec<VariableGroup>`. A second,
+later in-flight chain (`VarFetch`, alongside `stack_trace_rx`) starts once
+the top frame itself resolves — it needs that frame's own `id`, unusable
+until the first `stackTrace` response has already landed — and drives a
+real `scopes` request followed by one `variables` request per non-
+`expensive` scope with a nonzero `variablesReference` (`parse_scopes`
+drops the `expensive: true` "Static"/synthetic scope java-debug reports,
+matching the real `vscode-java-debug` extension's own Locals-panel
+behavior, and drops any scope with `variablesReference: 0` — DAP's own "no
+variables here" marker). `PausedFrame::variables_fetched` (not `VarFetch::
+Idle`, which is also true right after the chain finishes) is what tells
+"never started" apart from "finished with zero groups". Both the top-frame
+chain and the older `stack_trace_rx` are reset on every fresh `"stopped"`/
+`"continued"` event, so a new pause always re-fetches instead of showing
+stale values from the pause before it.
+
+`crates/app/src/panels/debug_panel.rs` is a new panel — shown as an
+`egui::Panel::right`, exactly while `DebugState::is_running()`, the same
+"tied 1:1 to a live session, not a `View`-menu-toggled dock" choice
+`debug_toolbar` (Phase 2) already made, since there's nothing useful to
+show once no session exists. Renders the call stack (each frame with a
+real file a click-to-jump row, resolved through `app.rs`'s own
+`pending_navigation` the same way `build_panel`'s clickable rows already
+are) and the variables grouped by scope (`egui::CollapsingHeader` per
+group).
+
+**Checkpoint 3 — real-protocol half done and live-verified; GUI
+click-through owed.** `cargo build --workspace`/`cargo test --workspace`/
+`cargo clippy --workspace --all-targets` all green (945 passed, 4 ignored
+— one of them this phase's own extended real-server test; the same two
+pre-existing tests flagged in Phase 2's own checkpoint were observed
+flaking again only under the default parallel run, not investigated
+further here, not caused by this phase). The existing Phase 1/2 real-
+server test (`lsp_state::tests::java_debug_launch_against_a_real_server_
+attaches_to_a_real_process`) was extended again, not duplicated: after the
+real breakpoint pause it now asserts a real, non-empty call stack whose
+top frame is the fixture's own `Main.main(String[])` in the exact fixture
+file, waits out the real `scopes`/`variables` chain, and asserts `main(String[]
+args)`'s own `args` parameter shows up among the real fetched variables —
+run live against a real jdtls 1.60.0 + java-debug 0.53.2 + JDK 21 this
+session (not mocked), including one real, found-not-assumed correction a
+first guess got wrong: a stack frame's own `name` is java-debug's full
+`"Main.main(String[])"` (declaring class + signature), not the bare method
+name the DAP spec's own field name alone would suggest. Every new pure
+helper (`parse_call_stack`, `parse_scopes`, `parse_variables`) also has its
+own fast, no-I/O unit tests. The GUI half (opening the panel, clicking a
+call-stack frame to jump, watching real values update across a step) is
+not yet click-through-verified — worth doing next time an exclusive Xvfb
+display is available, same caveat Phase 1/2 already flagged for their own
+GUI halves.
 
 ---
 
@@ -2204,7 +2399,9 @@ how correct the generated skeleton is.
       build-failure path correctly skipped reading a nonexistent
       `jacoco.xml`.)
 - [ ] Track 14 — Docker/container run integration
-- [ ] Track 15 — Quick-fix intention actions
+- [x] Track 15 — Quick-fix intention actions (Phase 1 shipped: `cargo
+      test -p foxgarden` green, 905 passed — checklist here was stale,
+      corrected this session; see that track's own Checkpoint 1)
 - [x] Track 17 — Peek definition (Phase 1 shipped and live-verified:
       Alt+F12 on a cross-file call opened the inline panel with the
       target line highlighted, active tab unchanged, Escape restored
@@ -2264,7 +2461,19 @@ how correct the generated skeleton is.
       both, verified side by side — into a pass/fail summary with a
       clickable row per failing test, jumping to the exact assertion line
       via its own stack trace)
-- [ ] Track 23 — Debugger
+- [ ] Track 23 — Debugger (Phase 1 — DAP client + launch — shipped and
+      live-verified: a real jdtls + vendored `java-debug` bundle + real
+      Maven project reached a real DAP `Attached` state, `"Launching
+      debuggee VM succeeded"` in jdt.ls' own log; Phase 2 — breakpoints +
+      stepping — shipped and fully live-verified, both the real-server
+      protocol test (a real breakpoint paused a real fixture at the exact
+      line, Step Over landed on the next line, Continue ran it to
+      completion) and the owed GUI click-through (gutter toggle, Debug
+      Project, pause highlight, every toolbar button) closed this session
+      on a dedicated Xvfb instance; Phase 3 — variable/call-stack panel —
+      shipped and live-verified against the real protocol (real call stack
+      + real fetched `args` variable off a real jdtls + java-debug pause);
+      its own GUI click-through still owed, same as Phase 1's)
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-
       server installer (landed; both servers are now vendored directly
@@ -2283,5 +2492,9 @@ how correct the generated skeleton is.
       Maven+Java scaffolding — shipped and live-verified: a real
       `com.example.demo`/`demo-app` Java-8 project created through the
       wizard, opened correctly, and a real `mvn -q compile` against it
-      outside FoxGarden succeeded; Phases 4+ (Gradle, Kotlin scaffolding)
-      not started)
+      outside FoxGarden succeeded; Phase 4 — Gradle (Kotlin DSL) + Java
+      scaffolding — shipped (`crates/core/src/scaffold.rs`'s
+      `BuildTool::Gradle` arm, `c80ad7d`; checklist here was stale,
+      corrected this session — Checkpoint 4's live-verify not re-confirmed
+      in this pass); Phase 5 (Kotlin scaffolding, stretch/optional) not
+      started)

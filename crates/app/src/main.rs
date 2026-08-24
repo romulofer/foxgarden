@@ -1,5 +1,7 @@
 mod app;
 mod auto_save;
+mod dap_client;
+mod debug_state;
 mod file_watch;
 mod goto_definition;
 mod jdk;

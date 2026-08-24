@@ -109,6 +109,25 @@ fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, col
     painter.add(Shape::line(points, Stroke::new(1.5, color)));
 }
 
+/// A translucent full-width band over the debuggee's current paused line
+/// (`PLAN.md` Track 23 Phase 2) — deliberately *not* built on
+/// `paint_occurrence_highlights` (span-width, sized to matched text) or
+/// `paint_blame_annotation` (draws text past the line's own content); this
+/// is the one painter in this module that fills an entire row regardless
+/// of how much of it the line's own galley actually covers, using `out.
+/// response.rect`'s own left/right for the full editor content width
+/// rather than a glyph-derived one. A no-op if `line` isn't among this
+/// frame's shaped rows (scrolled out of view).
+pub(super) fn paint_paused_line_highlight(ui: &egui::Ui, out: &TextAreaOutput, line: usize, dark_mode: bool) {
+    let Some(i) = out.row_galleys.iter().position(|(logical, _)| *logical == line) else { return };
+    let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(out.response.rect.left(), y),
+        egui::pos2(out.response.rect.right(), y + out.row_height),
+    );
+    ui.painter().rect_filled(rect, 0.0, theme::debug_current_line(dark_mode));
+}
+
 /// Paints one right-aligned line number per row `out` actually shaped this
 /// frame, flush against `gutter_right_edge` — virtualized the same way the
 /// text itself is, rather than iterating a whole-buffer galley's rows.

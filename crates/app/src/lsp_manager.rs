@@ -55,6 +55,28 @@ const JDTLS_ARCHIVE: &[u8] = include_bytes!("../../../vendor/lsp-servers/jdtls-1
 const KOTLIN_LANGUAGE_SERVER_ARCHIVE: &[u8] =
     include_bytes!("../../../vendor/lsp-servers/kotlin-language-server-1.3.13.zip");
 
+/// `com.microsoft.java.debug.plugin`, `vscjava.vscode-java-debug`'s own
+/// server-side jar (`PLAN.md` Track 23) — extracted from that VS Code
+/// extension's real `.vsix` (Open VSX, `vscjava/vscode-java-debug` version
+/// `0.59.0`; the `.vsix`'s own published sha256 was verified against the
+/// download before this jar was taken out of it), not built from
+/// `microsoft/java-debug` source — that repo publishes no build artifacts of
+/// its own (`gh api repos/microsoft/java-debug/releases/latest` has an empty
+/// `assets` array), the same absent-releases situation `Server::Jdtls`'s own
+/// doc comment already found for jdt.ls itself. Not a `Server` this module's
+/// own install/update UI manages — it's not a process FoxGarden spawns
+/// directly, only a bundle jdt.ls loads via its `initializationOptions.
+/// bundles` (`lsp_state`'s Java `initialization_options`), so it's silently
+/// materialized on disk the same best-effort way `ensure_kotlin_stdlib_
+/// override_for` prepares its own supporting file. Its own `META-INF/
+/// MANIFEST.MF` (checked against the real jar) declares `Require-Capability:
+/// osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=21))"` — satisfied by the same
+/// JDK 21+ host runtime `JDTLS_MINIMUM_JDK` already requires jdt.ls itself to
+/// run under, and bundles every one of its own dependency jars internally
+/// (`Bundle-ClassPath`), so no separate vendoring beyond this one file.
+const JAVA_DEBUG_PLUGIN_JAR: &[u8] = include_bytes!("../../../vendor/lsp-servers/java-debug-plugin-0.53.2.jar");
+const JAVA_DEBUG_PLUGIN_VERSION: &str = "0.53.2";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Server {
     Jdtls,
@@ -662,6 +684,37 @@ pub fn ensure_kotlin_stdlib_override_for(binary: &Path) {
     }
 }
 
+/// Writes the vendored `JAVA_DEBUG_PLUGIN_JAR` bytes to `dir` (idempotent —
+/// skips the write once a same-sized file already sits there, since this
+/// runs on every debug-session start, not just once) and returns its path,
+/// ready to hand `lsp_state`'s Java `initialization_options` as the sole
+/// entry of `bundles`. Split from `ensure_debug_plugin_jar` so the write
+/// logic is testable against a tempdir instead of the real cache directory.
+fn write_debug_plugin_jar(dir: &Path) -> Result<PathBuf, String> {
+    reject_lfs_pointer(JAVA_DEBUG_PLUGIN_JAR)?;
+    let path = dir.join(format!("java-debug-plugin-{JAVA_DEBUG_PLUGIN_VERSION}.jar"));
+    let already_current = std::fs::metadata(&path).map(|m| m.len() as usize).ok() == Some(JAVA_DEBUG_PLUGIN_JAR.len());
+    if !already_current {
+        std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {}: {e}", dir.display()))?;
+        std::fs::write(&path, JAVA_DEBUG_PLUGIN_JAR).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
+/// Entry point `lsp_state` calls while building every Java session's own
+/// `initializationOptions.bundles` — mirrors `ensure_kotlin_stdlib_
+/// override_for`'s own "prepare a supporting file, report failure as a
+/// plain string rather than panicking" shape. The caller treats `Err` the
+/// same best-effort way that one already does (log it, start the session
+/// anyway) — a Java session with no debug bundle loaded still has full
+/// hover/diagnostics/completion; `Debug` specifically becomes unusable that
+/// session, which surfaces as its own real error at the point it's actually
+/// used (`vscode.java.startDebugSession` failing with jdt.ls' "unknown
+/// command" response), not silently here.
+pub fn ensure_debug_plugin_jar() -> Result<PathBuf, String> {
+    write_debug_plugin_jar(&cache_dir()?)
+}
+
 /// Installs one specific `version` of `server`, reporting each step through
 /// `report`. Runs entirely on a background thread (see
 /// `LspManagerState::install`) so extraction never blocks the UI thread.
@@ -893,6 +946,23 @@ mod tests {
         let error = install_sync(Server::Jdtls, "1.59.0", &|_| {}).expect_err("not vendored");
         assert!(error.contains("1.60.0"), "{error}");
         assert!(error.contains("1.59.0"), "{error}");
+    }
+
+    #[test]
+    fn write_debug_plugin_jar_writes_the_real_vendored_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_debug_plugin_jar(dir.path()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), JAVA_DEBUG_PLUGIN_JAR);
+    }
+
+    #[test]
+    fn write_debug_plugin_jar_is_idempotent_and_skips_a_redundant_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_debug_plugin_jar(dir.path()).unwrap();
+        let written_at = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        write_debug_plugin_jar(dir.path()).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), written_at);
     }
 
     #[test]

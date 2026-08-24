@@ -12,6 +12,7 @@ use super::auto_edit::{
     current_line_range, duplicate_line, indent_selected_lines, is_pairable, join_lines, move_line_down, move_line_up,
     smart_home_target, sort_lines, toggle_line_comments, unique_lines, wrap_selection,
 };
+use super::breakpoint_gutter;
 use super::code_action::{self, CodeActionGutter};
 use super::codegen::{
     self, AccessorKind, GenerateAccessorsDialog, GenerateMethodDialog, GenerateMethodKind, OverrideMethodDialog,
@@ -31,7 +32,7 @@ use super::references::FindReferencesState;
 use super::rename::RenameBox;
 use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
-    paint_line_numbers, paint_occurrence_highlights, paint_sticky_scroll, paint_whitespace,
+    paint_line_numbers, paint_occurrence_highlights, paint_paused_line_highlight, paint_sticky_scroll, paint_whitespace,
 };
 use super::spring_annotation_completion;
 use super::spring_config_completion;
@@ -381,6 +382,7 @@ pub fn show(
     find_references: &mut FindReferencesState,
     rename_box: &mut RenameBox,
     code_action_gutter: &mut CodeActionGutter,
+    debug_state: &crate::debug_state::DebugState,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1177,6 +1179,15 @@ pub fn show(
     let gutter_font_id = FontId::new(font_size, editor_font.family());
     let digit_width = ui.fonts_mut(|f| f.glyph_width(&gutter_font_id, '0'));
     let line_count = doc.buffer.len_lines().max(1);
+    // Unlike every other gutter column here, this one is reserved whenever
+    // the document is debuggable at all (`PLAN.md` Track 23 Phase 2), not
+    // only once a breakpoint already exists — its whole point is to give
+    // the user somewhere to click to create the first one. Kotlin is
+    // excluded: Phase 1's own research found no evidence java-debug
+    // supports it, so a breakpoint gutter that can never actually pause
+    // anything would be misleading.
+    let breakpoint_gutter_width =
+        if doc.language == Some(Language::Java) { breakpoint_gutter::BREAKPOINT_GUTTER_WIDTH } else { 0.0 };
     let fold_gutter_width = if folds.is_empty() {
         0.0
     } else {
@@ -1212,6 +1223,7 @@ pub fn show(
         .map_or(0.0, |_| code_action::GUTTER_WIDTH);
     let gutter_width = digit_width * line_count.to_string().len() as f32
         + GUTTER_PADDING * 2.0
+        + breakpoint_gutter_width
         + code_action_width
         + fold_gutter_width
         + diff_gutter_width
@@ -2146,12 +2158,37 @@ pub fn show(
         &folds,
         &mut doc.folded_lines,
         &id_salt,
-        gutter_left + code_action_width,
+        gutter_left + breakpoint_gutter_width + code_action_width,
         dark_mode,
     );
     folding::paint_collapsed_markers(ui, &shell_out.base, &folds, &doc.folded_lines, dark_mode);
     let code_action_id = egui::Id::new(("code_action_popup", widget_id));
-    code_action_gutter.paint(ui, code_action_id, &shell_out.base, gutter_left, editor_rect, dark_mode);
+    code_action_gutter.paint(
+        ui,
+        code_action_id,
+        &shell_out.base,
+        gutter_left + breakpoint_gutter_width,
+        editor_rect,
+        dark_mode,
+    );
+    if breakpoint_gutter_width > 0.0 {
+        breakpoint_gutter::show_breakpoint_gutter(
+            ui,
+            &shell_out.base,
+            &mut doc.breakpoints,
+            &id_salt,
+            gutter_left,
+            dark_mode,
+        );
+    }
+    // The debuggee's own paused line (`PLAN.md` Track 23 Phase 2) — only
+    // painted for the document it's actually paused in, matching the path
+    // `DebugState::paused_location` reports.
+    if let Some((paused_path, paused_line)) = debug_state.paused_location()
+        && paused_path == doc.path
+    {
+        paint_paused_line_highlight(ui, &shell_out.base, paused_line, dark_mode);
+    }
 
     // Sticky scroll: pin the enclosing class/method header line(s) at the top
     // of the viewport while their body scrolls under them. Painted last so it

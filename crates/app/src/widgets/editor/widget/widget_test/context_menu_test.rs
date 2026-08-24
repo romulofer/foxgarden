@@ -74,6 +74,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
             &mut FindReferencesState::default(),
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
             );
         });
     };

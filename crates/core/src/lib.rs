@@ -42,7 +42,7 @@ pub use project::{FileKind, FileNode, Project};
 pub use project_config::{
     ProjectConfig, load_project_config, parse_project_config, save_project_config, serialize_project_config,
 };
-pub use run::{RunSetupError, run_command};
+pub use run::{RunSetupError, resolve_classpath, run_command};
 pub use run_config::{RunConfig, load_run_configs, parse_run_configs, save_run_configs, serialize_run_configs};
 pub use scaffold::{BuildTool, ProjectLanguage, ScaffoldSpec, scaffold_files, write_scaffold};
 pub use spring_config_metadata::{

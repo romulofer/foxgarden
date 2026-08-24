@@ -111,7 +111,7 @@ fn default_server_request_reply(method: &str, params: &Value) -> Value {
 /// before any header line is read at all (the server process exited
 /// between messages); an EOF *mid*-message is a real `Err`, not silently
 /// treated the same as a clean one.
-fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
+pub(crate) fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
     let mut content_length: Option<usize> = None;
     let mut line = String::new();
     loop {
@@ -155,7 +155,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
 /// between the two writes, a real `BrokenPipe` under heavy parallel `cargo
 /// test` load) confirmed two syscalls leaves a real window a fast-exiting
 /// reader can close mid-message; one call removes it.
-fn write_message<W: Write>(writer: &mut W, value: &Value) -> std::io::Result<()> {
+pub(crate) fn write_message<W: Write>(writer: &mut W, value: &Value) -> std::io::Result<()> {
     let body = serde_json::to_vec(value)?;
     let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
     framed.extend_from_slice(&body);

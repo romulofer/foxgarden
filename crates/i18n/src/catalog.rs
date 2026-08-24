@@ -87,6 +87,7 @@ pub struct Menu {
     pub run_project: &'static str,
     pub run_tests: &'static str,
     pub run_with_coverage: &'static str,
+    pub debug_project: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
@@ -338,12 +339,24 @@ pub struct Common {
     pub running_run: &'static str,
     pub running_tests: &'static str,
     pub running_coverage: &'static str,
+    /// The Run menu shows this in place of `menu.debug_project` once a
+    /// debug session is starting or attached (`PLAN.md` Track 23 Phase 1),
+    /// same "one string, so the button and any status line can't drift
+    /// apart" shape every other `running_*` entry here already follows.
+    pub running_debug: &'static str,
     /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
     /// generic enough verb to belong here rather than under `Menu`/
     /// `RunConfigs`, matching this struct's own "shared by more than one
-    /// area" purpose (a future Docker/debugger Stop control would reuse it
-    /// too, per `PLAN.md` Tracks 14/23's own similar wording).
+    /// area" purpose. Now also `PLAN.md` Track 23's own Stop-a-debug-
+    /// session control, per this field's own prior doc comment predicting
+    /// exactly that reuse.
     pub stop: &'static str,
+    /// Debug toolbar buttons (`PLAN.md` Track 23 Phase 2) — only enabled
+    /// while a debug session is actually paused at a breakpoint.
+    pub debug_continue: &'static str,
+    pub debug_step_over: &'static str,
+    pub debug_step_into: &'static str,
+    pub debug_step_out: &'static str,
 }
 
 /// Brazilian Portuguese — the primary language.
@@ -399,6 +412,7 @@ pub const PT_BR: Strings = Strings {
         run_project: "Executar Projeto",
         run_tests: "Executar Testes",
         run_with_coverage: "Executar com Cobertura",
+        debug_project: "Depurar Projeto",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
@@ -613,7 +627,12 @@ pub const PT_BR: Strings = Strings {
         running_run: "Executando…",
         running_tests: "Executando Testes…",
         running_coverage: "Executando Cobertura…",
+        running_debug: "Depurando…",
         stop: "Parar",
+        debug_continue: "Continuar",
+        debug_step_over: "Passar Por Cima",
+        debug_step_into: "Entrar Em",
+        debug_step_out: "Sair De",
     },
 };
 
@@ -670,6 +689,7 @@ pub const EN_US: Strings = Strings {
         run_project: "Run Project",
         run_tests: "Run Tests",
         run_with_coverage: "Run with Coverage",
+        debug_project: "Debug Project",
 
         view: "View",
         zen_mode: "Zen Mode",
@@ -884,6 +904,11 @@ pub const EN_US: Strings = Strings {
         running_run: "Running…",
         running_tests: "Running Tests…",
         running_coverage: "Running Coverage…",
+        running_debug: "Debugging…",
         stop: "Stop",
+        debug_continue: "Continue",
+        debug_step_over: "Step Over",
+        debug_step_into: "Step Into",
+        debug_step_out: "Step Out",
     },
 };

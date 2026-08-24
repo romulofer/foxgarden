@@ -3,6 +3,8 @@
 //! `tabs::open_parser_for`).
 
 pub mod build_panel;
+pub mod debug_panel;
+pub mod debug_toolbar;
 pub mod git_diff;
 pub mod git_stage;
 pub mod go_to_file;

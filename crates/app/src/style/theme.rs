@@ -75,6 +75,11 @@ const LIGHT_COVERAGE_MISSED: Color32 = Color32::from_rgb(191, 54, 12);
 const DARK_COVERAGE_PARTIAL: Color32 = Color32::from_rgb(255, 202, 58);
 const LIGHT_COVERAGE_PARTIAL: Color32 = Color32::from_rgb(179, 127, 0);
 
+const DARK_BREAKPOINT: Color32 = Color32::from_rgb(224, 82, 82);
+const LIGHT_BREAKPOINT: Color32 = Color32::from_rgb(202, 42, 42);
+const DARK_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(229, 192, 84, 40);
+const LIGHT_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(181, 137, 0, 30);
+
 /// A quick-fix lightbulb (`PLAN.md` Track 15 Phase 1) — amber, the same
 /// "actionable suggestion" hue real IDEs already use for this exact
 /// affordance, distinct from `error_squiggle`'s red/`DIFF_MODIFIED`'s blue
@@ -170,6 +175,14 @@ pub fn coverage_covered(dark_mode: bool) -> Color32 {
 
 pub fn coverage_missed(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_COVERAGE_MISSED } else { LIGHT_COVERAGE_MISSED }
+}
+
+pub fn breakpoint(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_BREAKPOINT } else { LIGHT_BREAKPOINT }
+}
+
+pub fn debug_current_line(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_DEBUG_CURRENT_LINE } else { LIGHT_DEBUG_CURRENT_LINE }
 }
 
 pub fn coverage_partial(dark_mode: bool) -> Color32 {

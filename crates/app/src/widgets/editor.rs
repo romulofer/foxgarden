@@ -12,6 +12,7 @@
 //! case-conversion are the only things used outside this module.
 
 mod auto_edit;
+mod breakpoint_gutter;
 mod code_action;
 mod codegen;
 mod completion;

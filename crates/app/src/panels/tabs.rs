@@ -141,6 +141,7 @@ pub fn show(
     find_references: &mut crate::widgets::editor::FindReferencesState,
     rename_box: &mut crate::widgets::editor::RenameBox,
     code_action_gutter: &mut crate::widgets::editor::CodeActionGutter,
+    debug_state: &crate::debug_state::DebugState,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -303,6 +304,7 @@ pub fn show(
             find_references,
             rename_box,
             code_action_gutter,
+            debug_state,
         );
     });
 }

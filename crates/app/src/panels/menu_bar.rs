@@ -81,6 +81,13 @@ pub struct MenuBarOutcome {
     pub run_tests_request: bool,
     /// Run > Run with Coverage (`PLAN.md` Track 13 Phase 1, Maven-only).
     pub run_with_coverage_request: bool,
+    /// Run > Debug Project, which becomes Run > Stop once `debug_running`
+    /// (this same button relabels/re-targets itself, rather than the menu
+    /// carrying two separate booleans for "start" and "stop") — the
+    /// caller's own `debug_state::DebugState::is_running()` is what decides
+    /// which of `start`/`stop` this outcome means (`PLAN.md` Track 23
+    /// Phase 1).
+    pub debug_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -124,6 +131,7 @@ pub fn show(
     run_running: bool,
     test_running: bool,
     coverage_running: bool,
+    debug_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -450,7 +458,14 @@ pub fn show(
                 outcome.open_run_configs_request = true;
                 ui.close();
             }
-            let any_running = build_running || run_running || test_running || coverage_running;
+            let any_running = build_running || run_running || test_running || coverage_running || debug_running;
+            // Build/Run/Test/Coverage all disable while a debug session is
+            // up too (`any_running` above already covers that), but the
+            // Debug entry's own enabled-ness has to stay independent of its
+            // own `debug_running` — otherwise there would be no way to ever
+            // click it again to reach `outcome.debug_request` and stop a
+            // session already in flight.
+            let other_running = build_running || run_running || test_running || coverage_running;
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
@@ -489,6 +504,16 @@ pub fn show(
                 .clicked()
             {
                 outcome.run_with_coverage_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.project.is_some() && (debug_running || !other_running),
+                    egui::Button::new(if debug_running { t().common.stop } else { t().menu.debug_project }),
+                )
+                .clicked()
+            {
+                outcome.debug_request = true;
                 ui.close();
             }
         });

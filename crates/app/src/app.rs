@@ -8,6 +8,7 @@ use ropey::Rope;
 use syntax::IncrementalParser;
 
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
+use crate::debug_state;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
 use crate::rename::RenameState;
@@ -15,6 +16,8 @@ use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
 use crate::panels::build_panel;
+use crate::panels::debug_panel;
+use crate::panels::debug_toolbar;
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
@@ -391,6 +394,11 @@ pub struct FoxGardenApp {
     /// in-flight `mvn`/`gradle` build — see `panels::build_panel::
     /// BuildState`. Runtime-only: a fresh launch has no build to resume.
     build_state: build_panel::BuildState,
+    /// One in-flight or attached Java debug session (`PLAN.md` Track 23
+    /// Phase 1) — see `debug_state::DebugState`. Runtime-only, same as
+    /// `build_state`: no real process is ever worth trying to resume across
+    /// a relaunch.
+    debug_state: debug_state::DebugState,
 }
 
 /// Opens `path` in a new tab (or focuses its existing tab, via
@@ -1166,6 +1174,7 @@ impl FoxGardenApp {
             git_stage: GitStageState::default(),
             build_panel_visible,
             build_state: build_panel::BuildState::default(),
+            debug_state: debug_state::DebugState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
@@ -1376,12 +1385,19 @@ impl eframe::App for FoxGardenApp {
         let mut outcome = side_panel::SidePanelOutcome::default();
         let mut menu_outcome = menu_bar::MenuBarOutcome::default();
         let mut terminal_outcome = terminal_panel::TerminalPanelOutcome::default();
+        let mut debug_toolbar_outcome = debug_toolbar::DebugToolbarOutcome::default();
         // Set by `build_panel::show` the frame a clickable compiler-error
         // row is clicked — resolved into `pending_navigation` further down,
         // once `open_path` has made the target file's real buffer available
         // to convert its line/column into a byte offset (see that call
         // site's own comment).
         let mut build_click: Option<(PathBuf, usize, usize)> = None;
+        // Set by `debug_panel::show` the frame a clickable call-stack frame
+        // row is clicked (`PLAN.md` Track 23 Phase 3) — resolved the same
+        // way `build_click` is below, just with an already-0-indexed line
+        // (`debug_state::StackFrameSummary::line`) instead of a compiler's
+        // 1-based one, so no `line_col_to_byte` column argument is needed.
+        let mut debug_click: Option<(PathBuf, usize)> = None;
         // Compared against `self.source_control_visible` after `menu_bar::
         // show` runs (which mutates it directly, same "one flag, two
         // triggers" shape every other View checkbox here already uses) to
@@ -1421,9 +1437,33 @@ impl eframe::App for FoxGardenApp {
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
                         self.build_state.is_coverage_running(),
+                        self.debug_state.is_running(),
                     )
                 })
                 .inner;
+
+            // Shown exactly while a debug session is live (`PLAN.md` Track
+            // 23 Phase 2) — not a `View`-menu-toggled dock like the build/
+            // terminal panels below, since its whole purpose is 1:1 tied to
+            // `self.debug_state` actually running.
+            if self.debug_state.is_running() {
+                egui::Panel::top("debug_toolbar")
+                    .show(ui, |ui| {
+                        debug_toolbar_outcome = debug_toolbar::show(ui, self.debug_state.is_paused());
+                    });
+            }
+
+            // Same "tied 1:1 to a live session" visibility rule as the
+            // toolbar above (`PLAN.md` Track 23 Phase 3) — see `debug_panel`'s
+            // own header for why this isn't a `View`-menu-toggled dock.
+            if self.debug_state.is_running() {
+                egui::Panel::right("debug_panel")
+                    .resizable(true)
+                    .default_size(280.0)
+                    .show(ui, |ui| {
+                        debug_click = debug_panel::show(ui, &self.debug_state);
+                    });
+            }
 
             // Added before every other bottom/side panel so it spans the
             // full window width along the very bottom edge, underneath the
@@ -1445,6 +1485,7 @@ impl eframe::App for FoxGardenApp {
                 &self.spring_config,
                 &self.git_stage,
                 &self.diff,
+                &self.debug_state,
             );
             let activities = status_bar::activities(&work);
             egui::Panel::bottom("status_bar").show(ui, |ui| status_bar::show(ui, &activities));
@@ -1562,6 +1603,25 @@ impl eframe::App for FoxGardenApp {
             }
         }
 
+        // A call-stack frame row's own `line` (`debug_state::
+        // StackFrameSummary::line`) is already 0-indexed, unlike `build_
+        // click`'s compiler-reported one above — `line_col_to_byte` still
+        // wants 1-based input, so `+ 1` undoes that before conversion.
+        if let Some((path, line)) = debug_click {
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
+            if let Some(doc) = self.state.open_tabs.iter().find(|d| d.path() == path.as_path()) {
+                let byte = fg_core::line_col_to_byte(&doc.buffer, line + 1, None);
+                self.pending_navigation = Some((path, byte));
+            }
+        }
+
         for (old, new) in &outcome.renamed {
             handle_rename(&mut self.state, &mut self.parsers, old, new);
         }
@@ -1635,6 +1695,61 @@ impl eframe::App for FoxGardenApp {
                 Some(fg_core::BuildTool::Gradle) => self.last_error = Some(t().errors.coverage_requires_maven.to_string()),
                 None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
             }
+        }
+
+        // Same "one button, `is_running()` decides which action it means"
+        // shape `menu_bar::MenuBarOutcome::debug_request`'s own doc comment
+        // describes — `start`'s own precondition failures (no `Ready` Java
+        // session, no saved `RunConfig`, classpath resolution failing) all
+        // surface through the same `last_error` modal every other Run
+        // menu action already uses.
+        if menu_outcome.debug_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            if self.debug_state.is_running() {
+                self.debug_state.stop();
+            } else {
+                match fg_core::detect_build_tool(&root) {
+                    Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
+                        Some(config) => {
+                            let initial_breakpoints = self
+                                .state
+                                .open_tabs
+                                .iter()
+                                .filter(|doc| !doc.breakpoints.is_empty())
+                                .map(|doc| (doc.path.clone(), doc.breakpoints.clone()))
+                                .collect();
+                            if let Err(err) =
+                                self.debug_state.start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
+                            {
+                                self.last_error = Some(err);
+                            }
+                        }
+                        None => self.last_error = Some(t().errors.no_run_config.to_string()),
+                    },
+                    None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                }
+            }
+        }
+
+        // Debug toolbar dispatch (`PLAN.md` Track 23 Phase 2) — each button
+        // maps straight to its matching `DebugState` method, all of which
+        // are harmless no-ops outside a paused session (Continue/Step) or
+        // an idle one (Stop), so no extra guard is needed here.
+        if debug_toolbar_outcome.continue_request {
+            self.debug_state.continue_();
+        }
+        if debug_toolbar_outcome.step_over_request {
+            self.debug_state.step_over();
+        }
+        if debug_toolbar_outcome.step_into_request {
+            self.debug_state.step_into();
+        }
+        if debug_toolbar_outcome.step_out_request {
+            self.debug_state.step_out();
+        }
+        if debug_toolbar_outcome.stop_request {
+            self.debug_state.stop();
         }
 
         if menu_outcome.open_external_tools_settings_request {
@@ -1715,6 +1830,11 @@ impl eframe::App for FoxGardenApp {
             }
         }
         self.spring_config.poll();
+        self.debug_state.poll();
+        self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
+        if let Some(err) = self.debug_state.take_failure() {
+            self.last_error = Some(err);
+        }
         for result in self.static_analysis.tool_manager.poll_installs() {
             match result {
                 Ok(installed) => self.external_tool_paths.apply_installed(&installed),
@@ -1836,6 +1956,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.find_references,
                 &mut self.rename_box,
                 &mut self.code_action_gutter,
+                &self.debug_state,
             );
         });
 

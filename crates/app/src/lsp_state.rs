@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fg_core::{Diagnostic, Document, Language, Severity};
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics};
-use lsp_types::request::{CodeActionRequest, Completion, GotoDefinition, HoverRequest, References, Rename};
+use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, References, Rename};
 use lsp_types::{DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem, Uri, WorkspaceFolder};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
@@ -53,7 +53,15 @@ impl ServerKind {
         }
     }
 
-    fn initialization_options(self, config: &SessionConfig) -> serde_json::Value {
+    /// `debug_bundles` is a plain parameter, not read off `config`, so this
+    /// stays a pure function of its own arguments — directly unit-testable
+    /// (`initialize_params_has_one_root_workspace_and_jdtls_capabilities`)
+    /// with no real filesystem I/O against this machine's actual cache
+    /// directory. `start_session` is the only real caller and is the one
+    /// place that resolves `lsp_manager::ensure_debug_plugin_jar` for real,
+    /// mirroring `ensure_kotlin_stdlib_override_for`'s own "prepared right
+    /// before spawning, not earlier" placement.
+    fn initialization_options(self, config: &SessionConfig, debug_bundles: &[String]) -> serde_json::Value {
         match self {
             // The local Zed Java reference establishes these as useful,
             // conservative JDTLS capabilities. Classpath injection remains
@@ -65,10 +73,39 @@ impl ServerKind {
                     "resolveAdditionalTextEditsSupport": true,
                 },
                 "settings": { "java": { "configuration": { "runtimes": jdtls_runtimes(config) } } },
+                "bundles": debug_bundles,
             }),
             // kotlin-language-server has usable workspace settings, but no
             // project-specific setting is safe to invent here.
             Self::Kotlin => json!({}),
+        }
+    }
+}
+
+/// The `bundles` list a Java session's `initializationOptions` carries —
+/// jdt.ls loads each entry as an extra OSGi bundle on top of its own core
+/// (`PLAN.md` Track 23), which is how `com.microsoft.java.debug.plugin`
+/// (real DAP support, not a jdt.ls-native feature) gets into a running
+/// session at all. Only ever called for `ServerKind::Java` (`start_session`'s
+/// own match arm gates it, mirroring the Kotlin-only `ensure_kotlin_stdlib_
+/// override_for` call in the arm right next to it) — real filesystem I/O
+/// against this machine's actual cache directory, so it must never run from
+/// anywhere a fast/non-`#[ignore]`d unit test can reach, unlike the rest of
+/// `initialize_params`'s own construction. Best-effort, mirroring
+/// `ensure_kotlin_stdlib_override_for`'s own "never blocks/fails the
+/// caller" shape: a failure here (a read-only cache directory, say)
+/// degrades to "no debugger available this session" rather than breaking
+/// hover/diagnostics/completion, which have nothing to do with debugging.
+/// Track 23's own "Debug" action is where that degradation becomes a real,
+/// user-visible error — `vscode.java.startDebugSession` against a session
+/// with no debug bundle loaded fails with jdt.ls' own "unknown command"
+/// response, not a silent no-op.
+fn debug_plugin_bundles() -> Vec<String> {
+    match lsp_manager::ensure_debug_plugin_jar() {
+        Ok(path) => vec![path.display().to_string()],
+        Err(error) => {
+            eprintln!("java-debug plugin unavailable, Debug will not work this session: {error}");
+            Vec::new()
         }
     }
 }
@@ -506,6 +543,29 @@ impl LspState {
         session.send_request("java/classFileContents", json!({ "uri": uri })).ok()
     }
 
+    /// `vscode.java.startDebugSession` (`PLAN.md` Track 23) — a jdt.ls
+    /// workspace command `com.microsoft.java.debug.plugin` registers once
+    /// loaded as a bundle (`SessionConfig::debug_bundles`), not a real LSP
+    /// method. Starts the plugin's own DAP server *inside* the running
+    /// jdt.ls JVM and hands back the TCP port it's listening on — verified
+    /// concretely against the real `vscode-java-debug` extension's own
+    /// client code, `dap_client`'s own header comment. No document/
+    /// byte-offset to flush first (unlike every `request_*` above), same
+    /// "just needs the session `Ready`" shape `request_class_file_contents`
+    /// already uses. `None` with no debug bundle loaded (`SessionConfig::
+    /// debug_bundles` empty) is possible in principle but not special-cased
+    /// here — jdt.ls' own "unknown command" error response covers that case
+    /// with a real, inspectable message rather than a client-side guess.
+    pub fn request_start_debug_session(&mut self) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let Slot::Ready { session, .. } = &mut self.java else { return None };
+        let params = lsp_types::ExecuteCommandParams {
+            command: "vscode.java.startDebugSession".to_string(),
+            arguments: Vec::new(),
+            work_done_progress_params: Default::default(),
+        };
+        session.send_request(ExecuteCommand::METHOD, serde_json::to_value(params).ok()?).ok()
+    }
+
     fn poll_retiring(&mut self) -> Vec<String> {
         let mut errors = Vec::new();
         self.retiring.retain_mut(|retiring| match retiring.shutdown_rx.try_recv() {
@@ -903,9 +963,14 @@ fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSessi
     // own documented `--java-executable` flag makes every JDTLS session use
     // the exact JVM `lsp_manager::resolve_jdtls_java` already verified,
     // rather than risking a second, unverified resolution.
+    let mut debug_bundles = Vec::new();
     let args = match kind {
         ServerKind::Java => {
             let java = lsp_manager::resolve_jdtls_java(&config.java_home)?;
+            // Best-effort (`debug_plugin_bundles`'s own doc comment) — a
+            // Java session still starts, with hover/diagnostics/completion
+            // fully working, even if this fails.
+            debug_bundles = debug_plugin_bundles();
             vec!["--java-executable".to_string(), java.display().to_string()]
         }
         ServerKind::Kotlin => {
@@ -920,14 +985,14 @@ fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSessi
     };
     let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root))
         .map_err(|error| format!("failed to start {} at {}: {error}", kind.name(), config.binary.display()))?;
-    let params = initialize_params(kind, &config)?;
+    let params = initialize_params(kind, &config, &debug_bundles)?;
     let initialize_rx = session
         .initialize(params)
         .map_err(|error| format!("failed to initialize {}: {error}", kind.name()))?;
     Ok(RunningSession { config, session, initialize_rx })
 }
 
-fn initialize_params(kind: ServerKind, config: &SessionConfig) -> Result<InitializeParams, String> {
+fn initialize_params(kind: ServerKind, config: &SessionConfig, debug_bundles: &[String]) -> Result<InitializeParams, String> {
     let root = config.root.as_path();
     let uri = file_uri(root)?;
     #[allow(deprecated)]
@@ -938,7 +1003,7 @@ fn initialize_params(kind: ServerKind, config: &SessionConfig) -> Result<Initial
             uri,
             name: root.file_name().and_then(|name| name.to_str()).unwrap_or("FoxGarden project").to_string(),
         }]),
-        initialization_options: Some(kind.initialization_options(config)),
+        initialization_options: Some(kind.initialization_options(config, debug_bundles)),
         // `snippet_support: Some(false)` — Phase 5's own completion
         // candidates are inserted as plain text (`completion::
         // bare_label_and_has_params`), never a real tab-stop-navigable
@@ -1127,9 +1192,21 @@ mod tests {
 
     #[test]
     fn initialize_params_has_one_root_workspace_and_jdtls_capabilities() {
-        let params = initialize_params(ServerKind::Java, &test_config(Path::new("."))).unwrap();
+        let params = initialize_params(ServerKind::Java, &test_config(Path::new(".")), &[]).unwrap();
         assert_eq!(params.workspace_folders.as_ref().unwrap().len(), 1);
         assert_eq!(params.initialization_options.unwrap()["extendedClientCapabilities"]["classFileContentsSupport"], true);
+    }
+
+    /// `debug_bundles` is a plain argument specifically so this stays a
+    /// pure, no-I/O test of the plumbing (`PLAN.md` Track 23 Phase 1) rather
+    /// than one that has to resolve `lsp_manager::ensure_debug_plugin_jar`
+    /// for real against this machine's actual cache directory.
+    #[test]
+    fn initialize_params_carries_the_debug_bundle_path_through() {
+        let params =
+            initialize_params(ServerKind::Java, &test_config(Path::new(".")), &["/cache/java-debug-plugin.jar".to_string()])
+                .unwrap();
+        assert_eq!(params.initialization_options.unwrap()["bundles"], serde_json::json!(["/cache/java-debug-plugin.jar"]));
     }
 
     /// A server picks its hover content format from what the client says
@@ -1139,7 +1216,7 @@ mod tests {
     /// renderer). PlainText must therefore be *first*, not merely present.
     #[test]
     fn initialize_params_prefers_plain_text_hover_content() {
-        let params = initialize_params(ServerKind::Java, &test_config(Path::new("."))).unwrap();
+        let params = initialize_params(ServerKind::Java, &test_config(Path::new(".")), &[]).unwrap();
         let hover = params.capabilities.text_document.unwrap().hover.unwrap();
         assert_eq!(
             hover.content_format,
@@ -1530,6 +1607,196 @@ sys.stdin.buffer.read()
             content.contains("Returns the answer to everything"),
             "hover resolved the symbol but dropped its Javadoc: {content}"
         );
+    }
+
+    /// `PLAN.md` Track 23 Phase 1's own checkpoint: launching a real Java
+    /// program under the debugger successfully attaches. Drives the real
+    /// chain end to end — a real `mvn compile`, a real jdt.ls session with
+    /// `com.microsoft.java.debug.plugin` loaded as a bundle
+    /// (`lsp_state::debug_plugin_bundles`), a real `vscode.java.
+    /// startDebugSession` call, a real socket connection, and the real DAP
+    /// `initialize`/`launch`/`configurationDone` handshake — not a mocked
+    /// adapter, since `dap_client`'s own fake-socket tests already cover the
+    /// framing/classification logic in isolation and what's unverified here
+    /// is everything downstream of it: whether jdt.ls actually starts the
+    /// plugin's DAP server on a real port, and whether java-debug actually
+    /// accepts this app's own hand-assembled `launch` arguments.
+    ///
+    /// `#[ignore]`d for the same reasons every real-server test here is:
+    /// needs a real jdtls + JDK 21 install, plus a real `mvn` on `PATH` to
+    /// compile the fixture project this test writes itself. Run with
+    /// `--ignored`, `FOXGARDEN_JDTLS`/`FOXGARDEN_JDTLS_JAVA_HOME` set the
+    /// same way the hover test above needs them.
+    #[test]
+    #[ignore = "needs a real jdtls install, a JDK 21, and mvn on PATH; run with --ignored"]
+    fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
+        let binary = real_server_binary("FOXGARDEN_JDTLS", "jdtls-1.60.0/bin/jdtls");
+        let dir = test_support::tempdir();
+        let root = dir.path();
+        std::fs::write(
+            root.join("pom.xml"),
+            concat!(
+                "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n",
+                "  <modelVersion>4.0.0</modelVersion>\n",
+                "  <groupId>com.example</groupId>\n",
+                "  <artifactId>debug-fixture</artifactId>\n",
+                "  <version>1.0.0</version>\n",
+                "  <properties>\n",
+                "    <maven.compiler.release>17</maven.compiler.release>\n",
+                "    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n",
+                "  </properties>\n",
+                "</project>\n",
+            ),
+        )
+        .expect("write the fixture pom.xml");
+        let main_dir = root.join("src/main/java/com/example");
+        std::fs::create_dir_all(&main_dir).expect("create the fixture's source tree");
+        std::fs::write(
+            main_dir.join("Main.java"),
+            concat!(
+                "package com.example;\n",
+                "public class Main {\n",
+                "    public static void main(String[] args) throws InterruptedException {\n",
+                "        System.out.println(\"debug fixture running\");\n",
+                "        Thread.sleep(5000);\n",
+                "        System.out.println(\"debug fixture done\");\n",
+                "    }\n",
+                "}\n",
+            ),
+        )
+        .expect("write the fixture Main.java");
+        let compile = std::process::Command::new("mvn")
+            .args(["-q", "compile"])
+            .current_dir(root)
+            .status()
+            .expect("mvn is on PATH");
+        assert!(compile.success(), "real mvn compile of the fixture project failed");
+
+        let mut doc = Document::open(main_dir.join("Main.java")).expect("open the fixture");
+        let settings = LspSettings {
+            enabled: true,
+            jdtls_binary: binary.display().to_string(),
+            jdtls_java_home: std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default(),
+            ..Default::default()
+        };
+        let mut state = LspState::default();
+        sync_until_java_ready(&mut state, &settings, root, &mut doc);
+
+        let run_config = fg_core::RunConfig {
+            name: "debug fixture".to_string(),
+            main_class: "com.example.Main".to_string(),
+            vm_args: String::new(),
+            program_args: String::new(),
+            env: Vec::new(),
+            working_dir: None,
+        };
+        // `PLAN.md` Track 23 Phase 2: a real breakpoint on the fixture's own
+        // `System.out.println("debug fixture running")` line (0-indexed
+        // line 3 — `package`/`class`/`main` signature/println are lines
+        // 0-3) exercises the *initial* breakpoint path (`start`'s own
+        // `initial_breakpoints`, sent before `configurationDone`), not the
+        // live-toggle path (`sync_breakpoints`) — the point of this test is
+        // proving a breakpoint set up front actually halts execution there.
+        let main_java = main_dir.join("Main.java");
+        let mut debug = crate::debug_state::DebugState::default();
+        debug
+            .start(
+                &mut state,
+                root,
+                fg_core::BuildTool::Maven,
+                &run_config,
+                vec![(main_java.clone(), HashSet::from([3]))],
+            )
+            .expect("starting a debug session against a Ready Java session should succeed");
+
+        // Draining the Java session's own diagnostics/hover plumbing
+        // (`sync_until_java_ready`'s own discipline) keeps the connection
+        // genuinely alive rather than starving it of the polling every
+        // other real-server test in this file already relies on — reused
+        // across every wait loop below, not just the first one.
+        let wait_for_pause = |debug: &mut crate::debug_state::DebugState, state: &mut LspState, doc: &mut Document| {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                debug.poll();
+                let _ = state.sync(&settings, Some(root), std::slice::from_mut(doc));
+                if let Some((file, line)) = debug.paused_location() {
+                    break (file.to_path_buf(), line);
+                }
+                match debug.status() {
+                    crate::debug_state::DebugStatus::Failed(message) => panic!("debug session failed: {message}"),
+                    status => {
+                        assert!(Instant::now() < deadline, "debug session never paused; stuck at {status:?}");
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+        };
+
+        let (paused_file, paused_line) = wait_for_pause(&mut debug, &mut state, &mut doc);
+        assert_eq!(
+            paused_file.canonicalize().expect("java-debug reports a real file path"),
+            main_java.canonicalize().expect("the fixture file exists"),
+            "should pause in the exact file the breakpoint was set on"
+        );
+        assert_eq!(paused_line, 3, "should pause exactly at the breakpoint's own line");
+        assert_eq!(debug.status(), crate::debug_state::DebugStatus::Attached);
+
+        // `PLAN.md` Track 23 Phase 3: the call stack and the `scopes`/
+        // `variables` chain both need extra polling past `paused_location`
+        // itself resolving (the former is fetched in the same `stackTrace`
+        // response, so it's already there; the latter is a separate,
+        // slower background chain — see `debug_state::VarFetch`'s own doc
+        // comment for why).
+        let stack = debug.call_stack();
+        assert!(!stack.is_empty(), "a real stackTrace response should report at least one frame");
+        // Real java-debug reports a frame's own `name` as `"Main.main(String[])"`
+        // — the declaring class and full signature, not the bare method
+        // name a first guess from the DAP spec alone might expect.
+        assert_eq!(stack[0].name, "Main.main(String[])", "the top frame should be the fixture's own main()");
+        assert_eq!(
+            stack[0].file.as_deref().and_then(|p| p.canonicalize().ok()),
+            main_java.canonicalize().ok(),
+            "the top frame's own file should be the fixture's Main.java"
+        );
+
+        let variables_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            debug.poll();
+            let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc));
+            if !debug.variables().is_empty() {
+                break;
+            }
+            assert!(Instant::now() < variables_deadline, "the scopes/variables chain never finished");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let has_args = debug.variables().iter().any(|group| group.variables.iter().any(|v| v.name == "args"));
+        assert!(has_args, "main(String[] args)'s own parameter should show up among the real fetched variables");
+
+        // Step Over: from the println line, the next line reached in the
+        // same frame is the `Thread.sleep(5000)` call right after it.
+        debug.step_over();
+        let (_, line_after_step) = wait_for_pause(&mut debug, &mut state, &mut doc);
+        assert_eq!(line_after_step, 4, "Step Over should land on the next source line");
+
+        // Continue: nothing else stops it, so the debuggee runs to
+        // completion — `Thread.sleep(5000)` makes this genuinely take a
+        // few seconds, hence the generous deadline below.
+        debug.continue_();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            debug.poll();
+            let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc));
+            match debug.status() {
+                crate::debug_state::DebugStatus::Idle => break,
+                crate::debug_state::DebugStatus::Failed(message) => panic!("debug session failed: {message}"),
+                status => {
+                    assert!(Instant::now() < deadline, "debuggee never terminated after Continue; stuck at {status:?}");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+
+        debug.stop();
     }
 
     /// `TECHNICAL_DEBT.md` #18: a raw JSON-RPC probe already proved

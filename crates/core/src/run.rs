@@ -18,7 +18,7 @@
 //! `java -cp ... Main arg1 arg2` launch reading both `System.getenv` and
 //! its own `args`), not assumed from either tool's own docs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build_output::default_classes_dir;
@@ -54,25 +54,36 @@ impl std::fmt::Display for RunSetupError {
 
 impl std::error::Error for RunSetupError {}
 
-/// Assembles (but does not spawn) the real `java` launch for `config`
-/// against `tool`'s own resolved classpath, cwd set to `config.
-/// working_dir` (or `project_root` when unset, matching `RunConfig`'s own
-/// documented default).
-pub fn run_command(project_root: &Path, tool: BuildTool, config: &RunConfig) -> Result<Command, RunSetupError> {
-    let classpath = match tool {
+/// Resolves `tool`'s own real classpath for `project_root` — every jar plus
+/// the tool's default compiled-classes output directory, most-specific
+/// first. Split out of `run_command` so a caller that needs the raw entry
+/// list rather than a shell-ready `-cp` string (`PLAN.md` Track 23's own DAP
+/// `launch` request, whose `classPaths` argument is a real JSON array, not
+/// a joined string) doesn't have to duplicate this same Maven/Gradle
+/// resolution branch a second time.
+pub fn resolve_classpath(project_root: &Path, tool: BuildTool) -> Result<Vec<PathBuf>, RunSetupError> {
+    match tool {
         BuildTool::Maven => {
             let mut cp = maven_classpath(project_root).map_err(|e| RunSetupError::Classpath(e.to_string()))?;
             cp.insert(0, default_classes_dir(project_root, tool));
-            cp
+            Ok(cp)
         }
         BuildTool::Gradle => {
             let classpaths = gradle_classpaths(project_root).map_err(|e| RunSetupError::Classpath(e.to_string()))?;
             let root = classpaths.into_iter().find(|c| c.path == ":").ok_or(RunSetupError::NoRootModule)?;
             let mut cp = root.runtime;
             cp.insert(0, default_classes_dir(project_root, tool));
-            cp
+            Ok(cp)
         }
-    };
+    }
+}
+
+/// Assembles (but does not spawn) the real `java` launch for `config`
+/// against `tool`'s own resolved classpath, cwd set to `config.
+/// working_dir` (or `project_root` when unset, matching `RunConfig`'s own
+/// documented default).
+pub fn run_command(project_root: &Path, tool: BuildTool, config: &RunConfig) -> Result<Command, RunSetupError> {
+    let classpath = resolve_classpath(project_root, tool)?;
 
     let separator = if cfg!(windows) { ';' } else { ':' };
     let classpath_str = classpath

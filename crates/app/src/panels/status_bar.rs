@@ -19,6 +19,7 @@
 
 use fg_i18n::{msg, t};
 
+use crate::debug_state::{DebugState, DebugStatus};
 use crate::lsp_manager::{ALL_SERVERS, LspManagerState};
 use crate::lsp_state::LspState;
 use crate::panels::git_diff::DiffState;
@@ -67,6 +68,12 @@ pub struct BackgroundWork {
     /// itemised — they're all "the app is talking to git", and several
     /// routinely overlap after a single save.
     pub running_git: bool,
+    /// A debug session's own launch handshake in flight (`PLAN.md` Track 23
+    /// Phase 1) — `Some` only while `DebugStatus::Starting`; once `Attached`
+    /// the Run menu's own button already reads `Stop`, a persistent enough
+    /// signal that this ambient line would just be redundant noise once the
+    /// handshake itself is done.
+    pub debug_starting: bool,
 }
 
 impl BackgroundWork {
@@ -81,6 +88,7 @@ impl BackgroundWork {
         spring_config: &SpringConfigState,
         git_stage: &GitStageState,
         diff: &DiffState,
+        debug: &DebugState,
     ) -> Self {
         let servers = &lsp_servers.manager;
         let tools = &static_analysis.tool_manager;
@@ -99,6 +107,7 @@ impl BackgroundWork {
                 || git_stage.op_running()
                 || git_stage.expanded_running()
                 || git_stage.full_diff_running(),
+            debug_starting: matches!(debug.status(), DebugStatus::Starting(_)),
         }
     }
 }
@@ -191,6 +200,9 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
     }
     if work.detecting_java_home {
         activities.push(Activity::new(t().status_bar.detecting_java_home.to_string()));
+    }
+    if work.debug_starting {
+        activities.push(Activity::new(t().common.running_debug.to_string()));
     }
     activities
 }

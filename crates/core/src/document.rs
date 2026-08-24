@@ -118,6 +118,11 @@ pub struct Document {
     /// "a fresh run's results always supersede the previous one" rule
     /// `checkstyle_diagnostics`'s own apply-results already established.
     pub coverage_lines: Vec<LineCoverage>,
+    /// Lines with a user-toggled breakpoint (`PLAN.md` Track 23 Phase 2) —
+    /// membership only, same session-only shape `folded_lines` already
+    /// establishes (a fresh open always starts with none, nothing here is
+    /// persisted).
+    pub breakpoints: HashSet<usize>,
 }
 
 impl Document {
@@ -178,6 +183,7 @@ impl Document {
             read_only: false,
             folded_lines: HashSet::new(),
             coverage_lines: Vec::new(),
+            breakpoints: HashSet::new(),
         })
     }
 
