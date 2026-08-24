@@ -138,14 +138,52 @@ Depends on Track 18 (`Inline diff viewer widget`) for its own revert-diff
 view — land that track first, or this one's Phase 2 duplicates its own
 diff rendering, which the whole point of Track 18 existing is to avoid.
 
-**Phase 1 — snapshot on save.** Every `Document::save` additionally writes
-the pre-save buffer into `.foxgarden/history/<relative path>/
-<timestamp>.snapshot`; a per-file cap (e.g. 50) prunes the oldest beyond
-it.
+**Phase 1 — snapshot on save. Done.** New `crates/core/src/file_history.rs`:
+`write_snapshot(project_root, file_path, content)` writes `content` (the
+just-saved, post-trim text) to `.foxgarden/history/<relative path>/
+<nanosecond timestamp>.snapshot` — the whole relative path, including the
+file's own name, becomes a directory (e.g. `.foxgarden/history/src/main/
+java/Main.java/`), with each save inside it named by timestamp, mirroring
+`run_config.rs`'s own `.foxgarden/run_configs.json` per-project-not-
+`eframe::Storage` convention. A no-op, not an error, when `file_path` isn't
+under `project_root` (a file opened with no project open at all, or one
+outside it, e.g. via go-to-definition into a JDK source) — there's no
+sensible project-relative location to snapshot into. `prune_snapshots`
+then trims the oldest beyond `SNAPSHOT_CAP` (50), sorting by the *parsed*
+timestamp rather than lexically so it can't be fooled by a future digit-
+count change.
 
-**Checkpoint 1:** `cargo test -p fg-core`/`-p app` green (a temp-project
-fixture asserting snapshots accumulate and prune correctly); no live
-click-through needed yet (no UI reads them).
+`Document` gained `project_root: Option<PathBuf>`, set by `EditorState::
+open_tab` right after `Document::open` (which has no project context of
+its own) rather than threaded as an extra parameter through `Document::
+save`'s own many call sites (`save_document`/`save_tab`/the editor's
+right-click Save, several layers deep in `widget.rs`/`context_menu.rs`) —
+keeping `save` self-sufficient avoided rippling a new parameter through
+every one of them for what's otherwise an internal detail of *how* saving
+persists. `save` calls `file_history::write_snapshot` best-effort (a
+snapshot failure — a read-only `.foxgarden/`, a full disk — is swallowed
+rather than failing the save itself, since the file actually saving
+matters far more than its own history entry existing).
+
+One real correctness gap found and closed while building this, not
+assumed away: `SystemTime::now()` at millisecond resolution collided
+across this module's own repeated-writes test (three saves landing in the
+same millisecond silently overwrote one snapshot with the next). Switched
+to nanoseconds, which isn't itself a guarantee on every platform's clock
+either, so `write_snapshot` also falls back to a `-1`/`-2`/... suffix loop
+on an exact collision rather than assuming nanosecond resolution is always
+enough — `prune_snapshots` parses both the timestamp and that optional
+suffix so a collided pair still sorts in the order they were actually
+written.
+
+**Checkpoint 1 — done.** `cargo build --workspace`/`cargo test
+--workspace`/`cargo clippy --workspace --all-targets` all green (`fg-core`
+203 passed, up from 199 — `file_history`'s own 4 unit tests plus
+`Document::save`'s two new snapshot-vs-no-project-root tests plus
+`EditorState::open_tab`'s two new project-root-propagation tests; `app`
+942 passed, 4 ignored, unaffected). No live click-through needed yet, per
+this phase's own checkpoint — no UI reads `.foxgarden/history/` until
+Phase 2.
 
 **Phase 2 — history UI + revert.** Tab context-menu "File History…" lists
 snapshots (timestamp + diff-stat); selecting one shows Track 18's diff
@@ -1959,8 +1997,8 @@ real file a click-to-jump row, resolved through `app.rs`'s own
 are) and the variables grouped by scope (`egui::CollapsingHeader` per
 group).
 
-**Checkpoint 3 — real-protocol half done and live-verified; GUI
-click-through owed.** `cargo build --workspace`/`cargo test --workspace`/
+**Checkpoint 3 — done, including the GUI click-through.**
+`cargo build --workspace`/`cargo test --workspace`/
 `cargo clippy --workspace --all-targets` all green (945 passed, 4 ignored
 — one of them this phase's own extended real-server test; the same two
 pre-existing tests flagged in Phase 2's own checkpoint were observed
@@ -1978,11 +2016,32 @@ first guess got wrong: a stack frame's own `name` is java-debug's full
 `"Main.main(String[])"` (declaring class + signature), not the bare method
 name the DAP spec's own field name alone would suggest. Every new pure
 helper (`parse_call_stack`, `parse_scopes`, `parse_variables`) also has its
-own fast, no-I/O unit tests. The GUI half (opening the panel, clicking a
-call-stack frame to jump, watching real values update across a step) is
-not yet click-through-verified — worth doing next time an exclusive Xvfb
-display is available, same caveat Phase 1/2 already flagged for their own
-GUI halves.
+own fast, no-I/O unit tests.
+
+The GUI half's own owed click-through closed this session on a dedicated,
+confirmed-exclusive Xvfb `:99` (checked clean via `ps aux`/`xwininfo`
+before touching it, same discipline Phase 2's own click-through session
+established). A real persistent fixture Maven project (same shape as the
+real-server test's own throwaway one, built fresh under `/tmp` since none
+survived from prior sessions) was opened via the same `~/.local/share/
+foxgarden/app.ron` `last_project` edit workaround Phase 2 already found
+necessary for `rfd`'s portal-routed Open Folder dialog — real session data
+backed up first, restored after. A real gutter click set a breakpoint on
+`System.out.println("debug fixture running")`, a run configuration was
+created through Executar > Editar Configurações (typing into its fields
+needed one extra `xdotool windowfocus <id>` first — this Xvfb instance has
+no window manager, so keystrokes sent before an explicit focus landed
+nowhere even though the field's own border showed focused), then Executar
+> Depurar Projeto: the pause landed exactly on the breakpointed line, the
+new `debug_panel.rs` populated in real time with the real call stack
+(`Main.main(String[]) (Main.java:4)`) and the real fetched `args` variable
+under its `Local` scope group, clicking the call-stack row itself worked
+(single-frame session, so the click's own destination was the line already
+showing — no crash, no stale state), Passar Por Cima moved the highlight
+and both panels' own live values to line 5, and Continuar ran the
+debuggee to real completion with the toolbar and debug panel both
+cleanly disappearing afterward — every piece of Phase 3's new UI exercised
+against a real session, not just asserted to exist.
 
 ---
 
@@ -2345,7 +2404,11 @@ how correct the generated skeleton is.
 - [x] Track 2 — Richer Java/Kotlin syntax highlighting (code green, no
       live click-through required per this track's own Checkpoint 1 note —
       headless-testable via the highlight-span test shape)
-- [ ] Track 4 — Local (non-git) file history
+- [ ] Track 4 — Local (non-git) file history (Phase 1 — snapshot on save —
+      shipped: every `Document::save` under an open project writes a
+      timestamped copy to `.foxgarden/history/<relative path>/`, capped at
+      50 per file; Phase 2 — history UI + revert, needs Track 18's diff
+      widget — not started)
 - [x] Track 5 — Static analysis integration (all 3 phases shipped and
       live-verified: Checkstyle and PMD verified earlier, including the
       in-app install/update addition for all three tools' binaries;
@@ -2461,7 +2524,7 @@ how correct the generated skeleton is.
       both, verified side by side — into a pass/fail summary with a
       clickable row per failing test, jumping to the exact assertion line
       via its own stack trace)
-- [ ] Track 23 — Debugger (Phase 1 — DAP client + launch — shipped and
+- [x] Track 23 — Debugger (Phase 1 — DAP client + launch — shipped and
       live-verified: a real jdtls + vendored `java-debug` bundle + real
       Maven project reached a real DAP `Attached` state, `"Launching
       debuggee VM succeeded"` in jdt.ls' own log; Phase 2 — breakpoints +
@@ -2471,9 +2534,13 @@ how correct the generated skeleton is.
       completion) and the owed GUI click-through (gutter toggle, Debug
       Project, pause highlight, every toolbar button) closed this session
       on a dedicated Xvfb instance; Phase 3 — variable/call-stack panel —
-      shipped and live-verified against the real protocol (real call stack
-      + real fetched `args` variable off a real jdtls + java-debug pause);
-      its own GUI click-through still owed, same as Phase 1's)
+      shipped and fully live-verified, both the real protocol (real call
+      stack + real fetched `args` variable off a real jdtls + java-debug
+      pause) and its own GUI click-through — the new `debug_panel.rs`
+      populating live, a call-stack row click, Step Over updating both
+      panels, Continue running to completion and both panels
+      disappearing — closed this session on a dedicated Xvfb instance;
+      all three phases' known gaps now closed, track complete)
 - [ ] Track 26 — Profiler integration
 - [x] Track 28 — Language Server settings modal + jdtls/kotlin-language-
       server installer (landed; both servers are now vendored directly

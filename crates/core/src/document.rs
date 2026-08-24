@@ -123,6 +123,16 @@ pub struct Document {
     /// establishes (a fresh open always starts with none, nothing here is
     /// persisted).
     pub breakpoints: HashSet<usize>,
+    /// The open project's own root, if this document lives under one — set
+    /// by `EditorState::open_tab` right after `Document::open` (which has
+    /// no project context of its own to draw on), not by `open` itself.
+    /// `save` uses this to snapshot into `.foxgarden/history/` (`PLAN.md`
+    /// Track 4 Phase 1); `None` both for a file opened with no project open
+    /// at all and for one outside the current project's own root (e.g. via
+    /// go-to-definition into a JDK/library source) — either way there's no
+    /// sensible project-relative location to snapshot into, so `save`
+    /// simply skips it.
+    pub project_root: Option<PathBuf>,
 }
 
 impl Document {
@@ -184,6 +194,7 @@ impl Document {
             folded_lines: HashSet::new(),
             coverage_lines: Vec::new(),
             breakpoints: HashSet::new(),
+            project_root: None,
         })
     }
 
@@ -195,7 +206,12 @@ impl Document {
     /// `buffer` itself (not just the bytes written to disk) to match — so
     /// the editor immediately shows what's actually on disk, and `is_dirty`
     /// (derived from `buffer != saved_buffer`) doesn't flip back to `true`
-    /// right after a save because the two silently diverged.
+    /// right after a save because the two silently diverged. Also snapshots
+    /// the saved content into `.foxgarden/history/` (`PLAN.md` Track 4
+    /// Phase 1) when `project_root` is set — best-effort: a snapshot
+    /// failure (a read-only `.foxgarden/`, a full disk) is silently
+    /// swallowed rather than failing the save itself, since the file having
+    /// actually saved matters far more than its own history entry existing.
     pub fn save(&mut self) -> std::io::Result<()> {
         let original = self.buffer.to_string();
         let trimmed = trim_trailing_whitespace(&original);
@@ -205,6 +221,9 @@ impl Document {
         }
         self.buffer = Rope::from_str(&trimmed);
         std::fs::write(&self.path, &trimmed)?;
+        if let Some(project_root) = &self.project_root {
+            let _ = crate::file_history::write_snapshot(project_root, &self.path, &trimmed);
+        }
         self.saved_buffer = self.buffer.clone();
         Ok(())
     }
@@ -280,6 +299,32 @@ mod tests {
 
         doc.buffer.remove(0.."// comment\n".len());
         assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn save_snapshots_into_history_when_project_root_is_set() {
+        let (dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
+        let mut doc = Document::open(path).unwrap();
+        doc.project_root = Some(dir.path().to_path_buf());
+
+        doc.buffer.insert(0, "// comment\n");
+        doc.save().unwrap();
+
+        let history_dir = dir.path().join(".foxgarden/history/Hello.java");
+        let snapshots: Vec<_> = std::fs::read_dir(&history_dir).unwrap().collect();
+        assert_eq!(snapshots.len(), 1);
+    }
+
+    #[test]
+    fn save_writes_no_history_without_a_project_root() {
+        let (dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
+        let mut doc = Document::open(path).unwrap();
+        assert_eq!(doc.project_root, None);
+
+        doc.buffer.insert(0, "// comment\n");
+        doc.save().unwrap();
+
+        assert!(!dir.path().join(".foxgarden").exists());
     }
 
     #[test]

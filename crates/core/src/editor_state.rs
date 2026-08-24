@@ -74,7 +74,8 @@ impl EditorState {
             return Ok(index);
         }
 
-        let document = Document::open(path)?;
+        let mut document = Document::open(path)?;
+        document.project_root = self.project.as_ref().map(|project| project.root.clone());
         self.open_tabs.push(document);
         let index = self.open_tabs.len() - 1;
         self.active_tab = Some(index);
@@ -179,6 +180,29 @@ mod tests {
         assert_eq!(first_index, second_index);
         assert_eq!(state.open_tabs.len(), 1);
         assert_eq!(state.active_tab, Some(first_index));
+    }
+
+    #[test]
+    fn opening_a_tab_within_an_open_project_records_its_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let mut state = EditorState::new();
+
+        state.open_project(dir.path().to_path_buf()).unwrap();
+        let index = state.open_tab(a).unwrap();
+
+        assert_eq!(state.open_tabs[index].project_root, Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn opening_a_tab_with_no_project_open_records_no_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = test_support::placeholder_java_file(dir.path(), "A.java");
+        let mut state = EditorState::new();
+
+        let index = state.open_tab(a).unwrap();
+
+        assert_eq!(state.open_tabs[index].project_root, None);
     }
 
     #[test]

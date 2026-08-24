@@ -6,6 +6,7 @@ mod diagnostic;
 mod diff;
 mod document;
 mod editor_state;
+mod file_history;
 mod gradle;
 mod java_release;
 mod language;
