@@ -937,13 +937,44 @@ integration`) — whichever track lands first builds that shared piece;
 this track's Phase 1 assumes it doesn't exist yet and builds a Docker-
 specific version only if Track 22 genuinely hasn't landed first.
 
-**Phase 1 — build & run.** Run > "Docker: Build & Run" / "Docker Compose:
-Up" shells out, streams output into the (possibly newly-built) output
-panel.
+**Phase 1 — build & run. Done.** Run > "Docker: Build & Run" / "Docker
+Compose: Up" shells out, streams output into the Track-22-built output
+panel — reused as-is, not a Docker-specific one-off, since Track 22
+landed first. New `crates/core/src/docker.rs`: `has_dockerfile`/
+`compose_file` (the latter checking `compose.yaml`/`compose.yml`/
+`docker-compose.yaml`/`docker-compose.yml` in the Compose Specification's
+own real discovery precedence, not guessed), `docker_build_command`/
+`docker_run_command`/`docker_compose_up_command` assembling (not
+spawning) the real invocations, tagging a build `foxgarden-<sanitized-dir-
+name>` so it's visibly distinguishable from a hand-built image in `docker
+images`/`docker ps`. `panels::build_panel::BuildState` gained three
+`Stage` variants (`DockerBuild`/`DockerRun`/`DockerCompose`) reusing the
+exact same `spawn_process`/streaming/poll machinery Build/Run/Test/
+Coverage already established — `DockerBuild`'s own `Finished` handling
+chains into `docker run --rm` of the image it just built once that
+succeeds, the same "compile, then launch" shape `RunCompiling`/
+`RunLaunched` already use for `mvn`/`gradle` + `java`. Each Run-menu entry
+disables itself when the file it would act on isn't present at the
+project root, rather than being clickable and failing with "no Dockerfile
+found."
 
-**Checkpoint 1:** full suite green; live-verify building/running a real
-Dockerfile/compose stack streams real output and the container actually
-starts (checked via `docker ps`, not just panel output).
+**Checkpoint 1 — done.** `cargo build --workspace`/`cargo test
+--workspace`/`cargo clippy --workspace --all-targets` all green (`fg-core`
+214 passed, up from 206 — `docker`'s own 9 unit tests; `foxgarden` 948
+passed/4 ignored, unaffected; no new clippy warnings). Live-verified under
+Xvfb against a real `Dockerfile` (`FROM alpine:3.19`, prints a marker
+string then sleeps): Run > "Docker: Build & Run" streamed real BuildKit
+build output into the panel, then the container's own stdout, and `docker
+ps` confirmed a real `foxgarden-<project>` container actually running
+concurrently with the app — not just panel text. "Docker Compose: Up"
+correctly stayed disabled with no compose file present at the project
+root (not live-verified end-to-end with a real compose stack this pass;
+worth a follow-up live-verify once a real multi-service project is
+available, same open-item shape Track 20 Phase 7's own checkpoint already
+flagged for a real Maven/Gradle project). The shared "Parar"/Stop button
+only kills the local `docker run` client process, not the container
+itself, via `docker stop` — expected: real container-stop lifecycle is
+Phase 2's own explicit scope, not this phase's.
 
 **Phase 2 — lifecycle + stop.** A Stop button per running container/
 stack; app-close stops every tracked container.

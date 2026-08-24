@@ -4,6 +4,7 @@ mod build_output;
 mod coverage;
 mod diagnostic;
 mod diff;
+mod docker;
 mod document;
 mod editor_state;
 mod file_history;
@@ -30,6 +31,7 @@ pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
     git_show_head, hunk_patch, parse_file_diff, parse_unified_diff,
 };
+pub use docker::{compose_file, docker_build_command, docker_compose_up_command, docker_run_command, has_dockerfile};
 pub use document::{Document, OpenDocumentError};
 pub use editor_state::{EditorState, TerminalTab};
 pub use file_history::{Snapshot, list_snapshots};

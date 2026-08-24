@@ -88,6 +88,8 @@ pub struct Menu {
     pub run_project: &'static str,
     pub run_tests: &'static str,
     pub run_with_coverage: &'static str,
+    pub docker_build_and_run: &'static str,
+    pub docker_compose_up: &'static str,
     pub debug_project: &'static str,
 
     pub view: &'static str,
@@ -316,6 +318,8 @@ pub struct Errors {
     pub no_build_tool_detected: &'static str,
     pub no_run_config: &'static str,
     pub coverage_requires_maven: &'static str,
+    pub no_dockerfile_detected: &'static str,
+    pub no_compose_file_detected: &'static str,
     pub rename_empty_name: &'static str,
     pub rename_no_parent: &'static str,
 }
@@ -353,6 +357,13 @@ pub struct Common {
     pub running_run: &'static str,
     pub running_tests: &'static str,
     pub running_coverage: &'static str,
+    /// The Run menu shows this in place of `menu.docker_build_and_run`
+    /// while `docker build`/`docker run` is in flight (`PLAN.md` Track 14
+    /// Phase 1).
+    pub running_docker_build: &'static str,
+    /// Same as `running_docker_build`, for `menu.docker_compose_up` while
+    /// `docker compose up --build` is in flight.
+    pub running_docker_compose: &'static str,
     /// The Run menu shows this in place of `menu.debug_project` once a
     /// debug session is starting or attached (`PLAN.md` Track 23 Phase 1),
     /// same "one string, so the button and any status line can't drift
@@ -426,6 +437,8 @@ pub const PT_BR: Strings = Strings {
         run_project: "Executar Projeto",
         run_tests: "Executar Testes",
         run_with_coverage: "Executar com Cobertura",
+        docker_build_and_run: "Docker: Construir e Executar",
+        docker_compose_up: "Docker Compose: Subir",
         debug_project: "Depurar Projeto",
 
         view: "Exibir",
@@ -619,6 +632,8 @@ pub const PT_BR: Strings = Strings {
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
         coverage_requires_maven: "Cobertura de código só é suportada em projetos Maven no momento.",
+        no_dockerfile_detected: "Nenhum Dockerfile encontrado na raiz do projeto.",
+        no_compose_file_detected: "Nenhum arquivo compose.yaml/docker-compose.yml encontrado na raiz do projeto.",
         pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
         spotbugs_not_configured: "Defina o binário do SpotBugs em Configurações > Ferramentas Externas primeiro.",
         spotbugs_no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
@@ -650,6 +665,8 @@ pub const PT_BR: Strings = Strings {
         running_run: "Executando…",
         running_tests: "Executando Testes…",
         running_coverage: "Executando Cobertura…",
+        running_docker_build: "Construindo e Executando Docker…",
+        running_docker_compose: "Subindo Docker Compose…",
         running_debug: "Depurando…",
         stop: "Parar",
         debug_continue: "Continuar",
@@ -712,6 +729,8 @@ pub const EN_US: Strings = Strings {
         run_project: "Run Project",
         run_tests: "Run Tests",
         run_with_coverage: "Run with Coverage",
+        docker_build_and_run: "Docker: Build & Run",
+        docker_compose_up: "Docker Compose: Up",
         debug_project: "Debug Project",
 
         view: "View",
@@ -905,6 +924,8 @@ pub const EN_US: Strings = Strings {
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
         coverage_requires_maven: "Code coverage is only supported for Maven projects right now.",
+        no_dockerfile_detected: "No Dockerfile found at the project root.",
+        no_compose_file_detected: "No compose.yaml/docker-compose.yml found at the project root.",
         pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
         spotbugs_not_configured: "Set the SpotBugs binary in Settings > External Tools first.",
         spotbugs_no_compiled_classes: "No compiled classes found. Run Run > Build first.",
@@ -936,6 +957,8 @@ pub const EN_US: Strings = Strings {
         running_run: "Running…",
         running_tests: "Running Tests…",
         running_coverage: "Running Coverage…",
+        running_docker_build: "Building & Running Docker…",
+        running_docker_compose: "Bringing Up Docker Compose…",
         running_debug: "Debugging…",
         stop: "Stop",
         debug_continue: "Continue",

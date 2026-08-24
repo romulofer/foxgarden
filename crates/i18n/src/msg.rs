@@ -278,6 +278,17 @@ msg! {
 }
 
 msg! {
+    /// A Docker action's own `Command::spawn` failing (`docker` missing
+    /// from `PATH`, e.g.) — not the build/run itself failing, which
+    /// instead shows up as ordinary lines in the build output panel
+    /// (`PLAN.md` Track 14 Phase 1).
+    failed_to_start_docker(err: &str) {
+        pt: "falha ao iniciar o Docker: {err}",
+        en: "failed to start Docker: {err}",
+    }
+}
+
+msg! {
     pmd_failed(err: &str) {
         pt: "o PMD falhou: {err}",
         en: "PMD failed: {err}",

@@ -88,6 +88,22 @@ enum Stage {
     /// parses `fg_core::coverage_report_path`'s own file once this exits
     /// successfully.
     Coverage { project_root: PathBuf },
+    /// Docker "Build & Run" (`PLAN.md` Track 14 Phase 1): `docker build`
+    /// running against `project_root`'s `Dockerfile`; `poll`'s own
+    /// `Finished` handling chains straight into `docker run --rm` of the
+    /// image it just built once that succeeds, the same "compile, then
+    /// launch" chain `RunCompiling`/`RunLaunched` already establish for
+    /// `mvn`/`gradle` + `java`.
+    DockerBuild { project_root: PathBuf },
+    /// The `docker run --rm` launched once `DockerBuild` finishes — no
+    /// further chaining, so this needs no fields of its own, same as
+    /// `RunLaunched`.
+    DockerRun,
+    /// Docker Compose "Up" (`PLAN.md` Track 14 Phase 1): one `docker
+    /// compose up --build` process covering build-and-start together, no
+    /// chained second process — same one-process shape `Coverage` already
+    /// uses for a tool that does everything itself.
+    DockerCompose,
 }
 
 /// One coverage run's own outcome: every source file JaCoCo reported data
@@ -135,6 +151,17 @@ impl BuildState {
 
     pub fn is_coverage_running(&self) -> bool {
         self.running() && matches!(self.stage, Some(Stage::Coverage { .. }))
+    }
+
+    /// Distinguishes Docker "Build & Run" from Docker Compose "Up" the same
+    /// way `is_build_running`/`is_run_running` distinguish Build from Run —
+    /// each menu entry needs its own "am I busy" answer.
+    pub fn is_docker_build_run_running(&self) -> bool {
+        self.running() && matches!(self.stage, Some(Stage::DockerBuild { .. }) | Some(Stage::DockerRun))
+    }
+
+    pub fn is_docker_compose_running(&self) -> bool {
+        self.running() && matches!(self.stage, Some(Stage::DockerCompose))
     }
 
     /// Starts a plain Build: the project's own compile command, stopping
@@ -191,6 +218,25 @@ impl BuildState {
         self.stage = Some(Stage::Coverage {
             project_root: project_root.to_path_buf(),
         });
+        Ok(())
+    }
+
+    /// Starts Docker "Build & Run" (`PLAN.md` Track 14 Phase 1):
+    /// `docker build`, chaining into `docker run --rm` of the built image
+    /// once that succeeds (`poll`'s own `Finished` handling).
+    pub fn start_docker_build_and_run(&mut self, project_root: &Path) -> std::io::Result<()> {
+        self.reset();
+        self.spawn_process(fg_core::docker_build_command(project_root))?;
+        self.stage = Some(Stage::DockerBuild { project_root: project_root.to_path_buf() });
+        Ok(())
+    }
+
+    /// Starts Docker Compose "Up" (`PLAN.md` Track 14 Phase 1): one
+    /// `docker compose up --build` process, no chaining.
+    pub fn start_docker_compose_up(&mut self, compose_file: &Path) -> std::io::Result<()> {
+        self.reset();
+        self.spawn_process(fg_core::docker_compose_up_command(compose_file))?;
+        self.stage = Some(Stage::DockerCompose);
         Ok(())
     }
 
@@ -388,6 +434,18 @@ impl BuildState {
                                     text: "Coverage run failed to complete — see log above.".into(),
                                     problem: None,
                                 });
+                            }
+                        }
+                        Some(Stage::DockerBuild { project_root }) if success => {
+                            match self.spawn_process(fg_core::docker_run_command(&project_root)) {
+                                Ok(()) => self.stage = Some(Stage::DockerRun),
+                                Err(err) => {
+                                    self.rows.push(BuildRow {
+                                        text: format!("Failed to run container: {err}"),
+                                        problem: None,
+                                    });
+                                    self.last_success = Some(false);
+                                }
                             }
                         }
                         _ => self.last_success = Some(success),

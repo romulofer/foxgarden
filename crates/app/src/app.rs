@@ -1444,6 +1444,8 @@ impl eframe::App for FoxGardenApp {
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
                         self.build_state.is_coverage_running(),
+                        self.build_state.is_docker_build_run_running(),
+                        self.build_state.is_docker_compose_running(),
                         self.debug_state.is_running(),
                     )
                 })
@@ -1701,6 +1703,31 @@ impl eframe::App for FoxGardenApp {
                 },
                 Some(fg_core::BuildTool::Gradle) => self.last_error = Some(t().errors.coverage_requires_maven.to_string()),
                 None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+            }
+        }
+
+        if menu_outcome.docker_build_run_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            if fg_core::has_dockerfile(&root) {
+                match self.build_state.start_docker_build_and_run(&root) {
+                    Ok(()) => self.build_panel_visible = true,
+                    Err(err) => self.last_error = Some(msg::failed_to_start_docker(&err.to_string())),
+                }
+            } else {
+                self.last_error = Some(t().errors.no_dockerfile_detected.to_string());
+            }
+        }
+
+        if menu_outcome.docker_compose_up_request
+            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+        {
+            match fg_core::compose_file(&root) {
+                Some(compose_file) => match self.build_state.start_docker_compose_up(&compose_file) {
+                    Ok(()) => self.build_panel_visible = true,
+                    Err(err) => self.last_error = Some(msg::failed_to_start_docker(&err.to_string())),
+                },
+                None => self.last_error = Some(t().errors.no_compose_file_detected.to_string()),
             }
         }
 

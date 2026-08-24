@@ -81,6 +81,10 @@ pub struct MenuBarOutcome {
     pub run_tests_request: bool,
     /// Run > Run with Coverage (`PLAN.md` Track 13 Phase 1, Maven-only).
     pub run_with_coverage_request: bool,
+    /// Run > "Docker: Build & Run" (`PLAN.md` Track 14 Phase 1).
+    pub docker_build_run_request: bool,
+    /// Run > "Docker Compose: Up" (`PLAN.md` Track 14 Phase 1).
+    pub docker_compose_up_request: bool,
     /// Run > Debug Project, which becomes Run > Stop once `debug_running`
     /// (this same button relabels/re-targets itself, rather than the menu
     /// carrying two separate booleans for "start" and "stop") — the
@@ -131,6 +135,8 @@ pub fn show(
     run_running: bool,
     test_running: bool,
     coverage_running: bool,
+    docker_build_run_running: bool,
+    docker_compose_running: bool,
     debug_running: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
@@ -458,14 +464,21 @@ pub fn show(
                 outcome.open_run_configs_request = true;
                 ui.close();
             }
-            let any_running = build_running || run_running || test_running || coverage_running || debug_running;
+            let any_running = build_running
+                || run_running
+                || test_running
+                || coverage_running
+                || docker_build_run_running
+                || docker_compose_running
+                || debug_running;
             // Build/Run/Test/Coverage all disable while a debug session is
             // up too (`any_running` above already covers that), but the
             // Debug entry's own enabled-ness has to stay independent of its
             // own `debug_running` — otherwise there would be no way to ever
             // click it again to reach `outcome.debug_request` and stop a
             // session already in flight.
-            let other_running = build_running || run_running || test_running || coverage_running;
+            let other_running =
+                build_running || run_running || test_running || coverage_running || docker_build_run_running || docker_compose_running;
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
@@ -504,6 +517,42 @@ pub fn show(
                 .clicked()
             {
                 outcome.run_with_coverage_request = true;
+                ui.close();
+            }
+            // Each Docker entry's own enabled-ness additionally requires
+            // the file it would act on to actually exist at the project
+            // root (`fg_core::has_dockerfile`/`compose_file`) — offering a
+            // button that can only ever fail with "no Dockerfile found"
+            // would be worse than just not showing it as clickable.
+            let docker_root = state.project.as_ref().map(|p| p.root.clone());
+            let has_dockerfile = docker_root.as_deref().is_some_and(fg_core::has_dockerfile);
+            let has_compose_file = docker_root.as_deref().and_then(fg_core::compose_file).is_some();
+            if ui
+                .add_enabled(
+                    has_dockerfile && !any_running,
+                    egui::Button::new(if docker_build_run_running {
+                        t().common.running_docker_build
+                    } else {
+                        t().menu.docker_build_and_run
+                    }),
+                )
+                .clicked()
+            {
+                outcome.docker_build_run_request = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    has_compose_file && !any_running,
+                    egui::Button::new(if docker_compose_running {
+                        t().common.running_docker_compose
+                    } else {
+                        t().menu.docker_compose_up
+                    }),
+                )
+                .clicked()
+            {
+                outcome.docker_compose_up_request = true;
                 ui.close();
             }
             if ui
