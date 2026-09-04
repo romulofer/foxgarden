@@ -31,7 +31,8 @@ use super::peek::PeekState;
 use super::references::FindReferencesState;
 use super::rename::RenameBox;
 use super::painting::{
-    paint_blame_annotation, paint_bracket_match, paint_diagnostics, paint_extra_selections, paint_indent_guides,
+    paint_blame_annotation, paint_bracket_match, paint_diagnostic_ruler, paint_diagnostics, paint_extra_selections,
+    paint_indent_guides,
     paint_line_numbers, paint_occurrence_highlights, paint_paused_line_highlight, paint_sticky_scroll, paint_whitespace,
 };
 use super::spring_annotation_completion;
@@ -190,6 +191,30 @@ fn compute_highlight_spans(
             color: theme::color_for_scope(scope, dark_mode),
         })
         .collect()
+}
+
+/// The byte offset of the diagnostic after (or, `forward = false`, before)
+/// `caret_byte`, wrapping around the ends so repeated presses cycle rather
+/// than stopping at the last one. `None` only when there are no
+/// diagnostics at all.
+fn neighbouring_diagnostic(diagnostics: &[&Diagnostic], caret_byte: usize, forward: bool) -> Option<usize> {
+    let mut starts: Vec<usize> = diagnostics.iter().map(|d| d.range.start).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if forward {
+        starts
+            .iter()
+            .copied()
+            .find(|&start| start > caret_byte)
+            .or_else(|| starts.first().copied())
+    } else {
+        starts
+            .iter()
+            .rev()
+            .copied()
+            .find(|&start| start < caret_byte)
+            .or_else(|| starts.last().copied())
+    }
 }
 
 /// How many lines of already-highlighted text to keep on each side of the
@@ -2211,7 +2236,22 @@ pub fn show(
         .chain(doc.spotbugs_diagnostics.iter())
         .chain(doc.lsp_diagnostics.iter())
         .collect();
+    // F8 / Shift+F8 walk this file's diagnostics, in file order, wrapping
+    // at the ends. Before this, reaching a problem meant scrolling until a
+    // squiggle appeared — which is only possible for someone who already
+    // knows there is one and roughly where.
+    let next_diagnostic = ui.input(|i| i.key_pressed(Key::F8) && !i.modifiers.shift);
+    let previous_diagnostic = ui.input(|i| i.key_pressed(Key::F8) && i.modifiers.shift);
+    if (next_diagnostic || previous_diagnostic) && !all_diagnostics.is_empty() {
+        let caret = text_area::peek_caret(ui.ctx(), widget_id).map_or(0, |caret| caret.primary);
+        let caret_byte = char_to_byte(&old_text, caret);
+        if let Some(target) = neighbouring_diagnostic(&all_diagnostics, caret_byte, next_diagnostic) {
+            manual_caret = Some(Caret::at(byte_to_char(&old_text, target.min(old_text.len()))));
+        }
+    }
+
     paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);
+    paint_diagnostic_ruler(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);
     paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);
     // The diff bar sits flush against the text's own left edge (the
     // innermost sliver of the gutter, reserved above via `diff_gutter_
@@ -2717,6 +2757,53 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
             ..
         }
     )
+}
+
+#[cfg(test)]
+mod diagnostic_navigation_test {
+    use super::*;
+
+    fn diagnostic_at(start: usize) -> Diagnostic {
+        Diagnostic {
+            range: start..start + 1,
+            message: "boom".to_string(),
+            severity: fg_core::Severity::Error,
+        }
+    }
+
+    #[test]
+    fn f8_walks_forward_and_wraps_at_the_end() {
+        let diagnostics = [diagnostic_at(10), diagnostic_at(40), diagnostic_at(90)];
+        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+        assert_eq!(neighbouring_diagnostic(&refs, 0, true), Some(10));
+        assert_eq!(neighbouring_diagnostic(&refs, 10, true), Some(40));
+        assert_eq!(neighbouring_diagnostic(&refs, 95, true), Some(10), "past the last one, wrap to the first");
+    }
+
+    #[test]
+    fn shift_f8_walks_backward_and_wraps_at_the_start() {
+        let diagnostics = [diagnostic_at(10), diagnostic_at(40)];
+        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+        assert_eq!(neighbouring_diagnostic(&refs, 40, false), Some(10));
+        assert_eq!(neighbouring_diagnostic(&refs, 0, false), Some(40), "before the first one, wrap to the last");
+    }
+
+    /// Several tools can report the same position (a syntax error the LSP
+    /// also flags); stepping must not stall on it.
+    #[test]
+    fn duplicate_positions_count_once() {
+        let diagnostics = [diagnostic_at(10), diagnostic_at(10), diagnostic_at(50)];
+        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
+
+        assert_eq!(neighbouring_diagnostic(&refs, 10, true), Some(50));
+    }
+
+    #[test]
+    fn nothing_to_step_through_is_not_a_jump_to_zero() {
+        assert_eq!(neighbouring_diagnostic(&[], 0, true), None);
+    }
 }
 
 #[cfg(test)]

@@ -272,6 +272,10 @@ pub struct NewProject {
 /// The `Ctrl+P`/`Ctrl+E`/`Ctrl+Shift+E` popups and the terminal panel's
 /// tab strip.
 pub struct Palettes {
+    /// The command palette's own prompt, and the name of the one command
+    /// that has no menu item to borrow wording from.
+    pub run_a_command: &'static str,
+    pub next_diagnostic: &'static str,
     pub go_to_file: &'static str,
     pub go_to_recent_file: &'static str,
     pub spring_endpoints: &'static str,
@@ -632,6 +636,8 @@ pub const PT_BR: Strings = Strings {
         create: "Criar",
     },
     palettes: Palettes {
+        run_a_command: "Executar comando",
+        next_diagnostic: "Próximo problema",
         go_to_file: "Ir para arquivo",
         go_to_recent_file: "Ir para arquivo recente",
         spring_endpoints: "Endpoints do Spring",
@@ -945,6 +951,8 @@ pub const EN_US: Strings = Strings {
         create: "Create",
     },
     palettes: Palettes {
+        run_a_command: "Run a command",
+        next_diagnostic: "Next problem",
         go_to_file: "Go to file",
         go_to_recent_file: "Go to recent file",
         spring_endpoints: "Spring endpoints",

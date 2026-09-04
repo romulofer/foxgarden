@@ -37,10 +37,6 @@ impl Toasts {
         self.messages.push(message);
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
-    }
-
     /// Draws the stack over the bottom-right of `ui`'s own area. Called
     /// once per frame, after the panels, so toasts sit above everything.
     pub fn show(&mut self, ui: &egui::Ui) {
@@ -105,6 +101,5 @@ mod tests {
         toasts.push("first".to_string());
         toasts.push("second".to_string());
         assert_eq!(toasts.messages, ["first", "second"]);
-        assert!(!toasts.is_empty());
     }
 }

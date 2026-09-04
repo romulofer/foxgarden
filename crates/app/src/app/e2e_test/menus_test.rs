@@ -310,3 +310,22 @@ fn tools_generate_getters_inserts_one_for_the_only_class() {
         "a single eligible class generates straight away, no dialog: {text}"
     );
 }
+
+/// The palette is how an action is found by name rather than by knowing
+/// which menu holds it — including one whose own shortcut this app spells
+/// differently from other editors.
+#[test]
+fn the_command_palette_runs_an_action_by_name() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    app.click_tree("Main.java");
+    app.type_into_active_tab(MAIN_JAVA.chars().count(), "// via the palette");
+
+    app.press(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P);
+    assert!(app.shows(t().palettes.run_a_command), "Ctrl+Shift+P opens the palette");
+
+    app.type_text(t().tabs.save_all);
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+
+    assert_eq!(app.on_disk("Main.java"), format!("{MAIN_JAVA}// via the palette"));
+    assert!(!app.shows(t().palettes.run_a_command), "picking a command closes the palette");
+}

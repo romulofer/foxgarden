@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use egui::text::CCursor;
 use egui::{Align2, Color32, FontId, Shape, Stroke};
-use fg_core::{BlameLine, Diagnostic};
+use fg_core::{BlameLine, Diagnostic, Severity};
 use ropey::Rope;
 
 use super::text_area::TextAreaOutput;
@@ -93,6 +93,59 @@ pub(super) fn paint_diagnostics(
             .on_hover_text(&diag.message);
     }
 }
+
+/// Paints one small mark per diagnostic on a thin strip down the right edge
+/// of the editor, positioned by how far through the file the problem is.
+///
+/// A squiggle is only visible if the line carrying it happens to be on
+/// screen, which means a file's problems are invisible until scrolled onto
+/// — there was no way to see *that* a file had errors, let alone how many
+/// or where. The strip is the same overview-ruler idea every editor uses:
+/// it covers the whole document regardless of the viewport, so a file's
+/// problems are visible at a glance and scrolling to one is aiming at a
+/// mark rather than hunting.
+pub(super) fn paint_diagnostic_ruler(
+    ui: &egui::Ui,
+    out: &TextAreaOutput,
+    buffer: &Rope,
+    text: &str,
+    diagnostics: &[&Diagnostic],
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    let rect = out.response.rect;
+    let total_lines = buffer.len_lines().max(1) as f32;
+    let painter = ui.painter();
+    let x = rect.right() - RULER_WIDTH / 2.0;
+
+    for diagnostic in diagnostics {
+        let start = diagnostic.range.start.min(text.len());
+        if !text.is_char_boundary(start) {
+            continue;
+        }
+        let line = buffer.byte_to_line(start) as f32;
+        let y = rect.top() + (line / total_lines) * rect.height();
+        let color = match diagnostic.severity {
+            Severity::Error => theme::error_squiggle(ui.visuals().dark_mode),
+            Severity::Warning => ui.visuals().warn_fg_color,
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(x - RULER_WIDTH / 2.0, y),
+                egui::vec2(RULER_WIDTH, RULER_MARK_HEIGHT),
+            ),
+            1.0,
+            color,
+        );
+    }
+}
+
+/// Width of the diagnostics strip, in points — wide enough to read as a
+/// mark, narrow enough not to eat the text's own right margin.
+const RULER_WIDTH: f32 = 6.0;
+/// Height of a single mark on that strip.
+const RULER_MARK_HEIGHT: f32 = 3.0;
 
 fn paint_squiggle(painter: &egui::Painter, y: f32, x_start: f32, x_end: f32, color: Color32) {
     let amplitude = 2.0;

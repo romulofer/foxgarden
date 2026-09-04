@@ -3,6 +3,7 @@
 //! `tabs::open_parser_for`).
 
 pub mod build_panel;
+pub mod command_palette;
 pub mod debug_panel;
 pub mod debug_toolbar;
 pub mod file_history;

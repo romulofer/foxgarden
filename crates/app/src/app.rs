@@ -43,7 +43,6 @@ use crate::widgets::editor::{
     CodeActionGutter, CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState,
     OverrideMethodDialog, PeekState, RenameBox, UserTemplates, jump_to,
 };
-use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
 /// Newline-joined roots of previously opened projects, most recent first —
@@ -142,6 +141,8 @@ pub struct FoxGardenApp {
     pending_close: Vec<PathBuf>,
     /// Non-blocking failure notices, drained from `last_error` every frame.
     toasts: crate::toasts::Toasts,
+    /// `Ctrl+Shift+P` — every common action by name, with its shortcut.
+    command_palette: crate::panels::command_palette::CommandPaletteState,
     /// Project roots opened before, most recent first — offered on the
     /// welcome screen and persisted across restarts.
     recent_projects: Vec<PathBuf>,
@@ -1228,6 +1229,7 @@ impl FoxGardenApp {
             parsers,
             pending_close: Vec::new(),
             toasts: crate::toasts::Toasts::default(),
+            command_palette: crate::panels::command_palette::CommandPaletteState::default(),
             recent_projects,
             generate_dialog: None,
             generate_method_dialog: None,
@@ -1329,6 +1331,85 @@ impl FoxGardenApp {
     /// back through `text_area::peek_caret` rather than duplicating it on
     /// `Document`. `None` when no tab is open — the bar then shows only
     /// background activity, as it always did.
+    /// Performs a command picked from the palette.
+    ///
+    /// Anything the menus already raise as a request is routed through
+    /// `menu_outcome` rather than reimplemented here, so a palette command
+    /// and its menu item can't drift apart — they are literally the same
+    /// code path from this point on. Only the actions that are plain state
+    /// flips (panel toggles, theme) or direct calls are handled inline.
+    fn run_command(
+        &mut self,
+        ctx: &egui::Context,
+        command: crate::panels::command_palette::Command,
+        menu_outcome: &mut menu_bar::MenuBarOutcome,
+    ) {
+        use crate::panels::command_palette::Command;
+
+        match command {
+            Command::Save => tabs::save_active_tab(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                self.trim_trailing_whitespace_on_save,
+            ),
+            Command::SaveAll => tabs::save_all_dirty_tabs(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &HashSet::new(),
+                self.trim_trailing_whitespace_on_save,
+            ),
+            Command::CloseTab => {
+                if let Some(active) = self.state.active_tab {
+                    tabs::request_close_tab(&mut self.state, &mut self.parsers, &mut self.pending_close, active);
+                }
+            }
+            Command::ReopenClosedTab => tabs::reopen_last_closed_tab(&mut self.state, &mut self.parsers),
+            Command::OpenFolder => self
+                .side_panel
+                .open_folder_picker(self.state.project.as_ref().map(|project| project.root.clone())),
+            Command::NewFile => {
+                if let Some(root) = self.state.project.as_ref().map(|project| project.root.clone()) {
+                    self.side_panel.begin_new_file(root);
+                }
+            }
+            Command::NewProject => menu_outcome.open_new_project_wizard_request = true,
+            Command::GoToFile => self.go_to_file.toggle(),
+            Command::RecentFiles => self.quick_switcher.toggle(),
+            // The editor owns diagnostic navigation (it needs the caret),
+            // so this arrives as the same key event pressing F8 does.
+            Command::NextDiagnostic => self
+                .pending_editor_input
+                .push(egui::Event::Key {
+                    key: egui::Key::F8,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }),
+            Command::ToggleSidePanel => self.side_panel_visible = !self.side_panel_visible,
+            Command::ToggleTerminal => self.terminal_panel_visible = !self.terminal_panel_visible,
+            Command::ToggleSourceControl => self.source_control_visible = !self.source_control_visible,
+            Command::ToggleBuildPanel => self.build_panel_visible = !self.build_panel_visible,
+            Command::ToggleTheme => {
+                self.dark_mode = !self.dark_mode;
+                theme::apply(ctx, self.dark_mode);
+            }
+            Command::ZenMode => self.zen_mode = !self.zen_mode,
+            Command::Build => menu_outcome.build_request = true,
+            Command::RunProject => menu_outcome.run_project_request = true,
+            Command::RunTests => menu_outcome.run_tests_request = true,
+            Command::RunCheckstyle => menu_outcome.run_checkstyle_request = true,
+            Command::RunPmd => menu_outcome.run_pmd_request = true,
+            Command::RunSpotBugs => menu_outcome.run_spotbugs_request = true,
+            Command::FoldAll => menu_outcome.fold_all_request = true,
+            Command::ExpandAll => menu_outcome.expand_all_request = true,
+            Command::SortLines => menu_outcome.sort_lines_request = true,
+            Command::UniqueLines => menu_outcome.unique_lines_request = true,
+        }
+    }
+
     fn document_status(&self, ctx: &egui::Context) -> Option<status_bar::DocumentStatus> {
         let doc = self.state.open_tabs.get(self.state.active_tab?)?;
         let caret = crate::widgets::editor::peek_caret(ctx, egui::Id::new(doc.path.to_string_lossy().into_owned()));
@@ -1397,8 +1478,13 @@ impl eframe::App for FoxGardenApp {
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
             self.quick_switcher.toggle();
         }
-        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command) {
+        if !terminal_focused
+            && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && !i.modifiers.shift)
+        {
             self.go_to_file.toggle();
+        }
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && i.modifiers.shift) {
+            self.command_palette.toggle();
         }
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift) {
             self.spring_endpoints
@@ -1578,6 +1664,13 @@ impl eframe::App for FoxGardenApp {
         // opening it needs an explicit first `git status` to have anything
         // to show at all.
         let source_control_was_visible = self.source_control_visible;
+
+        // Drawn before the panels so a command picked this frame is acted
+        // on by the very same code paths the menus feed, rather than a
+        // frame later.
+        if let Some(command) = crate::panels::command_palette::show(ui, &mut self.command_palette) {
+            self.run_command(ui.ctx(), command, &mut menu_outcome);
+        }
 
         if !self.zen_mode {
             menu_outcome = egui::Panel::top("menu_bar")
