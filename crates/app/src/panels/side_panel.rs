@@ -23,6 +23,10 @@ pub struct SidePanelState {
     /// `request_reveal` (a tab's "Reveal in Tree"), consumed on the next
     /// frame this panel draws.
     reveal_request: Option<PathBuf>,
+    /// The project root this panel has already auto-expanded, so opening a
+    /// project expands its first few rows exactly once and never fights the
+    /// user's own collapsing afterwards.
+    auto_expanded_root: Option<PathBuf>,
     /// The "Open Folder" dialog, when one is up — on its own thread, so a
     /// slow (or never-appearing) native/portal dialog can't freeze the
     /// editor behind it. See `crate::folder_picker`.
@@ -142,6 +146,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     if let Some(path) = panel.reveal_request.take() {
         reveal(ui.ctx(), panel, &path);
     }
+    if let Some(project) = &state.project
+        && panel.auto_expanded_root.as_ref() != Some(&project.root)
+    {
+        panel.auto_expanded_root = Some(project.root.clone());
+        expand_until_branching(ui.ctx(), &project.tree);
+    }
 
     ui.horizontal(|ui| {
         if ui
@@ -241,6 +251,39 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     outcome
 }
 
+/// Opens the rows between the project root and the first directory that
+/// actually branches, once, when a project is opened.
+///
+/// A freshly opened Maven project otherwise shows a single collapsed row,
+/// and reaching the first source file takes four clicks through directories
+/// that had exactly one child each — every one of which the user would have
+/// expanded anyway. Stops at the first directory with more than one entry
+/// (that's a real choice, and the user's to make) and never runs again for
+/// the same project, so collapsing something back stays collapsed.
+fn expand_until_branching(ctx: &egui::Context, root: &FileNode) {
+    let mut node = root;
+    // Bounded so a pathological chain (a deeply nested single-child tree)
+    // can't expand the panel into an unreadable ladder.
+    for _ in 0..8 {
+        let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ctx,
+            tree_node_id(&node.path),
+            false,
+        );
+        collapsing.set_open(true);
+        collapsing.store(ctx);
+
+        let directories: Vec<&FileNode> = node.children.iter().filter(|c| c.kind == FileKind::Dir).collect();
+        let [only] = directories.as_slice() else {
+            return;
+        };
+        if node.children.len() > 1 {
+            return;
+        }
+        node = only;
+    }
+}
+
 /// The `CollapsingState` id for a directory row. A pure function of the
 /// path, so anything holding a path can address that row's expansion state.
 fn tree_node_id(path: &Path) -> egui::Id {
@@ -248,6 +291,12 @@ fn tree_node_id(path: &Path) -> egui::Id {
 }
 
 impl SidePanelState {
+    /// Opens the "choose a folder" dialog, as the toolbar's own button
+    /// does — for the welcome screen, which offers the same action.
+    pub fn open_folder_picker(&mut self, start_dir: Option<PathBuf>) {
+        self.folder_picker.open(start_dir);
+    }
+
     /// Asks the tree to reveal `path` on its next frame — see `reveal`.
     pub fn request_reveal(&mut self, path: PathBuf) {
         self.reveal_request = Some(path);

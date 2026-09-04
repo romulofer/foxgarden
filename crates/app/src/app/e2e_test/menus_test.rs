@@ -271,8 +271,8 @@ fn tools_case_conversion_with_no_selection_reports_an_error() {
     app.menu(t().menu.tools, t().menu.convert_to_lowercase);
 
     assert!(app.shows(t().errors.select_text_first));
-    app.click(t().common.ok);
-    assert!(!app.shows(t().errors.select_text_first), "OK dismisses the error");
+    app.dismiss_toasts();
+    assert!(!app.shows(t().errors.select_text_first), "dismissing clears it");
 }
 
 #[test]

@@ -150,6 +150,10 @@ pub fn show(
     // names, for the caller to hand to the side panel (which owns tree
     // expansion and selection).
     side_panel_reveal: &mut Option<PathBuf>,
+    // The welcome screen's own buttons, when it's the thing being shown
+    // (no file open); left untouched otherwise.
+    welcome: &mut crate::panels::welcome::WelcomeOutcome,
+    recent_projects: &[PathBuf],
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -171,7 +175,9 @@ pub fn show(
     // never costs the editor a line of height — which means the scroll
     // area has to leave room for it rather than claiming the full width.
     let overflow_width = 64.0;
-    let hidden_tabs = ui
+    // The count itself is drawn inside; the binding just keeps the
+    // closure's own return value from being silently discarded.
+    let _hidden_tabs = ui
         .horizontal(|ui| {
             let bar_width = (ui.available_width() - overflow_width).max(0.0);
             let hidden = egui::ScrollArea::horizontal()
@@ -366,7 +372,9 @@ pub fn show(
     ui.separator();
 
     let Some(active) = state.active_tab else {
-        ui.weak(t().tabs.no_file_open);
+        // No file open is the app's own front door, not an error state —
+        // see `panels::welcome`.
+        *welcome = crate::panels::welcome::show(ui, recent_projects, state.project.is_some());
         return;
     };
     let project = state.project.as_ref();

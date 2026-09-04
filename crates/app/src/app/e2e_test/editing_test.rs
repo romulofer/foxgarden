@@ -130,7 +130,7 @@ fn saving_with_no_tab_open_does_nothing_and_reports_nothing() {
 
     app.press(egui::Modifiers::COMMAND, egui::Key::S);
 
-    assert!(app.shows(t().tabs.no_file_open), "still nothing open");
+    assert!(app.shows(t().welcome.tagline), "still nothing open");
     assert_eq!(app.on_disk("Main.java"), MAIN_JAVA);
 }
 

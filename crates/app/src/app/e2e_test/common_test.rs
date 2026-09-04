@@ -51,25 +51,10 @@ impl E2e {
             .expect("open temp project");
 
         let mut app = Self { harness, dir };
-        app.settle();
-        // Every directory row starts collapsed (`render_node`'s
-        // `load_with_default_open(..., false)`), including the project root
-        // itself, so a freshly-opened project shows exactly one row. Expand
-        // it here so tests start where a user does one click in: looking at
-        // the project's files. `project_tree`'s own
-        // `collapsing_the_project_root_hides_its_files` covers the toggle.
-        app.toggle_project_root();
-        // Expanding it also *selected* it (a plain click on any tree row
-        // collapses the selection down to that row), and a selected root
-        // silently joins every later multi-target operation — a Delete
-        // aimed at two Ctrl+clicked files would offer to delete three
-        // things, the project directory included. Ctrl+click toggles it
-        // back out without collapsing the row again, leaving tests with an
-        // expanded tree and an empty selection.
-        let root = app.project_root_label();
-        app.harness
-            .get_by_label_contains(&root)
-            .click_modifiers(egui::Modifiers::COMMAND);
+        // Opening a project auto-expands it down to the first directory
+        // that branches (`side_panel::expand_until_branching`), so tests
+        // start where a user does: looking at the project's files, with
+        // nothing selected.
         app.settle();
         app
     }
@@ -230,6 +215,20 @@ impl E2e {
     /// identically in the tab bar and in the project tree (same icon, same
     /// name), and the singular query panics on more than one match — which
     /// for "is this on screen?" is a false failure.
+    /// Dismisses whatever failure toasts are showing — the non-blocking
+    /// replacement for the old error modal's OK button.
+    pub(super) fn dismiss_toasts(&mut self) {
+        let close = crate::style::icons::CLOSE.to_string();
+        loop {
+            let showing = self.harness.query_all_by_label(&close).next().is_some();
+            if !showing {
+                return;
+            }
+            self.harness.get_all_by_label(&close).next().expect("a toast to dismiss").click();
+            self.settle();
+        }
+    }
+
     pub(super) fn shows(&self, label: &str) -> bool {
         self.harness.query_all_by_label(label).next().is_some()
     }

@@ -20,6 +20,7 @@ pub struct Strings {
     pub about: About,
     pub side_panel: SidePanel,
     pub tabs: Tabs,
+    pub welcome: Welcome,
     pub file_history: FileHistory,
     pub git: Git,
     pub lsp: Lsp,
@@ -157,6 +158,16 @@ pub struct SidePanel {
 }
 
 /// The tab bar and its close-with-unsaved-changes prompt.
+/// The empty-state screen shown when no file is open.
+pub struct Welcome {
+    pub tagline: &'static str,
+    pub recent_projects: &'static str,
+    pub hint_go_to_file: &'static str,
+    pub hint_recent_files: &'static str,
+    pub hint_command_palette: &'static str,
+    pub hint_terminal: &'static str,
+}
+
 pub struct Tabs {
     pub no_file_open: &'static str,
     pub allow_editing: &'static str,
@@ -343,6 +354,8 @@ pub struct Errors {
 
 /// Strings used by more than one area — button verbs, mostly.
 pub struct Common {
+    /// Clears every toast at once.
+    pub dismiss_all: &'static str,
     pub ok: &'static str,
     pub close: &'static str,
     pub cancel: &'static str,
@@ -531,6 +544,14 @@ pub const PT_BR: Strings = Strings {
         create: "Criar",
         no_folder_open: "Nenhuma pasta aberta",
     },
+    welcome: Welcome {
+        tagline: "Editor leve para Java e Kotlin",
+        recent_projects: "Projetos recentes",
+        hint_go_to_file: "Ctrl+P: ir para arquivo",
+        hint_recent_files: "Ctrl+E: arquivos recentes",
+        hint_command_palette: "Ctrl+Shift+P: comandos",
+        hint_terminal: "Ctrl+`: terminal",
+    },
     tabs: Tabs {
         no_file_open: "Nenhum arquivo aberto",
         allow_editing: "Permitir Edição",
@@ -670,6 +691,7 @@ pub const PT_BR: Strings = Strings {
         rename_no_parent: "falha ao renomear: sem diretório pai",
     },
     common: Common {
+        dismiss_all: "Dispensar tudo",
         ok: "OK",
         close: "Fechar",
         cancel: "Cancelar",
@@ -835,6 +857,14 @@ pub const EN_US: Strings = Strings {
         create: "Create",
         no_folder_open: "No folder open",
     },
+    welcome: Welcome {
+        tagline: "A light editor for Java and Kotlin",
+        recent_projects: "Recent projects",
+        hint_go_to_file: "Ctrl+P: go to file",
+        hint_recent_files: "Ctrl+E: recent files",
+        hint_command_palette: "Ctrl+Shift+P: commands",
+        hint_terminal: "Ctrl+`: terminal",
+    },
     tabs: Tabs {
         no_file_open: "No file open",
         allow_editing: "Allow Editing",
@@ -974,6 +1004,7 @@ pub const EN_US: Strings = Strings {
         rename_no_parent: "rename failed: no parent directory",
     },
     common: Common {
+        dismiss_all: "Dismiss all",
         ok: "OK",
         close: "Close",
         cancel: "Cancel",

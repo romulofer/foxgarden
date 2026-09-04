@@ -17,6 +17,7 @@ mod pty_session;
 mod rename;
 mod style;
 mod terminal;
+mod toasts;
 mod tool_manager;
 mod widgets;
 mod workspace_edit;

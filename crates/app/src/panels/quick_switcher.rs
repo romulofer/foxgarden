@@ -33,7 +33,17 @@ impl QuickSwitcherState {
 /// `EditorState` already keeps for tabs/`Ctrl+Shift+T`, rather than
 /// tracking a separate "most recently used" history just for this popup.
 fn recent_files(state: &EditorState) -> Vec<PathBuf> {
-    let mut result: Vec<PathBuf> = state.open_tabs.iter().map(|doc| doc.path().to_path_buf()).collect();
+    // The *active* tab is what the user is already looking at, so it goes
+    // last: opening this popup and pressing Enter should land on the file
+    // they were in before, the way switching between two files works in
+    // every editor with this gesture.
+    let mut result: Vec<PathBuf> = state
+        .open_tabs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != state.active_tab)
+        .map(|(_, doc)| doc.path().to_path_buf())
+        .collect();
     for doc in state.closed_tabs.iter().rev() {
         if result.len() >= MAX_ENTRIES {
             break;
@@ -43,8 +53,25 @@ fn recent_files(state: &EditorState) -> Vec<PathBuf> {
             result.push(path);
         }
     }
+    if let Some(active) = state.active_tab.and_then(|index| state.open_tabs.get(index)) {
+        result.push(active.path().to_path_buf());
+    }
     result.truncate(MAX_ENTRIES);
     result
+}
+
+/// The directory a candidate lives in, relative to the open project — what
+/// tells two `Application.java`s in different modules apart. Empty for a
+/// file directly at the project root (nothing useful to add) or outside the
+/// project entirely, where the absolute parent path is shown instead.
+fn location_of(state: &EditorState, path: &Path) -> String {
+    let Some(parent) = path.parent() else {
+        return String::new();
+    };
+    match state.project.as_ref().and_then(|project| parent.strip_prefix(&project.root).ok()) {
+        Some(relative) => relative.to_string_lossy().into_owned(),
+        None => parent.to_string_lossy().into_owned(),
+    }
 }
 
 /// Whether `path`'s file name contains `query`, case-insensitively — an
@@ -105,7 +132,9 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut QuickSwitcherStat
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let is_selected = index == switcher.selected;
-                let response = ui.selectable_label(is_selected, name);
+                let location = location_of(state, path);
+                let label = if location.is_empty() { name } else { format!("{name}    {location}") };
+                let response = ui.selectable_label(is_selected, label);
                 if response.clicked() || (is_selected && enter_pressed) {
                     chosen = Some(path.clone());
                 }
@@ -206,5 +235,35 @@ mod tests {
         switcher.toggle();
         switcher.toggle();
         assert!(!switcher.open);
+    }
+
+    /// Ctrl+E is a "go back to what I was just in" gesture: the file
+    /// already on screen must not be the first thing offered, or the
+    /// gesture does nothing.
+    #[test]
+    fn the_active_tab_is_offered_last_not_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = EditorState::new();
+        state.open_tabs.push(doc_at(&dir, "First.java"));
+        state.open_tabs.push(doc_at(&dir, "Second.java"));
+        state.active_tab = Some(1);
+
+        let files = recent_files(&state);
+
+        assert_eq!(files.first().unwrap().file_name().unwrap(), "First.java");
+        assert_eq!(files.last().unwrap().file_name().unwrap(), "Second.java");
+    }
+
+    #[test]
+    fn a_candidate_carries_its_directory_inside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("service/src")).unwrap();
+        let mut state = EditorState::new();
+        state.open_project(dir.path().to_path_buf()).unwrap();
+
+        let nested = dir.path().join("service/src/App.java");
+        assert_eq!(location_of(&state, &nested), "service/src");
+        // A file at the root has no location worth repeating.
+        assert_eq!(location_of(&state, &dir.path().join("App.java")), "");
     }
 }

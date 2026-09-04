@@ -209,7 +209,7 @@ fn persisted_session_round_trips_open_tabs_and_active_tab() {
     state.focus_tab(0); // B was opened last (and thus focused); explicitly refocus A
 
     let mut storage = FakeStorage::default();
-    persist_session(&mut storage, &state);
+    persist_session(&mut storage, &state, &[]);
 
     let mut restored_state = EditorState::new();
     let mut restored_parsers: Vec<Option<IncrementalParser>> = Vec::new();

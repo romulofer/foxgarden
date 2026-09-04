@@ -7,13 +7,13 @@ use fg_i18n::{msg, t};
 #[test]
 fn clicking_a_file_in_the_tree_opens_it_in_a_tab() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    assert!(app.shows(t().tabs.no_file_open), "nothing is open before the click");
+    assert!(app.shows(t().welcome.tagline), "the welcome screen stands in for an empty editor");
 
     app.click_tree("Main.java");
 
     assert_eq!(app.open_tab_names(), ["Main.java"]);
     assert!(app.shows(&E2e::row("Main.java")), "the opened file must get a tab");
-    assert!(!app.shows(t().tabs.no_file_open));
+    assert!(!app.shows(t().welcome.tagline));
 }
 
 #[test]
@@ -119,7 +119,9 @@ fn opening_a_binary_file_reports_an_error_instead_of_a_tab() {
     let refusal = msg::couldnt_open_not_text(&app.path("blob.bin").display().to_string());
     assert!(app.shows(&refusal), "a binary file must report why it won't open");
     assert!(app.open_tab_names().is_empty(), "and open no tab");
-    app.click(t().common.ok);
+    // A toast, not a modal: it can be dismissed, but nothing had to be
+    // answered before the editor was usable again.
+    app.dismiss_toasts();
     assert!(!app.shows(&refusal));
 }
 

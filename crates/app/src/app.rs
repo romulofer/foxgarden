@@ -46,6 +46,10 @@ use crate::widgets::editor::{
 use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
+/// Newline-joined roots of previously opened projects, most recent first —
+/// what the welcome screen offers. Same newline encoding (and same reason)
+/// as `OPEN_TABS_KEY`.
+const RECENT_PROJECTS_KEY: &str = "recent_projects";
 /// Newline-joined absolute paths of the tabs that were open at last exit, in
 /// tab order. Newline-joined rather than a structured format since neither
 /// `eframe::Storage` nor this crate currently pulls in `serde` — a file path
@@ -136,6 +140,11 @@ pub struct FoxGardenApp {
     /// Unsaved tabs waiting on a save/discard answer before they close, in
     /// the order they'll be asked about — see `tabs::request_close_tab`.
     pending_close: Vec<PathBuf>,
+    /// Non-blocking failure notices, drained from `last_error` every frame.
+    toasts: crate::toasts::Toasts,
+    /// Project roots opened before, most recent first — offered on the
+    /// welcome screen and persisted across restarts.
+    recent_projects: Vec<PathBuf>,
     /// Open while the active tab's file has more than one class with
     /// eligible fields and "Generate Getters/Setters" was just requested —
     /// lets the user pick which class, then which fields, before
@@ -299,7 +308,8 @@ pub struct FoxGardenApp {
     zen_mode: bool,
     /// The most recent user-facing failure from any panel (open/save/rename/
     /// delete/create a file, open or refresh a project, restore last
-    /// session, ...), shown as a dismissable modal (see `show_error_modal`).
+    /// session, ...), moved into `toasts` at the end of each frame (see
+    /// `drain_errors_into_toasts`).
     /// A single shared slot rather than one flag per failure kind: every
     /// site that used to just `eprintln!` — invisible outside a terminal
     /// the GUI user probably isn't watching — sets this instead, so a new
@@ -835,7 +845,11 @@ fn restore_session(
 /// Inverse of `restore_session`: writes the project folder, open tab paths
 /// (in tab order), and the focused tab's path, so the next launch can
 /// reconstruct the same session.
-fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState) {
+fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState, recent_projects: &[PathBuf]) {
+    storage.set_string(
+        RECENT_PROJECTS_KEY,
+        recent_projects.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n"),
+    );
     if let Some(project) = &state.project {
         storage.set_string(LAST_PROJECT_KEY, project.root.to_string_lossy().into_owned());
     }
@@ -1159,6 +1173,7 @@ impl FoxGardenApp {
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
         let mut trim_trailing_whitespace_on_save = true;
+        let mut recent_projects: Vec<PathBuf> = Vec::new();
         let mut lsp_settings = LspSettings::default();
         let mut jdk_registry = JdkRegistry::default();
 
@@ -1179,6 +1194,9 @@ impl FoxGardenApp {
         }
 
         if let Some(storage) = cc.storage {
+            if let Some(stored) = storage.get_string(RECENT_PROJECTS_KEY) {
+                recent_projects = stored.lines().map(PathBuf::from).filter(|path| path.is_dir()).collect();
+            }
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
             restore_settings(
                 storage,
@@ -1209,6 +1227,8 @@ impl FoxGardenApp {
             state,
             parsers,
             pending_close: Vec::new(),
+            toasts: crate::toasts::Toasts::default(),
+            recent_projects,
             generate_dialog: None,
             generate_method_dialog: None,
             override_method_dialog: None,
@@ -1342,25 +1362,22 @@ impl FoxGardenApp {
     }
 }
 
-/// Shows `last_error` (if any) as a dismissable modal, and clears it once
-/// acknowledged. Free function rather than a method so its borrow of
-/// `last_error` doesn't overlap `&mut self` for the rest of `ui()`.
+/// Moves whatever failed this frame into the toast stack.
 ///
-/// Borrows the message for the label instead of cloning it — `show_modal`
-/// returning the closure's result (whether "OK" was clicked) is what lets
-/// the actual `*last_error = None` write happen after `show_modal` returns,
-/// once the borrow of `last_error` used for `message` has ended, without
-/// needing a separate `dismissed` flag mutated from inside the closure.
-fn show_error_modal(ui: &egui::Ui, last_error: &mut Option<String>) {
-    let message = last_error.as_deref();
-    let outcome = show_modal(ui, "error_modal", message, |ui, message| {
-        ui.label(*message);
-        ui.button(t().common.ok).clicked()
-    });
-    if let Some((ok_clicked, escape_pressed)) = outcome
-        && (ok_clicked || escape_pressed)
-    {
-        *last_error = None;
+/// These used to be a modal, which meant a language server dying in the
+/// background, or a `git` refresh failing, stole focus mid-keystroke and
+/// had to be dismissed before typing could continue. None of them are
+/// questions — the modals that remain (reload-or-keep, confirm delete,
+/// save-before-closing) are the ones that actually need an answer.
+///
+/// One toast per line, since `errors::report` accumulates several failures
+/// into one string.
+fn drain_errors_into_toasts(last_error: &mut Option<String>, toasts: &mut crate::toasts::Toasts) {
+    let Some(message) = last_error.take() else {
+        return;
+    };
+    for line in message.lines() {
+        toasts.push(line.to_string());
     }
 }
 
@@ -1428,6 +1445,14 @@ impl eframe::App for FoxGardenApp {
         // case each of those points is simply a no-op (nothing to diff
         // against).
         let diff_root = self.state.project.as_ref().map(|p| p.root.clone());
+        // Recorded here rather than at each `open_project` call site (the
+        // side panel's own button, the menu, the welcome screen, a restored
+        // session): whatever route was taken, this frame sees the result.
+        if let Some(root) = &diff_root
+            && self.recent_projects.first() != Some(root)
+        {
+            crate::panels::welcome::remember_project(&mut self.recent_projects, root);
+        }
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
         let tree_changed_on_disk = process_file_events(
@@ -2107,6 +2132,15 @@ impl eframe::App for FoxGardenApp {
         // before the tab bar, so this frame's own tree is already laid out
         // by the time the request exists).
         let mut reveal_in_tree: Option<PathBuf> = None;
+        let mut welcome = crate::panels::welcome::WelcomeOutcome::default();
+        // Everything but the project already open — reopening that one is
+        // not a thing anyone needs offered.
+        let recent_to_offer: Vec<PathBuf> = self
+            .recent_projects
+            .iter()
+            .filter(|path| Some(*path) != self.state.project.as_ref().map(|project| &project.root))
+            .cloned()
+            .collect();
         egui::CentralPanel::default().show(ui, |ui| {
             show_external_change_banner(
                 ui,
@@ -2157,7 +2191,20 @@ impl eframe::App for FoxGardenApp {
                 self.dark_mode,
                 self.trim_trailing_whitespace_on_save,
                 &mut reveal_in_tree,
+                &mut welcome,
+                &recent_to_offer,
             );
+            if welcome.open_folder {
+                self.side_panel.open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
+            }
+            if welcome.new_project {
+                self.new_project_wizard.open();
+            }
+            if let Some(path) = welcome.open_recent.take()
+                && let Err(err) = self.state.open_project(path)
+            {
+                crate::errors::report(&mut self.last_error, msg::failed_to_open_project(&err.to_string()));
+            }
             if let Some(path) = reveal_in_tree.take() {
                 // Handled on the *next* frame by the panel itself: the side
                 // panel is drawn before the tab bar, so its tree for this
@@ -2291,11 +2338,12 @@ impl eframe::App for FoxGardenApp {
         jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
         new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
 
-        show_error_modal(ui, &mut self.last_error);
+        drain_errors_into_toasts(&mut self.last_error, &mut self.toasts);
+        self.toasts.show(ui);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        persist_session(storage, &self.state);
+        persist_session(storage, &self.state, &self.recent_projects);
         persist_settings(
             storage,
             self.editor_font,
