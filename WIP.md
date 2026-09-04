@@ -1,9 +1,9 @@
-# WIP — code review fixes (2026-09-03)
+# WIP — code review + usability fixes (2026-09-03/04)
 
-Trabalho **não commitado** na branch `ide-henshin`. Base: `df7944e`.
-Suíte: `cargo test --workspace` → **1350 passando, 0 falhando** (antes: 5
-falhas por Git LFS). `cargo clippy --workspace` → 8 warnings, todos
-pré-existentes em código de teste.
+Commitado na branch `ide-henshin`, a partir de `df7944e`.
+Suíte: `cargo test --workspace` → **1383 passando, 0 falhando** (antes: 5
+falhas por Git LFS). `cargo clippy --workspace --all-targets` → 7 warnings,
+todos pré-existentes em código de teste.
 
 **Não rodar `cargo fmt`**: o repositório não é rustfmt-clean por opção
 (`HEAD` limpo já acusa 641 diffs). Formatação foi mantida no estilo manual
@@ -14,7 +14,7 @@ do entorno.
 Partiu de um code review do projeto inteiro (não só do diff). Achados novos
 + itens já listados em `ISSUES.md`/`TECHNICAL_DEBT.md` que continuavam
 abertos. Depois veio "corrija tudo" e, em seguida, um pedido de análise de
-usabilidade (essa parte **não foi entregue** — ver Pendências).
+usabilidade, feita com o app rodando de verdade (ver a seção própria).
 
 ## O que foi corrigido
 
