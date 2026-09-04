@@ -17,15 +17,15 @@ fn line_two_start() -> usize {
 #[test]
 fn ctrl_z_undoes_the_last_edit_and_makes_the_tab_clean_again() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "X");
-    assert!(app.shows("*Main.java"));
+    assert!(app.shows(&E2e::dirty_row("Main.java")));
 
     app.press(egui::Modifiers::COMMAND, egui::Key::Z);
 
     assert_eq!(app.active_tab_text(), MAIN_JAVA, "undo must restore the original text");
     assert!(
-        !app.shows("*Main.java"),
+        !app.shows(&E2e::dirty_row("Main.java")),
         "a document back at its saved contents is clean again"
     );
 }
@@ -33,7 +33,7 @@ fn ctrl_z_undoes_the_last_edit_and_makes_the_tab_clean_again() {
 #[test]
 fn ctrl_slash_comments_the_current_line_and_uncomments_it_again() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
     app.type_into_active_tab(line_two_start(), "");
 
     app.press(egui::Modifiers::COMMAND, egui::Key::Slash);
@@ -49,7 +49,7 @@ fn ctrl_slash_comments_the_current_line_and_uncomments_it_again() {
 #[test]
 fn ctrl_j_joins_the_current_line_with_the_next() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
     app.type_into_active_tab(line_two_start(), "");
 
     app.press(egui::Modifiers::COMMAND, egui::Key::J);
@@ -60,7 +60,7 @@ fn ctrl_j_joins_the_current_line_with_the_next() {
 #[test]
 fn alt_down_moves_the_current_line_past_the_next_one() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
     app.type_into_active_tab(line_two_start(), "");
 
     app.press(egui::Modifiers::ALT, egui::Key::ArrowDown);
@@ -74,7 +74,7 @@ fn alt_down_moves_the_current_line_past_the_next_one() {
 #[test]
 fn alt_shift_down_duplicates_the_current_line() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
     app.type_into_active_tab(line_two_start(), "");
 
     app.press(egui::Modifiers::ALT | egui::Modifiers::SHIFT, egui::Key::ArrowDown);
@@ -88,7 +88,7 @@ fn alt_shift_down_duplicates_the_current_line() {
 #[test]
 fn ctrl_shift_u_uppercases_the_selection_without_the_menu() {
     let mut app = E2e::launch(&[("Main.java", "class Main {\n  int value;\n}\n")]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
 
     let offset = "class Main {\n  int ".chars().count();
     app.select_in_active_tab(offset, "value".chars().count());
@@ -100,7 +100,7 @@ fn ctrl_shift_u_uppercases_the_selection_without_the_menu() {
 #[test]
 fn typing_an_opening_bracket_closes_it_automatically() {
     let mut app = E2e::launch(&[("Main.java", "class Main {\n}\n")]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
 
     app.type_into_active_tab("class Main {\n".chars().count(), "    foo(");
 
@@ -114,7 +114,7 @@ fn typing_an_opening_bracket_closes_it_automatically() {
 #[test]
 fn a_live_template_expands_on_tab() {
     let mut app = E2e::launch(&[("Main.java", "class Main {\n}\n")]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
 
     app.type_into_active_tab("class Main {\n".chars().count(), "sout");
     app.press(egui::Modifiers::NONE, egui::Key::Tab);
@@ -129,7 +129,7 @@ fn a_live_template_expands_on_tab() {
 #[test]
 fn a_read_only_tab_ignores_the_line_operations_too() {
     let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
     app.menu(t().menu.tools, t().menu.read_only);
 
     app.type_into_active_tab(line_two_start(), "");
@@ -146,7 +146,7 @@ fn a_read_only_tab_ignores_the_line_operations_too() {
 #[test]
 fn ctrl_d_adds_a_cursor_at_the_next_occurrence_and_types_into_both() {
     let mut app = E2e::launch(&[("Dup.java", "class Dup {\n    int x;\n    int x;\n}\n")]);
-    app.click("☕ Dup.java");
+    app.click_tree("Dup.java");
 
     // Select the first `x`, then Ctrl+D to add the second one.
     let first_x = "class Dup {\n    int ".chars().count();
@@ -164,7 +164,7 @@ fn ctrl_d_adds_a_cursor_at_the_next_occurrence_and_types_into_both() {
 #[test]
 fn tab_at_the_start_of_a_line_indents_by_the_configured_width() {
     let mut app = E2e::launch(&[("Body.java", "class Body {\nint a = 1;\n}\n")]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
 
     app.type_into_active_tab("class Body {\n".chars().count(), "");
     app.press(egui::Modifiers::NONE, egui::Key::Tab);
@@ -179,7 +179,7 @@ fn tab_at_the_start_of_a_line_indents_by_the_configured_width() {
 #[test]
 fn shift_tab_dedents_the_line_again() {
     let mut app = E2e::launch(&[("Body.java", "class Body {\n        int a = 1;\n}\n")]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
 
     app.type_into_active_tab("class Body {\n".chars().count(), "");
     app.press(egui::Modifiers::SHIFT, egui::Key::Tab);
@@ -190,7 +190,7 @@ fn shift_tab_dedents_the_line_again() {
 #[test]
 fn enter_inside_a_block_keeps_the_current_indentation() {
     let mut app = E2e::launch(&[("Body.java", "class Body {\n    int a = 1;\n}\n")]);
-    app.click("☕ Body.java");
+    app.click_tree("Body.java");
 
     let end_of_statement = "class Body {\n    int a = 1;".chars().count();
     app.type_into_active_tab(end_of_statement, "");

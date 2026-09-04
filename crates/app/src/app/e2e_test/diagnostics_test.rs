@@ -6,14 +6,14 @@ use super::common_test::{E2e, MAIN_JAVA};
 fn a_file_with_a_syntax_error_reports_a_diagnostic_when_opened() {
     let mut app = E2e::launch(&[("Broken.java", "class Broken {\n"), ("Main.java", MAIN_JAVA)]);
 
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     assert_eq!(
         app.active_tab_diagnostics(),
         0,
         "a well-formed file has nothing to squiggle"
     );
 
-    app.click("☕ Broken.java");
+    app.click_tree("Broken.java");
 
     assert!(
         app.active_tab_diagnostics() > 0,
@@ -24,7 +24,7 @@ fn a_file_with_a_syntax_error_reports_a_diagnostic_when_opened() {
 #[test]
 fn typing_a_syntax_error_makes_a_diagnostic_appear_and_fixing_it_clears_it() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     assert_eq!(app.active_tab_diagnostics(), 0);
 
     // Straight after `class`, so what follows is no longer a valid class
@@ -49,10 +49,10 @@ fn typing_a_syntax_error_makes_a_diagnostic_appear_and_fixing_it_clears_it() {
 fn a_kotlin_file_reports_its_own_syntax_errors() {
     let mut app = E2e::launch(&[("Broken.kt", "class Broken {\n"), ("Fine.kt", "class Fine\n")]);
 
-    app.click("🔷 Fine.kt");
+    app.click_tree("Fine.kt");
     assert_eq!(app.active_tab_diagnostics(), 0);
 
-    app.click("🔷 Broken.kt");
+    app.click_tree("Broken.kt");
 
     assert!(
         app.active_tab_diagnostics() > 0,
@@ -64,7 +64,7 @@ fn a_kotlin_file_reports_its_own_syntax_errors() {
 fn a_file_with_no_recognized_language_never_reports_diagnostics() {
     let mut app = E2e::launch(&[("notes.txt", "this is (((( not code\n")]);
 
-    app.click("📄 notes.txt");
+    app.click_tree("notes.txt");
 
     assert_eq!(
         app.active_tab_diagnostics(),
@@ -77,7 +77,7 @@ fn a_file_with_no_recognized_language_never_reports_diagnostics() {
 #[test]
 fn fixing_a_broken_file_and_saving_clears_its_diagnostics() {
     let mut app = E2e::launch(&[("Broken.java", "class Broken {\n")]);
-    app.click("☕ Broken.java");
+    app.click_tree("Broken.java");
     assert!(app.active_tab_diagnostics() > 0);
 
     app.type_into_active_tab("class Broken {\n".chars().count(), "}");

@@ -133,7 +133,9 @@ pub struct FoxGardenApp {
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
     /// open document.
     parsers: Vec<Option<IncrementalParser>>,
-    pending_close: Option<usize>,
+    /// Unsaved tabs waiting on a save/discard answer before they close, in
+    /// the order they'll be asked about — see `tabs::request_close_tab`.
+    pending_close: Vec<PathBuf>,
     /// Open while the active tab's file has more than one class with
     /// eligible fields and "Generate Getters/Setters" was just requested —
     /// lets the user pick which class, then which fields, before
@@ -1206,7 +1208,7 @@ impl FoxGardenApp {
         let mut app = Self {
             state,
             parsers,
-            pending_close: None,
+            pending_close: Vec::new(),
             generate_dialog: None,
             generate_method_dialog: None,
             override_method_dialog: None,
@@ -1295,6 +1297,48 @@ impl FoxGardenApp {
             app.git_stage.load_committer_first_name(&root);
         }
         app
+    }
+}
+
+impl FoxGardenApp {
+    /// What the status bar reports about the active tab: where the caret
+    /// is, what the file is, how it indents, and how many problems it has.
+    ///
+    /// The caret lives in the editor widget's own persisted state (it is
+    /// the widget, not the document, that owns a cursor), so this reads it
+    /// back through `text_area::peek_caret` rather than duplicating it on
+    /// `Document`. `None` when no tab is open — the bar then shows only
+    /// background activity, as it always did.
+    fn document_status(&self, ctx: &egui::Context) -> Option<status_bar::DocumentStatus> {
+        let doc = self.state.open_tabs.get(self.state.active_tab?)?;
+        let caret = crate::widgets::editor::peek_caret(ctx, egui::Id::new(doc.path.to_string_lossy().into_owned()));
+        let offset = caret.map_or(0, |caret| caret.primary).min(doc.buffer.len_chars());
+        let line = doc.buffer.char_to_line(offset);
+        let column = offset - doc.buffer.line_to_char(line);
+
+        let diagnostics = doc
+            .diagnostics
+            .iter()
+            .chain(doc.checkstyle_diagnostics.iter())
+            .chain(doc.pmd_diagnostics.iter())
+            .chain(doc.spotbugs_diagnostics.iter())
+            .chain(doc.lsp_diagnostics.iter());
+        let (mut errors, mut warnings) = (0, 0);
+        for diagnostic in diagnostics {
+            match diagnostic.severity {
+                fg_core::Severity::Error => errors += 1,
+                fg_core::Severity::Warning => warnings += 1,
+            }
+        }
+
+        Some(status_bar::DocumentStatus {
+            line: line + 1,
+            column: column + 1,
+            language: doc.language,
+            indent: self.indent_settings,
+            errors,
+            warnings,
+        })
     }
 }
 
@@ -1594,7 +1638,9 @@ impl eframe::App for FoxGardenApp {
                 &self.debug_state,
             );
             let activities = status_bar::activities(&work);
-            egui::Panel::bottom("status_bar").show(ui, |ui| status_bar::show(ui, &activities));
+            let document_status = self.document_status(ui.ctx());
+            egui::Panel::bottom("status_bar")
+                .show(ui, |ui| status_bar::show(ui, &activities, document_status.as_ref()));
 
             if self.side_panel_visible {
                 let panel_response = egui::Panel::left("project_panel")
@@ -2056,6 +2102,11 @@ impl eframe::App for FoxGardenApp {
             crate::errors::report(&mut self.last_error, msg::git_diff_failed(&err.to_string()));
         }
 
+        // A tab's "Reveal in Tree", raised inside `tabs::show` below and
+        // applied to the side panel on the next frame (the panel is drawn
+        // before the tab bar, so this frame's own tree is already laid out
+        // by the time the request exists).
+        let mut reveal_in_tree: Option<PathBuf> = None;
         egui::CentralPanel::default().show(ui, |ui| {
             show_external_change_banner(
                 ui,
@@ -2105,7 +2156,15 @@ impl eframe::App for FoxGardenApp {
                 &mut self.file_history,
                 self.dark_mode,
                 self.trim_trailing_whitespace_on_save,
+                &mut reveal_in_tree,
             );
+            if let Some(path) = reveal_in_tree.take() {
+                // Handled on the *next* frame by the panel itself: the side
+                // panel is drawn before the tab bar, so its tree for this
+                // frame is already laid out by the time the request exists.
+                self.side_panel.request_reveal(path);
+                self.side_panel_visible = true;
+            }
         });
 
         // Find references (`PLAN.md` Track 20 Phase 6): a row clicked in

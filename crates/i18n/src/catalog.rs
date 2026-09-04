@@ -161,6 +161,16 @@ pub struct Tabs {
     pub no_file_open: &'static str,
     pub allow_editing: &'static str,
     pub discard: &'static str,
+    pub close: &'static str,
+    pub close_others: &'static str,
+    pub close_to_the_right: &'static str,
+    pub copy_path: &'static str,
+    pub reveal_in_tree: &'static str,
+    /// Overflow indicator on the tab bar: how many tabs are scrolled out of
+    /// view, e.g. "4 mais".
+    pub more_tabs: &'static str,
+    pub more_tabs_hint: &'static str,
+    pub save_all: &'static str,
 }
 
 /// The tab context menu's "File History…" window (`PLAN.md` Track 4 Phase
@@ -291,6 +301,11 @@ pub struct Install {
 /// (`Iniciando JDTLS…`) interpolate that name, so they live in
 /// [`crate::msg`] instead.
 pub struct StatusBar {
+    /// The language indicator's text for a file with no recognized
+    /// language — it still opens and edits, it just has no highlighting.
+    pub plain_text: &'static str,
+    /// Hover text over the error/warning counts.
+    pub diagnostics_hint: &'static str,
     /// Shown when nothing at all is running, so the bar keeps its height
     /// (and its meaning: "the app is not busy", not "the bar is broken").
     pub ready: &'static str,
@@ -520,6 +535,14 @@ pub const PT_BR: Strings = Strings {
         no_file_open: "Nenhum arquivo aberto",
         allow_editing: "Permitir Edição",
         discard: "Descartar",
+        close: "Fechar",
+        close_others: "Fechar as Outras",
+        close_to_the_right: "Fechar as da Direita",
+        copy_path: "Copiar Caminho",
+        reveal_in_tree: "Mostrar na Árvore",
+        more_tabs: "mais",
+        more_tabs_hint: "Abas fora da vista — role a barra ou use Ctrl+E",
+        save_all: "Salvar Todos",
     },
     file_history: FileHistory {
         menu_item: "Histórico do Arquivo…",
@@ -616,6 +639,8 @@ pub const PT_BR: Strings = Strings {
         check_for_updates: "Verificar Atualizações",
     },
     status_bar: StatusBar {
+        plain_text: "Texto",
+        diagnostics_hint: "Erros e avisos neste arquivo",
         ready: "Pronto",
         detecting_java_home: "Procurando um JDK…",
         scanning_classpath: "Lendo o classpath do projeto…",
@@ -814,6 +839,14 @@ pub const EN_US: Strings = Strings {
         no_file_open: "No file open",
         allow_editing: "Allow Editing",
         discard: "Discard",
+        close: "Close",
+        close_others: "Close Others",
+        close_to_the_right: "Close to the Right",
+        copy_path: "Copy Path",
+        reveal_in_tree: "Reveal in Tree",
+        more_tabs: "more",
+        more_tabs_hint: "Tabs scrolled out of view — scroll the bar, or use Ctrl+E",
+        save_all: "Save All",
     },
     file_history: FileHistory {
         menu_item: "File History…",
@@ -910,6 +943,8 @@ pub const EN_US: Strings = Strings {
         check_for_updates: "Check for Updates",
     },
     status_bar: StatusBar {
+        plain_text: "Plain Text",
+        diagnostics_hint: "Errors and warnings in this file",
         ready: "Ready",
         detecting_java_home: "Looking for a JDK…",
         scanning_classpath: "Reading the project classpath…",

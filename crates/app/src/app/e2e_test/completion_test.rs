@@ -15,7 +15,7 @@ fn body_offset() -> usize {
 #[test]
 fn typing_a_prefix_offers_a_word_already_in_the_file() {
     let mut app = E2e::launch(&[("Words.java", WORDS_JAVA)]);
-    app.click("☕ Words.java");
+    app.click_tree("Words.java");
 
     app.type_into_active_tab(body_offset(), "    invent");
 
@@ -28,7 +28,7 @@ fn typing_a_prefix_offers_a_word_already_in_the_file() {
 #[test]
 fn accepting_a_completion_inserts_the_whole_word() {
     let mut app = E2e::launch(&[("Words.java", WORDS_JAVA)]);
-    app.click("☕ Words.java");
+    app.click_tree("Words.java");
 
     app.type_into_active_tab(body_offset(), "    invent");
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
@@ -44,7 +44,7 @@ fn accepting_a_completion_inserts_the_whole_word() {
 #[test]
 fn escape_dismisses_the_popup_and_leaves_what_was_typed() {
     let mut app = E2e::launch(&[("Words.java", WORDS_JAVA)]);
-    app.click("☕ Words.java");
+    app.click_tree("Words.java");
 
     app.type_into_active_tab(body_offset(), "    invent");
     app.press(egui::Modifiers::NONE, egui::Key::Escape);
@@ -63,7 +63,7 @@ fn escape_dismisses_the_popup_and_leaves_what_was_typed() {
 #[test]
 fn ctrl_space_opens_the_popup_with_no_prefix_typed() {
     let mut app = E2e::launch(&[("Words.java", WORDS_JAVA)]);
-    app.click("☕ Words.java");
+    app.click_tree("Words.java");
 
     app.type_into_active_tab(body_offset(), "    ");
     app.press(egui::Modifiers::COMMAND, egui::Key::Space);
@@ -77,7 +77,7 @@ fn ctrl_space_opens_the_popup_with_no_prefix_typed() {
 #[test]
 fn a_java_keyword_is_offered_too() {
     let mut app = E2e::launch(&[("Words.java", WORDS_JAVA)]);
-    app.click("☕ Words.java");
+    app.click_tree("Words.java");
 
     app.type_into_active_tab(body_offset(), "    priv");
 

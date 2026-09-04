@@ -21,6 +21,21 @@ impl Language {
         }
     }
 
+    /// How this language is named in the UI — the status bar's own
+    /// language indicator. Deliberately not `Debug`: these are shown to
+    /// users, so a future rename of a variant must not silently change
+    /// what the editor says a file is.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Language::Java => "Java",
+            Language::Kotlin => "Kotlin",
+            Language::Properties => "Properties",
+            Language::Yaml => "YAML",
+            Language::Xml => "XML",
+            Language::Dockerfile => "Dockerfile",
+        }
+    }
+
     /// Recognizes a `Dockerfile` by its bare file name, for files with no
     /// extension at all to key off (`from_extension` alone can't: a plain
     /// `Dockerfile` has nothing after a `.` to look at). Matches the exact

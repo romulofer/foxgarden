@@ -74,20 +74,18 @@ impl E2e {
         app
     }
 
-    /// Enough of the project root row's label to identify it: `📁 <temp dir
-    /// name>`. Matched as a fragment rather than in full because a root
-    /// whose only child is a directory renders as one collapsed
-    /// `📁 <root>/<child>` row (`collapse_chain`) — and a fragment carrying
-    /// the (per-run unique) temp directory name still can't collide with a
-    /// nested row like `📁 sub`.
+    /// Enough of the project root row's label to identify it: the temp
+    /// directory's own (per-run unique) name. Matched as a fragment rather
+    /// than in full because the row also carries a folder icon and, for a
+    /// root whose only child is a directory, that child's name too
+    /// (`collapse_chain`).
     fn project_root_label(&self) -> String {
-        let name = self
-            .dir
+        self.dir
             .path()
             .file_name()
             .expect("temp dir has a name")
-            .to_string_lossy();
-        format!("📁 {name}")
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Clicks the project root's row in the tree, expanding or collapsing
@@ -135,15 +133,6 @@ impl E2e {
         self.settle();
     }
 
-    /// Middle-clicks `label` — the tab bar's "close without aiming for the
-    /// little x" gesture.
-    pub(super) fn click_middle(&mut self, label: &str) {
-        self.harness
-            .get_by_label(label)
-            .click_button(egui::PointerButton::Middle);
-        self.settle();
-    }
-
     /// Clicks the one widget whose label *contains* `fragment`. Menu items
     /// carry decoration a caller shouldn't have to reproduce — a shortcut
     /// hint (`Save Ctrl+S`), a submenu arrow (`Theme ⏵`) — so menus are
@@ -155,6 +144,14 @@ impl E2e {
         self.settle();
     }
 
+    /// Right-clicks the one widget whose label contains `fragment` — the
+    /// fragment counterpart to [`Self::click_secondary`], for tree rows
+    /// whose label carries a folder icon that changes as they expand.
+    pub(super) fn click_secondary_containing(&mut self, fragment: &str) {
+        self.harness.get_by_label_contains(fragment).click_secondary();
+        self.settle();
+    }
+
     /// Opens `menu` in the menu bar and clicks `item` inside it. Two clicks
     /// with a frame between them, exactly as a user does it — a menu's items
     /// don't exist in the accessibility tree until the menu is open. `item`
@@ -162,7 +159,20 @@ impl E2e {
     /// submenu, call this for the submenu itself and then `click` its item.
     pub(super) fn menu(&mut self, menu: &str, item: &str) {
         self.click(menu);
-        self.click_containing(item);
+        // A menu item's own label carries its shortcut too ("Salvar
+        // Ctrl+S"), so this can only match by fragment — and "Salvar" is a
+        // fragment of "Salvar Todos" as well. The shortest matching label
+        // is the item actually named, rather than one that merely starts
+        // with the same words.
+        let shortest = self
+            .harness
+            .query_all_by_label_contains(item)
+            .filter_map(|node| egui_kittest::kittest::NodeT::accesskit_node(&node).label().map(|l| l.to_owned()))
+            .min_by_key(|label| label.len());
+        match shortest {
+            Some(label) => self.click(&label),
+            None => self.click_containing(item),
+        }
     }
 
     /// Clicks the checkbox labelled `label`, ignoring any plain text that
@@ -178,8 +188,98 @@ impl E2e {
     }
 
     /// Whether any widget currently on screen is labelled exactly `label`.
+    /// The project tree/tab label for `file_name` — icon plus name, using
+    /// the same `style::icons` mapping the UI itself does, so a test names
+    /// a row the way a user sees it without hard-coding a glyph that would
+    /// have to be updated here every time the icon set changes.
+    pub(super) fn row(file_name: &str) -> String {
+        format!("{} {file_name}", crate::style::icons::for_file(std::path::Path::new(file_name)))
+    }
+
+    /// The tab label for `file_name` with unsaved changes — the same row,
+    /// plus the trailing dot the tab bar marks a dirty buffer with.
+    /// A collapsed directory row's label: the closed-folder icon plus
+    /// `name`. (An expanded row carries the open-folder icon instead, which
+    /// is why tests that don't care either way match on the name alone.)
+    pub(super) fn folder_row(name: &str) -> String {
+        format!("{} {name}", crate::style::icons::FOLDER)
+    }
+
+    /// How many widgets carry `file_name`'s row label — 1 when it's only in
+    /// the project tree, 2 once it also has a tab.
+    pub(super) fn label_count(&self, file_name: &str) -> usize {
+        self.harness.query_all_by_label(&Self::row(file_name)).count()
+    }
+
+    pub(super) fn dirty_row(file_name: &str) -> String {
+        format!("{} {}", Self::row(file_name), crate::style::icons::UNSAVED)
+    }
+
+    /// The tab label for a read-only `file_name`: a leading lock.
+    pub(super) fn read_only_row(file_name: &str) -> String {
+        format!("{} {}", crate::style::icons::LOCK, Self::row(file_name))
+    }
+
+    /// A read-only tab that also has unsaved changes — which should never
+    /// happen, and is exactly what the read-only tests assert against.
+    pub(super) fn dirty_read_only_row(file_name: &str) -> String {
+        format!("{} {}", Self::read_only_row(file_name), crate::style::icons::UNSAVED)
+    }
+
+    /// `query_all_`, not `query_`: a file open in a tab is labelled
+    /// identically in the tab bar and in the project tree (same icon, same
+    /// name), and the singular query panics on more than one match — which
+    /// for "is this on screen?" is a false failure.
     pub(super) fn shows(&self, label: &str) -> bool {
-        self.harness.query_by_label(label).is_some()
+        self.harness.query_all_by_label(label).next().is_some()
+    }
+
+    /// Clicks `file_name`'s row in the project tree. The tree is laid out
+    /// before the tab bar, so the first node carrying the label is the tree
+    /// row and the last is the tab — which is what lets a test aim at one
+    /// or the other while both are on screen with the same label.
+    pub(super) fn click_tree(&mut self, file_name: &str) {
+        let label = Self::row(file_name);
+        self.harness.get_all_by_label(&label).next().expect("a tree row for this file").click();
+        self.settle();
+    }
+
+    /// Right-clicks `file_name`'s row in the project tree, opening the
+    /// tree's own context menu (New File/Rename/Delete/Copy/Cut) — not the
+    /// tab bar's, which carries a different set of entries under the same
+    /// label. See `click_tree`.
+    pub(super) fn click_tree_secondary(&mut self, file_name: &str) {
+        let label = Self::row(file_name);
+        self.harness
+            .get_all_by_label(&label)
+            .next()
+            .expect("a tree row for this file")
+            .click_secondary();
+        self.settle();
+    }
+
+    pub(super) fn click_tab_secondary(&mut self, file_name: &str) {
+        let label = Self::row(file_name);
+        // `contains`, not an exact match: a tab carries decoration the
+        // tree row doesn't (the unsaved dot, a read-only lock), so an exact
+        // label would silently fall back to the tree row and open the
+        // wrong context menu.
+        self.harness
+            .get_all_by_label_contains(&label)
+            .last()
+            .expect("a tab for this file")
+            .click_secondary();
+        self.settle();
+    }
+
+    pub(super) fn click_tab_middle(&mut self, file_name: &str) {
+        let label = Self::row(file_name);
+        self.harness
+            .get_all_by_label_contains(&label)
+            .last()
+            .expect("a tab for this file")
+            .click_button(egui::PointerButton::Middle);
+        self.settle();
     }
 
     /// Whether any widget's label *contains* `fragment` — for rows whose
@@ -236,7 +336,8 @@ impl E2e {
     /// button labelled `x`, so they can only be told apart by position —
     /// accessibility-tree order is tab-bar order.
     pub(super) fn close_tab(&mut self, index: usize) {
-        let buttons = self.harness.get_all_by_label("x").collect::<Vec<_>>();
+        let close = crate::style::icons::CLOSE.to_string();
+        let buttons = self.harness.get_all_by_label(&close).collect::<Vec<_>>();
         assert!(index < buttons.len(), "no close button for tab {index}");
         buttons[index].click();
         self.settle();

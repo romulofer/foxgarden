@@ -9,6 +9,7 @@ use syntax::IncrementalParser;
 use crate::goto_definition::GotoDefinitionState;
 use crate::panels::file_history::{self, FileHistoryState};
 use crate::style::fonts::EditorFont;
+use crate::style::icons;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
@@ -114,7 +115,7 @@ fn save_tab(
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut EditorState,
-    pending_close: &mut Option<usize>,
+    pending_close: &mut Vec<PathBuf>,
     parsers: &mut Vec<Option<IncrementalParser>>,
     editor_font: EditorFont,
     font_size: f32,
@@ -145,58 +146,162 @@ pub fn show(
     file_history: &mut FileHistoryState,
     dark_mode: bool,
     trim_trailing_whitespace_on_save: bool,
+    // `side_panel_reveal` is set to the path a tab's "Reveal in Tree"
+    // names, for the caller to hand to the side panel (which owns tree
+    // expansion and selection).
+    side_panel_reveal: &mut Option<PathBuf>,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
     let mut toggle_read_only_request = None;
     let mut file_history_request: Option<usize> = None;
 
-    ui.horizontal_wrapped(|ui| {
-        for (index, doc) in state.open_tabs.iter().enumerate() {
-            let name = doc
-                .path()
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let mut label = String::new();
-            if doc.read_only {
-                label.push('🔒');
-            }
-            if doc.is_dirty() {
-                label.push('*');
-            }
-            label.push_str(&name);
-            let selected = state.active_tab == Some(index);
+    let mut close_others_request = None;
+    let mut close_right_request = None;
+    let mut reveal_request: Option<PathBuf> = None;
 
+    // Horizontally scrollable rather than wrapping: with a wrapped bar,
+    // enough open files pushed the editor itself down the screen, and with
+    // a plain clipped row the tabs past the right edge — the *active* one
+    // included, once it was far enough along — simply couldn't be reached
+    // with the mouse at all. Scrolling keeps the bar one row tall and every
+    // tab reachable, and `scroll_to_me` below keeps the active one on
+    // screen without the user hunting for it.
+    // The overflow count sits at the right end of the same row, so it
+    // never costs the editor a line of height — which means the scroll
+    // area has to leave room for it rather than claiming the full width.
+    let overflow_width = 64.0;
+    let hidden_tabs = ui
+        .horizontal(|ui| {
+            let bar_width = (ui.available_width() - overflow_width).max(0.0);
+            let hidden = egui::ScrollArea::horizontal()
+                .id_salt("tab_bar")
+                .auto_shrink([false, true])
+                .max_width(bar_width)
+                .show(ui, |ui| {
+            let mut hidden = 0usize;
             ui.horizontal(|ui| {
-                let label_response = ui.selectable_label(selected, label);
-                if label_response.clicked() {
-                    focus_request = Some(index);
-                }
-                if label_response.middle_clicked() {
-                    close_request = Some(index);
-                }
-                label_response.context_menu(|ui| {
-                    let toggle_label = if doc.read_only { t().tabs.allow_editing } else { t().menu.read_only };
-                    if ui.button(toggle_label).clicked() {
-                        toggle_read_only_request = Some(index);
-                        ui.close();
-                    }
-                    // Only a file living under the currently open project
-                    // has anywhere to snapshot into (`Document::project_
-                    // root`, `PLAN.md` Track 4 Phase 1) — no point offering
-                    // a history browser that would always open empty.
-                    if doc.project_root.is_some() && ui.button(t().file_history.menu_item).clicked() {
-                        file_history_request = Some(index);
-                        ui.close();
-                    }
-                });
-                if ui.small_button("x").clicked() {
-                    close_request = Some(index);
+                for (index, doc) in state.open_tabs.iter().enumerate() {
+                    let name = doc
+                        .path()
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let selected = state.active_tab == Some(index);
+
+                    ui.horizontal(|ui| {
+                        // Icon, name, then a dot for unsaved changes — the
+                        // dot trails the name instead of an asterisk
+                        // leading it, so a tab doesn't visibly shift left
+                        // and right as it's edited and saved.
+                        let mut label = format!("{} {name}", icons::for_file(doc.path()));
+                        if doc.read_only {
+                            label.insert(0, ' ');
+                            label.insert(0, icons::LOCK);
+                        }
+                        if doc.is_dirty() {
+                            label.push(' ');
+                            label.push(icons::UNSAVED);
+                        }
+                        let label_response = ui.selectable_label(selected, label);
+                        if !ui.is_rect_visible(label_response.rect) {
+                            hidden += 1;
+                        }
+                        // Two files called `Application.java` in different
+                        // modules are otherwise indistinguishable in the bar.
+                        let label_response = label_response.on_hover_text(doc.path().display().to_string());
+                        if label_response.clicked() {
+                            focus_request = Some(index);
+                        }
+                        if label_response.middle_clicked() {
+                            close_request = Some(index);
+                        }
+                        if selected && scroll_active_tab_into_view(ui, state.active_tab) {
+                            label_response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        label_response.context_menu(|ui| {
+                            if ui.button(t().tabs.close).clicked() {
+                                close_request = Some(index);
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(state.open_tabs.len() > 1, egui::Button::new(t().tabs.close_others))
+                                .clicked()
+                            {
+                                close_others_request = Some(index);
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    index + 1 < state.open_tabs.len(),
+                                    egui::Button::new(t().tabs.close_to_the_right),
+                                )
+                                .clicked()
+                            {
+                                close_right_request = Some(index);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button(t().tabs.copy_path).clicked() {
+                                ui.ctx().copy_text(doc.path().display().to_string());
+                                ui.close();
+                            }
+                            if ui.button(t().tabs.reveal_in_tree).clicked() {
+                                reveal_request = Some(doc.path().to_path_buf());
+                                ui.close();
+                            }
+                            ui.separator();
+                            let toggle_label =
+                                if doc.read_only { t().tabs.allow_editing } else { t().menu.read_only };
+                            if ui.button(toggle_label).clicked() {
+                                toggle_read_only_request = Some(index);
+                                ui.close();
+                            }
+                            // Only a file living under the currently open project
+                            // has anywhere to snapshot into (`Document::project_
+                            // root`, `PLAN.md` Track 4 Phase 1) — no point offering
+                            // a history browser that would always open empty.
+                            if doc.project_root.is_some() && ui.button(t().file_history.menu_item).clicked() {
+                                file_history_request = Some(index);
+                                ui.close();
+                            }
+                        });
+                        let close = egui::RichText::new(icons::CLOSE.to_string()).small().weak();
+                        if ui.add(egui::Button::new(close).frame(false)).clicked() {
+                            close_request = Some(index);
+                        }
+                    });
                 }
             });
-        }
-    });
+                    hidden
+                })
+                .inner;
+            // How many tabs are scrolled out of sight, so "there are more
+            // files open than you can see" is visible rather than something
+            // the user has to discover by scrolling.
+            if hidden > 0 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{hidden} {}", t().tabs.more_tabs))
+                            .weak()
+                            .small(),
+                    )
+                    .on_hover_text(t().tabs.more_tabs_hint);
+                });
+            }
+            hidden
+        })
+        .inner;
+
+    if let Some(index) = close_others_request {
+        close_all_except(state, parsers, pending_close, index);
+    }
+    if let Some(index) = close_right_request {
+        close_all_after(state, parsers, pending_close, index);
+    }
+    if let Some(path) = reveal_request {
+        side_panel_reveal.replace(path);
+    }
 
     if let Some(index) = focus_request {
         state.focus_tab(index);
@@ -241,9 +346,13 @@ pub fn show(
         parsers[index] = open_parser_for(doc);
     }
 
-    let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
+    let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command && !i.modifiers.shift);
     if save_requested {
         save_active_tab(state, parsers, last_error, trim_trailing_whitespace_on_save);
+    }
+    let save_all_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command && i.modifiers.shift);
+    if save_all_requested {
+        save_all_dirty_tabs(state, parsers, last_error, &HashSet::new(), trim_trailing_whitespace_on_save);
     }
 
     let reopen_closed_tab_requested =
@@ -370,20 +479,73 @@ pub fn save_all_dirty_tabs(
     }
 }
 
-/// Closes `index`, prompting first if it's dirty. Shared by each tab's `x`
-/// button and the menu bar's File > Close Tab.
+/// Closes `index`, prompting first if it's dirty. Shared by each tab's
+/// close button and the menu bar's File > Close Tab.
+///
+/// A dirty tab joins `pending_close`, a *queue* rather than a single slot,
+/// because "Close Others" can hit several unsaved files at once and each
+/// one still deserves its own save/discard decision — asked one at a time,
+/// in tab order. Queued by path, not index: closing the tabs ahead of it
+/// renumbers everything after, and a stale index would confirm-and-close
+/// the wrong file.
 pub fn request_close_tab(
     state: &mut EditorState,
     parsers: &mut Vec<Option<IncrementalParser>>,
-    pending_close: &mut Option<usize>,
+    pending_close: &mut Vec<PathBuf>,
     index: usize,
 ) {
     if state.open_tabs[index].is_dirty() {
-        *pending_close = Some(index);
+        let path = state.open_tabs[index].path().to_path_buf();
+        if !pending_close.contains(&path) {
+            pending_close.push(path);
+        }
     } else {
         state.close_tab(index);
         parsers.remove(index);
     }
+}
+
+/// Closes every tab except `keep`, and every tab after it — the tab bar's
+/// own "Close Others"/"Close to the Right". Both walk backwards so each
+/// close can't renumber a tab this loop hasn't reached yet.
+fn close_all_except(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    pending_close: &mut Vec<PathBuf>,
+    keep: usize,
+) {
+    let keep_path = state.open_tabs[keep].path().to_path_buf();
+    for index in (0..state.open_tabs.len()).rev() {
+        if state.open_tabs[index].path() != keep_path {
+            request_close_tab(state, parsers, pending_close, index);
+        }
+    }
+}
+
+fn close_all_after(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    pending_close: &mut Vec<PathBuf>,
+    after: usize,
+) {
+    for index in ((after + 1)..state.open_tabs.len()).rev() {
+        request_close_tab(state, parsers, pending_close, index);
+    }
+}
+
+/// Whether the active tab should be scrolled into view this frame: true
+/// exactly on the frame the active tab changed, so the bar follows a tab
+/// switch (including one made from the quick switcher, with the tab bar
+/// scrolled somewhere else entirely) without fighting the user's own
+/// scrolling on every other frame.
+fn scroll_active_tab_into_view(ui: &egui::Ui, active: Option<usize>) -> bool {
+    let id = egui::Id::new("tab_bar_last_active");
+    let previous: Option<Option<usize>> = ui.ctx().data(|d| d.get_temp(id));
+    if previous == Some(active) {
+        return false;
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, active));
+    true
 }
 
 /// Restores the most recently closed tab (`Ctrl+Shift+T`), giving it a
@@ -404,24 +566,32 @@ pub fn reopen_last_closed_tab(state: &mut EditorState, parsers: &mut Vec<Option<
 fn show_close_confirm(
     ui: &mut egui::Ui,
     state: &mut EditorState,
-    pending_close: &mut Option<usize>,
+    pending_close: &mut Vec<PathBuf>,
     parsers: &mut Vec<Option<IncrementalParser>>,
     last_error: &mut Option<String>,
     trim_trailing_whitespace: bool,
 ) {
-    let Some(index) = *pending_close else {
-        return;
+    // The queue front is whichever unsaved tab is being asked about right
+    // now; anything in it whose tab is gone (closed by another path, or
+    // reloaded clean) is dropped rather than asked about.
+    let index = loop {
+        let Some(path) = pending_close.first() else {
+            return;
+        };
+        match state.find_tab(path) {
+            Some(index) if state.open_tabs[index].is_dirty() => break index,
+            _ => {
+                pending_close.remove(0);
+            }
+        }
     };
-    if index >= state.open_tabs.len() {
-        *pending_close = None;
-        return;
-    }
 
     let name = state.open_tabs[index]
         .path()
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let remaining = pending_close.len();
 
     let outcome = show_modal(ui, "close_confirm", Some(index), |ui, &index| {
         ui.label(msg::save_changes_before_closing(&name));
@@ -430,22 +600,37 @@ fn show_close_confirm(
                 save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
                 state.close_tab(index);
                 parsers.remove(index);
-                *pending_close = None;
+                pending_close.remove(0);
+            }
+            // Only worth offering when this isn't the last one being asked
+            // about: a batch close ("Close Others" over several unsaved
+            // files) otherwise means answering the same question once per
+            // file.
+            if remaining > 1 && ui.button(t().tabs.save_all).clicked() {
+                for path in std::mem::take(pending_close) {
+                    if let Some(index) = state.find_tab(&path) {
+                        save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
+                        state.close_tab(index);
+                        parsers.remove(index);
+                    }
+                }
             }
             if ui.button(t().tabs.discard).clicked() {
                 state.close_tab(index);
                 parsers.remove(index);
-                *pending_close = None;
+                pending_close.remove(0);
             }
             if ui.button(t().common.cancel).clicked() {
-                *pending_close = None;
+                // Cancel abandons the whole batch, not just this one file:
+                // answering "cancel" to "close these 7 tabs?" and then
+                // being asked about the other six is not what anyone means.
+                pending_close.clear();
             }
         });
     });
-    // Escape means "stop asking," the same as Cancel — neither saves nor
-    // discards the tab, it's still open with `pending_close` cleared.
+    // Escape means "stop asking," the same as Cancel.
     if let Some((_, true)) = outcome {
-        *pending_close = None;
+        pending_close.clear();
     }
 }
 

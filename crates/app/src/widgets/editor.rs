@@ -50,3 +50,6 @@ pub use templates::{
     serialize_user_templates,
 };
 pub use widget::{EditorRequests, jump_to, show};
+/// Where the caret sits in a given editor widget — read by the status bar,
+/// which reports a position the widget (not the document) owns.
+pub use text_area::peek_caret;

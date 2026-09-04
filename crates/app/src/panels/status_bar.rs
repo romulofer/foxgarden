@@ -17,7 +17,11 @@
 //! actually says is then a pure function over a plain struct, and no test
 //! of it has to spawn a real child process to reach a given line.
 
+use fg_core::Language;
 use fg_i18n::{msg, t};
+
+use crate::style::icons;
+use crate::style::indent::IndentSettings;
 
 use crate::debug_state::{DebugState, DebugStatus};
 use crate::lsp_manager::{ALL_SERVERS, LspManagerState};
@@ -217,8 +221,17 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
 /// what keeps `FoxGardenApp::ui`'s once-per-frame polling of these very
 /// jobs running while one is in flight: no user input arrives during a
 /// multi-minute install, and none is needed.
-pub fn show(ui: &mut egui::Ui, activities: &[Activity]) {
+pub fn show(ui: &mut egui::Ui, activities: &[Activity], document: Option<&DocumentStatus>) {
     ui.horizontal(|ui| {
+        // The document's own facts sit on the right, where every editor
+        // puts them, and are laid out first so the (variable-length)
+        // activity text on the left can't push them off screen.
+        if let Some(document) = document {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                show_document_status(ui, document);
+            });
+        }
+
         let Some((first, rest)) = activities.split_first() else {
             ui.weak(t().status_bar.ready);
             return;
@@ -232,6 +245,54 @@ pub fn show(ui: &mut egui::Ui, activities: &[Activity]) {
         let all: Vec<String> = activities.iter().map(Activity::text).collect();
         response.on_hover_text(all.join("\n"));
     });
+}
+
+/// What the bar reports about the file currently being edited. Everything
+/// here was previously invisible: the caret position, what language the
+/// editor thinks the file is, what a Tab key inserts, and whether the file
+/// has problems in it — all of which a user has to be able to check
+/// without hunting through menus.
+pub struct DocumentStatus {
+    /// 1-based, as every editor displays them (and as compiler output
+    /// refers to them), not the 0-based indices the buffer uses.
+    pub line: usize,
+    pub column: usize,
+    /// `None` for a file whose extension maps to no supported language —
+    /// worth saying explicitly, since that's also why it has no
+    /// highlighting or completion.
+    pub language: Option<Language>,
+    pub indent: IndentSettings,
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+fn show_document_status(ui: &mut egui::Ui, document: &DocumentStatus) {
+    // Right-to-left layout: added last renders leftmost.
+    let indent = if document.indent.use_tabs {
+        msg::status_indent_tabs(document.indent.width)
+    } else {
+        msg::status_indent_spaces(document.indent.width)
+    };
+    ui.weak(indent);
+    ui.weak("·");
+    ui.weak(match document.language {
+        Some(language) => language.display_name().to_string(),
+        None => t().status_bar.plain_text.to_string(),
+    });
+    ui.weak("·");
+    ui.weak(msg::status_line_column(document.line, document.column));
+
+    if document.errors > 0 || document.warnings > 0 {
+        ui.weak("·");
+        let counts = format!(
+            "{} {}  {} {}",
+            icons::ERROR,
+            document.errors,
+            icons::WARNING,
+            document.warnings
+        );
+        ui.label(counts).on_hover_text(t().status_bar.diagnostics_hint);
+    }
 }
 
 #[cfg(test)]

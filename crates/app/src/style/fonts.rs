@@ -42,6 +42,15 @@ pub fn install(ctx: &egui::Context) {
         .entry(egui::FontFamily::Monospace)
         .or_default()
         .push(NERD_FONT_SYMBOLS_KEY.to_owned());
+    // Proportional too, because the *UI* draws icons from this same font
+    // (`style::icons`) — the project tree, tab bar, side-panel toolbar and
+    // status bar all render in the proportional family, and without this
+    // every one of those icons would be a missing glyph.
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push(NERD_FONT_SYMBOLS_KEY.to_owned());
     ctx.set_fonts(fonts);
 }
 

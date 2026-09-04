@@ -30,7 +30,8 @@ pub(super) use cache::hash_hidden;
 pub(super) use render::ContentKey;
 pub(super) use input::Caret;
 pub(super) use render::{HighlightSpan, TextAreaOutput};
-pub(super) use shell::{char_offset_for_pos, peek_caret, set_caret, show as show_interactive};
+pub(super) use shell::{char_offset_for_pos, set_caret, show as show_interactive};
+pub use shell::peek_caret;
 
 /// The inclusive-start, exclusive-end range of **visual rows** at least
 /// partially inside a viewport `viewport_h` tall scrolled down by `scroll_y`,

@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use fg_core::{EditorState, FileKind, FileNode};
 
+use crate::style::icons;
 use crate::terminal;
 use crate::widgets::modal::show_modal;
 
@@ -18,6 +19,10 @@ pub enum ClipboardOp {
 /// Transient UI state for the side panel, owned by the caller across frames.
 #[derive(Default)]
 pub struct SidePanelState {
+    /// A path to scroll to, expand every ancestor of, and select — set by
+    /// `request_reveal` (a tab's "Reveal in Tree"), consumed on the next
+    /// frame this panel draws.
+    reveal_request: Option<PathBuf>,
     /// The "Open Folder" dialog, when one is up — on its own thread, so a
     /// slow (or never-appearing) native/portal dialog can't freeze the
     /// editor behind it. See `crate::folder_picker`.
@@ -134,10 +139,13 @@ struct TreeActions {
 
 pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelState) -> SidePanelOutcome {
     let mut outcome = SidePanelOutcome::default();
+    if let Some(path) = panel.reveal_request.take() {
+        reveal(ui.ctx(), panel, &path);
+    }
 
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!panel.folder_picker.is_open(), egui::Button::new("📁"))
+            .add_enabled(!panel.folder_picker.is_open(), egui::Button::new(icons::OPEN_FOLDER.to_string()))
             .on_hover_text(t().side_panel.open_folder_hint)
             .clicked()
         {
@@ -154,10 +162,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             outcome.error = Some(msg::failed_to_open_project(&err.to_string()));
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
-            if ui.button("📄").on_hover_text(t().side_panel.new_file_hint).clicked() {
+            if ui.button(icons::NEW_FILE.to_string()).on_hover_text(t().side_panel.new_file_hint).clicked() {
                 panel.begin_new_file(root.clone());
             }
-            if ui.button("💻").on_hover_text(t().side_panel.open_terminal_hint).clicked()
+            if ui.button(icons::TERMINAL.to_string()).on_hover_text(t().side_panel.open_terminal_hint).clicked()
                 && let Err(err) = terminal::open(&root)
             {
                 outcome.error = Some(msg::failed_to_open_terminal(&err.to_string()));
@@ -231,6 +239,63 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     }
 
     outcome
+}
+
+/// The `CollapsingState` id for a directory row. A pure function of the
+/// path, so anything holding a path can address that row's expansion state.
+fn tree_node_id(path: &Path) -> egui::Id {
+    egui::Id::new(("project_tree_node", path))
+}
+
+impl SidePanelState {
+    /// Asks the tree to reveal `path` on its next frame — see `reveal`.
+    pub fn request_reveal(&mut self, path: PathBuf) {
+        self.reveal_request = Some(path);
+    }
+}
+
+/// Expands every directory between the project root and `path`, and selects
+/// `path` itself.
+///
+/// Expansion state belongs to egui (each row is a `CollapsingState` keyed by
+/// its own path), so revealing means opening each ancestor's state directly
+/// rather than tracking a parallel set of open directories here. A path
+/// outside the open project simply expands nothing — its ancestors have no
+/// rows to open.
+fn reveal(ctx: &egui::Context, panel: &mut SidePanelState, path: &Path) {
+    for ancestor in path.ancestors().skip(1) {
+        let id = tree_node_id(ancestor);
+        let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, false);
+        collapsing.set_open(true);
+        collapsing.store(ctx);
+    }
+    panel.selected.clear();
+    panel.selected.insert(path.to_path_buf());
+    panel.last_selected = Some(path.to_path_buf());
+}
+
+/// One row of the project tree: an icon, then the name, laid out so a name
+/// too long for the panel is truncated with an ellipsis instead of wrapping
+/// onto a second line (which broke the row's alignment and pushed every
+/// following row down — plainly visible with a name as ordinary as
+/// `Application.java` in a default-width panel).
+///
+/// `full_path`, when given, becomes the row's tooltip: two modules in the
+/// same project routinely hold files with identical names, and the tree
+/// shows only the name.
+fn row_label(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: char,
+    name: &str,
+    full_path: Option<&Path>,
+) -> egui::Response {
+    let text = egui::RichText::new(format!("{icon} {name}"));
+    let response = ui.add(egui::Button::selectable(selected, text).truncate());
+    match full_path {
+        Some(path) => response.on_hover_text(path.display().to_string()),
+        None => response,
+    }
 }
 
 /// Draws a single-line text field, focusing it (once, per `should_focus`)
@@ -756,9 +821,14 @@ fn render_node(
             // label *also* toggles expand (preserving today's "click
             // anywhere on the row" ergonomics for the common case) — only
             // a Cmd/Ctrl/Shift-click is select-only.
-            let collapsing_id = ui.make_persistent_id(&terminal.path);
+            // Keyed on the path alone (not `make_persistent_id`, which
+            // mixes in the enclosing `Ui`'s own id) so `reveal` can open a
+            // directory's state from outside the tree's own layout.
+            let collapsing_id = tree_node_id(&terminal.path);
             let collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
-            let header = collapsing.show_header(ui, |ui| ui.selectable_label(is_selected, format!("📁 {}", collapsed.label)));
+            let folder_icon = if collapsing.is_open() { icons::FOLDER_OPEN } else { icons::FOLDER };
+            let header =
+                collapsing.show_header(ui, |ui| row_label(ui, is_selected, folder_icon, &collapsed.label, None));
             let (_, header_response, _) = header.body(|ui| {
                 for child in &terminal.children {
                     render_node(ui, child, child_sep, rename_draft, should_focus_rename, clipboard, selected, visible_order, actions);
@@ -823,35 +893,11 @@ fn render_node(
             });
         }
         None => {
-            let extension = node.path.extension().and_then(|ext| ext.to_str());
-            // A bare `Dockerfile` has no extension at all for the `match`
-            // below to key off, and a suffixed variant (`Dockerfile.dev`)
-            // has one that means nothing here (`"dev"` isn't a real file
-            // type) — so this is checked as its own name-based fallback,
-            // the same `from_filename` check `Document::open` already uses
-            // to recognize one, rather than folded into the `extension`
-            // match itself.
-            let is_dockerfile = node
-                .path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| fg_core::Language::from_filename(n).is_some());
-            let icon = match extension {
-                Some("java") => "☕ ",
-                Some("kt") => "🔷 ",
-                Some("properties") => "⚙️ ",
-                Some("yml" | "yaml") => "📜 ",
-                Some("xml") => "🏷️ ",
-                _ if is_dockerfile => "🐳 ",
-                _ => "📄 ",
-            };
-            let label_text = format!("{icon}{}", node.name);
-
             // Any file can be opened — `Document::open` only fails on files
             // that aren't valid UTF-8 text (binaries, etc), and that failure
             // is reported when the open is actually attempted, not guessed
             // at here from the extension alone.
-            let response = ui.selectable_label(is_selected, label_text);
+            let response = row_label(ui, is_selected, icons::for_file(&node.path), &node.name, Some(&node.path));
             if response.clicked() {
                 let modifiers = ui.input(|i| i.modifiers);
                 actions.select_click = Some((node.path.clone(), modifiers));

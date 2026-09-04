@@ -55,8 +55,8 @@ fn arrow_down_moves_the_go_to_file_selection_before_enter_opens_it() {
 #[test]
 fn ctrl_e_lists_recent_files_and_reopens_one() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA), ("Other.kt", "class Other\n")]);
-    app.click("☕ Main.java");
-    app.click("🔷 Other.kt");
+    app.click_tree("Main.java");
+    app.click_tree("Other.kt");
 
     app.press(egui::Modifiers::COMMAND, egui::Key::E);
     assert!(

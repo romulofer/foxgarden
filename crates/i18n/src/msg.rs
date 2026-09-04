@@ -315,6 +315,27 @@ msg! {
 }
 
 msg! {
+    status_line_column(line: usize, column: usize) {
+        pt: "Ln {line}, Col {column}",
+        en: "Ln {line}, Col {column}",
+    }
+}
+
+msg! {
+    status_indent_spaces(width: usize) {
+        pt: "Espaços: {width}",
+        en: "Spaces: {width}",
+    }
+}
+
+msg! {
+    status_indent_tabs(width: usize) {
+        pt: "Tabulações: {width}",
+        en: "Tabs: {width}",
+    }
+}
+
+msg! {
     install_failed(tool: &str, err: &str) {
         pt: "a instalação de {tool} falhou: {err}",
         en: "Installing {tool} failed: {err}",

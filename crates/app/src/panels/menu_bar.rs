@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use fg_core::EditorState;
 use fg_i18n::{Lang, msg, t};
 use syntax::{IncrementalParser, Scope};
@@ -116,7 +118,7 @@ pub fn show(
     state: &mut EditorState,
     side_panel: &mut SidePanelState,
     parsers: &mut Vec<Option<IncrementalParser>>,
-    pending_close: &mut Option<usize>,
+    pending_close: &mut Vec<std::path::PathBuf>,
     menu: &mut MenuBarState,
     editor_font: &mut EditorFont,
     font_size: &mut f32,
@@ -176,6 +178,24 @@ pub fn show(
                 .clicked()
             {
                 tabs::save_active_tab(state, parsers, last_error, *trim_trailing_whitespace_on_save);
+                ui.close();
+            }
+            let any_dirty = state.open_tabs.iter().any(|doc| doc.is_dirty());
+            if ui
+                .add_enabled(any_dirty, egui::Button::new(t().tabs.save_all).shortcut_text("Ctrl+Shift+S"))
+                .clicked()
+            {
+                // No conflict set here: this is an explicit "save
+                // everything" the user just asked for, unlike auto-save,
+                // which deliberately skips a tab whose file changed on disk
+                // rather than silently picking a winner.
+                tabs::save_all_dirty_tabs(
+                    state,
+                    parsers,
+                    last_error,
+                    &HashSet::new(),
+                    *trim_trailing_whitespace_on_save,
+                );
                 ui.close();
             }
             if ui

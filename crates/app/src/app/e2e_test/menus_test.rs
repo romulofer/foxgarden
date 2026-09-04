@@ -8,20 +8,20 @@ use fg_i18n::t;
 #[test]
 fn file_save_writes_the_active_tab() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// via the menu");
 
     app.menu(t().menu.file, t().common.save);
 
     assert_eq!(app.on_disk("Main.java"), format!("{MAIN_JAVA}// via the menu"));
-    assert!(!app.shows("*Main.java"));
+    assert!(!app.shows(&E2e::dirty_row("Main.java")));
 }
 
 #[test]
 fn file_close_tab_closes_the_active_one() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA), ("Other.kt", "class Other\n")]);
-    app.click("☕ Main.java");
-    app.click("🔷 Other.kt");
+    app.click_tree("Main.java");
+    app.click_tree("Other.kt");
 
     app.menu(t().menu.file, t().menu.close_tab);
 
@@ -31,7 +31,7 @@ fn file_close_tab_closes_the_active_one() {
 #[test]
 fn file_reopen_closed_tab_brings_the_last_one_back() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     app.menu(t().menu.file, t().menu.close_tab);
     assert!(app.open_tab_names().is_empty());
 
@@ -171,7 +171,7 @@ fn view_zen_mode_hides_the_menu_bar_and_f11_brings_it_back() {
 
     app.menu(t().menu.view, t().menu.zen_mode);
     assert!(!app.shows(t().menu.file), "zen mode hides the menu bar");
-    assert!(!app.shows("☕ Main.java"), "and the side panel with it");
+    assert!(!app.shows(&E2e::row("Main.java")), "and the side panel with it");
 
     app.press(egui::Modifiers::NONE, egui::Key::F11);
 
@@ -179,7 +179,7 @@ fn view_zen_mode_hides_the_menu_bar_and_f11_brings_it_back() {
         app.shows(t().menu.file),
         "F11 must get out of zen mode even with no menu to click"
     );
-    assert!(app.shows("☕ Main.java"));
+    assert!(app.shows(&E2e::row("Main.java")));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn view_side_panel_checkbox_hides_the_project_tree() {
 
     app.menu(t().menu.view, t().menu.side_panel);
 
-    assert!(!app.shows("☕ Main.java"));
+    assert!(!app.shows(&E2e::row("Main.java")));
     assert!(app.shows(t().menu.file), "only the side panel goes, unlike zen mode");
 }
 
@@ -238,21 +238,21 @@ fn help_live_templates_dialog_opens() {
 #[test]
 fn tools_read_only_marks_the_tab_and_blocks_typing() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
 
     app.menu(t().menu.tools, t().menu.read_only);
-    assert!(app.shows("🔒Main.java"), "a read-only tab is marked with a lock");
+    assert!(app.shows(&E2e::read_only_row("Main.java")), "a read-only tab is marked with a lock");
 
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// nope");
 
     assert_eq!(app.active_tab_text(), MAIN_JAVA, "a read-only tab must ignore typing");
-    assert!(!app.shows("*🔒Main.java"), "and so must stay clean");
+    assert!(!app.shows(&E2e::dirty_read_only_row("Main.java")), "and so must stay clean");
 }
 
 #[test]
 fn tools_convert_to_uppercase_converts_the_selection() {
     let mut app = E2e::launch(&[("Main.java", "class Main {\n  int value;\n}\n")]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
 
     // The `value` identifier on line 2.
     let offset = "class Main {\n  int ".chars().count();
@@ -265,7 +265,7 @@ fn tools_convert_to_uppercase_converts_the_selection() {
 #[test]
 fn tools_case_conversion_with_no_selection_reports_an_error() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    app.click("☕ Main.java");
+    app.click_tree("Main.java");
     app.type_into_active_tab(0, "");
 
     app.menu(t().menu.tools, t().menu.convert_to_lowercase);
@@ -278,7 +278,7 @@ fn tools_case_conversion_with_no_selection_reports_an_error() {
 #[test]
 fn tools_sort_lines_sorts_the_selected_lines() {
     let mut app = E2e::launch(&[("Notes.java", "// c\n// a\n// b\n")]);
-    app.click("☕ Notes.java");
+    app.click_tree("Notes.java");
 
     app.select_in_active_tab(0, "// c\n// a\n// b".chars().count());
     app.menu(t().menu.tools, t().menu.sort_lines);
@@ -289,7 +289,7 @@ fn tools_sort_lines_sorts_the_selected_lines() {
 #[test]
 fn tools_unique_lines_drops_the_duplicates() {
     let mut app = E2e::launch(&[("Notes.java", "// a\n// a\n// b\n")]);
-    app.click("☕ Notes.java");
+    app.click_tree("Notes.java");
 
     app.select_in_active_tab(0, "// a\n// a\n// b".chars().count());
     app.menu(t().menu.tools, t().menu.unique_lines);
@@ -300,7 +300,7 @@ fn tools_unique_lines_drops_the_duplicates() {
 #[test]
 fn tools_generate_getters_inserts_one_for_the_only_class() {
     let mut app = E2e::launch(&[("Person.java", "class Person {\n    private String name;\n}\n")]);
-    app.click("☕ Person.java");
+    app.click_tree("Person.java");
 
     app.menu(t().menu.tools, t().menu.generate_getters);
 

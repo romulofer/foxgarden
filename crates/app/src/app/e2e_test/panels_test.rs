@@ -71,3 +71,18 @@ fn the_status_bar_reports_an_idle_app_and_goes_away_in_zen_mode() {
         "zen mode hides the status bar along with the rest of the chrome"
     );
 }
+
+/// The status bar reports the file being edited, not just background work:
+/// caret position, language, indentation. All of it was previously
+/// invisible anywhere in the UI.
+#[test]
+fn the_status_bar_reports_the_active_file_s_position_and_language() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    assert!(!app.shows_containing("Ln 1"), "with no file open there is nothing to report");
+
+    app.click_tree("Main.java");
+
+    assert!(app.shows_containing("Ln 1, Col 1"), "a freshly opened file starts at the top");
+    assert!(app.shows_containing("Java"), "and says what language it is");
+    assert!(app.shows_containing("Espaços: 4"), "and what a Tab inserts");
+}
