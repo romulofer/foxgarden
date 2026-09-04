@@ -7,6 +7,7 @@ mod diagnostic;
 mod diff;
 mod docker;
 mod document;
+mod drafts;
 mod editor_state;
 mod file_history;
 mod gradle;
@@ -36,6 +37,7 @@ pub use diff::{
 };
 pub use docker::{compose_file, docker_build_command, docker_compose_up_command, docker_run_command, has_dockerfile};
 pub use document::{Document, OpenDocumentError};
+pub use drafts::{Draft, discard_draft, pending_drafts, write_draft};
 pub use editor_state::{EditorState, TerminalTab};
 pub use file_history::{Snapshot, list_snapshots};
 pub use gradle::{GradleClasspath, GradleDependency, GradleError, GradleProject, gradle_classpaths, gradle_projects};

@@ -358,6 +358,7 @@ pub struct Errors {
 
 /// Strings used by more than one area — button verbs, mostly.
 pub struct Common {
+    pub restore: &'static str,
     /// Clears every toast at once.
     pub dismiss_all: &'static str,
     pub ok: &'static str,
@@ -698,6 +699,7 @@ pub const PT_BR: Strings = Strings {
     },
     common: Common {
         dismiss_all: "Dispensar tudo",
+        restore: "Restaurar",
         ok: "OK",
         close: "Fechar",
         cancel: "Cancelar",
@@ -1013,6 +1015,7 @@ pub const EN_US: Strings = Strings {
     },
     common: Common {
         dismiss_all: "Dismiss all",
+        restore: "Restore",
         ok: "OK",
         close: "Close",
         cancel: "Cancel",

@@ -315,6 +315,13 @@ msg! {
 }
 
 msg! {
+    unsaved_work_found(count: usize) {
+        pt: "{count} arquivo(s) com alterações não salvas da sessão anterior. Restaurar?",
+        en: "{count} file(s) had unsaved changes from the previous session. Restore them?",
+    }
+}
+
+msg! {
     status_line_column(line: usize, column: usize) {
         pt: "Ln {line}, Col {column}",
         en: "Ln {line}, Col {column}",

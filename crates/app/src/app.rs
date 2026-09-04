@@ -39,6 +39,7 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
+use crate::widgets::modal::show_modal;
 use crate::widgets::editor::{
     CodeActionGutter, CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState,
     OverrideMethodDialog, PeekState, RenameBox, UserTemplates, jump_to,
@@ -131,6 +132,12 @@ const DEFAULT_SIDE_PANEL_WIDTH: f32 = 200.0;
 /// repeatedly for what the user experiences as a single change.
 const TREE_REFRESH_DEBOUNCE_SECONDS: f64 = 0.3;
 
+/// How often unsaved buffers are copied into `.foxgarden/drafts/`. Short
+/// enough that a crash costs seconds of typing rather than an afternoon,
+/// long enough that a burst of keystrokes doesn't turn into a burst of
+/// writes — the drafts are a safety net, not a second save path.
+const DRAFT_INTERVAL_SECONDS: f64 = 5.0;
+
 pub struct FoxGardenApp {
     state: EditorState,
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
@@ -143,6 +150,12 @@ pub struct FoxGardenApp {
     toasts: crate::toasts::Toasts,
     /// `Ctrl+Shift+P` — every common action by name, with its shortcut.
     command_palette: crate::panels::command_palette::CommandPaletteState,
+    /// When unsaved buffers were last copied to `.foxgarden/drafts/` — see
+    /// `DRAFT_INTERVAL_SECONDS`.
+    drafts_written_at: f64,
+    /// Drafts found at startup, waiting for the user to say whether to
+    /// restore them (`show_draft_restore_prompt`).
+    pending_drafts: Vec<fg_core::Draft>,
     /// Project roots opened before, most recent first — offered on the
     /// welcome screen and persisted across restarts.
     recent_projects: Vec<PathBuf>,
@@ -453,6 +466,23 @@ pub struct FoxGardenApp {
 /// *already*-open tab rather than truly opening a new one: cheap enough to
 /// re-run, and simpler than threading a "was this actually new" flag out of
 /// `EditorState::open_tab`'s own dedup just to skip it.
+/// Opens `path` in a tab and hands back its index — the piece of
+/// `open_path` a draft restore needs (it has to write into the buffer
+/// afterwards) without the diff/error plumbing that isn't relevant when the
+/// file is about to be overwritten from a draft anyway.
+fn open_path_for_draft(
+    state: &mut EditorState,
+    parsers: &mut Vec<Option<IncrementalParser>>,
+    path: PathBuf,
+) -> Option<usize> {
+    let index = state.open_tab(path).ok()?;
+    if index == parsers.len() {
+        let parser = tabs::open_parser_for(&mut state.open_tabs[index]);
+        parsers.push(parser);
+    }
+    Some(index)
+}
+
 fn open_path(
     state: &mut EditorState,
     parsers: &mut Vec<Option<IncrementalParser>>,
@@ -1230,6 +1260,8 @@ impl FoxGardenApp {
             pending_close: Vec::new(),
             toasts: crate::toasts::Toasts::default(),
             command_palette: crate::panels::command_palette::CommandPaletteState::default(),
+            drafts_written_at: 0.0,
+            pending_drafts: Vec::new(),
             recent_projects,
             generate_dialog: None,
             generate_method_dialog: None,
@@ -1338,6 +1370,80 @@ impl FoxGardenApp {
     /// and its menu item can't drift apart — they are literally the same
     /// code path from this point on. Only the actions that are plain state
     /// flips (panel toggles, theme) or direct calls are handled inline.
+    /// Copies every unsaved buffer into `.foxgarden/drafts/`, and clears
+    /// the draft of anything that now matches disk.
+    ///
+    /// Best-effort throughout: a read-only `.foxgarden/`, a full disk, a
+    /// file outside the project — none of that is worth interrupting the
+    /// user over, since the buffer they're typing into is unaffected. The
+    /// worst case is the safety net not being there, which is where this
+    /// app already was.
+    fn write_drafts(&self) {
+        for doc in &self.state.open_tabs {
+            let Some(root) = &doc.project_root else {
+                continue;
+            };
+            if doc.is_dirty() {
+                let _ = fg_core::write_draft(root, doc.path(), &doc.buffer.to_string());
+            } else {
+                let _ = fg_core::discard_draft(root, doc.path());
+            }
+        }
+    }
+
+    /// Offers to restore whatever unsaved work the last session left
+    /// behind. One prompt for all of them, not one per file: they were all
+    /// lost by the same event, and answering the same question six times
+    /// is its own annoyance.
+    ///
+    /// Restoring opens each file and puts the draft's text into its buffer
+    /// *without saving* — the result is exactly the dirty tab the user had,
+    /// not a decision made on their behalf about what belongs on disk.
+    fn show_draft_restore_prompt(&mut self, ui: &egui::Ui) {
+        if self.pending_drafts.is_empty() {
+            return;
+        }
+        let names: Vec<String> = self
+            .pending_drafts
+            .iter()
+            .filter_map(|draft| draft.file_path.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+
+        let outcome = show_modal(ui, "restore_drafts", Some(names.len()), |ui, _| {
+            ui.label(msg::unsaved_work_found(names.len()));
+            ui.weak(names.join("\n"));
+            ui.horizontal(|ui| (ui.button(t().common.restore).clicked(), ui.button(t().tabs.discard).clicked()))
+                .inner
+        });
+
+        let Some(((restore, discard), escaped)) = outcome else {
+            return;
+        };
+        if !restore && !discard && !escaped {
+            return;
+        }
+        let drafts = std::mem::take(&mut self.pending_drafts);
+        for draft in drafts {
+            let root = self.state.project.as_ref().map(|project| project.root.clone());
+            if restore {
+                match open_path_for_draft(&mut self.state, &mut self.parsers, draft.file_path.clone()) {
+                    Some(index) => {
+                        let doc = &mut self.state.open_tabs[index];
+                        doc.buffer.replace(Rope::from_str(&draft.content));
+                        doc.lsp_version += 1;
+                        doc.lsp_sync_pending = true;
+                        self.parsers[index] = tabs::open_parser_for(doc);
+                    }
+                    None => continue,
+                }
+            } else if let Some(root) = root {
+                // Declined (or dismissed): the draft has served its
+                // purpose and must not be offered again next launch.
+                let _ = fg_core::discard_draft(&root, &draft.file_path);
+            }
+        }
+    }
+
     fn run_command(
         &mut self,
         ctx: &egui::Context,
@@ -1525,6 +1631,10 @@ impl eframe::App for FoxGardenApp {
             self.auto_save_state.record_activity(now);
         }
         let auto_save_fired = self.auto_save_state.tick(self.auto_save_settings, focused, now);
+        if now - self.drafts_written_at >= DRAFT_INTERVAL_SECONDS {
+            self.drafts_written_at = now;
+            self.write_drafts();
+        }
 
         // Computed once and reused at every `git diff` trigger point below
         // (open/save/reload) — `None` when no project is open, in which
@@ -1538,6 +1648,10 @@ impl eframe::App for FoxGardenApp {
             && self.recent_projects.first() != Some(root)
         {
             crate::panels::welcome::remember_project(&mut self.recent_projects, root);
+            // Whatever the last session left unsaved in this project: read
+            // once, here, on the frame it's opened (including the restored
+            // session's own project at startup), rather than polled.
+            self.pending_drafts = fg_core::pending_drafts(root);
         }
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
@@ -2431,6 +2545,7 @@ impl eframe::App for FoxGardenApp {
         jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
         new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
 
+        self.show_draft_restore_prompt(ui);
         drain_errors_into_toasts(&mut self.last_error, &mut self.toasts);
         self.toasts.show(ui);
     }

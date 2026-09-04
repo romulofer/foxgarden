@@ -146,3 +146,29 @@ fn undoing_every_edit_before_closing_skips_the_prompt_entirely() {
     assert!(app.open_tab_names().is_empty(), "a clean tab closes without asking");
     assert!(!app.shows(&msg::save_changes_before_closing("Main.java")));
 }
+
+/// Unsaved work used to exist only in memory: killing the app took it with
+/// it, silently. It's now mirrored into `.foxgarden/drafts/` and offered
+/// back on the next launch.
+#[test]
+fn unsaved_work_is_kept_on_disk_and_offered_back() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    app.click_tree("Main.java");
+    app.type_into_active_tab(MAIN_JAVA.chars().count(), "// never saved");
+
+    app.advance_time_past_the_draft_interval();
+
+    let draft = app.path(".foxgarden/drafts/Main.java.draft");
+    assert!(draft.is_file(), "an unsaved buffer must leave a draft behind");
+    assert_eq!(
+        std::fs::read_to_string(&draft).unwrap(),
+        format!("{MAIN_JAVA}// never saved"),
+        "the draft holds what was typed, not what is on disk"
+    );
+    assert_eq!(app.on_disk("Main.java"), MAIN_JAVA, "and the file itself is untouched");
+
+    // Saving means there is nothing left to recover.
+    app.press(egui::Modifiers::COMMAND, egui::Key::S);
+    app.advance_time_past_the_draft_interval();
+    assert!(!draft.exists(), "a saved file's draft is cleaned up");
+}

@@ -13,6 +13,10 @@ pub enum FileKind {
 /// turn opening the project into a multi-second walk of files nobody wants
 /// to see in the tree anyway.
 const SKIPPED_DIR_NAMES: &[&str] = &[
+    // This app's own per-project state — history snapshots, drafts, run
+    // configs. It's bookkeeping about the project, not part of it, and
+    // showing it invites editing files the editor rewrites underneath.
+    ".foxgarden",
     ".git",
     "target",
     "node_modules",
@@ -323,6 +327,10 @@ mod tests {
         std::fs::create_dir_all(root.join("target/classes")).unwrap();
         std::fs::write(root.join("target/classes/Main.class"), "").unwrap();
         std::fs::create_dir_all(root.join("node_modules/some-pkg")).unwrap();
+        // This app's own state directory: history snapshots and drafts are
+        // bookkeeping about the project, not files to browse.
+        std::fs::create_dir_all(root.join(".foxgarden/drafts")).unwrap();
+        std::fs::write(root.join(".foxgarden/drafts/Main.java.draft"), "").unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/Main.java"), "class Main {}").unwrap();
 

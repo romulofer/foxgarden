@@ -229,6 +229,19 @@ impl E2e {
         }
     }
 
+    /// Runs frames until the app's own draft timer has fired at least once
+    /// — the drafts are written on a wall-clock interval, and a test's
+    /// frames are otherwise far too fast to reach it.
+    pub(super) fn advance_time_past_the_draft_interval(&mut self) {
+        let start = self.harness.ctx.input(|i| i.time);
+        // `run_ok` advances the harness clock by one frame's worth of time
+        // per step, so this is bounded by real frames, not a sleep.
+        while self.harness.ctx.input(|i| i.time) - start < 6.0 {
+            self.harness.step();
+        }
+        self.settle();
+    }
+
     pub(super) fn shows(&self, label: &str) -> bool {
         self.harness.query_all_by_label(label).next().is_some()
     }
