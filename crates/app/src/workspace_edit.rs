@@ -91,7 +91,7 @@ fn apply_file_edits(
         let text = state.open_tabs[index].buffer.to_string();
         let new_text = apply_text_edits(&text, edits)?;
         let doc = &mut state.open_tabs[index];
-        doc.buffer = Rope::from_str(&new_text);
+        doc.buffer.replace(Rope::from_str(&new_text));
         doc.lsp_version += 1;
         doc.lsp_sync_pending = true;
         parsers[index] = tabs::open_parser_for(doc);

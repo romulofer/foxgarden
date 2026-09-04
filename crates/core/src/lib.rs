@@ -1,3 +1,4 @@
+mod atomic_file;
 mod blame;
 mod boilerplate;
 mod build_output;
@@ -21,7 +22,9 @@ mod spring_config_metadata;
 mod static_analysis;
 mod status;
 mod test_report;
+mod text_buffer;
 
+pub use atomic_file::write_atomically;
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
 pub use build_output::{BuildProblem, build_command, default_classes_dir, detect_build_tool, parse_build_output_line};
@@ -57,6 +60,7 @@ pub use status::{
     GitCommandError, GitStatusError, StatusEntry, git_add, git_apply_cached, git_commit, git_push, git_reset_paths,
     git_status, git_user_first_name,
 };
+pub use text_buffer::TextBuffer;
 pub use test_report::{
     TestCase, TestOutcome, TestSummary, failure_line, parse_junit_xml, scan_test_reports, summarize, test_command,
     test_source_file,

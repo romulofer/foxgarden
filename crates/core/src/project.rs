@@ -94,11 +94,187 @@ impl Project {
         let tree = FileNode::build(&root)?;
         Ok(Project { root, tree })
     }
+
+    /// Every directory in the tree, root included — what the app watches
+    /// for filesystem changes so the side panel notices a file created or
+    /// deleted outside FoxGarden.
+    ///
+    /// Derived from the already-built tree rather than a fresh walk, which
+    /// means it inherits `SKIPPED_DIR_NAMES` for free: watching `target/`
+    /// or `.git/` would register thousands of watches for churn nobody
+    /// wants shown in the tree anyway.
+    pub fn directories(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        collect_directories(&self.tree, &mut dirs);
+        dirs
+    }
+}
+
+impl Project {
+    /// Drops `path` (and everything under it) from the in-memory tree, so a
+    /// delete or a move shows up immediately instead of waiting for the
+    /// next full walk. Returns whether anything was actually removed.
+    ///
+    /// This is the cheap half of keeping the tree honest: the app also
+    /// schedules a real (background) re-walk, but that lands a frame or
+    /// more later, and a file the user just deleted must not still be
+    /// sitting there in the meantime.
+    pub fn remove_path(&mut self, path: &Path) -> bool {
+        remove_from(&mut self.tree, path)
+    }
+
+    /// Inserts `path` into the tree in its correct sorted position,
+    /// creating any missing parent directory nodes along the way.
+    /// The counterpart to `remove_path` for a file/folder that was just
+    /// created (or moved into place). Returns whether anything changed.
+    pub fn insert_path(&mut self, path: &Path, kind: FileKind) -> bool {
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        let components: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if components.is_empty() {
+            return false;
+        }
+        insert_into(&mut self.tree, &components, kind)
+    }
+}
+
+fn remove_from(node: &mut FileNode, path: &Path) -> bool {
+    if node.kind != FileKind::Dir {
+        return false;
+    }
+    if let Some(index) = node.children.iter().position(|child| child.path == path) {
+        node.children.remove(index);
+        return true;
+    }
+    node.children
+        .iter_mut()
+        .filter(|child| path.starts_with(&child.path))
+        .any(|child| remove_from(child, path))
+}
+
+fn insert_into(node: &mut FileNode, components: &[String], kind: FileKind) -> bool {
+    let Some((name, rest)) = components.split_first() else {
+        return false;
+    };
+    let child_path = node.path.join(name);
+    let last = rest.is_empty();
+    let child_kind = if last { kind } else { FileKind::Dir };
+
+    let existing = node.children.iter().position(|child| child.path == child_path);
+    let index = match existing {
+        Some(index) => index,
+        None => {
+            let new_node = FileNode {
+                path: child_path,
+                name: name.clone(),
+                kind: child_kind,
+                children: Vec::new(),
+            };
+            // Same ordering `FileNode::build` produces: directories first,
+            // then files, each group alphabetically — so an inserted entry
+            // lands where a rebuilt tree would have put it.
+            let position = node
+                .children
+                .iter()
+                .position(|child| (child.kind == FileKind::File, &child.path) > (new_node.kind == FileKind::File, &new_node.path))
+                .unwrap_or(node.children.len());
+            node.children.insert(position, new_node);
+            if last {
+                return true;
+            }
+            position
+        }
+    };
+    if last {
+        return existing.is_none();
+    }
+    insert_into(&mut node.children[index], rest, kind)
+}
+
+fn collect_directories(node: &FileNode, into: &mut Vec<PathBuf>) {
+    if node.kind != FileKind::Dir {
+        return;
+    }
+    into.push(node.path.clone());
+    for child in &node.children {
+        collect_directories(child, into);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_path_drops_a_file_and_a_whole_subtree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/main")).unwrap();
+        std::fs::write(root.join("src/main/Main.java"), "class Main {}").unwrap();
+        std::fs::write(root.join("README.md"), "").unwrap();
+        let mut project = Project::open(root.to_path_buf()).unwrap();
+
+        assert!(project.remove_path(&root.join("src/main/Main.java")));
+        assert!(!project.directories().is_empty());
+        assert!(project.remove_path(&root.join("src")));
+        assert!(!project.directories().contains(&root.join("src/main")));
+        assert!(!project.remove_path(&root.join("does/not/exist")));
+    }
+
+    #[test]
+    fn insert_path_lands_where_a_rebuilt_tree_would_have_put_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("README.md"), "").unwrap();
+        let mut project = Project::open(root.to_path_buf()).unwrap();
+
+        std::fs::write(root.join("src/New.java"), "class New {}").unwrap();
+        assert!(project.insert_path(&root.join("src/New.java"), FileKind::File));
+
+        let rebuilt = Project::open(root.to_path_buf()).unwrap();
+        assert_eq!(project, rebuilt, "an inserted node must match a full rebuild");
+    }
+
+    #[test]
+    fn insert_path_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut project = Project::open(root.to_path_buf()).unwrap();
+
+        std::fs::create_dir_all(root.join("src/main/java")).unwrap();
+        std::fs::write(root.join("src/main/java/A.java"), "class A {}").unwrap();
+        assert!(project.insert_path(&root.join("src/main/java/A.java"), FileKind::File));
+
+        assert_eq!(project, Project::open(root.to_path_buf()).unwrap());
+    }
+
+    #[test]
+    fn insert_path_ignores_anything_outside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::open(dir.path().to_path_buf()).unwrap();
+        assert!(!project.insert_path(Path::new("/somewhere/else/A.java"), FileKind::File));
+    }
+
+    #[test]
+    fn directories_lists_every_directory_and_skips_the_ignored_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/main/java")).unwrap();
+        std::fs::create_dir_all(root.join("target/classes")).unwrap();
+        std::fs::write(root.join("src/main/java/Main.java"), "class Main {}").unwrap();
+
+        let project = Project::open(root.to_path_buf()).unwrap();
+        let dirs = project.directories();
+
+        assert!(dirs.contains(&root.to_path_buf()));
+        assert!(dirs.contains(&root.join("src/main/java")));
+        assert!(!dirs.iter().any(|d| d.starts_with(root.join("target"))));
+    }
 
     #[test]
     fn builds_nested_tree_with_empty_dirs_and_mixed_file_types() {

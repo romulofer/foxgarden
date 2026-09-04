@@ -20,7 +20,7 @@ pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use fields::{ClassFields, FieldInfo, fields_in_type, java_classes_with_fields};
 pub use folding::{FoldRange, foldable_ranges};
-pub use highlight::{Scope, highlight_spans};
+pub use highlight::{Scope, highlight_spans, highlight_spans_in};
 pub use imports::{ExistingImport, ImportInsertion, existing_imports, import_insertion};
 pub use kotlin_members::{
     all_kotlin_functions_in_type, kotlin_enclosing_class, kotlin_functions_in_type, kotlin_properties_in_class_body,

@@ -129,10 +129,28 @@ fn cached_query(language: Language) -> &'static Query {
 /// makes `@property` correctly win over `@string` for a YAML/properties key
 /// instead of losing to whichever one happens to sort first.
 pub fn highlight_spans(tree: &Tree, source: &str, language: Language) -> Vec<(Range<usize>, Scope)> {
+    highlight_spans_in(tree, source, language, 0..source.len())
+}
+
+/// `highlight_spans` restricted to `byte_range` — the query only visits
+/// nodes overlapping it, and only captures inside it are returned.
+///
+/// This is what keeps highlighting a large file cheap: the editor paints
+/// only the rows in the viewport, so running the query over the whole
+/// document means matching (and sorting, and allocating) tens of thousands
+/// of captures for a few dozen visible lines, on every edit. A range query
+/// scales with what's on screen instead of with file size.
+pub fn highlight_spans_in(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    byte_range: Range<usize>,
+) -> Vec<(Range<usize>, Scope)> {
     let query = cached_query(language);
     let capture_names = query.capture_names();
 
     let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(byte_range);
     let mut captures = cursor.captures(query, tree.root_node(), source.as_bytes());
 
     let mut by_range: std::collections::HashMap<Range<usize>, Scope> = std::collections::HashMap::new();

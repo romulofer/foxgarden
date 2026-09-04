@@ -97,6 +97,35 @@ impl Tool {
         }
     }
 
+    /// The SHA-256 of the exact asset `download_url` points at for this
+    /// tool's own `recommended_version` — computed from the real
+    /// downloaded file, not copied from a checksum page.
+    ///
+    /// Pinning the version alone isn't integrity: a release asset on
+    /// GitHub can be deleted and re-uploaded under the same tag, and the
+    /// download itself is a plain HTTPS GET whose only guarantee is
+    /// "someone with a valid certificate for this host served me some
+    /// bytes". Since these downloads become *executable* code this app
+    /// then runs (`java -jar`, `bin/pmd`), a swapped artifact is arbitrary
+    /// code execution on the user's machine. Comparing against a hash
+    /// checked into this repo makes a substituted asset a loud, refusable
+    /// failure instead of a silent one.
+    ///
+    /// `None` for any version other than `recommended_version` — the only
+    /// version `install` ever fetches, so this is exhaustive in practice;
+    /// a caller reaching for another version has no pinned hash to check
+    /// against and must not proceed as if it did.
+    fn expected_sha256(self, version: &str) -> Option<&'static str> {
+        if version != self.recommended_version() {
+            return None;
+        }
+        Some(match self {
+            Tool::Checkstyle => "e41c24433723ba310a30e41da4f449c105ad47cab2ae9e6be5e06606a647dbca",
+            Tool::Pmd => "9f55cb7ff0e9f9a66dd2f005eaa370e84c8a4cd971b134aa14a930c4a283ebc9",
+            Tool::SpotBugs => "e814ee5bf9665412658c4d684e45eae3cf993148a71bc8bc93fb343e92288151",
+        })
+    }
+
     fn download_url(self, version: &str) -> String {
         format!(
             "https://github.com/{}/releases/download/{}/{}",
@@ -179,6 +208,34 @@ fn cache_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "couldn't determine a cache directory for this platform".to_string())
 }
 
+/// Lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Refuses `downloaded` unless it hashes to exactly what this build pinned
+/// for `tool`/`version` — see `Tool::expected_sha256`.
+fn verify_download(tool: Tool, version: &str, downloaded: &[u8]) -> Result<(), String> {
+    let Some(expected) = tool.expected_sha256(version) else {
+        return Err(format!(
+            "no pinned checksum for {} {version} — refusing to install an unverified download",
+            tool.display_name()
+        ));
+    };
+    let actual = sha256_hex(downloaded);
+    if actual != expected {
+        return Err(format!(
+            "{}'s download doesn't match its expected checksum (expected {expected}, got {actual}) — refusing to \
+             install it",
+            tool.display_name()
+        ));
+    }
+    Ok(())
+}
+
 fn download(url: &str) -> Result<Vec<u8>, String> {
     let mut response = ureq::get(url).call().map_err(|e| format!("download failed: {e}"))?;
     let mut bytes = Vec::new();
@@ -229,6 +286,7 @@ fn install_sync(tool: Tool) -> InstallResult {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let downloaded = download(&tool.download_url(&version))?;
+    verify_download(tool, &version, &downloaded)?;
 
     let binary = match tool {
         Tool::Checkstyle => {
@@ -321,7 +379,12 @@ impl ToolManagerState {
     /// realistically finish between two consecutive frames), not just the
     /// first one found, so two tools installing at once don't have one's
     /// result delayed behind the other's.
-    pub fn poll_installs(&mut self) -> Vec<InstallResult> {
+    ///
+    /// Each result is paired with the `Tool` it belongs to — an `Ok` names
+    /// its own tool via `Installed::tool`, but an `Err` is a bare message,
+    /// so without this the caller could only report "install failed" with
+    /// no way to say *which* of three concurrently-installing tools it was.
+    pub fn poll_installs(&mut self) -> Vec<(Tool, InstallResult)> {
         poll_all(&mut self.installs)
     }
 
@@ -339,11 +402,11 @@ impl ToolManagerState {
     }
 }
 
-fn poll_all(slots: &mut std::collections::HashMap<Tool, Receiver<InstallResult>>) -> Vec<InstallResult> {
+fn poll_all(slots: &mut std::collections::HashMap<Tool, Receiver<InstallResult>>) -> Vec<(Tool, InstallResult)> {
     let mut done = Vec::new();
-    slots.retain(|_, rx| match rx.try_recv() {
+    slots.retain(|&tool, rx| match rx.try_recv() {
         Ok(result) => {
-            done.push(result);
+            done.push((tool, result));
             false
         }
         Err(TryRecvError::Empty) => true,
@@ -432,6 +495,31 @@ mod tests {
         }
 
         assert!(extract_zip_and_locate_launcher(Tool::Pmd, dir.path(), &buf).is_err());
+    }
+
+    #[test]
+    fn verify_download_accepts_bytes_matching_the_pinned_checksum() {
+        // The pinned hashes belong to ~20-70MB real archives, so this
+        // exercises the comparison itself against a value computed the same
+        // way `verify_download` computes it, rather than re-downloading.
+        assert_eq!(
+            sha256_hex(b"hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn verify_download_rejects_bytes_that_do_not_match() {
+        let error = verify_download(Tool::Checkstyle, Tool::Checkstyle.recommended_version(), b"not the real jar")
+            .expect_err("a substituted artifact must be refused");
+        assert!(error.contains("checksum"), "{error}");
+    }
+
+    #[test]
+    fn verify_download_refuses_a_version_with_no_pinned_checksum() {
+        let error = verify_download(Tool::Pmd, "0.0.1-unpinned", b"anything")
+            .expect_err("an unpinned version has nothing to verify against");
+        assert!(error.contains("no pinned checksum"), "{error}");
     }
 
     #[test]

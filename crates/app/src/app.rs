@@ -92,6 +92,9 @@ const SPOTBUGS_INSTALLED_VERSION_KEY: &str = "spotbugs_installed_version";
 const AUTO_SAVE_ENABLED_KEY: &str = "auto_save_enabled";
 const AUTO_SAVE_MODE_KEY: &str = "auto_save_mode";
 const AUTO_SAVE_IDLE_SECONDS_KEY: &str = "auto_save_idle_seconds";
+/// Settings > Trim Trailing Whitespace on Save. Absent (a fresh install)
+/// means on, matching what saving always did before this became a choice.
+const TRIM_TRAILING_WHITESPACE_KEY: &str = "trim_trailing_whitespace_on_save";
 /// `AUTO_SAVE_MODE_KEY`'s persisted value for `AutoSaveMode::OnFocusLoss` —
 /// an explicit string rather than `{:?}`, so a future `Debug` reformat
 /// (e.g. renaming the variant) can't silently change what's on disk and
@@ -117,6 +120,13 @@ const DEFAULT_DARK_MODE: bool = true;
 /// fresh install (no persisted `SIDE_PANEL_WIDTH_KEY` yet) looks exactly as
 /// if this app had never overridden it.
 const DEFAULT_SIDE_PANEL_WIDTH: f32 = 200.0;
+
+/// How long the project tree waits for filesystem events to stop arriving
+/// before rebuilding itself. One external action (`git checkout`, an
+/// unzip, a build that writes into a watched source folder) produces many
+/// individual events; rebuilding per event would walk the whole project
+/// repeatedly for what the user experiences as a single change.
+const TREE_REFRESH_DEBOUNCE_SECONDS: f64 = 0.3;
 
 pub struct FoxGardenApp {
     state: EditorState,
@@ -332,6 +342,18 @@ pub struct FoxGardenApp {
     external_tool_paths: ExternalToolPaths,
     /// Settings > Auto-save — see `auto_save::AutoSaveSettings`.
     auto_save_settings: AutoSaveSettings,
+    /// When the project tree should be rebuilt after an external
+    /// filesystem change, as an `egui` input-time timestamp — `None` when
+    /// no rebuild is pending. See `TREE_REFRESH_DEBOUNCE_SECONDS`.
+    tree_refresh_due: Option<f64>,
+    /// A background project-tree walk in flight, if any — see
+    /// `tree_refresh_due`.
+    tree_refresh_rx: Option<std::sync::mpsc::Receiver<std::io::Result<fg_core::Project>>>,
+    /// Whether `Document::save` strips trailing whitespace from every line
+    /// (Settings > Trim Trailing Whitespace on Save). On by default; off
+    /// exists so opening and saving a file in a codebase that never had
+    /// this doesn't rewrite lines the user never touched.
+    trim_trailing_whitespace_on_save: bool,
     /// Settings > Language Server — see `lsp_settings::LspSettings`. Off by
     /// default; `lsp_state::LspState` is its Phase 1 consumer and launches
     /// an external `jdtls`/`kotlin-language-server` process only after the
@@ -446,7 +468,7 @@ fn open_path(
                     msg::couldnt_open(&path.display().to_string(), &e.to_string())
                 }
             };
-            *last_error = Some(message);
+            crate::errors::report(last_error, message);
         }
     }
 }
@@ -470,7 +492,7 @@ fn new_terminal_session(
             sessions.push(session);
             state.new_terminal_tab();
         }
-        Err(err) => *last_error = Some(msg::failed_to_start_terminal(&err.to_string())),
+        Err(err) => crate::errors::report(last_error, msg::failed_to_start_terminal(&err.to_string())),
     }
 }
 
@@ -589,8 +611,8 @@ fn reload_tab_from_disk(
     diff_root: Option<PathBuf>,
 ) {
     let doc = &mut state.open_tabs[index];
-    doc.buffer = Rope::from_str(new_content);
-    doc.saved_buffer = doc.buffer.clone();
+    doc.buffer.replace(Rope::from_str(new_content));
+    doc.saved_buffer = doc.buffer.rope().clone();
     doc.lsp_version += 1;
     doc.lsp_sync_pending = true;
     parsers[index] = tabs::open_parser_for(doc);
@@ -615,7 +637,17 @@ fn sync_watched_dirs(
     state: &EditorState,
 ) {
     let Some(watcher) = watcher else { return };
-    let needed = file_watch::watched_dirs_for(state.open_tabs.iter().map(|doc| doc.path()));
+    let mut needed = file_watch::watched_dirs_for(state.open_tabs.iter().map(|doc| doc.path()));
+    // Every directory the project tree shows, so a file created or deleted
+    // outside FoxGarden (a `git checkout`, a `mvn archetype:generate`, an
+    // editor in another window) updates the side panel instead of leaving
+    // it quietly wrong until the user happens to do something that
+    // refreshes it. `Project::directories` already excludes `target/`,
+    // `.git/` and friends, so this doesn't register watches for build
+    // churn.
+    if let Some(project) = &state.project {
+        needed.extend(project.directories());
+    }
     for dir in needed.difference(watched_dirs) {
         let _ = watcher.watch(dir, notify::RecursiveMode::NonRecursive);
     }
@@ -640,7 +672,8 @@ fn process_file_events(
     externally_deleted: &mut HashSet<PathBuf>,
     diff: &mut DiffState,
     diff_root: Option<&Path>,
-) {
+) -> bool {
+    let mut tree_changed = false;
     while let Ok(event_result) = rx.try_recv() {
         let Ok(event) = event_result else { continue };
         if !matches!(
@@ -648,6 +681,13 @@ fn process_file_events(
             notify::EventKind::Modify(_) | notify::EventKind::Create(_) | notify::EventKind::Remove(_)
         ) {
             continue;
+        }
+        // A create or delete changes the *shape* of the tree, so the side
+        // panel needs rebuilding — including for paths with no open tab,
+        // which is the common case (a file appearing in a folder nobody
+        // has opened yet). A plain content modification never does.
+        if matches!(event.kind, notify::EventKind::Create(_) | notify::EventKind::Remove(_)) {
+            tree_changed = true;
         }
         for path in &event.paths {
             let Some(index) = state.find_tab(path) else {
@@ -684,6 +724,7 @@ fn process_file_events(
             }
         }
     }
+    tree_changed
 }
 
 /// Draws the "changed on disk" / "deleted on disk" banner for the active
@@ -757,7 +798,7 @@ fn restore_session(
         if path.is_dir()
             && let Err(err) = state.open_project(path)
         {
-            *last_error = Some(msg::failed_to_reopen_last_project(&err.to_string()));
+            crate::errors::report(last_error, msg::failed_to_reopen_last_project(&err.to_string()));
         }
     }
 
@@ -777,7 +818,7 @@ fn restore_session(
                         parsers.push(parser);
                     }
                 }
-                Err(err) => *last_error = Some(msg::failed_to_reopen_tab(&err.to_string())),
+                Err(err) => crate::errors::report(last_error, msg::failed_to_reopen_tab(&err.to_string())),
             }
         }
     }
@@ -856,6 +897,7 @@ fn restore_settings(
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
+    trim_trailing_whitespace_on_save: &mut bool,
     lsp_settings: &mut LspSettings,
     jdk_registry: &mut JdkRegistry,
 ) {
@@ -966,6 +1008,9 @@ fn restore_settings(
     {
         auto_save_settings.idle_seconds = idle_seconds;
     }
+    if let Some(trim) = storage.get_string(TRIM_TRAILING_WHITESPACE_KEY) {
+        *trim_trailing_whitespace_on_save = trim == "true";
+    }
     if let Some(enabled) = storage.get_string(LSP_ENABLED_KEY) {
         lsp_settings.enabled = enabled == "true";
     }
@@ -1009,6 +1054,7 @@ fn persist_settings(
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
+    trim_trailing_whitespace_on_save: bool,
     lsp_settings: &LspSettings,
     jdk_registry: &JdkRegistry,
 ) {
@@ -1073,6 +1119,7 @@ fn persist_settings(
         .to_string(),
     );
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
+    storage.set_string(TRIM_TRAILING_WHITESPACE_KEY, trim_trailing_whitespace_on_save.to_string());
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
     storage.set_string(
@@ -1109,6 +1156,7 @@ impl FoxGardenApp {
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
+        let mut trim_trailing_whitespace_on_save = true;
         let mut lsp_settings = LspSettings::default();
         let mut jdk_registry = JdkRegistry::default();
 
@@ -1145,6 +1193,7 @@ impl FoxGardenApp {
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
+                &mut trim_trailing_whitespace_on_save,
                 &mut lsp_settings,
                 &mut jdk_registry,
             );
@@ -1205,6 +1254,9 @@ impl FoxGardenApp {
             spring_config: SpringConfigState::default(),
             external_tool_paths,
             auto_save_settings,
+            tree_refresh_due: None,
+            tree_refresh_rx: None,
+            trim_trailing_whitespace_on_save,
             lsp_settings,
             lsp: LspState::default(),
             lsp_servers: LspServersState::default(),
@@ -1334,7 +1386,7 @@ impl eframe::App for FoxGardenApp {
         let diff_root = self.state.project.as_ref().map(|p| p.root.clone());
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
-        process_file_events(
+        let tree_changed_on_disk = process_file_events(
             &self.file_event_rx,
             &mut self.state,
             &mut self.parsers,
@@ -1343,6 +1395,49 @@ impl eframe::App for FoxGardenApp {
             &mut self.diff,
             diff_root.as_deref(),
         );
+        // Rebuilding the tree is a full directory walk, and a single
+        // external action (a `git checkout`, an unzip) arrives as a burst
+        // of individual create/delete events — so the rebuild is deferred
+        // until the burst goes quiet rather than run once per event.
+        if tree_changed_on_disk {
+            self.tree_refresh_due = Some(now + TREE_REFRESH_DEBOUNCE_SECONDS);
+        }
+        if let Some(due) = self.tree_refresh_due
+            && now >= due
+            && self.tree_refresh_rx.is_none()
+            && let Some(root) = self.state.project.as_ref().map(|project| project.root.clone())
+        {
+            self.tree_refresh_due = None;
+            // Walked on a background thread: on a real multi-module project
+            // this reads thousands of directory entries, and doing that on
+            // the UI thread turns "a file appeared on disk" into a visible
+            // stutter.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(fg_core::Project::open(root));
+                ctx.request_repaint();
+            });
+            self.tree_refresh_rx = Some(rx);
+        }
+        if let Some(rx) = &self.tree_refresh_rx {
+            match rx.try_recv() {
+                Ok(Ok(project)) => {
+                    self.state.refresh_project_tree(project);
+                    self.tree_refresh_rx = None;
+                }
+                Ok(Err(err)) => {
+                    crate::errors::report(&mut self.last_error, msg::failed_to_refresh_tree(&err.to_string()));
+                    self.tree_refresh_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.tree_refresh_rx = None,
+            }
+        }
+        if self.tree_refresh_due.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(TREE_REFRESH_DEBOUNCE_SECONDS));
+        }
 
         // The process owner only polls channels/child state here; it never
         // waits. This keeps an unavailable or slow external language server
@@ -1377,6 +1472,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.parsers,
                 &mut self.last_error,
                 &self.external_conflicts,
+                self.trim_trailing_whitespace_on_save,
             );
         }
 
@@ -1430,6 +1526,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.indent_settings,
                         &mut self.view_settings,
                         &mut self.auto_save_settings,
+                        &mut self.trim_trailing_whitespace_on_save,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
                         &mut self.terminal_panel_visible,
@@ -1538,7 +1635,7 @@ impl eframe::App for FoxGardenApp {
                 if let Some(result) = self.build_state.take_coverage_result() {
                     match result {
                         Ok(files) => build_panel::apply_coverage_results(&mut self.state, &files),
-                        Err(err) => self.last_error = Some(msg::coverage_report_failed(&err.to_string())),
+                        Err(err) => crate::errors::report(&mut self.last_error, msg::coverage_report_failed(&err.to_string())),
                     }
                 }
             }
@@ -1637,8 +1734,14 @@ impl eframe::App for FoxGardenApp {
         for path in &outcome.deleted {
             close_tabs_under(&mut self.state, &mut self.parsers, path);
         }
+        if outcome.tree_changed {
+            // Scheduled rather than walked here, so an in-app file
+            // operation goes through the same debounced background refresh
+            // an external one does — see `TREE_REFRESH_DEBOUNCE_SECONDS`.
+            self.tree_refresh_due = Some(now);
+        }
         if let Some(err) = outcome.error {
-            self.last_error = Some(err);
+            crate::errors::report(&mut self.last_error, err);
         }
 
         if menu_outcome.open_run_configs_request
@@ -1653,9 +1756,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(tool) => match self.build_state.start_build(&root, tool) {
                     Ok(()) => self.build_panel_visible = true,
-                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
                 },
-                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
 
@@ -1673,11 +1776,11 @@ impl eframe::App for FoxGardenApp {
                 Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
                     Some(config) => match self.build_state.start_run(&root, tool, config) {
                         Ok(()) => self.build_panel_visible = true,
-                        Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                        Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
                     },
-                    None => self.last_error = Some(t().errors.no_run_config.to_string()),
+                    None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                 },
-                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
 
@@ -1687,9 +1790,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(tool) => match self.build_state.start_test(&root, tool) {
                     Ok(()) => self.build_panel_visible = true,
-                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
                 },
-                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
 
@@ -1699,10 +1802,10 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(fg_core::BuildTool::Maven) => match self.build_state.start_coverage(&root) {
                     Ok(()) => self.build_panel_visible = true,
-                    Err(err) => self.last_error = Some(msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
                 },
-                Some(fg_core::BuildTool::Gradle) => self.last_error = Some(t().errors.coverage_requires_maven.to_string()),
-                None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                Some(fg_core::BuildTool::Gradle) => crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string()),
+                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
 
@@ -1712,10 +1815,10 @@ impl eframe::App for FoxGardenApp {
             if fg_core::has_dockerfile(&root) {
                 match self.build_state.start_docker_build_and_run(&root) {
                     Ok(()) => self.build_panel_visible = true,
-                    Err(err) => self.last_error = Some(msg::failed_to_start_docker(&err.to_string())),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
                 }
             } else {
-                self.last_error = Some(t().errors.no_dockerfile_detected.to_string());
+                crate::errors::report(&mut self.last_error, t().errors.no_dockerfile_detected.to_string());
             }
         }
 
@@ -1725,9 +1828,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::compose_file(&root) {
                 Some(compose_file) => match self.build_state.start_docker_compose_up(&compose_file) {
                     Ok(()) => self.build_panel_visible = true,
-                    Err(err) => self.last_error = Some(msg::failed_to_start_docker(&err.to_string())),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
                 },
-                None => self.last_error = Some(t().errors.no_compose_file_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, t().errors.no_compose_file_detected.to_string()),
             }
         }
 
@@ -1756,12 +1859,12 @@ impl eframe::App for FoxGardenApp {
                             if let Err(err) =
                                 self.debug_state.start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
                             {
-                                self.last_error = Some(err);
+                                crate::errors::report(&mut self.last_error, err);
                             }
                         }
-                        None => self.last_error = Some(t().errors.no_run_config.to_string()),
+                        None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                     },
-                    None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
                 }
             }
         }
@@ -1807,7 +1910,7 @@ impl eframe::App for FoxGardenApp {
             let binary = self.external_tool_paths.checkstyle_binary.trim();
             let config = self.external_tool_paths.checkstyle_config.trim();
             if binary.is_empty() || config.is_empty() {
-                self.last_error = Some(t().errors.checkstyle_not_configured.to_string());
+                crate::errors::report(&mut self.last_error, t().errors.checkstyle_not_configured.to_string());
             } else {
                 self.static_analysis
                     .run_checkstyle(PathBuf::from(binary), PathBuf::from(config), root);
@@ -1819,7 +1922,7 @@ impl eframe::App for FoxGardenApp {
             let binary = self.external_tool_paths.pmd_binary.trim();
             let ruleset = self.external_tool_paths.pmd_ruleset.trim();
             if binary.is_empty() || ruleset.is_empty() {
-                self.last_error = Some(t().errors.pmd_not_configured.to_string());
+                crate::errors::report(&mut self.last_error, t().errors.pmd_not_configured.to_string());
             } else {
                 self.static_analysis
                     .run_pmd(PathBuf::from(binary), ruleset.to_string(), root);
@@ -1830,7 +1933,7 @@ impl eframe::App for FoxGardenApp {
         {
             let binary = self.external_tool_paths.spotbugs_binary.trim();
             if binary.is_empty() {
-                self.last_error = Some(t().errors.spotbugs_not_configured.to_string());
+                crate::errors::report(&mut self.last_error, t().errors.spotbugs_not_configured.to_string());
             } else {
                 match fg_core::detect_build_tool(&root) {
                     Some(tool) => {
@@ -1838,41 +1941,44 @@ impl eframe::App for FoxGardenApp {
                         if classes_dir.is_dir() {
                             self.static_analysis.run_spotbugs(PathBuf::from(binary), classes_dir, root);
                         } else {
-                            self.last_error = Some(t().errors.spotbugs_no_compiled_classes.to_string());
+                            crate::errors::report(&mut self.last_error, t().errors.spotbugs_no_compiled_classes.to_string());
                         }
                     }
-                    None => self.last_error = Some(t().errors.no_build_tool_detected.to_string()),
+                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
                 }
             }
         }
         if let Some(result) = self.static_analysis.poll_checkstyle() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_checkstyle_results(&mut self.state, &diagnostics),
-                Err(err) => self.last_error = Some(msg::checkstyle_failed(&err.to_string())),
+                Err(err) => crate::errors::report(&mut self.last_error, msg::checkstyle_failed(&err.to_string())),
             }
         }
         if let Some(result) = self.static_analysis.poll_pmd() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
-                Err(err) => self.last_error = Some(msg::pmd_failed(&err.to_string())),
+                Err(err) => crate::errors::report(&mut self.last_error, msg::pmd_failed(&err.to_string())),
             }
         }
         if let Some(result) = self.static_analysis.poll_spotbugs() {
             match result {
                 Ok(diagnostics) => static_analysis::apply_spotbugs_results(&mut self.state, &diagnostics),
-                Err(err) => self.last_error = Some(msg::spotbugs_failed(&err.to_string())),
+                Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
         self.spring_config.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
         if let Some(err) = self.debug_state.take_failure() {
-            self.last_error = Some(err);
+            crate::errors::report(&mut self.last_error, err);
         }
-        for result in self.static_analysis.tool_manager.poll_installs() {
+        for (tool, result) in self.static_analysis.tool_manager.poll_installs() {
             match result {
                 Ok(installed) => self.external_tool_paths.apply_installed(&installed),
-                Err(err) => self.last_error = Some(msg::install_failed(&err.to_string())),
+                Err(err) => crate::errors::report(
+                    &mut self.last_error,
+                    msg::install_failed(tool.display_name(), &err.to_string()),
+                ),
             }
         }
         for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
@@ -1883,10 +1989,13 @@ impl eframe::App for FoxGardenApp {
         // a background thread with no input event to ride in on, so its
         // dialog needs repaints requested for it the same way `lsp_state`'s
         // own background replies do.
-        for result in self.lsp_servers.manager.poll_installs() {
+        for (server, result) in self.lsp_servers.manager.poll_installs() {
             match result {
                 Ok(installed) => self.lsp_settings.apply_installed(&installed),
-                Err(err) => self.last_error = Some(msg::language_server_install_failed(&err.to_string())),
+                Err(err) => crate::errors::report(
+                    &mut self.last_error,
+                    msg::language_server_install_failed(server.display_name(), &err.to_string()),
+                ),
             }
         }
         for (server, result) in self.lsp_servers.manager.poll_checks() {
@@ -1915,7 +2024,7 @@ impl eframe::App for FoxGardenApp {
         if let Some(result) = self.git_stage.poll_status()
             && let Err(err) = result
         {
-            self.last_error = Some(msg::git_status_failed(&err.to_string()));
+            crate::errors::report(&mut self.last_error, msg::git_status_failed(&err.to_string()));
         }
         if let Some(result) = self.git_stage.poll_op() {
             match result {
@@ -1933,18 +2042,18 @@ impl eframe::App for FoxGardenApp {
                         self.git_stage.refresh_expanded(root);
                     }
                 }
-                Err(err) => self.last_error = Some(msg::git_operation_failed(&err.to_string())),
+                Err(err) => crate::errors::report(&mut self.last_error, msg::git_operation_failed(&err.to_string())),
             }
         }
         if let Some(result) = self.git_stage.poll_expanded()
             && let Err(err) = result
         {
-            self.last_error = Some(msg::git_diff_failed(&err.to_string()));
+            crate::errors::report(&mut self.last_error, msg::git_diff_failed(&err.to_string()));
         }
         if let Some(result) = self.git_stage.poll_full_diff()
             && let Err(err) = result
         {
-            self.last_error = Some(msg::git_diff_failed(&err.to_string()));
+            crate::errors::report(&mut self.last_error, msg::git_diff_failed(&err.to_string()));
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
@@ -1975,11 +2084,13 @@ impl eframe::App for FoxGardenApp {
                 &mut self.hover,
                 &mut self.goto_definition,
                 &mut self.peek,
-                menu_outcome.case_conversion_request,
-                menu_outcome.sort_lines_request,
-                menu_outcome.unique_lines_request,
-                menu_outcome.fold_all_request,
-                menu_outcome.expand_all_request,
+                crate::widgets::editor::EditorRequests {
+                    case_conversion: menu_outcome.case_conversion_request,
+                    sort_lines: menu_outcome.sort_lines_request,
+                    unique_lines: menu_outcome.unique_lines_request,
+                    fold_all: menu_outcome.fold_all_request,
+                    expand_all: menu_outcome.expand_all_request,
+                },
                 &mut self.last_error,
                 &mut self.pending_editor_input,
                 &mut self.cached_clipboard_text,
@@ -1993,6 +2104,7 @@ impl eframe::App for FoxGardenApp {
                 &self.debug_state,
                 &mut self.file_history,
                 self.dark_mode,
+                self.trim_trailing_whitespace_on_save,
             );
         });
 
@@ -2021,7 +2133,7 @@ impl eframe::App for FoxGardenApp {
             self.rename.request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
         }
         if let Some(Err(err)) = self.rename.poll(&mut self.state, &mut self.parsers) {
-            self.last_error = Some(msg::failed_to_rename(&err));
+            crate::errors::report(&mut self.last_error, msg::failed_to_rename(&err));
         }
 
         // Quick-fix intention actions (`PLAN.md` Track 15 Phase 1): a
@@ -2033,7 +2145,7 @@ impl eframe::App for FoxGardenApp {
         if let Some(edit) = self.code_action_gutter.take_confirmed()
             && let Err(err) = crate::workspace_edit::apply(edit, &mut self.state, &mut self.parsers)
         {
-            self.last_error = Some(msg::failed_to_apply_code_action(&err));
+            crate::errors::report(&mut self.last_error, msg::failed_to_apply_code_action(&err));
         }
 
         // Go to definition (`PLAN.md` Track 20 Phase 4): a Ctrl+Click inside
@@ -2140,6 +2252,7 @@ impl eframe::App for FoxGardenApp {
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,
+            self.trim_trailing_whitespace_on_save,
             &self.lsp_settings,
             &self.jdk_registry,
         );

@@ -1,5 +1,5 @@
 use fg_core::Language;
-use syntax::{IncrementalParser, InputEdit, Scope, byte_to_point, highlight_spans, syntax_errors};
+use syntax::{IncrementalParser, InputEdit, Scope, byte_to_point, highlight_spans, highlight_spans_in, syntax_errors};
 
 const VALID_JAVA: &str = include_str!("fixtures/valid.java");
 const VALID_KOTLIN: &str = include_str!("fixtures/valid.kt");
@@ -412,4 +412,34 @@ fn xml_highlight_query_covers_tag_names_and_comment() {
         "an XML tag name must not carry Scope::Property"
     );
     assert!(has_scope_over("A friendly note", Scope::Comment));
+}
+
+/// The editor highlights only what it's about to paint (`widget::
+/// highlight_window`), so a restricted query must return exactly the
+/// captures inside its own window — no more (paying for off-screen text)
+/// and no fewer (leaving visible text uncolored).
+#[test]
+fn highlight_spans_in_returns_only_captures_inside_the_requested_range() {
+    let source = "class A {\n    // first\n}\nclass B {\n    // second\n}\n";
+    let mut parser = IncrementalParser::new(Language::Java);
+    let tree = parser.parse(source);
+
+    let second_class_start = source.find("class B").unwrap();
+    let windowed = highlight_spans_in(tree, source, Language::Java, second_class_start..source.len());
+
+    assert!(
+        windowed.iter().all(|(range, _)| range.end > second_class_start),
+        "a windowed query must not return captures before its own range"
+    );
+    let comment_in_window = windowed
+        .iter()
+        .any(|(range, scope)| *scope == Scope::Comment && source[range.clone()].contains("second"));
+    assert!(comment_in_window, "captures inside the window must still be returned");
+
+    // The unrestricted query is the union: everything the window found is
+    // also found by a whole-document run.
+    let full = highlight_spans(tree, source, Language::Java);
+    for span in &windowed {
+        assert!(full.contains(span), "windowed span {span:?} must agree with the full-document query");
+    }
 }

@@ -33,7 +33,7 @@ use crate::widgets::modal::show_modal;
 pub struct JdkRegistryState {
     settings_open: bool,
     last_add_error: Option<String>,
-    picker_rx: Option<Receiver<Option<PathBuf>>>,
+    picker: crate::folder_picker::FolderPicker,
     auto_detect_rx: Option<Receiver<Vec<JavaRuntime>>>,
 }
 
@@ -44,7 +44,7 @@ impl JdkRegistryState {
     }
 
     pub fn picker_running(&self) -> bool {
-        self.picker_rx.is_some()
+        self.picker.is_open()
     }
 
     /// Drains a completed folder-picker dialog, if it finished since the
@@ -53,18 +53,7 @@ impl JdkRegistryState {
     /// and "user picked nothing" — the caller only needs to know when a
     /// real folder came back.
     pub fn poll_picker(&mut self) -> Option<PathBuf> {
-        let rx = self.picker_rx.as_ref()?;
-        match rx.try_recv() {
-            Ok(folder) => {
-                self.picker_rx = None;
-                folder
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.picker_rx = None;
-                None
-            }
-        }
+        self.picker.poll()
     }
 
     pub fn auto_detect_running(&self) -> bool {
@@ -139,11 +128,7 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(!state.picker_running(), egui::Button::new("Add JDK…")).clicked() {
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(rfd::FileDialog::new().pick_folder());
-                });
-                state.picker_rx = Some(rx);
+                state.picker.open(None);
             }
             if ui.add_enabled(!state.auto_detect_running(), egui::Button::new("Auto-detect")).clicked() {
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -179,7 +164,7 @@ mod tests {
         let mut state = JdkRegistryState {
             settings_open: false,
             last_add_error: Some("stale".to_string()),
-            picker_rx: None,
+            picker: crate::folder_picker::FolderPicker::default(),
             auto_detect_rx: None,
         };
         state.open_settings();
@@ -187,34 +172,9 @@ mod tests {
         assert!(state.last_add_error.is_none());
     }
 
-    #[test]
-    fn poll_picker_drains_a_completed_pick_without_blocking_the_caller() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut state = JdkRegistryState::default();
-        state.picker_rx = Some(rx);
-        assert!(state.picker_running());
-
-        // Nothing sent yet — still running, not a false "user picked
-        // nothing" result (the bug this whole background-thread shape
-        // exists to avoid: never mistake "in flight" for "resolved").
-        assert!(state.poll_picker().is_none());
-        assert!(state.picker_running());
-
-        tx.send(Some(PathBuf::from("/opt/jdk21"))).unwrap();
-        assert_eq!(state.poll_picker(), Some(PathBuf::from("/opt/jdk21")));
-        assert!(!state.picker_running());
-    }
-
-    #[test]
-    fn poll_picker_on_a_disconnected_sender_clears_the_slot_without_a_result() {
-        let (tx, rx) = std::sync::mpsc::channel::<Option<PathBuf>>();
-        let mut state = JdkRegistryState::default();
-        state.picker_rx = Some(rx);
-        drop(tx);
-
-        assert!(state.poll_picker().is_none());
-        assert!(!state.picker_running());
-    }
+    // The picker's own "in flight vs. resolved" mechanics are tested
+    // where they now live, in `crate::folder_picker` — this dialog only
+    // forwards to it.
 
     #[test]
     fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {

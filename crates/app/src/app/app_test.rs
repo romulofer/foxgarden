@@ -120,7 +120,7 @@ fn process_file_events_ignores_its_own_recent_save() {
     // Simulates this app's own `Document::save()`: the buffer already
     // matches what's now on disk, so the event this triggers must be a
     // no-op, not a spurious reload.
-    state.open_tabs[index].save().unwrap();
+    state.open_tabs[index].save(true).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(modify_event(path.clone())).unwrap();
 
@@ -326,6 +326,7 @@ fn persisted_settings_round_trip() {
         &saved_templates,
         &saved_tools,
         saved_auto_save,
+        false,
         &saved_lsp,
         &saved_jdk_registry,
     );
@@ -345,6 +346,7 @@ fn persisted_settings_round_trip() {
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
     let mut jdk_registry = JdkRegistry::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -360,6 +362,7 @@ fn persisted_settings_round_trip() {
         &mut custom_templates,
         &mut external_tool_paths,
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut jdk_registry,
     );
@@ -422,6 +425,7 @@ fn persist_settings_writes_the_active_language() {
         &UserTemplates::default(),
         &ExternalToolPaths::default(),
         AutoSaveSettings::default(),
+        true,
         &LspSettings::default(),
         &JdkRegistry::default(),
     );
@@ -469,6 +473,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
 
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -484,6 +489,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut JdkRegistry::default(),
     );
@@ -514,6 +520,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
 
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -529,6 +536,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut JdkRegistry::default(),
     );
@@ -552,6 +560,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
 
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -567,6 +576,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut JdkRegistry::default(),
     );
@@ -650,7 +660,7 @@ fn renaming_the_open_file_itself_leaves_it_saveable() {
     handle_rename(&mut state, &mut parsers, &a, &new_path);
 
     let mut last_error = None;
-    tabs::save_active_tab(&mut state, &mut parsers, &mut last_error);
+    tabs::save_active_tab(&mut state, &mut parsers, &mut last_error, true);
 
     assert_eq!(last_error, None, "save produced an error: {last_error:?}");
     assert_eq!(
@@ -737,6 +747,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
     let mut auto_save_settings = AutoSaveSettings::default();
 
     let mut lsp_settings = LspSettings::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -752,6 +763,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut JdkRegistry::default(),
     );
@@ -782,6 +794,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
     };
 
     let mut lsp_settings = LspSettings::default();
+    let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
         &mut editor_font,
@@ -797,6 +810,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
         &mut auto_save_settings,
+        &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
         &mut JdkRegistry::default(),
     );
@@ -842,7 +856,7 @@ fn auto_save_focus_loss_trigger_saves_only_the_dirty_tab() {
 
     // Frame 2: focus is lost — the edge fires, and the dirty tab (only) saves.
     assert!(auto_save_state.tick(settings, false, 1.0));
-    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new(), true);
 
     assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
     assert!(
@@ -889,7 +903,7 @@ fn auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity() {
         auto_save_state.tick(settings, true, 10.0),
         "10s idle: threshold reached"
     );
-    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new());
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &HashSet::new(), true);
 
     assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
     assert!(!state.open_tabs[index].is_dirty());
@@ -922,7 +936,7 @@ fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
     external_conflicts.insert(conflicted_path.clone());
     let mut last_error = None;
 
-    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &external_conflicts);
+    tabs::save_all_dirty_tabs(&mut state, &mut parsers, &mut last_error, &external_conflicts, true);
 
     assert_eq!(last_error, None, "auto-save produced an error: {last_error:?}");
     assert!(

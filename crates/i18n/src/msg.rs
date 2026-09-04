@@ -315,16 +315,16 @@ msg! {
 }
 
 msg! {
-    install_failed(err: &str) {
-        pt: "a instalação falhou: {err}",
-        en: "Install failed: {err}",
+    install_failed(tool: &str, err: &str) {
+        pt: "a instalação de {tool} falhou: {err}",
+        en: "Installing {tool} failed: {err}",
     }
 }
 
 msg! {
-    language_server_install_failed(err: &str) {
-        pt: "a instalação do servidor de linguagem falhou: {err}",
-        en: "Language server install failed: {err}",
+    language_server_install_failed(server: &str, err: &str) {
+        pt: "a instalação de {server} falhou: {err}",
+        en: "Installing {server} failed: {err}",
     }
 }
 

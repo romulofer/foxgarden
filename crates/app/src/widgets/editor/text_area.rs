@@ -27,7 +27,7 @@ mod shell;
     reason = "PLAN.md Phase 0 prerequisite; no widget.rs-side cache needs a hidden-ranges key yet"
 )]
 pub(super) use cache::hash_hidden;
-pub(super) use cache::hash_rope_content;
+pub(super) use render::ContentKey;
 pub(super) use input::Caret;
 pub(super) use render::{HighlightSpan, TextAreaOutput};
 pub(super) use shell::{char_offset_for_pos, peek_caret, set_caret, show as show_interactive};
@@ -198,3 +198,49 @@ impl<'a> FoldMap<'a> {
 
 #[cfg(test)]
 mod text_area_test;
+
+/// The logical lines the editor is about to paint, as best as can be known
+/// *before* the text area lays itself out — used by `widget.rs` to run
+/// syntax highlighting over the visible window instead of the whole file.
+///
+/// It's an estimate on purpose. The exact answer only exists after
+/// `layout_visible*` has allocated its own rect, which is too late to
+/// decide what to highlight; this reads the same scroll geometry from the
+/// `Ui` the layout is about to use (`cursor()` is where that rect will
+/// start, `clip_rect()` is the viewport), so it agrees with the real
+/// answer except at the boundaries — which is why callers widen it before
+/// using it.
+///
+/// `None` means "no reliable window, use the whole document": either
+/// folding is active without word-wrap (visual rows and logical lines
+/// diverge in a way this shortcut doesn't model) or the geometry isn't
+/// usable yet.
+pub(super) fn visible_line_window(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    content: ContentKey,
+    font_id: &egui::FontId,
+    word_wrap: bool,
+    hidden: &[Range<usize>],
+    total_lines: usize,
+) -> Option<Range<usize>> {
+    let row_height = ui.fonts_mut(|f| f.row_height(font_id));
+    if row_height <= 0.0 {
+        return None;
+    }
+    let clip = ui.clip_rect();
+    let scroll_y = (clip.top() - ui.cursor().top()).max(0.0);
+
+    if word_wrap {
+        let counts = render::cached_row_counts(ui, id, content, font_id, ui.available_width(), hidden, total_lines);
+        let prefix = prefix_rows(&counts);
+        let lines = visible_lines(scroll_y, clip.height(), row_height, &prefix);
+        (!lines.is_empty()).then_some(lines)
+    } else if hidden.is_empty() {
+        // No wrap and no folds: one visual row per logical line exactly.
+        let rows = visible_rows(scroll_y, clip.height(), row_height, total_lines);
+        (!rows.is_empty()).then_some(rows)
+    } else {
+        None
+    }
+}

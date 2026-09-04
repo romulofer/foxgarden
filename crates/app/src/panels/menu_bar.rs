@@ -18,6 +18,9 @@ use crate::widgets::modal::show_modal;
 /// Persistent state for menu-triggered dialogs.
 #[derive(Default)]
 pub struct MenuBarState {
+    /// File > Open Folder's dialog, when one is up — see
+    /// `crate::folder_picker` for why it isn't opened inline.
+    folder_picker: crate::folder_picker::FolderPicker,
     about_open: bool,
     /// Settings > Font… — see `show_font_settings`.
     font_settings_open: bool,
@@ -121,6 +124,7 @@ pub fn show(
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
     auto_save_settings: &mut AutoSaveSettings,
+    trim_trailing_whitespace_on_save: &mut bool,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
     terminal_panel_visible: &mut bool,
@@ -152,12 +156,11 @@ pub fn show(
                 }
                 ui.close();
             }
-            if ui.button(t().menu.open_folder).clicked() {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder()
-                    && let Err(err) = state.open_project(folder)
-                {
-                    *last_error = Some(msg::failed_to_open_project(&err.to_string()));
-                }
+            if ui
+                .add_enabled(!menu.folder_picker.is_open(), egui::Button::new(t().menu.open_folder))
+                .clicked()
+            {
+                menu.folder_picker.open(state.project.as_ref().map(|p| p.root.clone()));
                 ui.close();
             }
             if ui.button(t().menu.new_project).clicked() {
@@ -172,7 +175,7 @@ pub fn show(
                 )
                 .clicked()
             {
-                tabs::save_active_tab(state, parsers, last_error);
+                tabs::save_active_tab(state, parsers, last_error, *trim_trailing_whitespace_on_save);
                 ui.close();
             }
             if ui
@@ -292,6 +295,13 @@ pub fn show(
                     });
                 });
             });
+            if ui
+                .checkbox(trim_trailing_whitespace_on_save, t().menu.trim_trailing_whitespace)
+                .on_hover_text(t().menu.trim_trailing_whitespace_hint)
+                .changed()
+            {
+                ui.close();
+            }
             if ui.button(t().menu.language_servers).clicked() {
                 outcome.open_lsp_servers_settings_request = true;
                 ui.close();
@@ -671,6 +681,15 @@ pub fn show(
             }
         });
     });
+
+    // Polled here rather than at the menu item itself: the menu closes as
+    // soon as it's clicked, so by the time the user answers the dialog
+    // there is no menu left to run that code.
+    if let Some(folder) = menu.folder_picker.poll()
+        && let Err(err) = state.open_project(folder)
+    {
+        crate::errors::report(last_error, msg::failed_to_open_project(&err.to_string()));
+    }
 
     show_about(ui, menu);
     show_font_settings(ui, menu, editor_font, font_size);

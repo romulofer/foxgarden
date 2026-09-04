@@ -161,6 +161,7 @@ mod tests {
                     ui,
                     id,
                     &buffer,
+                    0,
                     buffer_text,
                     egui::FontId::monospace(14.0),
                     egui::Color32::WHITE,

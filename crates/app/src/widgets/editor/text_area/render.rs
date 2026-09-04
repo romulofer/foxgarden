@@ -15,7 +15,8 @@ use egui::text::LayoutJob;
 use egui::{Color32, FontId, Galley, Sense, TextFormat};
 use ropey::Rope;
 
-use super::cache::{hash_hidden, hash_rope_content};
+pub use super::cache::ContentKey;
+use super::cache::hash_hidden;
 use super::{FoldMap, content_height, prefix_rows, visible_lines, visible_rows};
 
 /// One already-resolved syntax-highlighting span: a **byte** range into the
@@ -313,6 +314,7 @@ pub(super) fn layout_visible_wrapped(
     ui: &mut egui::Ui,
     id: egui::Id,
     buffer: &Rope,
+    content: ContentKey,
     font_id: FontId,
     hidden: &[Range<usize>],
     spans: &[HighlightSpan],
@@ -321,7 +323,7 @@ pub(super) fn layout_visible_wrapped(
     let total_lines = buffer.len_lines().max(1);
     let width = ui.available_width();
 
-    let counts = cached_row_counts(ui, id, buffer, &font_id, width, hidden, total_lines);
+    let counts = cached_row_counts(ui, id, content, &font_id, width, hidden, total_lines);
     let prefix = prefix_rows(&counts);
     let total_rows = *prefix.last().expect("prefix_rows always returns at least one entry");
 
@@ -346,7 +348,7 @@ pub(super) fn layout_visible_wrapped(
     // frame at the same cache key (pure scroll, no edit) doesn't have to
     // guess `default_row_counts`' baseline for a line already visited.
     let key = RowCountsKey {
-        content_hash: hash_rope_content(buffer),
+        content,
         hidden_hash: hash_hidden(hidden),
         wrap_width_bits: width.to_bits(),
         font_size_bits: font_id.size.to_bits(),
@@ -365,7 +367,7 @@ pub(super) fn layout_visible_wrapped(
 
 #[derive(Clone, PartialEq)]
 struct RowCountsKey {
-    content_hash: u64,
+    content: ContentKey,
     hidden_hash: u64,
     wrap_width_bits: u32,
     font_size_bits: u32,
@@ -414,7 +416,7 @@ pub(super) fn default_row_counts(total_lines: usize, hidden: &[Range<usize>]) ->
 pub(super) fn cached_row_counts(
     ui: &egui::Ui,
     id: egui::Id,
-    buffer: &Rope,
+    content: ContentKey,
     font_id: &FontId,
     wrap_width: f32,
     hidden: &[Range<usize>],
@@ -422,7 +424,7 @@ pub(super) fn cached_row_counts(
 ) -> Arc<Vec<usize>> {
     let cache_id = egui::Id::new(("text_area_row_counts", id));
     let key = RowCountsKey {
-        content_hash: hash_rope_content(buffer),
+        content,
         hidden_hash: hash_hidden(hidden),
         wrap_width_bits: wrap_width.to_bits(),
         font_size_bits: font_id.size.to_bits(),

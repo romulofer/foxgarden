@@ -22,6 +22,10 @@ pub struct RunConfigsDialogState {
     /// selected config's `env` list.
     new_env_key: String,
     new_env_value: String,
+    /// The working-directory "Browse…" dialog, when one is up — on its own
+    /// thread (`crate::folder_picker`) so a portal dialog that takes its
+    /// time can't freeze the editor underneath this one.
+    working_dir_picker: crate::folder_picker::FolderPicker,
 }
 
 impl RunConfigsDialogState {
@@ -61,7 +65,7 @@ pub fn show(ui: &egui::Ui, project_root: &Path, state: &mut RunConfigsDialogStat
     if close_clicked || escape_pressed {
         state.open = false;
         if let Err(err) = fg_core::save_run_configs(project_root, &state.configs) {
-            *last_error = Some(format!("failed to save run configurations: {err}"));
+            crate::errors::report(last_error, format!("failed to save run configurations: {err}"));
         }
     }
 }
@@ -136,9 +140,13 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
                 if ui.text_edit_singleline(&mut dir_text).changed() {
                     config.working_dir = (!dir_text.is_empty()).then(|| PathBuf::from(&dir_text));
                 }
-                if ui.button(t().run_configs.browse).clicked()
-                    && let Some(dir) = rfd::FileDialog::new().set_directory(project_root).pick_folder()
+                if ui
+                    .add_enabled(!state.working_dir_picker.is_open(), egui::Button::new(t().run_configs.browse))
+                    .clicked()
                 {
+                    state.working_dir_picker.open(Some(project_root.to_path_buf()));
+                }
+                if let Some(dir) = state.working_dir_picker.poll() {
                     config.working_dir = Some(dir);
                 }
             });

@@ -23,7 +23,7 @@ use super::input::{
     move_down, move_end, move_home, move_left, move_right, move_up, replace_block_selection, replace_selection,
 };
 use super::render::{
-    HighlightSpan, TextAreaOutput, cached_row_counts, layout_visible, layout_visible_wrapped, paint_rows,
+    ContentKey, HighlightSpan, TextAreaOutput, cached_row_counts, layout_visible, layout_visible_wrapped, paint_rows,
     shape_line_range, shape_range,
 };
 use super::{FoldMap, prefix_rows};
@@ -191,10 +191,15 @@ pub fn char_offset_for_pos(out: &TextAreaOutput, buffer: &Rope, pos: egui::Pos2)
     clippy::too_many_arguments,
     reason = "each parameter is independently threaded per-frame state, not a bundle waiting to be a struct — see widget::show's own too-many-arguments allowance for the same shape"
 )]
+/// `content_revision` is `fg_core::TextBuffer::revision` for `buffer` —
+/// what every shaping cache below is keyed on, so an idle frame recognizes
+/// "nothing changed" with an integer compare instead of a full pass over
+/// the document.
 pub fn show(
     ui: &mut egui::Ui,
     id: Id,
     buffer: &Rope,
+    content_revision: u64,
     text: &str,
     font_id: FontId,
     text_color: Color32,
@@ -251,13 +256,14 @@ pub fn show(
     // moments later would see almost nothing left — collapsing every
     // character onto its own wrapped row for that one frame.
     let wrap_width = ui.available_width();
+    let content = ContentKey::revision(content_revision);
 
     // Shape (never paint yet) against the pre-edit buffer: this is what's
     // actually on screen right now, so pointer clicks below resolve against
     // it rather than against text that doesn't exist on screen until this
     // function returns.
     let pre = if word_wrap {
-        layout_visible_wrapped(ui, id, buffer, font_id.clone(), hidden, spans)
+        layout_visible_wrapped(ui, id, buffer, content, font_id.clone(), hidden, spans)
     } else {
         layout_visible(ui, id, buffer, font_id.clone(), hidden, spans)
     };
@@ -423,7 +429,14 @@ pub fn show(
         let line = final_buffer.char_to_line(state.caret.primary.min(final_buffer.len_chars()));
         let visual_row = if word_wrap {
             let total_lines = final_buffer.len_lines().max(1);
-            let counts = cached_row_counts(ui, id, final_buffer, &font_id, wrap_width, hidden, total_lines);
+            // An edit this frame produced `final_buffer` from `buffer`, so
+            // it is *not* the text `content` names — see `ContentKey::
+            // edited`, which keeps the two from sharing a cache entry.
+            let final_content = match &post_buffer {
+                Some(edited) => ContentKey::edited(content_revision, edited),
+                None => content,
+            };
+            let counts = cached_row_counts(ui, id, final_content, &font_id, wrap_width, hidden, total_lines);
             prefix_rows(&counts).get(line).copied()
         } else {
             FoldMap::new(hidden).to_visual(line)

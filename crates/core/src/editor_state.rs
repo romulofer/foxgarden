@@ -63,6 +63,19 @@ impl EditorState {
         Ok(())
     }
 
+    /// Swaps in a freshly-walked tree for the project that's already open,
+    /// without the rest of `open_project`'s semantics (clearing reopenable
+    /// closed tabs, in particular — a file appearing on disk is not the
+    /// user navigating to a different project). A no-op if `refreshed`
+    /// isn't the currently-open project's own root, which is what makes a
+    /// slow background walk safe: the user may have opened a different
+    /// project while it was running, and its result must not clobber that.
+    pub fn refresh_project_tree(&mut self, refreshed: Project) {
+        if self.project.as_ref().is_some_and(|open| open.root == refreshed.root) {
+            self.project = Some(refreshed);
+        }
+    }
+
     pub fn find_tab(&self, path: &Path) -> Option<usize> {
         self.open_tabs.iter().position(|doc| doc.path() == path)
     }

@@ -60,11 +60,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 &mut HoverState::default(),
                 &mut GotoDefinitionState::default(),
                 &mut PeekState::default(),
-                None,
-                false,
-                false,
-                false,
-                false,
+                EditorRequests::default(),
                 &mut None,
                 pending_input,
                 &mut None,
@@ -75,6 +71,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
             );
         });
     };

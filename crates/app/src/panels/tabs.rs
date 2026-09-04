@@ -12,7 +12,7 @@ use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    self, AccessorKind, CaseConversion, CompletionState, GenerateAccessorsDialog, GenerateMethodDialog,
+    self, AccessorKind, CompletionState, GenerateAccessorsDialog, GenerateMethodDialog,
     GenerateMethodKind, HoverState, OverrideMethodDialog, PeekState, UserTemplates,
 };
 use crate::widgets::modal::show_modal;
@@ -70,10 +70,11 @@ pub(crate) fn save_document(
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,
     last_error: &mut Option<String>,
+    trim_trailing_whitespace: bool,
 ) {
     let old_text = doc.buffer.to_string();
-    if let Err(err) = doc.save() {
-        *last_error = Some(msg::failed_to_save(&err.to_string()));
+    if let Err(err) = doc.save(trim_trailing_whitespace) {
+        crate::errors::report(last_error, msg::failed_to_save(&err.to_string()));
         return;
     }
     if let Some(parser) = parser.as_mut() {
@@ -92,6 +93,7 @@ fn save_tab(
     parsers: &mut [Option<IncrementalParser>],
     index: usize,
     last_error: &mut Option<String>,
+    trim_trailing_whitespace: bool,
 ) {
     let Some(doc) = state.open_tabs.get_mut(index) else {
         return;
@@ -99,7 +101,7 @@ fn save_tab(
     let Some(parser) = parsers.get_mut(index) else {
         return;
     };
-    save_document(doc, parser, last_error);
+    save_document(doc, parser, last_error, trim_trailing_whitespace);
 }
 
 /// Renders the tab bar and the active document's editor. `parsers` is kept
@@ -128,11 +130,7 @@ pub fn show(
     hover: &mut HoverState,
     goto_definition: &mut GotoDefinitionState,
     peek: &mut PeekState,
-    case_conversion_request: Option<CaseConversion>,
-    sort_lines_request: bool,
-    unique_lines_request: bool,
-    fold_all_request: bool,
-    expand_all_request: bool,
+    requests: crate::widgets::editor::EditorRequests,
     last_error: &mut Option<String>,
     pending_editor_input: &mut Vec<egui::Event>,
     cached_clipboard_text: &mut Option<String>,
@@ -146,6 +144,7 @@ pub fn show(
     debug_state: &crate::debug_state::DebugState,
     file_history: &mut FileHistoryState,
     dark_mode: bool,
+    trim_trailing_whitespace_on_save: bool,
 ) {
     let mut focus_request = None;
     let mut close_request = None;
@@ -236,7 +235,7 @@ pub fn show(
         && let Some(index) = state.find_tab(path)
     {
         let doc = &mut state.open_tabs[index];
-        doc.buffer = Rope::from_str(&content);
+        doc.buffer.replace(Rope::from_str(&content));
         doc.lsp_version += 1;
         doc.lsp_sync_pending = true;
         parsers[index] = open_parser_for(doc);
@@ -244,7 +243,7 @@ pub fn show(
 
     let save_requested = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
     if save_requested {
-        save_active_tab(state, parsers, last_error);
+        save_active_tab(state, parsers, last_error, trim_trailing_whitespace_on_save);
     }
 
     let reopen_closed_tab_requested =
@@ -253,7 +252,7 @@ pub fn show(
         reopen_last_closed_tab(state, parsers);
     }
 
-    show_close_confirm(ui, state, pending_close, parsers, last_error);
+    show_close_confirm(ui, state, pending_close, parsers, last_error, trim_trailing_whitespace_on_save);
 
     ui.separator();
 
@@ -320,11 +319,7 @@ pub fn show(
             hover,
             goto_definition,
             peek,
-            case_conversion_request,
-            sort_lines_request,
-            unique_lines_request,
-            fold_all_request,
-            expand_all_request,
+            requests,
             last_error,
             pending_editor_input,
             cached_clipboard_text,
@@ -335,6 +330,7 @@ pub fn show(
             rename_box,
             code_action_gutter,
             debug_state,
+            trim_trailing_whitespace_on_save,
         );
     });
 }
@@ -345,9 +341,10 @@ pub fn save_active_tab(
     state: &mut EditorState,
     parsers: &mut [Option<IncrementalParser>],
     last_error: &mut Option<String>,
+    trim_trailing_whitespace: bool,
 ) {
     if let Some(active) = state.active_tab {
-        save_tab(state, parsers, active, last_error);
+        save_tab(state, parsers, active, last_error, trim_trailing_whitespace);
     }
 }
 
@@ -364,10 +361,11 @@ pub fn save_all_dirty_tabs(
     parsers: &mut [Option<IncrementalParser>],
     last_error: &mut Option<String>,
     external_conflicts: &HashSet<PathBuf>,
+    trim_trailing_whitespace: bool,
 ) {
     for index in 0..state.open_tabs.len() {
         if state.open_tabs[index].is_dirty() && !external_conflicts.contains(state.open_tabs[index].path()) {
-            save_tab(state, parsers, index, last_error);
+            save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
         }
     }
 }
@@ -409,6 +407,7 @@ fn show_close_confirm(
     pending_close: &mut Option<usize>,
     parsers: &mut Vec<Option<IncrementalParser>>,
     last_error: &mut Option<String>,
+    trim_trailing_whitespace: bool,
 ) {
     let Some(index) = *pending_close else {
         return;
@@ -428,7 +427,7 @@ fn show_close_confirm(
         ui.label(msg::save_changes_before_closing(&name));
         ui.horizontal(|ui| {
             if ui.button(t().common.save).clicked() {
-                save_tab(state, parsers, index, last_error);
+                save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
                 state.close_tab(index);
                 parsers.remove(index);
                 *pending_close = None;
@@ -478,7 +477,7 @@ mod tests {
         let mut parsers = vec![parser];
         let mut last_error = None;
 
-        save_tab(&mut state, &mut parsers, 0, &mut last_error);
+        save_tab(&mut state, &mut parsers, 0, &mut last_error, true);
 
         let doc = &state.open_tabs[0];
         assert_eq!(

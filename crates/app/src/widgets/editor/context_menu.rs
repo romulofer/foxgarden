@@ -59,6 +59,7 @@ pub(super) fn show_context_menu(
     pending_input: &mut Vec<Event>,
     last_error: &mut Option<String>,
     cached_clipboard_text: &mut Option<String>,
+    trim_trailing_whitespace_on_save: bool,
 ) {
     let has_selection = primary_caret.is_some_and(|c| !c.is_collapsed());
     let cursor_char = primary_caret.map(|c| c.primary);
@@ -200,7 +201,7 @@ pub(super) fn show_context_menu(
             )
             .clicked()
         {
-            crate::panels::tabs::save_document(doc, parser, last_error);
+            crate::panels::tabs::save_document(doc, parser, last_error, trim_trailing_whitespace_on_save);
             // `Document::save` trims trailing whitespace, which can change
             // `doc.buffer` out from under `text` — every other branch in
             // `widget::show` refreshes it right after an edit for exactly

@@ -45,7 +45,7 @@ pub(super) fn paint_diagnostics(
     out: &TextAreaOutput,
     buffer: &Rope,
     text: &str,
-    diagnostics: &[Diagnostic],
+    diagnostics: &[&Diagnostic],
 ) {
     if diagnostics.is_empty() {
         return;
@@ -69,7 +69,7 @@ pub(super) fn paint_diagnostics(
     let painter = ui.painter();
     let squiggle_color = theme::error_squiggle(ui.visuals().dark_mode);
     for (i, start, end) in spans {
-        let diag = &diagnostics[i];
+        let diag = diagnostics[i];
         let char_start = char_offset_for[&start];
         let char_end = char_offset_for[&end].max(char_start + 1);
 

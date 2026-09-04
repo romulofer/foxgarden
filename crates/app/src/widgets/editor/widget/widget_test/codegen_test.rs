@@ -272,11 +272,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -287,6 +283,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
     text_area::set_caret(
@@ -321,11 +318,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut last_error,
             &mut Vec::new(),
             &mut None,
@@ -336,6 +329,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 
@@ -387,11 +381,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -402,6 +392,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
     text_area::set_caret(
@@ -435,11 +426,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -450,6 +437,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 
@@ -495,11 +483,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -510,6 +494,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
     text_area::set_caret(
@@ -544,11 +529,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut last_error,
             &mut Vec::new(),
             &mut None,
@@ -559,6 +540,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 

@@ -36,11 +36,7 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -51,6 +47,7 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
     text_area::set_caret(
@@ -134,11 +131,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -149,6 +142,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
     text_area::set_caret(

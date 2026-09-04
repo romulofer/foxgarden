@@ -18,6 +18,10 @@ pub enum ClipboardOp {
 /// Transient UI state for the side panel, owned by the caller across frames.
 #[derive(Default)]
 pub struct SidePanelState {
+    /// The "Open Folder" dialog, when one is up — on its own thread, so a
+    /// slow (or never-appearing) native/portal dialog can't freeze the
+    /// editor behind it. See `crate::folder_picker`.
+    folder_picker: crate::folder_picker::FolderPicker,
     /// (target directory, typed name so far).
     new_file_draft: Option<(PathBuf, String)>,
     rename_draft: Option<(PathBuf, String)>,
@@ -86,6 +90,26 @@ pub struct SidePanelOutcome {
     /// whatever the caller was already holding — last error wins, same as
     /// every other single-slot outcome field here.
     pub error: Option<String>,
+    /// Paths that appeared on disk this frame (a new file, a pasted copy)
+    /// — used to patch them straight into the in-memory tree, so they show
+    /// up in the same frame the user created them.
+    pub created: Vec<PathBuf>,
+    /// Something this frame changed the shape of the tree on disk (a file
+    /// created, renamed, deleted, or pasted), so the caller should schedule
+    /// a rebuild. Deliberately *not* rebuilt here: walking a real project
+    /// takes long enough to be visible, and the caller already owns a
+    /// debounced, background-threaded refresh for exactly this (see
+    /// `FoxGardenApp`'s own `tree_refresh_due`) — doing it inline as well
+    /// would mean paying for the same walk twice, on the UI thread.
+    pub tree_changed: bool,
+}
+
+/// What `path` is right now on disk — the tree distinguishes the two, and
+/// a just-created path is always readable here (it was created moments ago
+/// by the same frame). Anything unreadable is treated as a file, which is
+/// the harmless guess: the very next background refresh corrects it.
+fn kind_on_disk(path: &std::path::Path) -> fg_core::FileKind {
+    if path.is_dir() { fg_core::FileKind::Dir } else { fg_core::FileKind::File }
 }
 
 #[derive(Default)]
@@ -112,21 +136,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     let mut outcome = SidePanelOutcome::default();
 
     ui.horizontal(|ui| {
-        if ui.button("📁").on_hover_text(t().side_panel.open_folder_hint).clicked() {
+        if ui
+            .add_enabled(!panel.folder_picker.is_open(), egui::Button::new("📁"))
+            .on_hover_text(t().side_panel.open_folder_hint)
+            .clicked()
+        {
             // Default to the already-open project's folder, if there is
             // one, so re-opening (a sibling folder, or the same project
             // after it was closed) doesn't mean re-navigating away from
             // wherever the OS's own default (home, Desktop, ...) happens
             // to be every single time.
-            let mut dialog = rfd::FileDialog::new();
-            if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
-                dialog = dialog.set_directory(root);
-            }
-            if let Some(folder) = dialog.pick_folder()
-                && let Err(err) = state.open_project(folder)
-            {
-                outcome.error = Some(msg::failed_to_open_project(&err.to_string()));
-            }
+            panel.folder_picker.open(state.project.as_ref().map(|p| p.root.clone()));
+        }
+        if let Some(folder) = panel.folder_picker.poll()
+            && let Err(err) = state.open_project(folder)
+        {
+            outcome.error = Some(msg::failed_to_open_project(&err.to_string()));
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
             if ui.button("📄").on_hover_text(t().side_panel.new_file_hint).clicked() {
@@ -184,11 +209,25 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     // *existing* file (also carried on `outcome.open`, via a tree click)
     // doesn't touch the filesystem, so re-walking the whole project for it
     // would be a pointless full directory read on every single file click.
-    if (created || pasted || !outcome.renamed.is_empty() || !outcome.deleted.is_empty())
-        && let Some(root) = state.project.as_ref().map(|p| p.root.clone())
-        && let Err(err) = state.open_project(root)
+    outcome.tree_changed =
+        created || pasted || !outcome.renamed.is_empty() || !outcome.deleted.is_empty();
+    // Patch the in-memory tree with exactly what changed, rather than
+    // re-walking the project for it: the user sees the result in this same
+    // frame, and the caller's own background refresh (which lands later)
+    // only has to confirm what's already shown.
+    if outcome.tree_changed
+        && let Some(project) = state.project.as_mut()
     {
-        outcome.error = Some(msg::failed_to_refresh_tree(&err.to_string()));
+        for path in &outcome.deleted {
+            project.remove_path(path);
+        }
+        for (old, new) in &outcome.renamed {
+            project.remove_path(old);
+            project.insert_path(new, kind_on_disk(new));
+        }
+        for path in &outcome.created {
+            project.insert_path(path, kind_on_disk(path));
+        }
     }
 
     outcome
@@ -276,6 +315,7 @@ fn show_new_file_row(
 
                     match create_file_with_parents(&new_path, &content) {
                         Ok(()) => {
+                            outcome.created.push(new_path.clone());
                             outcome.open = Some(new_path);
                             close_draft = true;
                             created = true;
@@ -452,6 +492,8 @@ fn apply_tree_actions(panel: &mut SidePanelState, actions: TreeActions, outcome:
                     tree_changed = true;
                     if op == ClipboardOp::Cut {
                         outcome.renamed.push((source.clone(), dest));
+                    } else {
+                        outcome.created.push(dest);
                     }
                 }
                 Err(err) => failures.push(format!("{}: {err}", source.display())),

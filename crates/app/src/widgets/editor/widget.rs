@@ -45,6 +45,24 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 
+/// The one-shot "the user asked for this on the frame it was clicked"
+/// requests the Tools/Edit menus raise for the editor to act on.
+///
+/// A struct rather than five positional parameters (`Option<CaseConversion>`
+/// followed by four bare `bool`s) because that run of same-typed arguments
+/// was silently mis-threadable: swapping "sort lines" for "unique lines" at
+/// any of the ~50 call sites — production or test — compiles cleanly and
+/// runs the wrong transform. Named fields make the mistake impossible, and
+/// `Default` means a caller that wants none of them says so once.
+#[derive(Clone, Copy, Default)]
+pub struct EditorRequests {
+    pub case_conversion: Option<CaseConversion>,
+    pub sort_lines: bool,
+    pub unique_lines: bool,
+    pub fold_all: bool,
+    pub expand_all: bool,
+}
+
 /// Persisted (via `egui::Context`'s per-frame-surviving temp storage, same
 /// mechanism `CachedLayout` above uses) across `Ctrl+W`/`Ctrl+Shift+W`
 /// presses: `history` is every selection expand has grown *from*, most
@@ -91,7 +109,11 @@ fn sticky_headers_to_pin(scope_lines: &[usize], top_line: usize, max_depth: usiz
 
 #[derive(Clone, PartialEq)]
 struct HighlightSpansKey {
-    content_hash: u64,
+    revision: u64,
+    /// Which slice of the document these spans cover — see
+    /// `highlight_window`. Part of the key because scrolling into
+    /// un-highlighted text changes the answer without changing the text.
+    byte_range: Range<usize>,
     dark_mode: bool,
 }
 
@@ -102,7 +124,7 @@ struct CachedHighlightSpans {
 }
 
 /// Cache-checking wrapper (PLAN.md Phase 3 / SPEC.md §4) around
-/// `compute_highlight_spans`, keyed on `(hash_rope_content(&doc.buffer),
+/// `compute_highlight_spans`, keyed on `(doc.buffer.revision(),
 /// dark_mode)` — spans are theme-dependent, so a dark/light toggle with no
 /// text change still needs a recompute. Mirrors `text_area/render.rs`'s
 /// `cached_row_counts` exact key/store/invalidate shape: without this, the
@@ -113,13 +135,15 @@ fn highlight_spans_for(
     ui: &egui::Ui,
     widget_id: egui::Id,
     parser: Option<&IncrementalParser>,
-    buffer: &Rope,
+    revision: u64,
     source: &str,
+    byte_range: Range<usize>,
     dark_mode: bool,
 ) -> Arc<Vec<HighlightSpan>> {
     let cache_id = egui::Id::new(("widget_highlight_spans", widget_id));
     let key = HighlightSpansKey {
-        content_hash: text_area::hash_rope_content(buffer),
+        revision,
+        byte_range: byte_range.clone(),
         dark_mode,
     };
 
@@ -129,7 +153,7 @@ fn highlight_spans_for(
         return cached.spans;
     }
 
-    let spans = Arc::new(compute_highlight_spans(parser, source, dark_mode));
+    let spans = Arc::new(compute_highlight_spans(parser, source, byte_range, dark_mode));
     ui.ctx().data_mut(|d| {
         d.insert_temp(
             cache_id,
@@ -150,11 +174,16 @@ fn highlight_spans_for(
 /// language-less file or one with no tree yet, which `text_area` already
 /// treats as "no highlighting, everything falls through to the plain text
 /// color."
-fn compute_highlight_spans(parser: Option<&IncrementalParser>, source: &str, dark_mode: bool) -> Vec<HighlightSpan> {
+fn compute_highlight_spans(
+    parser: Option<&IncrementalParser>,
+    source: &str,
+    byte_range: Range<usize>,
+    dark_mode: bool,
+) -> Vec<HighlightSpan> {
     let Some((tree, language)) = parser.and_then(|p| p.tree().map(|t| (t, p.language()))) else {
         return Vec::new();
     };
-    syntax::highlight_spans(tree, source, language)
+    syntax::highlight_spans_in(tree, source, language, byte_range)
         .into_iter()
         .map(|(range, scope)| HighlightSpan {
             range,
@@ -163,9 +192,53 @@ fn compute_highlight_spans(parser: Option<&IncrementalParser>, source: &str, dar
         .collect()
 }
 
+/// How many lines of already-highlighted text to keep on each side of the
+/// viewport, so a small scroll doesn't immediately land on un-highlighted
+/// text while the next query runs.
+const HIGHLIGHT_MARGIN_LINES: usize = 200;
+
+/// Line granularity the highlight window snaps to. Without it, every pixel
+/// of scrolling would produce a slightly different range — a different
+/// cache key, and so a fresh query per frame while dragging the scrollbar.
+/// Snapping means scrolling within a block is free, and crossing one costs
+/// a single query over a bounded slice.
+const HIGHLIGHT_BLOCK_LINES: usize = 500;
+
+/// The byte range `highlight_spans_for` should highlight this frame: the
+/// visible lines, widened by `HIGHLIGHT_MARGIN_LINES` and snapped outward
+/// to `HIGHLIGHT_BLOCK_LINES` boundaries. Falls back to the whole document
+/// when the viewport can't be estimated (see `text_area::
+/// visible_line_window`), which is exactly the old behavior.
+fn highlight_window(
+    ui: &mut egui::Ui,
+    widget_id: egui::Id,
+    doc: &Document,
+    font_id: &FontId,
+    word_wrap: bool,
+    hidden: &[Range<usize>],
+    source: &str,
+) -> Range<usize> {
+    let total_lines = doc.buffer.len_lines().max(1);
+    let content = text_area::ContentKey::revision(doc.buffer.revision());
+    let Some(lines) = text_area::visible_line_window(ui, widget_id, content, font_id, word_wrap, hidden, total_lines)
+    else {
+        return 0..source.len();
+    };
+
+    let first = lines.start.saturating_sub(HIGHLIGHT_MARGIN_LINES) / HIGHLIGHT_BLOCK_LINES * HIGHLIGHT_BLOCK_LINES;
+    let last = (lines.end + HIGHLIGHT_MARGIN_LINES)
+        .div_ceil(HIGHLIGHT_BLOCK_LINES)
+        .saturating_mul(HIGHLIGHT_BLOCK_LINES)
+        .min(total_lines);
+
+    let start = doc.buffer.line_to_byte(first.min(total_lines));
+    let end = if last >= total_lines { source.len() } else { doc.buffer.line_to_byte(last) };
+    start..end.max(start)
+}
+
 #[derive(Clone)]
 struct CachedFolds {
-    content_hash: u64,
+    revision: u64,
     folds: Arc<Vec<syntax::FoldRange>>,
 }
 
@@ -180,14 +253,13 @@ fn foldable_ranges_for(
     ui: &egui::Ui,
     widget_id: egui::Id,
     parser: Option<&IncrementalParser>,
-    buffer: &Rope,
+    revision: u64,
     source: &str,
 ) -> Arc<Vec<syntax::FoldRange>> {
     let cache_id = egui::Id::new(("widget_foldable_ranges", widget_id));
-    let content_hash = text_area::hash_rope_content(buffer);
 
     if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedFolds>(cache_id))
-        && cached.content_hash == content_hash
+        && cached.revision == revision
     {
         return cached.folds;
     }
@@ -200,7 +272,7 @@ fn foldable_ranges_for(
         d.insert_temp(
             cache_id,
             CachedFolds {
-                content_hash,
+                revision,
                 folds: folds.clone(),
             },
         )
@@ -211,7 +283,7 @@ fn foldable_ranges_for(
 #[derive(Clone, PartialEq)]
 struct OccurrenceHighlightKey {
     word: String,
-    content_hash: u64,
+    revision: u64,
 }
 
 #[derive(Clone)]
@@ -233,14 +305,14 @@ struct CachedOccurrenceHighlights {
 fn occurrences_for(
     ui: &egui::Ui,
     widget_id: egui::Id,
-    buffer: &Rope,
+    revision: u64,
     text: &str,
     word: &str,
 ) -> Arc<Vec<Range<usize>>> {
     let cache_id = egui::Id::new(("widget_occurrence_highlights", widget_id));
     let key = OccurrenceHighlightKey {
         word: word.to_owned(),
-        content_hash: text_area::hash_rope_content(buffer),
+        revision,
     };
 
     if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedOccurrenceHighlights>(cache_id))
@@ -273,7 +345,7 @@ fn occurrences_for(
 /// bug `save_tab` in `panels::tabs` had before it started reusing this
 /// pattern too).
 pub(super) fn apply_edit(doc: &mut Document, parser: &mut Option<IncrementalParser>, old_text: &str, new_text: &str) {
-    doc.buffer = Rope::from_str(new_text);
+    doc.buffer.replace(Rope::from_str(new_text));
     doc.lsp_version += 1;
     doc.lsp_sync_pending = true;
     if let Some(parser) = parser.as_mut() {
@@ -368,11 +440,7 @@ pub fn show(
     hover: &mut HoverState,
     goto_definition: &mut GotoDefinitionState,
     peek: &mut PeekState,
-    case_conversion_request: Option<CaseConversion>,
-    sort_lines_request: bool,
-    unique_lines_request: bool,
-    fold_all_request: bool,
-    expand_all_request: bool,
+    requests: EditorRequests,
     last_error: &mut Option<String>,
     pending_input: &mut Vec<Event>,
     cached_clipboard_text: &mut Option<String>,
@@ -383,6 +451,7 @@ pub fn show(
     rename_box: &mut RenameBox,
     code_action_gutter: &mut CodeActionGutter,
     debug_state: &crate::debug_state::DebugState,
+    trim_trailing_whitespace_on_save: bool,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -425,7 +494,11 @@ pub fn show(
     let generate_request = if doc.read_only { None } else { generate_request };
     let generate_method_request = if doc.read_only { None } else { generate_method_request };
     let override_method_request = !doc.read_only && override_method_request;
-    let case_conversion_request = if doc.read_only { None } else { case_conversion_request };
+    let case_conversion_request = if doc.read_only { None } else { requests.case_conversion };
+    let sort_lines_request = requests.sort_lines;
+    let unique_lines_request = requests.unique_lines;
+    let fold_all_request = requests.fold_all;
+    let expand_all_request = requests.expand_all;
 
     // Mutable: the wrap-selection interception below may replace it with an
     // already-edited version *before* `TextEdit::show()` ever runs, so
@@ -1038,7 +1111,7 @@ pub fn show(
                     }
                 }
                 _ => {
-                    *last_error = Some(t().errors.select_text_first.to_string());
+                    crate::errors::report(last_error, t().errors.select_text_first.to_string());
                 }
             }
         }
@@ -1161,7 +1234,7 @@ pub fn show(
     // needs no separate reconciliation pass, see `Document::folded_lines`'s
     // doc comment — then narrowed to just the currently-collapsed ones as
     // the line-space hidden-range list `text_area`'s `FoldMap` skips.
-    let folds = foldable_ranges_for(ui, widget_id, parser.as_ref(), &doc.buffer, &old_text);
+    let folds = foldable_ranges_for(ui, widget_id, parser.as_ref(), doc.buffer.revision(), &old_text);
     if fold_all_request {
         folding::fold_all(&folds, &mut doc.folded_lines);
     }
@@ -1236,8 +1309,29 @@ pub fn show(
     // that any of this frame's own edits land in too) rather than inside
     // `text_area`, which stays decoupled from `syntax`/`theme` on purpose.
     let dark_mode = ui.visuals().dark_mode;
-    let spans = highlight_spans_for(ui, widget_id, parser.as_ref(), &doc.buffer, &old_text, dark_mode);
     let font_id = FontId::new(font_size, editor_font.family());
+    // Only the visible window is highlighted (see `highlight_window`) —
+    // the query is the expensive part of a keystroke on a large file, and
+    // the rows outside the viewport are never shaped, so their colors
+    // aren't needed.
+    let highlight_range = highlight_window(
+        ui,
+        widget_id,
+        doc,
+        &font_id,
+        view_settings.word_wrap,
+        &hidden,
+        &old_text,
+    );
+    let spans = highlight_spans_for(
+        ui,
+        widget_id,
+        parser.as_ref(),
+        doc.buffer.revision(),
+        &old_text,
+        highlight_range,
+        dark_mode,
+    );
     let text_color = theme::default_text(dark_mode);
 
     // Alt+Click adds a bare secondary cursor at the click position without
@@ -1271,6 +1365,7 @@ pub fn show(
             ui,
             widget_id,
             &doc.buffer,
+            doc.buffer.revision(),
             &old_text,
             font_id,
             text_color,
@@ -1673,18 +1768,18 @@ pub fn show(
         (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
         if doc.language != Some(Language::Java) {
-            *last_error = Some(t().errors.accessors_java_only.to_string());
+            crate::errors::report(last_error, t().errors.accessors_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
-                0 => *last_error = Some(t().errors.no_class_fields.to_string()),
+                0 => crate::errors::report(last_error, t().errors.no_class_fields.to_string()),
                 1 => {
                     let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
-                        *last_error = Some(t().errors.every_field_is_final.to_string());
+                        crate::errors::report(last_error, t().errors.every_field_is_final.to_string());
                     } else {
                         let (inserted, new_cursor) =
                             insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
@@ -1695,7 +1790,7 @@ pub fn show(
                 _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some(t().errors.accessors_no_tree.to_string());
+            crate::errors::report(last_error, t().errors.accessors_no_tree.to_string());
         }
     }
 
@@ -1715,7 +1810,7 @@ pub fn show(
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
                     manual_caret = Some(Caret::at(new_cursor));
                 }
-                Err(message) => *last_error = Some(message),
+                Err(message) => crate::errors::report(last_error, message),
             }
         }
     }
@@ -1729,12 +1824,12 @@ pub fn show(
     // templates are all valid Java even with zero fields selected).
     if let Some(kind) = generate_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some(t().errors.generate_java_only.to_string());
+            crate::errors::report(last_error, t().errors.generate_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let classes = syntax::java_classes_with_fields(tree, &text_now);
             match classes.len() {
-                0 => *last_error = Some(t().errors.no_class_fields.to_string()),
+                0 => crate::errors::report(last_error, t().errors.no_class_fields.to_string()),
                 1 => {
                     let generated =
                         codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
@@ -1745,7 +1840,7 @@ pub fn show(
                 _ => *generate_method_dialog = Some(GenerateMethodDialog::new(classes, kind)),
             }
         } else {
-            *last_error = Some(t().errors.generate_no_tree.to_string());
+            crate::errors::report(last_error, t().errors.generate_no_tree.to_string());
         }
     }
 
@@ -1776,27 +1871,27 @@ pub fn show(
     // work."
     if override_method_request {
         if doc.language != Some(Language::Java) {
-            *last_error = Some(t().errors.override_java_only.to_string());
+            crate::errors::report(last_error, t().errors.override_java_only.to_string());
         } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
             let text_now = doc.buffer.to_string();
             let cursor_byte = shell_out.caret.map(|c| char_to_byte(&text_now, c.primary));
             let enclosing = cursor_byte.and_then(|c| syntax::enclosing_class(tree, &text_now, c));
 
             match enclosing {
-                None => *last_error = Some(t().errors.override_needs_class.to_string()),
+                None => crate::errors::report(last_error, t().errors.override_needs_class.to_string()),
                 Some((class_name, insertion_byte)) => match syntax::superclass_name(tree, &text_now, &class_name) {
                     None => {
-                        *last_error = Some(msg::no_superclass(&class_name));
+                        crate::errors::report(last_error, msg::no_superclass(&class_name));
                     }
                     Some(super_name) => {
                         let super_path = project.and_then(|p| codegen::find_java_file_by_stem(&p.tree, &super_name));
                         match super_path {
                             None => {
-                                *last_error = Some(msg::superclass_not_in_project(&super_name));
+                                crate::errors::report(last_error, msg::superclass_not_in_project(&super_name));
                             }
                             Some(super_path) => match std::fs::read_to_string(&super_path) {
                                 Err(err) => {
-                                    *last_error = Some(msg::failed_to_read(&super_path.display().to_string(), &err.to_string()));
+                                    crate::errors::report(last_error, msg::failed_to_read(&super_path.display().to_string(), &err.to_string()));
                                 }
                                 Ok(super_source) => {
                                     let mut super_parser = IncrementalParser::new(Language::Java);
@@ -1813,7 +1908,7 @@ pub fn show(
                                         .collect();
 
                                     if candidates.is_empty() {
-                                        *last_error = Some(msg::no_overridable_methods(&super_name));
+                                        crate::errors::report(last_error, msg::no_overridable_methods(&super_name));
                                     } else {
                                         *override_method_dialog =
                                             Some(OverrideMethodDialog::new(candidates, insertion_byte));
@@ -1825,7 +1920,7 @@ pub fn show(
                 },
             }
         } else {
-            *last_error = Some(t().errors.override_no_tree.to_string());
+            crate::errors::report(last_error, t().errors.override_no_tree.to_string());
         }
     }
 
@@ -1842,7 +1937,7 @@ pub fn show(
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
                     manual_caret = Some(Caret::at(new_cursor));
                 }
-                Err(message) => *last_error = Some(message),
+                Err(message) => crate::errors::report(last_error, message),
             }
         }
     }
@@ -1862,6 +1957,7 @@ pub fn show(
         pending_input,
         last_error,
         cached_clipboard_text,
+        trim_trailing_whitespace_on_save,
     );
 
     if !doc.extra_selections.is_empty() && !ctrl_d_pressed {
@@ -2069,7 +2165,7 @@ pub fn show(
         let word_range = multi_cursor::word_range_at(&old_text, primary_caret.primary);
         if !word_range.is_empty() {
             let word = &old_text[char_to_byte(&old_text, word_range.start)..char_to_byte(&old_text, word_range.end)];
-            let occurrences = occurrences_for(ui, widget_id, &doc.buffer, &old_text, word);
+            let occurrences = occurrences_for(ui, widget_id, doc.buffer.revision(), &old_text, word);
             paint_occurrence_highlights(ui, &shell_out.base, &doc.buffer, &occurrences);
         }
     }
@@ -2100,17 +2196,20 @@ pub fn show(
 
     // Several independent sources feeding one squiggle pipeline (see
     // `Document::checkstyle_diagnostics`'s own doc comment for why they're
-    // separate fields) — collected into one slice here, at paint time,
+    // separate fields) — gathered into one slice here, at paint time,
     // rather than a fifth stored field, since the cost scales with this
-    // one document's own diagnostic count, not project size.
-    let all_diagnostics: Vec<Diagnostic> = doc
+    // one document's own diagnostic count, not project size. References,
+    // not clones: this runs on *every* frame the editor is visible (idle
+    // cursor-blink frames included), and a `Diagnostic` owns its message
+    // `String`, so cloning meant allocating one string per diagnostic per
+    // frame purely to hand the painter something it only ever reads.
+    let all_diagnostics: Vec<&Diagnostic> = doc
         .diagnostics
         .iter()
         .chain(doc.checkstyle_diagnostics.iter())
         .chain(doc.pmd_diagnostics.iter())
         .chain(doc.spotbugs_diagnostics.iter())
         .chain(doc.lsp_diagnostics.iter())
-        .cloned()
         .collect();
     paint_diagnostics(ui, &shell_out.base, &doc.buffer, &old_text, &all_diagnostics);
     paint_extra_selections(ui, &shell_out.base, &doc.buffer, &doc.extra_selections);

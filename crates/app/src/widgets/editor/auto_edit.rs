@@ -154,6 +154,11 @@ pub(super) fn indent_selected_lines(
         .rposition(|&c| c == '\n')
         .map_or(0, |i| i + 1);
 
+    // Ascending by construction (line starts, in file order) — which is
+    // what lets the membership checks below be binary searches instead of
+    // the linear `contains` scans they used to be: with one scan per line
+    // over a list that holds one entry per *selected* line, Select-All +
+    // Tab on a large file was quadratic in line count.
     let mut touched: Vec<usize> = std::iter::once(0)
         .chain(
             chars
@@ -178,7 +183,7 @@ pub(super) fn indent_selected_lines(
         let line_end = chars[pos..].iter().position(|&c| c == '\n').map_or(n, |off| pos + off);
         let has_newline = line_end < n;
 
-        if touched.contains(&pos) {
+        if touched.binary_search(&pos).is_ok() {
             if dedent {
                 let removable = if chars.get(pos) == Some(&'\t') {
                     1
@@ -220,7 +225,7 @@ pub(super) fn indent_selected_lines(
             }
         }
         let column = p - p_line_start;
-        let new_column = if !touched.contains(&p_line_start) {
+        let new_column = if touched.binary_search(&p_line_start).is_err() {
             column
         } else if dedent {
             column.saturating_sub((-this_line_delta) as usize)
@@ -395,6 +400,11 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
         .iter()
         .rposition(|&c| c == '\n')
         .map_or(0, |i| i + 1);
+    // Ascending by construction (line starts, in file order) — which is
+    // what lets the membership checks below be binary searches instead of
+    // the linear `contains` scans they used to be: with one scan per line
+    // over a list that holds one entry per *selected* line, Select-All +
+    // Tab on a large file was quadratic in line count.
     let mut touched: Vec<usize> = std::iter::once(0)
         .chain(
             chars
@@ -432,7 +442,7 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
         let line_end = line_end_of(pos);
         let has_newline = line_end < n;
 
-        if touched.contains(&pos) {
+        if touched.binary_search(&pos).is_ok() {
             if uncomment && is_commented(pos) {
                 let removable = if chars.get(pos + 2) == Some(&' ') { 3 } else { 2 };
                 result.extend_from_slice(&chars[pos + removable..line_end]);
@@ -471,7 +481,7 @@ pub(super) fn toggle_line_comments(text: &str, start_char: usize, end_char: usiz
             }
         }
         let column = p - p_line_start;
-        let new_column = if !touched.contains(&p_line_start) {
+        let new_column = if touched.binary_search(&p_line_start).is_err() {
             column
         } else if uncomment {
             column.saturating_sub((-this_line_delta) as usize)

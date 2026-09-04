@@ -7,7 +7,6 @@
 //! place.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 
 use fg_core::{BuildTool, EditorState, ProjectConfig, ProjectLanguage, ScaffoldSpec};
 use fg_i18n::{msg, t};
@@ -38,7 +37,7 @@ pub struct NewProjectWizardState {
     java_release: u32,
     build_tool: BuildTool,
     last_error: Option<String>,
-    picker_rx: Option<Receiver<Option<PathBuf>>>,
+    picker: crate::folder_picker::FolderPicker,
 }
 
 impl NewProjectWizardState {
@@ -53,23 +52,12 @@ impl NewProjectWizardState {
     }
 
     pub fn picker_running(&self) -> bool {
-        self.picker_rx.is_some()
+        self.picker.is_open()
     }
 
     /// Same shape as `panels::jdk_registry::JdkRegistryState::poll_picker`.
     pub fn poll_picker(&mut self) -> Option<PathBuf> {
-        let rx = self.picker_rx.as_ref()?;
-        match rx.try_recv() {
-            Ok(folder) => {
-                self.picker_rx = None;
-                folder
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.picker_rx = None;
-                None
-            }
-        }
+        self.picker.poll()
     }
 }
 
@@ -131,11 +119,7 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut state.location);
                 if ui.add_enabled(!state.picker_running(), egui::Button::new(t().new_project.browse)).clicked() {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(rfd::FileDialog::new().pick_folder());
-                    });
-                    state.picker_rx = Some(rx);
+                    state.picker.open(None);
                 }
             });
             ui.end_row();
@@ -248,7 +232,7 @@ mod tests {
             java_release: 8,
             build_tool: BuildTool::Gradle,
             last_error: Some("stale error".to_string()),
-            picker_rx: None,
+            picker: crate::folder_picker::FolderPicker::default(),
         };
         state.open();
 

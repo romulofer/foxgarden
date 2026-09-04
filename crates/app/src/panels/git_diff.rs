@@ -235,7 +235,8 @@ mod tests {
 
         diff.check_for_saves(&state, Some(Path::new("."))); // observes it already dirty
 
-        state.open_tabs[0].buffer = state.open_tabs[0].saved_buffer.clone(); // simulates a save clearing dirty
+        let saved = state.open_tabs[0].saved_buffer.clone();
+        state.open_tabs[0].buffer.replace(saved); // simulates a save clearing dirty
         diff.check_for_saves(&state, Some(Path::new(".")));
 
         assert!(diff.scans.contains_key(&path), "the dirty -> clean transition must kick off a scan");
@@ -249,7 +250,8 @@ mod tests {
         let mut diff = DiffState::default();
 
         diff.check_for_saves(&state, None);
-        state.open_tabs[0].buffer = state.open_tabs[0].saved_buffer.clone();
+        let saved = state.open_tabs[0].saved_buffer.clone();
+        state.open_tabs[0].buffer.replace(saved);
         diff.check_for_saves(&state, None);
 
         assert!(diff.scans.is_empty(), "no project root means nothing to diff against");

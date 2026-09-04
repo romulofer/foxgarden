@@ -406,6 +406,7 @@ fn wrapped_shaped_count(total_lines: usize) -> usize {
                 ui,
                 egui::Id::new("test"),
                 &buffer,
+                super::render::ContentKey::revision(0),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],
@@ -452,12 +453,21 @@ fn wrapped_layout_reuses_a_learned_row_count_across_scroll_only_frames() {
                 ui,
                 id,
                 &buffer,
+                super::render::ContentKey::revision(0),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],
             );
             let counts =
-                super::render::cached_row_counts(ui, id, &buffer, &egui::FontId::monospace(14.0), 100.0, &[], 2_000);
+                super::render::cached_row_counts(
+                    ui,
+                    id,
+                    super::render::ContentKey::revision(0),
+                    &egui::FontId::monospace(14.0),
+                    100.0,
+                    &[],
+                    2_000,
+                );
             first_prefix_at_line_1 = prefix_rows(&counts)[1];
         });
     });
@@ -477,7 +487,15 @@ fn wrapped_layout_reuses_a_learned_row_count_across_scroll_only_frames() {
         egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
             ui.set_max_width(100.0);
             let counts =
-                super::render::cached_row_counts(ui, id, &buffer, &egui::FontId::monospace(14.0), 100.0, &[], 2_000);
+                super::render::cached_row_counts(
+                    ui,
+                    id,
+                    super::render::ContentKey::revision(0),
+                    &egui::FontId::monospace(14.0),
+                    100.0,
+                    &[],
+                    2_000,
+                );
             second_prefix_at_line_1 = prefix_rows(&counts)[1];
         });
     });
@@ -501,6 +519,7 @@ fn wrapped_layout_after_an_edit_reshapes_only_the_new_visible_slice() {
                 ui,
                 id,
                 &buffer,
+                super::render::ContentKey::revision(0),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],
@@ -518,6 +537,7 @@ fn wrapped_layout_after_an_edit_reshapes_only_the_new_visible_slice() {
                 ui,
                 id,
                 &edited,
+                super::render::ContentKey::edited(0, &edited),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],
@@ -549,6 +569,7 @@ fn huge_file_first_open_and_per_keystroke_cost_stays_bounded() {
                 ui,
                 id,
                 &buffer,
+                super::render::ContentKey::revision(0),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],
@@ -579,6 +600,7 @@ fn huge_file_first_open_and_per_keystroke_cost_stays_bounded() {
                 ui,
                 id,
                 &edited,
+                super::render::ContentKey::edited(0, &edited),
                 egui::FontId::monospace(14.0),
                 &[],
                 &[],

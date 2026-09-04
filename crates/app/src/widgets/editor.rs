@@ -49,4 +49,4 @@ pub use templates::{
     GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,
     serialize_user_templates,
 };
-pub use widget::{jump_to, show};
+pub use widget::{EditorRequests, jump_to, show};

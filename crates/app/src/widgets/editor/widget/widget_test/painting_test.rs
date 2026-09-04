@@ -60,11 +60,7 @@ fn sticky_scroll_enabled_renders_without_panicking() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -75,6 +71,7 @@ fn sticky_scroll_enabled_renders_without_panicking() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }
@@ -114,11 +111,7 @@ fn renders_highlighted_valid_file_without_panicking() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -129,6 +122,7 @@ fn renders_highlighted_valid_file_without_panicking() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }
@@ -174,11 +168,7 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
                 &mut HoverState::default(),
                 &mut GotoDefinitionState::default(),
                 &mut PeekState::default(),
-                None,
-                false,
-                false,
-                false,
-                false,
+                EditorRequests::default(),
                 &mut None,
                 &mut Vec::new(),
                 &mut None,
@@ -189,6 +179,7 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
             );
         });
     };
@@ -266,11 +257,7 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -281,6 +268,7 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }
@@ -313,11 +301,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -328,6 +312,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }
@@ -368,11 +353,7 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
                 &mut HoverState::default(),
                 &mut GotoDefinitionState::default(),
                 &mut PeekState::default(),
-                None,
-                false,
-                false,
-                false,
-                false,
+                EditorRequests::default(),
                 &mut None,
                 &mut Vec::new(),
                 &mut None,
@@ -383,6 +364,7 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
             &mut RenameBox::default(),
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
+        true,
             );
         });
     };
@@ -428,11 +410,7 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -443,6 +421,7 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 
@@ -463,7 +442,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
     let edit = syntax::diff_edit(&old_text, &new_text);
     let inner_parser = parser.as_mut().unwrap();
     inner_parser.reparse(&new_text, edit);
-    doc.buffer = Rope::from_str(&new_text);
+    doc.buffer.replace(Rope::from_str(&new_text));
     doc.diagnostics = syntax::syntax_errors(inner_parser.tree().unwrap());
 
     assert!(doc.is_dirty());
@@ -491,11 +470,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -506,6 +481,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }
@@ -542,11 +518,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            None,
-            false,
-            false,
-            false,
-            false,
+            EditorRequests::default(),
             &mut None,
             &mut Vec::new(),
             &mut None,
@@ -557,6 +529,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
         &mut RenameBox::default(),
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
+        true,
         );
     });
 }

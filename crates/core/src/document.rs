@@ -30,7 +30,11 @@ impl std::error::Error for OpenDocumentError {}
 
 pub struct Document {
     pub path: PathBuf,
-    pub buffer: Rope,
+    /// The live text. A `TextBuffer` rather than a bare `Rope` so every
+    /// per-frame cache in the editor can key on `buffer.revision()` — an
+    /// integer compare — instead of hashing the whole document to find out
+    /// whether anything changed since last frame.
+    pub buffer: crate::TextBuffer,
     pub saved_buffer: Rope,
     /// `None` for files whose extension isn't a recognized language (or has
     /// none at all) — the file still opens and edits like any other, it
@@ -177,7 +181,7 @@ impl Document {
 
         Ok(Document {
             path,
-            buffer,
+            buffer: buffer.into(),
             saved_buffer,
             language,
             diagnostics: Vec::new(),
@@ -202,29 +206,41 @@ impl Document {
         self.buffer != self.saved_buffer
     }
 
-    /// Trims trailing whitespace from every line before writing, and updates
-    /// `buffer` itself (not just the bytes written to disk) to match — so
-    /// the editor immediately shows what's actually on disk, and `is_dirty`
-    /// (derived from `buffer != saved_buffer`) doesn't flip back to `true`
-    /// right after a save because the two silently diverged. Also snapshots
-    /// the saved content into `.foxgarden/history/` (`PLAN.md` Track 4
-    /// Phase 1) when `project_root` is set — best-effort: a snapshot
-    /// failure (a read-only `.foxgarden/`, a full disk) is silently
-    /// swallowed rather than failing the save itself, since the file having
-    /// actually saved matters far more than its own history entry existing.
-    pub fn save(&mut self) -> std::io::Result<()> {
+    /// Writes the buffer to disk **atomically** (`crate::write_atomically`):
+    /// a crash or power loss mid-save leaves the previous contents fully
+    /// intact rather than a truncated source file, which a plain
+    /// `fs::write` (truncate, *then* write) cannot promise.
+    ///
+    /// When `trim_trailing_whitespace` is set, trailing whitespace is
+    /// stripped from every line first, and `buffer` itself (not just the
+    /// bytes written to disk) is updated to match — so the editor
+    /// immediately shows what's actually on disk, and `is_dirty` (derived
+    /// from `buffer != saved_buffer`) doesn't flip back to `true` right
+    /// after a save because the two silently diverged. It's a setting
+    /// (Settings > Trim Trailing Whitespace on Save) rather than
+    /// unconditional because on an existing codebase that never had it, the
+    /// first save of an otherwise-untouched file rewrites lines the user
+    /// didn't edit, turning a one-line change into a noisy diff.
+    ///
+    /// Also snapshots the saved content into `.foxgarden/history/`
+    /// (`PLAN.md` Track 4 Phase 1) when `project_root` is set —
+    /// best-effort: a snapshot failure (a read-only `.foxgarden/`, a full
+    /// disk) is silently swallowed rather than failing the save itself,
+    /// since the file having actually saved matters far more than its own
+    /// history entry existing.
+    pub fn save(&mut self, trim_trailing_whitespace: bool) -> std::io::Result<()> {
         let original = self.buffer.to_string();
-        let trimmed = trim_trailing_whitespace(&original);
+        let trimmed = if trim_trailing_whitespace { trim_trailing_whitespace_in(&original) } else { original.clone() };
         if trimmed != original {
             self.lsp_version += 1;
             self.lsp_sync_pending = true;
+            self.buffer.replace(Rope::from_str(&trimmed));
         }
-        self.buffer = Rope::from_str(&trimmed);
-        std::fs::write(&self.path, &trimmed)?;
+        crate::write_atomically(&self.path, trimmed.as_bytes())?;
         if let Some(project_root) = &self.project_root {
             let _ = crate::file_history::write_snapshot(project_root, &self.path, &trimmed);
         }
-        self.saved_buffer = self.buffer.clone();
+        self.saved_buffer = self.buffer.rope().clone();
         Ok(())
     }
 
@@ -238,7 +254,7 @@ impl Document {
 /// `\r\n`-terminated line has its `\r` set aside first and reattached after
 /// trimming — otherwise `\r` (not itself whitespace we want to strip) would
 /// block `trim_end_matches` from reaching the spaces/tabs before it.
-fn trim_trailing_whitespace(text: &str) -> String {
+fn trim_trailing_whitespace_in(text: &str) -> String {
     text.split('\n')
         .map(|line| match line.strip_suffix('\r') {
             Some(content) => format!("{}\r", content.trim_end_matches([' ', '\t'])),
@@ -284,7 +300,7 @@ mod tests {
         doc.buffer.insert(0, "// comment\n");
         assert!(doc.is_dirty());
 
-        doc.save().unwrap();
+        doc.save(true).unwrap();
         assert!(!doc.is_dirty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), doc.buffer.to_string());
     }
@@ -308,7 +324,7 @@ mod tests {
         doc.project_root = Some(dir.path().to_path_buf());
 
         doc.buffer.insert(0, "// comment\n");
-        doc.save().unwrap();
+        doc.save(true).unwrap();
 
         let history_dir = dir.path().join(".foxgarden/history/Hello.java");
         let snapshots: Vec<_> = std::fs::read_dir(&history_dir).unwrap().collect();
@@ -322,7 +338,7 @@ mod tests {
         assert_eq!(doc.project_root, None);
 
         doc.buffer.insert(0, "// comment\n");
-        doc.save().unwrap();
+        doc.save(true).unwrap();
 
         assert!(!dir.path().join(".foxgarden").exists());
     }
@@ -353,8 +369,8 @@ mod tests {
         let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path.clone()).unwrap();
 
-        doc.buffer = Rope::from_str("class Hello {   \n\tint x;\t\t\n}   \n");
-        doc.save().unwrap();
+        doc.buffer.replace(Rope::from_str("class Hello {   \n\tint x;\t\t\n}   \n"));
+        doc.save(true).unwrap();
 
         let expected = "class Hello {\n\tint x;\n}\n";
         assert_eq!(doc.buffer.to_string(), expected);
@@ -367,11 +383,25 @@ mod tests {
         let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
 
-        doc.buffer = Rope::from_str("class Hello {}  ");
-        doc.save().unwrap();
+        doc.buffer.replace(Rope::from_str("class Hello {}  "));
+        doc.save(true).unwrap();
 
         // No newline should be added where there wasn't one.
         assert_eq!(doc.buffer.to_string(), "class Hello {}");
+    }
+
+    #[test]
+    fn save_leaves_trailing_whitespace_alone_when_trimming_is_off() {
+        let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
+        let mut doc = Document::open(path.clone()).unwrap();
+
+        let untouched = "class Hello {   \n\tint x;\t\t\n}   \n";
+        doc.buffer.replace(Rope::from_str(untouched));
+        doc.save(false).unwrap();
+
+        assert_eq!(doc.buffer.to_string(), untouched);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), untouched);
+        assert!(!doc.is_dirty());
     }
 
     #[test]
@@ -379,8 +409,8 @@ mod tests {
         let (_dir, path) = test_support::temp_file("Hello.java", "class Hello {}");
         let mut doc = Document::open(path).unwrap();
 
-        doc.buffer = Rope::from_str("class Hello {}  \r\n  int x;\r\n");
-        doc.save().unwrap();
+        doc.buffer.replace(Rope::from_str("class Hello {}  \r\n  int x;\r\n"));
+        doc.save(true).unwrap();
 
         assert_eq!(doc.buffer.to_string(), "class Hello {}\r\n  int x;\r\n");
     }

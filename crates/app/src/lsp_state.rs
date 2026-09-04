@@ -5,7 +5,7 @@
 //! current project and keeps every wait/poll non-blocking, so an unavailable
 //! or slow server never joins the editor's input-to-pixels path.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -183,7 +183,18 @@ enum Slot {
     Ready {
         config: SessionConfig,
         session: LspSession,
-        open_documents: HashSet<PathBuf>,
+        /// Every document this session has been sent a `didOpen` for,
+        /// mapped to the exact text the server currently believes it has.
+        /// Keeping that copy is what makes incremental `didChange` possible
+        /// (`incremental_change` diffs against it); it costs one extra copy
+        /// per open document, which the previous full-text sync was already
+        /// allocating on *every* keystroke anyway.
+        open_documents: HashMap<PathBuf, String>,
+        /// What the server said it wants in its own `initialize` reply.
+        /// A server that asks for `Full` still gets whole-document
+        /// `didChange`s — sending it ranges it never agreed to parse would
+        /// silently corrupt its copy of the file.
+        sync_kind: lsp_types::TextDocumentSyncKind,
         /// The most recent `language/status` message jdt.ls sent since its
         /// `initialize` response landed, if any — `None` once a
         /// `"ServiceReady"` status arrives (the project import this
@@ -688,7 +699,8 @@ fn slot_matches(slot: &Slot, desired: Option<&SessionConfig>) -> bool {
 fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
     match slot {
         Slot::Starting(running) => match running.initialize_rx.try_recv() {
-            Ok(Ok(_)) => {
+            Ok(Ok(result)) => {
+                let sync_kind = advertised_sync_kind(&result);
                 if let Err(error) = running.session.initialized() {
                     let config = running.config.clone();
                     let message = format!("failed to finish {} initialization: {error}", kind.name());
@@ -700,7 +712,8 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
                     *slot = Slot::Ready {
                         config: running.config,
                         session: running.session,
-                        open_documents: HashSet::new(),
+                        open_documents: HashMap::new(),
+                        sync_kind,
                         status_message: None,
                     };
                 }
@@ -742,11 +755,11 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
     }
 }
 
-/// Full-text synchronization is deliberately the first implementation: it
-/// avoids getting byte/UTF-16 incremental edit bookkeeping wrong while still
-/// sending only documents whose edit path marked them pending. Servers that
-/// advertise incremental sync can be optimized later without changing the
-/// document lifecycle.
+/// Documents are synchronized incrementally against servers that ask for
+/// it (`advertised_sync_kind`) and whole-document against the rest — see
+/// `incremental_change`, which derives the edit by diffing against the text
+/// the server was last actually sent rather than trusting the editor's edit
+/// paths to report themselves.
 fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document], errors: &mut Vec<String>) {
     let Slot::Ready { session, open_documents, .. } = slot else { return };
     let current: HashSet<PathBuf> = documents
@@ -754,7 +767,7 @@ fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document],
         .filter(|doc| doc.language == Some(kind.language()))
         .map(|doc| doc.path.clone())
         .collect();
-    let closed: Vec<PathBuf> = open_documents.difference(&current).cloned().collect();
+    let closed: Vec<PathBuf> = open_documents.keys().filter(|path| !current.contains(*path)).cloned().collect();
     for path in closed {
         match file_uri(&path) {
             Ok(uri) => {
@@ -799,7 +812,7 @@ fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document],
 /// extracted); `true` otherwise, including the common "nothing to send"
 /// case.
 fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, errors: &mut Vec<String>) -> bool {
-    let Slot::Ready { session, open_documents, .. } = slot else { return true };
+    let Slot::Ready { session, open_documents, sync_kind, .. } = slot else { return true };
     let uri = match file_uri(&doc.path) {
         Ok(uri) => uri,
         Err(error) => {
@@ -807,25 +820,55 @@ fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, erro
             return true;
         }
     };
-    let result = if open_documents.contains(&doc.path) {
-        if !doc.lsp_sync_pending {
-            return true;
+    let (result, synced_text) = match open_documents.get(&doc.path) {
+        Some(last_synced) => {
+            if !doc.lsp_sync_pending {
+                return true;
+            }
+            let new_text = doc.buffer.to_string();
+            let content_changes = if *sync_kind == lsp_types::TextDocumentSyncKind::INCREMENTAL {
+                match incremental_change(last_synced, &new_text) {
+                    Some(change) => vec![change],
+                    // The buffer ended up back at what the server already
+                    // has (an edit and its undo between two syncs) — there
+                    // is nothing to report, so this only clears the pending
+                    // flag.
+                    None => {
+                        doc.lsp_sync_pending = false;
+                        return true;
+                    }
+                }
+            } else {
+                vec![TextDocumentContentChangeEvent { range: None, range_length: None, text: new_text.clone() }]
+            };
+            let params = DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier { uri, version: doc.lsp_version },
+                content_changes,
+            };
+            (
+                session.send_notification(DidChangeTextDocument::METHOD, serde_json::to_value(params).unwrap()),
+                new_text,
+            )
         }
-        let params = DidChangeTextDocumentParams {
-            text_document: lsp_types::VersionedTextDocumentIdentifier { uri, version: doc.lsp_version },
-            content_changes: vec![TextDocumentContentChangeEvent { range: None, range_length: None, text: doc.buffer.to_string() }],
-        };
-        session.send_notification(DidChangeTextDocument::METHOD, serde_json::to_value(params).unwrap())
-    } else {
-        let language_id = match kind { ServerKind::Java => "java", ServerKind::Kotlin => "kotlin" }.to_string();
-        let params = DidOpenTextDocumentParams {
-            text_document: TextDocumentItem { uri, language_id, version: doc.lsp_version, text: doc.buffer.to_string() },
-        };
-        session.send_notification(DidOpenTextDocument::METHOD, serde_json::to_value(params).unwrap())
+        None => {
+            let language_id = match kind { ServerKind::Java => "java", ServerKind::Kotlin => "kotlin" }.to_string();
+            let text = doc.buffer.to_string();
+            let params = DidOpenTextDocumentParams {
+                text_document: TextDocumentItem { uri, language_id, version: doc.lsp_version, text: text.clone() },
+            };
+            (
+                session.send_notification(DidOpenTextDocument::METHOD, serde_json::to_value(params).unwrap()),
+                text,
+            )
+        }
     };
     match result {
         Ok(()) => {
-            open_documents.insert(doc.path.clone());
+            // Recorded only on a successful send: a failed notification
+            // leaves the server's copy at whatever it had, and the next
+            // sync must diff against *that*, not against text the server
+            // never received.
+            open_documents.insert(doc.path.clone(), synced_text);
             doc.lsp_sync_pending = false;
             true
         }
@@ -834,6 +877,85 @@ fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, erro
             false
         }
     }
+}
+
+/// What `initialize`'s reply says about how this server wants document
+/// changes delivered. LSP allows either a bare number
+/// (`textDocumentSync: 2`) or the full options object
+/// (`textDocumentSync: { "change": 2, ... }`) — real servers use both
+/// shapes, so both are read here. Anything missing or unrecognized falls
+/// back to `Full`, the conservative choice: a server that gets a whole
+/// document when it expected one is merely doing redundant work, whereas
+/// one that gets a range it never agreed to apply ends up with a corrupt
+/// copy of the file and starts reporting diagnostics for text that isn't
+/// there.
+fn advertised_sync_kind(initialize_result: &serde_json::Value) -> lsp_types::TextDocumentSyncKind {
+    let sync = initialize_result.get("capabilities").and_then(|c| c.get("textDocumentSync"));
+    let change = match sync {
+        Some(serde_json::Value::Number(n)) => n.as_u64(),
+        Some(serde_json::Value::Object(_)) => sync.and_then(|s| s.get("change")).and_then(serde_json::Value::as_u64),
+        _ => None,
+    };
+    match change {
+        Some(2) => lsp_types::TextDocumentSyncKind::INCREMENTAL,
+        _ => lsp_types::TextDocumentSyncKind::FULL,
+    }
+}
+
+/// The one `TextDocumentContentChangeEvent` that turns `old` into `new`:
+/// the shared prefix and suffix are skipped, and only what's between them
+/// is sent, as a range into `old`.
+///
+/// This is what keeps typing in a large file cheap. A whole-document
+/// `didChange` per keystroke means serializing the entire file — hundreds
+/// of kilobytes on a real Spring service class — to tell the server about
+/// one inserted character, on every keystroke, forever. Diffing here rather
+/// than instrumenting every edit path in the editor keeps that bookkeeping
+/// in one place (and correct by construction: the result is computed
+/// *from* the two texts, so it can't drift out of sync with an edit path
+/// that forgot to report itself).
+///
+/// `None` when the texts are identical — nothing to tell the server.
+fn incremental_change(old: &str, new: &str) -> Option<TextDocumentContentChangeEvent> {
+    if old == new {
+        return None;
+    }
+
+    let mut prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Byte-wise scanning can stop in the middle of a multi-byte character
+    // (typing an accent onto an existing letter, say); backing up to a
+    // boundary keeps every slice below a valid `str`.
+    while prefix > 0 && (!old.is_char_boundary(prefix) || !new.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let mut suffix = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(max_suffix);
+    while suffix > 0
+        && (!old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix))
+    {
+        suffix -= 1;
+    }
+
+    let old_end = old.len() - suffix;
+    Some(TextDocumentContentChangeEvent {
+        range: Some(lsp_types::Range {
+            start: byte_to_utf16_position(old, prefix),
+            end: byte_to_utf16_position(old, old_end),
+        }),
+        range_length: None,
+        text: new[prefix..new.len() - suffix].to_string(),
+    })
 }
 
 /// jdt.ls' own custom `language/status` notification's params — `type` is
@@ -1039,7 +1161,41 @@ fn initialize_params(kind: ServerKind, config: &SessionConfig, debug_bundles: &[
     Ok(params)
 }
 
+/// Memo table for `file_uri` — every successful `path -> Uri` resolution,
+/// so the `canonicalize` syscall inside it is paid once per file instead of
+/// once per call. It's called in a linear scan over every open document on
+/// *every* `publishDiagnostics` a server sends (jdt.ls sends them in bursts
+/// while indexing), which turned a background server's chatter into
+/// hundreds of stat calls per frame.
+///
+/// Only successes are cached: a failure means the path didn't resolve
+/// *yet* (a file being written out from under an open tab), and must be
+/// retried rather than remembered. Capped, and cleared wholesale when full,
+/// since the working set is "files open in this session" — a bounded
+/// number in practice, and a rebuild costs one syscall per file.
+static FILE_URI_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Uri>>> = std::sync::OnceLock::new();
+
+/// How many resolved URIs `FILE_URI_CACHE` keeps before it's cleared.
+const FILE_URI_CACHE_CAP: usize = 1024;
+
 fn file_uri(path: &Path) -> Result<Uri, String> {
+    let cache = FILE_URI_CACHE.get_or_init(Default::default);
+    if let Ok(cached) = cache.lock()
+        && let Some(uri) = cached.get(path)
+    {
+        return Ok(uri.clone());
+    }
+    let uri = resolve_file_uri(path)?;
+    if let Ok(mut cached) = cache.lock() {
+        if cached.len() >= FILE_URI_CACHE_CAP {
+            cached.clear();
+        }
+        cached.insert(path.to_path_buf(), uri.clone());
+    }
+    Ok(uri)
+}
+
+fn resolve_file_uri(path: &Path) -> Result<Uri, String> {
     let path = path
         .canonicalize()
         .map_err(|error| format!("cannot resolve LSP project root {}: {error}", path.display()))?;
@@ -1293,6 +1449,101 @@ mod tests {
         assert_eq!(utf16_range_to_bytes(text, range), None);
     }
 
+    /// Applies `change` to `old` the way a real server would, so a test can
+    /// assert the server ends up with exactly `new` instead of only
+    /// asserting the range arithmetic looks plausible.
+    fn apply(old: &str, change: &TextDocumentContentChangeEvent) -> String {
+        let range = change.range.expect("an incremental change always carries a range");
+        let start = utf16_range_to_bytes(old, range).expect("range resolves against the text it was built from");
+        format!("{}{}{}", &old[..start.start], change.text, &old[start.end..])
+    }
+
+    #[test]
+    fn incremental_change_is_none_when_nothing_changed() {
+        assert!(incremental_change("class A {}", "class A {}").is_none());
+    }
+
+    #[test]
+    fn incremental_change_sends_only_the_inserted_text() {
+        let old = "class A {\n    int x;\n}\n";
+        let new = "class A {\n    int xy;\n}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert_eq!(change.text, "y");
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn incremental_change_sends_an_empty_text_for_a_deletion() {
+        let old = "class A {\n    int xy;\n}\n";
+        let new = "class A {\n    int x;\n}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert!(change.text.is_empty());
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn incremental_change_handles_a_multi_line_replacement() {
+        let old = "class A {\n    int x;\n    int y;\n}\n";
+        let new = "class A {\n    long z;\n}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn incremental_change_never_splits_a_multi_byte_character() {
+        // The shared prefix ends mid-`ç` byte-wise: "café" and "caçé" share
+        // `ca` plus the first byte of the two-byte `f`/`ç`... which is only
+        // true for characters that happen to share a lead byte, so this
+        // uses two that do.
+        let old = "// año\nclass A {}\n";
+        let new = "// añô\nclass A {}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn incremental_change_handles_an_edit_at_the_very_end() {
+        let old = "class A {}";
+        let new = "class A {}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert_eq!(change.text, "\n");
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn incremental_change_handles_an_edit_at_the_very_start() {
+        let old = "class A {}\n";
+        let new = "// hi\nclass A {}\n";
+
+        let change = incremental_change(old, new).expect("a change");
+
+        assert_eq!(apply(old, &change), new);
+    }
+
+    #[test]
+    fn advertised_sync_kind_reads_both_shapes_and_defaults_to_full() {
+        let numeric = serde_json::json!({ "capabilities": { "textDocumentSync": 2 } });
+        assert_eq!(advertised_sync_kind(&numeric), lsp_types::TextDocumentSyncKind::INCREMENTAL);
+
+        let options = serde_json::json!({ "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 } } });
+        assert_eq!(advertised_sync_kind(&options), lsp_types::TextDocumentSyncKind::INCREMENTAL);
+
+        let full = serde_json::json!({ "capabilities": { "textDocumentSync": { "change": 1 } } });
+        assert_eq!(advertised_sync_kind(&full), lsp_types::TextDocumentSyncKind::FULL);
+
+        assert_eq!(advertised_sync_kind(&serde_json::json!({})), lsp_types::TextDocumentSyncKind::FULL);
+    }
+
     #[test]
     fn byte_to_utf16_position_at_the_very_start_is_zero_zero() {
         assert_eq!(byte_to_utf16_position("class Foo {\n}\n", 0), lsp_types::Position { line: 0, character: 0 });
@@ -1385,7 +1636,8 @@ sys.stdin.buffer.read()
             java: Slot::Ready {
                 config: SessionConfig { binary: PathBuf::from("python3"), ..test_config(&root) },
                 session,
-                open_documents: HashSet::new(),
+                open_documents: HashMap::new(),
+            sync_kind: lsp_types::TextDocumentSyncKind::INCREMENTAL,
                 status_message: None,
             },
             kotlin: Slot::Empty,
@@ -1411,7 +1663,8 @@ sys.stdin.buffer.read()
         Slot::Ready {
             config: test_config(Path::new(".")),
             session,
-            open_documents: HashSet::new(),
+            open_documents: HashMap::new(),
+            sync_kind: lsp_types::TextDocumentSyncKind::INCREMENTAL,
             status_message: None,
         }
     }
@@ -1838,7 +2091,7 @@ sys.stdin.buffer.read()
         let typed = before_dot.replace("    list\n", "    list.\n");
         // Exactly what `widgets::editor::widget::apply_edit` does for a
         // typed character, minus the tree-sitter reparse this doesn't need.
-        doc.buffer = ropey::Rope::from_str(&typed);
+        doc.buffer.replace(ropey::Rope::from_str(&typed));
         doc.lsp_version += 1;
         doc.lsp_sync_pending = true;
         let anchor = typed.find("list.").expect("the fixture contains the receiver") + "list.".len();
