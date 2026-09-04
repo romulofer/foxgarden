@@ -109,87 +109,42 @@ usabilidade (essa parte **não foi entregue** — ver Pendências).
 `advertised_sync_kind` (8), `verify_download` (3), `highlight_spans_in` (1),
 `text_offset` (1 property-ish), `save` sem trim (1).
 
-## Análise de usabilidade (2026-09-04)
+## Usabilidade (2026-09-04) — corrigida
 
-Feita com o app real rodando em Xvfb (`:77`), projeto Maven de teste com 9
-classes, navegando por cliques/teclado sintéticos. Screenshots em
-`/tmp/fg-ux/*.png` (efêmero — `/tmp` é limpo entre sessões); script em
-`/tmp/fg-ux/drive.py` (usa `python-xlib`).
+Levantada com o app real rodando em Xvfb (`:77`), projeto Maven de teste com
+9 classes, navegando por cliques/teclado sintéticos (`python-xlib`). Todos os
+13 defeitos encontrados foram corrigidos, em quatro commits:
 
-Já corrigido nesta rodada: **terminal sem `TERM`** (commit `53a5d40`) — o
-zsh imprimia `tput: No value for $TERM` e o próprio prompt como
-`{nl}{i}{rst}` literal. Agora `tput colors` → 256.
+| # | Defeito | Correção |
+|---|---------|----------|
+| 1 | Abas cortavam na borda; a ativa ficava inalcançável | Barra rolável de uma linha, segue a aba ativa, conta as escondidas |
+| 2 | Ícones emoji viravam tofu sem fonte do sistema | `style/icons.rs` com glifos do Nerd Font já embutido; fallback também na família proporcional |
+| 3 | Nome longo quebrava em duas linhas na árvore | Truncamento com elipse + tooltip com caminho completo |
+| 4 | Barra de status não dizia nada do arquivo | Ln/Col, linguagem, indentação e contagem de erros/avisos |
+| 5 | Todo erro era modal bloqueante | `toasts.rs`; modal só para o que exige resposta |
+| 6 | Tela inicial sem call-to-action | `panels/welcome.rs`: abrir, criar, projetos recentes, atalhos |
+| 7 | Diagnóstico invisível fora da viewport | Régua de marcas à direita + F8/Shift+F8 |
+| 8 | Quatro cliques até o primeiro arquivo | Auto-expansão até a primeira pasta que ramifica |
+| 9 | Quick switcher sem pasta e sem alternância | Diretório no rótulo; arquivo atual vai para o fim da lista |
+| 10 | Sem "Salvar tudo" | File > Save All, Ctrl+Shift+S, e botão no modal de fechamento em lote |
+| 11 | Sem command palette; atalhos divergentes | `panels/command_palette.rs` (Ctrl+Shift+P) com os atalhos ao lado |
+| 12 | Menu de contexto da aba com dois itens | Fechar / outras / à direita / copiar caminho / mostrar na árvore |
+| 13 | Edições não salvas sumiam sem aviso | `core/drafts.rs` + oferta de restauração na abertura |
 
-### Defeitos observados, por prioridade
+Extras encontrados durante a verificação:
 
-1. **Abas somem na borda direita, sem scroll nem indicador.** Com 9
-   arquivos abertos, a barra corta em "S…" e as abas restantes ficam
-   inalcançáveis pelo mouse — inclusive a **aba ativa**, que fica fora de
-   vista enquanto se edita. O `*` de arquivo modificado também some junto.
-   *Sugestão:* barra rolável horizontalmente + botão de overflow ("⌄ 4
-   more") + auto-scroll para a aba ativa. `panels/tabs.rs` usa
-   `horizontal_wrapped`; trocar por `ScrollArea::horizontal`.
-2. **Ícones dependem de fonte de emoji do sistema.** `📁 📄 💻 ☕ 🔷`
-   aparecem como tofu (quadrado vazio) num ambiente sem fonte de emoji —
-   painel, abas e árvore inteiros ficam ilegíveis. `style/fonts.rs` embute
-   JetBrains Mono e Nerd Font Symbols, mas nenhum emoji.
-   *Sugestão:* usar os glifos do Nerd Font já embutido (que tem ícones de
-   arquivo/pasta/terminal) em vez de emoji Unicode, ou embutir NotoEmoji.
-3. **Nomes longos quebram em duas linhas na árvore.** `Application.java`
-   renderiza o ícone numa linha e o nome na seguinte, desalinhando a lista.
-   *Sugestão:* truncar com elipse no meio (`Applica…n.java`) e tooltip com
-   o nome completo; ou scroll horizontal no painel.
-4. **Barra de status não diz nada sobre o arquivo.** Só reporta trabalho de
-   fundo ("Ready"). Sem linha/coluna, linguagem, indentação, encoding, nem
-   contagem de erros.
-   *Sugestão:* seção à direita com `Ln 11, Col 20 · Java · Spaces: 4 · UTF-8`
-   e um contador de diagnósticos clicável.
-5. **Erros só existem como modal bloqueante.** Uma falha de fundo (install,
-   LSP, git) interrompe a digitação com um diálogo que precisa ser
-   dispensado.
-   *Sugestão:* toast não-modal com histórico em painel; reservar o modal
-   para o que exige decisão (conflito de arquivo, confirmação de exclusão).
-6. **Tela inicial sem call-to-action.** "No folder open" / "No file open" e
-   um ícone de 16 px no canto. Nada indica como começar.
-   *Sugestão:* tela de boas-vindas com "Abrir pasta", "Novo projeto",
-   projetos recentes e os atalhos principais.
-7. **Diagnósticos discretos demais.** O `;` faltando vira um squiggle de
-   poucos pixels; sem marcador na régua de scroll, sem painel de problemas,
-   sem navegação F8/Shift+F8.
-   *Sugestão:* marcas na régua + lista de problemas + atalho de navegação.
-8. **Árvore: quatro cliques até o primeiro arquivo, com colapso
-   inconsistente.** `src/main` colapsa com `/`, `java` não colapsa com o
-   filho único, `com.example` colapsa com `.`.
-   *Sugestão:* uma regra só (colapsar toda cadeia de filho único) e
-   expandir automaticamente até a primeira pasta com mais de um filho ao
-   abrir o projeto.
-9. **Quick switcher mostra só o nome do arquivo.** Sem pasta/módulo,
-   `Application.java` de dois módulos fica indistinguível; e a seleção
-   inicial é o primeiro item, não o "arquivo anterior" que faz Ctrl+E
-   alternar entre dois arquivos como nos IDEs.
-10. **Sem "Salvar tudo".** `Ctrl+S` salva só a aba ativa; o modal de
-    fechamento oferece Salvar/Descartar/Cancelar para uma aba por vez.
-    *Sugestão:* `Ctrl+Shift+S`, item no menu File e botão "Salvar todos" no
-    modal quando houver mais de uma aba suja.
-11. **Sem command palette e atalhos divergentes.** `Ctrl+E` = recentes,
-    `Ctrl+Shift+E` = endpoints Spring (no VS Code é o explorador), `F11` =
-    zen (convencionalmente tela cheia).
-    *Sugestão:* `Ctrl+Shift+P` abrindo uma paleta que liste toda ação de
-    menu com seu atalho — resolve descoberta e diverge menos.
-12. **Menu de contexto da aba tem só dois itens** (somente leitura,
-    histórico). Faltam Fechar / Fechar outras / Fechar à direita / Copiar
-    caminho / Revelar na árvore.
-13. **Edições não salvas somem sem aviso** se o processo é encerrado por
-    fora. O auto-save existe mas é opt-in e desligado por padrão.
-    *Sugestão:* rascunho periódico do buffer sujo em `.foxgarden/`,
-    restaurado na próxima abertura (o snapshot de histórico já existe, só
-    não cobre buffer não salvo).
+- Terminal sem `TERM` (o zsh imprimia `tput: No value for $TERM` e o próprio
+  prompt como `{nl}{i}{rst}`) — corrigido, `tput colors` responde 256.
+- `.foxgarden/` aparecia na árvore do projeto — passou para
+  `SKIPPED_DIR_NAMES`.
+
+O colapso de cadeias na árvore (`src/main` com `/`, `com.example` com `.`,
+`java` em linha própria) **não** é defeito: é a convenção do IntelliJ,
+documentada em `side_panel::collapse_chain`.
 
 ## Pendências
 
-1. Aplicar as correções de UX acima (nenhuma foi implementada, exceto a do
-   `TERM`).
-2. Não avaliados/parados de propósito: servidores LSP embutidos via
+1. Não avaliados/parados de propósito: servidores LSP embutidos via
    `include_bytes!` (~135 MB no binário) — decisão de produto documentada em
    `lsp_manager`, não mexi; e a abertura *inicial* do projeto, que segue
    síncrona (só o refresh virou background).
