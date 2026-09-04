@@ -43,15 +43,30 @@ const SCROLLBACK_LINES: usize = 1000;
 /// app that has to choose a shell directly.
 fn shell_command() -> CommandBuilder {
     #[cfg(windows)]
-    {
+    let mut command = {
         let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
         CommandBuilder::new(shell)
-    }
+    };
     #[cfg(not(windows))]
-    {
+    let mut command = {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         CommandBuilder::new(shell)
-    }
+    };
+    // The shell inherits this process's own environment, and a GUI app
+    // started from a desktop launcher (rather than from a terminal) has no
+    // `TERM` at all — which every curses/termcap consumer treats as "this
+    // isn't a terminal": `tput: No value for $TERM and no -T specified`,
+    // prompts printing their own escape codes as literal text, `vim`/`htop`
+    // refusing to start. Observed directly in this panel with a real zsh.
+    //
+    // `xterm-256color` because that is what this panel actually emulates:
+    // the output is parsed by `vt100`, whose supported sequence set is the
+    // xterm one, and its cell attributes carry 256-colour indices.
+    // `COLORTERM` alongside it is the de-facto way programs detect 24-bit
+    // colour support, which `vt100` also parses.
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command
 }
 
 /// A running shell session: the child process, its pty writer half, and
@@ -195,6 +210,16 @@ mod tests {
     // despite an earlier claim here that no other test in this crate reads/
     // writes `SHELL`. Sequential within one test is the actual fix, not a
     // workaround.
+    /// Regression for a shell started from a desktop launcher, which
+    /// inherits no `TERM` and then prints its own prompt escapes as
+    /// literal text (observed with a real zsh in this panel).
+    #[test]
+    fn shell_command_declares_the_terminal_it_actually_emulates() {
+        let command = shell_command();
+        assert_eq!(command.get_env("TERM"), Some(std::ffi::OsStr::new("xterm-256color")));
+        assert_eq!(command.get_env("COLORTERM"), Some(std::ffi::OsStr::new("truecolor")));
+    }
+
     #[test]
     #[cfg(not(windows))]
     fn shell_command_reflects_the_shell_env_var_with_a_bin_sh_fallback() {
