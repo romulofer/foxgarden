@@ -2572,6 +2572,18 @@ impl eframe::App for FoxGardenApp {
             &self.jdk_registry,
         );
     }
+
+    /// Stop anything that would otherwise outlive the window on quit. A
+    /// running Docker container/stack (`PLAN.md` Track 14 Phase 2) lives on
+    /// the daemon, not as our child process, so closing the window doesn't
+    /// stop it — `BuildState::shutdown` sends the daemon the `docker stop`/
+    /// `compose down` and waits for it here, before the process goes away.
+    /// The debug session gets the same courtesy (its own launched debuggee
+    /// VM is a real child that should not be left running detached).
+    fn on_exit(&mut self) {
+        self.build_state.shutdown();
+        self.debug_state.stop();
+    }
 }
 
 #[cfg(test)]

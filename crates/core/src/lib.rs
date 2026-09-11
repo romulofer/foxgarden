@@ -35,7 +35,10 @@ pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
     git_show_head, hunk_patch, parse_file_diff, parse_unified_diff,
 };
-pub use docker::{compose_file, docker_build_command, docker_compose_up_command, docker_run_command, has_dockerfile};
+pub use docker::{
+    compose_file, container_name, docker_build_command, docker_compose_down_command, docker_compose_up_command,
+    docker_run_command, docker_stop_command, has_dockerfile,
+};
 pub use document::{Document, OpenDocumentError};
 pub use drafts::{Draft, discard_draft, pending_drafts, write_draft};
 pub use editor_state::{EditorState, TerminalTab};

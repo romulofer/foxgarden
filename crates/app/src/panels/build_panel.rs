@@ -97,13 +97,39 @@ enum Stage {
     DockerBuild { project_root: PathBuf },
     /// The `docker run --rm` launched once `DockerBuild` finishes — no
     /// further chaining, so this needs no fields of its own, same as
-    /// `RunLaunched`.
+    /// `RunLaunched`. The container's own name (for `docker stop`) lives in
+    /// `BuildState::docker_teardown`, not here, since it has to outlive the
+    /// stage being `take`n in `poll`.
     DockerRun,
     /// Docker Compose "Up" (`PLAN.md` Track 14 Phase 1): one `docker
     /// compose up --build` process covering build-and-start together, no
     /// chained second process — same one-process shape `Coverage` already
     /// uses for a tool that does everything itself.
     DockerCompose,
+}
+
+/// What Phase 2 has to tear down for the Docker task currently in flight —
+/// the piece killing the local `docker` client `Child` can't do on its own
+/// (the container/stack lives on the daemon, not as our child process). Set
+/// the moment a `docker run`/`docker compose up` starts, cleared once it
+/// ends (either torn down explicitly by `stop`/`shutdown`, or on its own
+/// when `poll` sees it finish — a `--rm` container removes itself on exit).
+#[derive(Clone)]
+enum DockerTeardown {
+    /// `docker stop <name>` for a `docker_run_command` container.
+    Container(String),
+    /// `docker compose -f <file> down` for a `docker_compose_up_command`
+    /// stack.
+    Compose(PathBuf),
+}
+
+impl DockerTeardown {
+    fn command(&self) -> std::process::Command {
+        match self {
+            DockerTeardown::Container(name) => fg_core::docker_stop_command(name),
+            DockerTeardown::Compose(file) => fg_core::docker_compose_down_command(file),
+        }
+    }
 }
 
 /// One coverage run's own outcome: every source file JaCoCo reported data
@@ -126,6 +152,11 @@ pub struct BuildState {
     /// signature for a second, unrelated payload would be a worse fit than
     /// a dedicated drain method.
     coverage_result: Option<CoverageResult>,
+    /// The running Docker container/stack this state is responsible for
+    /// stopping (`PLAN.md` Track 14 Phase 2), or `None` when no Docker task
+    /// is live. Read by `stop` (fire-and-forget teardown) and `shutdown`
+    /// (blocking teardown on app close).
+    docker_teardown: Option<DockerTeardown>,
 }
 
 impl BuildState {
@@ -237,6 +268,10 @@ impl BuildState {
         self.reset();
         self.spawn_process(fg_core::docker_compose_up_command(compose_file))?;
         self.stage = Some(Stage::DockerCompose);
+        // The stack is now (being) brought up, so `stop`/`shutdown` owe it a
+        // `docker compose down` — set before returning, not on first output,
+        // so even an immediate Stop tears it down.
+        self.docker_teardown = Some(DockerTeardown::Compose(compose_file.to_path_buf()));
         Ok(())
     }
 
@@ -257,6 +292,39 @@ impl BuildState {
             && let Some(child) = guard.as_mut()
         {
             let _ = child.kill();
+        }
+        // Killing the local `docker` client above doesn't stop the
+        // container/stack it launched (Track 14 Phase 2) — that runs on the
+        // daemon. Tear it down explicitly, on a background thread so
+        // `docker stop`'s own up-to-10s graceful shutdown never freezes the
+        // UI. Fire-and-forget: the daemon does the work regardless of
+        // whether we wait on the client.
+        if let Some(teardown) = self.docker_teardown.take() {
+            let mut command = teardown.command();
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+            std::thread::spawn(move || {
+                let _ = command.status();
+            });
+        }
+    }
+
+    /// The app-close counterpart to `stop` (`PLAN.md` Track 14 Phase 2:
+    /// "quitting the app stops everything still tracked"): same teardown,
+    /// but run to completion rather than fire-and-forget — once the process
+    /// exits, a background thread wouldn't survive to finish the `docker
+    /// stop`, so this blocks (briefly) to guarantee the container/stack is
+    /// actually stopped before FoxGarden goes away, not left orphaned on the
+    /// daemon.
+    pub fn shutdown(&mut self) {
+        if let Ok(mut guard) = self.child.lock()
+            && let Some(child) = guard.as_mut()
+        {
+            let _ = child.kill();
+        }
+        if let Some(teardown) = self.docker_teardown.take() {
+            let mut command = teardown.command();
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+            let _ = command.status();
         }
     }
 
@@ -437,8 +505,15 @@ impl BuildState {
                             }
                         }
                         Some(Stage::DockerBuild { project_root }) if success => {
-                            match self.spawn_process(fg_core::docker_run_command(&project_root)) {
-                                Ok(()) => self.stage = Some(Stage::DockerRun),
+                            let name = fg_core::container_name(&project_root);
+                            match self.spawn_process(fg_core::docker_run_command(&project_root, &name)) {
+                                Ok(()) => {
+                                    self.stage = Some(Stage::DockerRun);
+                                    // The container is now (being) started under
+                                    // `name`, so `stop`/`shutdown` owe it a
+                                    // `docker stop`.
+                                    self.docker_teardown = Some(DockerTeardown::Container(name));
+                                }
                                 Err(err) => {
                                     self.rows.push(BuildRow {
                                         text: format!("Failed to run container: {err}"),
@@ -447,6 +522,14 @@ impl BuildState {
                                     self.last_success = Some(false);
                                 }
                             }
+                        }
+                        // A Docker container/stack that finished on its own —
+                        // a `--rm` container removes itself on exit, and a
+                        // `compose up` that returns has already stopped — so
+                        // there's nothing left to tear down.
+                        Some(Stage::DockerRun) | Some(Stage::DockerCompose) => {
+                            self.docker_teardown = None;
+                            self.last_success = Some(success);
                         }
                         _ => self.last_success = Some(success),
                     }

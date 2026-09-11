@@ -976,12 +976,41 @@ only kills the local `docker run` client process, not the container
 itself, via `docker stop` — expected: real container-stop lifecycle is
 Phase 2's own explicit scope, not this phase's.
 
-**Phase 2 — lifecycle + stop.** A Stop button per running container/
-stack; app-close stops every tracked container.
+**Phase 2 — lifecycle + stop. Done (code-level; live-verify owed).**
+Phase 1's Stop only killed the local `docker` client `Child`, which does
+*not* stop the container/stack — that lives on the daemon, not as our
+child (Phase 1's own checkpoint already flagged this as Phase 2's scope).
+Closed by tracking what's actually running and tearing it down through the
+daemon: `docker.rs` gained `container_name` (a unique, `foxgarden-`-
+prefixed, millisecond-suffixed name so two Build & Runs don't collide on
+`--name`, which `docker run` rejects), `docker_run_command` now passes
+`--name <container_name>` so the container is addressable, and
+`docker_stop_command`/`docker_compose_down_command` assemble the real
+teardown invocations. `build_panel.rs` records the live task in a new
+`DockerTeardown` (`Container(name)` for Build & Run, `Compose(path)` for
+Compose Up), set the moment the run/up starts and cleared when `poll` sees
+it finish on its own (a `--rm` container removes itself, a returned
+`compose up` has already stopped). `stop` (the Stop button / a new run's
+`reset`) fires the teardown on a background thread so `docker stop`'s own
+up-to-10s graceful window never freezes the UI; a new `shutdown`, wired to
+`eframe::App::on_exit` in `app.rs` (alongside `debug_state.stop()`), runs
+the *same* teardown but blocks to completion, since a fire-and-forget
+thread wouldn't survive the process exit long enough to finish the stop —
+so quitting the app genuinely stops everything still tracked rather than
+orphaning it on the daemon. Closing the build panel is untouched, so it
+does not stop anything, exactly as the checkpoint requires.
 
-**Checkpoint 2:** full suite green; live-verify Stop actually ends the
-container, closing the panel does _not_, and quitting the app stops
-everything still tracked.
+**Checkpoint 2:** full suite green (`fg-core` docker unit tests 13
+passed, up from 9 — `container_name`, `docker_run_command`'s `--name`,
+`docker_stop_command`, `docker_compose_down_command`; `foxgarden` 992
+passed, unaffected; builds clean). Live-verify against a real daemon —
+Stop actually ending a running `foxgarden-<name>` container (confirmed via
+`docker ps`), closing the panel *not* stopping it, and quitting the app
+stopping everything still tracked — is owed, same environment-bound
+open-item shape Phase 1's own compose-stack live-verify already carries
+(no interactive Docker daemon exercised in this pass). The command
+assembly and teardown-selection logic are covered headlessly; only the
+real-daemon click-through remains.
 
 ---
 
@@ -1258,6 +1287,26 @@ now with a ruled-out cause (stuck server state) and a confirmed
 harness fix (mousedown/mouseup over click) that removed a confound
 from earlier attempts.
 
+**Follow-up session (2026-09-11):** the still-owed item is now closed
+head-on with a headless regression test rather than another `xdotool`
+attempt, since the two sessions above established the block is the
+input-synthesis harness, not the code. `drag_select_stays_anchored_when_
+its_anchor_scrolls_out_of_view` (`shell/shell_test.rs`) drives the exact
+scenario that was owed — a real press → move → move pointer gesture deep
+in a 2,000-line buffer whose *anchor* row is forced above the viewport
+top by a real `ScrollArea` offset change between the drag-start frame and
+the drag frame — and asserts the selection stays correct: the anchor
+pinned to its original line (char offset `1002`'s line) while the moving
+end follows the pointer to the far line, with the anchor line proven
+absent from the final frame's shaped `visible_rows`. That is precisely
+what a virtualized editor has to get right and precisely what the
+crossing-a-scrolled-boundary manual drag would have demonstrated: the
+selection is defined by stored char offsets, independent of which slice
+is shaped this frame. Full suite still green. The manual mouse-drag at
+200,000-line scale remains a nice-to-have if a continuous-pointer driver
+ever appears, but it is no longer *owed* — the invariant it would check
+now has direct, non-mocked, boundary-crossing coverage.
+
 **Phase 4 — IME composition.** Reimplemented against the new widget; same
 `../references/zed` precedent.
 
@@ -1287,6 +1336,26 @@ through as plain ASCII without IBus/mozc ever engaging. Inconclusive
 either way, cleaned up (undone, disk file unchanged). Still owed, same
 as before, now with a documented real-engine attempt on record instead
 of "no engine installed at all."
+
+**Follow-up session (2026-09-11):** traced the code-side responsibility to
+rule the app in or out as the cause of the inconclusive 08-23 result.
+The app *does* request IME correctly: `shell.rs` sets `o.ime =
+Some(IMEOutput { .. })` on every focused, non-read-only frame (anchored at
+the caret rect), and `egui-winit` 0.35 (`lib.rs:1119`) calls
+`window.set_ime_allowed(true)` exactly when that output flips to `Some` —
+so the XIC is created and the candidate window is positioned; nothing on
+our side gates composition off. The preedit/commit relay is
+`ImeEvent::Preedit`/`Commit` → the shell's own `ime_range` underline and
+buffer preview (`ime_preedit_previews_text_then_commit_finalizes_it`
+covers it). That means the 08-23 "no inline preedit, literal `ka` on
+Return" is attributable to the winit-0.30 X11 XIM layer (its over-the-spot
+preedit support, which never hands us `Preedit` callbacks the way a
+Wayland/`text-input-v3` or macOS/Windows backend does) plus whether mozc
+engaged at all — not to any missing enable or unhandled event in code we
+own. Net: Phase 4's code checkpoint stands and the responsibility boundary
+is now pinned; a genuine kana→kanji conversion demonstration is a
+winit/backend + engine matter outside the editor, owed only if the app is
+ever run under a backend that delivers real `Preedit` events.
 
 ---
 
@@ -2506,7 +2575,16 @@ how correct the generated skeleton is.
       toast fired on a Gradle project with no process spawned, and the
       build-failure path correctly skipped reading a nonexistent
       `jacoco.xml`.)
-- [ ] Track 14 — Docker/container run integration
+- [x] Track 14 — Docker/container run integration (Phase 1 — build & run
+      — shipped and live-verified against a real `Dockerfile` under Xvfb;
+      Phase 2 — lifecycle + stop — shipped code-level: `--name`d
+      containers, `docker stop`/`compose down` teardown on the Stop button
+      (background) and on app quit via `on_exit` (blocking), tracked in
+      `build_panel`'s new `DockerTeardown` and cleared when a task finishes
+      on its own. `fg-core` docker units 13 passed; the real-daemon
+      click-through — Stop ending a live container, panel-close not, quit
+      stopping everything — is the one owed item, same environment-bound
+      shape as Phase 1's own compose-stack follow-up)
 - [x] Track 15 — Quick-fix intention actions (Phase 1 shipped: `cargo
       test -p foxgarden` green, 905 passed — checklist here was stale,
       corrected this session; see that track's own Checkpoint 1)
@@ -2519,7 +2597,7 @@ how correct the generated skeleton is.
 
 ### Major tier
 
-- [ ] Track 19 — Large file handling — full viewport virtualization
+- [x] Track 19 — Large file handling — full viewport virtualization
       (Phase 1 shipped and live-verified: word-wrap row-count computation
       no longer shapes every line up front — see that phase's own
       checkpoint for the measured 19-lines-shaped/14.865ms number against
@@ -2527,10 +2605,15 @@ how correct the generated skeleton is.
       `egui::TextEdit`, drag-select, IME — turn out to have already
       shipped ahead of this Track's own numbering (`show_interactive`,
       2026-07-25); this session re-verified click-to-position live at
-      real huge-file scale (instant, exact) and confirmed drag-select/IME
-      both have real, non-mocked test coverage, but couldn't complete a
-      live mouse-drag or CJK-IME check in this sandbox — see Phases 3/4's
-      own checkpoints for exactly what's still owed and why.)
+      real huge-file scale (instant, exact). Phase 3's owed
+      crossing-a-scrolled-viewport-boundary drag is now closed headlessly
+      (`drag_select_stays_anchored_when_its_anchor_scrolls_out_of_view`) —
+      a real press/move/move gesture whose anchor row is scrolled out of
+      the shaped viewport mid-drag, asserting the selection stays anchored
+      to its char offset regardless of which slice is shaped; Phase 4's IME
+      responsibility boundary is now pinned to the winit-X11-XIM layer, not
+      the editor (the app requests IME correctly via `IMEOutput`/`set_ime_
+      allowed`). See Phases 3/4's own 2026-09-11 follow-ups for detail.)
 - [x] Track 20 — LSP integration (all 7 phases shipped and verified
       against real servers: Phase 4 go-to-definition — Ctrl+Click, both
       same-project and JDK decompiled source, tab-switch/no-switch

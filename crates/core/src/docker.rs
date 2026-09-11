@@ -63,14 +63,56 @@ pub fn docker_build_command(project_root: &Path) -> Command {
     command
 }
 
-/// Assembles `docker run --rm` for the image `docker_build_command` just
-/// built for `project_root` — `--rm` so a one-shot run doesn't leave a
-/// stopped container behind every time (Phase 2's own lifecycle tracking
-/// is for the container while it's *running*, not for accumulating exited
-/// ones after each Build & Run).
-pub fn docker_run_command(project_root: &Path) -> Command {
+/// A unique, stable name to launch a container under, so Phase 2's own
+/// lifecycle tracking can `docker stop` it by name later (an unnamed
+/// `docker run` gets a random daemon-assigned name we'd have no handle to).
+/// `docker_image_tag`'s already-sanitized, `foxgarden-`-prefixed base plus
+/// a millisecond timestamp suffix — unique enough that two Build & Runs in
+/// quick succession don't collide on the same container name (which
+/// `docker run` rejects outright), while still self-evidently one of ours.
+pub fn container_name(project_root: &Path) -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{}-{millis}", docker_image_tag(project_root))
+}
+
+/// Assembles `docker run --rm --name <container_name>` for the image
+/// `docker_build_command` just built for `project_root` — `--rm` so a
+/// one-shot run doesn't leave a stopped container behind every time, and
+/// `--name` so Phase 2 can `docker stop` this exact container (see
+/// `docker_stop_command`). `container_name` comes from `container_name`.
+pub fn docker_run_command(project_root: &Path, container_name: &str) -> Command {
     let mut command = Command::new("docker");
-    command.args(["run", "--rm", &docker_image_tag(project_root)]);
+    command.args(["run", "--rm", "--name", container_name, &docker_image_tag(project_root)]);
+    command
+}
+
+/// Assembles `docker stop <container_name>` — Phase 2's own teardown for a
+/// container `docker_run_command` launched. Killing the local `docker run`
+/// client process (the editor's own `Child`) doesn't stop the container:
+/// that runs on the daemon, not as a child of the CLI, so it needs an
+/// explicit stop request the daemon acts on (a graceful SIGTERM, then
+/// SIGKILL after Docker's own default 10s grace).
+pub fn docker_stop_command(container_name: &str) -> Command {
+    let mut command = Command::new("docker");
+    command.args(["stop", container_name]);
+    command
+}
+
+/// Assembles `docker compose -f <compose_file> down` — Phase 2's own
+/// teardown for a stack `docker_compose_up_command` brought up. Same
+/// reasoning as `docker_stop_command`: `docker compose up`'s foreground
+/// client exiting (or being killed) doesn't necessarily stop every service
+/// it started, so `down` is what actually tears the stack down, cwd set to
+/// the compose file's own directory the same way `up` runs.
+pub fn docker_compose_down_command(compose_file: &Path) -> Command {
+    let mut command = Command::new("docker");
+    command.arg("compose").arg("-f").arg(compose_file).arg("down");
+    if let Some(parent) = compose_file.parent() {
+        command.current_dir(parent);
+    }
     command
 }
 
@@ -147,11 +189,52 @@ mod tests {
     fn docker_run_command_uses_the_same_tag_docker_build_command_would() {
         let dir = tempfile::tempdir().unwrap();
         let build = docker_build_command(dir.path());
-        let run = docker_run_command(dir.path());
+        let run = docker_run_command(dir.path(), "foxgarden-x-1");
         let build_args: Vec<_> = build.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         let run_args: Vec<_> = run.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         let tag = &build_args[build_args.iter().position(|a| a == "-t").unwrap() + 1];
         assert!(run_args.contains(tag));
+    }
+
+    #[test]
+    fn docker_run_command_names_the_container_so_it_can_be_stopped_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = docker_run_command(dir.path(), "foxgarden-demo-123");
+        let args: Vec<_> = run.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let name = &args[args.iter().position(|a| a == "--name").expect("--name is passed") + 1];
+        assert_eq!(name, "foxgarden-demo-123");
+        assert!(args.contains(&"--rm".to_string()), "still one-shot cleanup on exit");
+    }
+
+    #[test]
+    fn container_name_is_unique_valid_and_tag_prefixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = container_name(dir.path());
+        assert!(first.starts_with("foxgarden-"));
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')));
+        // The whole point of the suffix: two names generated a moment apart
+        // don't collide, so `docker run --name` won't reject the second.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_ne!(first, container_name(dir.path()));
+    }
+
+    #[test]
+    fn docker_stop_command_stops_the_named_container() {
+        let command = docker_stop_command("foxgarden-demo-123");
+        assert_eq!(command.get_program(), "docker");
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, vec!["stop", "foxgarden-demo-123"]);
+    }
+
+    #[test]
+    fn docker_compose_down_command_targets_the_file_and_its_own_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let compose = dir.path().join("compose.yaml");
+        std::fs::write(&compose, "").unwrap();
+        let command = docker_compose_down_command(&compose);
+        assert_eq!(command.get_current_dir(), Some(dir.path()));
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, vec!["compose", "-f", compose.to_str().unwrap(), "down"]);
     }
 
     #[test]
