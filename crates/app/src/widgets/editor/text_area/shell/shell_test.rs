@@ -527,6 +527,140 @@ fn alt_drag_produces_a_rectangular_block_selection_spanning_multiple_rows() {
     );
 }
 
+/// Same as `pointer_frame`, but forces the enclosing `ScrollArea` to a
+/// given vertical offset — the piece the viewport-crossing drag test below
+/// needs and `pointer_frame` (always at offset 0) can't express. The
+/// `id_salt` is fixed so `ScrollArea` state (and the widget's own
+/// `ShellState`) persists across the multi-frame gesture on the same `ctx`.
+fn scrolled_pointer_frame(
+    ctx: &egui::Context,
+    id: egui::Id,
+    buffer: &Rope,
+    events: Vec<Event>,
+    offset_y: f32,
+) -> ShellOutput {
+    let mut result = None;
+    let text = buffer.to_string();
+    let _ = ctx.run_ui(pointer_raw_input(events, Modifiers::NONE), |ui| {
+        ui.memory_mut(|m| m.request_focus(id));
+        egui::ScrollArea::vertical()
+            .max_height(400.0)
+            .id_salt("scrolled_drag_scroll_area")
+            .vertical_scroll_offset(offset_y)
+            .show(ui, |ui| {
+                result = Some(show(
+                    ui,
+                    id,
+                    buffer,
+                    0,
+                    &text,
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                    false,
+                    &[],
+                    &[],
+                    false,
+                    true,
+                ));
+            });
+    });
+    result.expect("show ran inside the scroll area closure")
+}
+
+/// Track 19 Phase 3's still-owed live-verify, closed headlessly instead: a
+/// mouse drag-select whose *anchor* line scrolls entirely out of the shaped
+/// viewport mid-gesture — the one scenario `xdotool` against a WM-less Xvfb
+/// could never reproduce (see the track's own two follow-up-session notes).
+/// It's exactly the case virtualization has to get right: only the visible
+/// slice is ever shaped, yet the selection has to stay anchored to a char
+/// offset the widget is no longer painting. Proven deep in a 2,000-line
+/// buffer, with the anchor row forced above the viewport top by a real
+/// `ScrollArea` offset change between the drag-start and the drag frames —
+/// not a seeded `Caret`, a real press → move → move pointer gesture.
+#[test]
+fn drag_select_stays_anchored_when_its_anchor_scrolls_out_of_view() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("scrolled_drag");
+    let lines: Vec<String> = (0..2000).map(|i| format!("line{i:04}")).collect();
+    let buffer = Rope::from_str(&lines.join("\n"));
+
+    // One event-free probe (at the top) purely to learn real pixel geometry
+    // — row height and the content's left edge — rather than guessing it,
+    // the same approach `alt_drag_...` uses. Vertical scroll never changes
+    // either, so the top is as good a probe point as any.
+    let probe = scrolled_pointer_frame(&ctx, id, &buffer, vec![], 0.0).base;
+    let rh = probe.row_height;
+    let ox = probe.content_origin.x;
+
+    // The anchor lands two rows below each viewport's top, so it's
+    // comfortably on-screen when pressed; the far end likewise. `content_
+    // origin.y` is `-offset` for a `ScrollArea` at a forced offset (its
+    // content top scrolled that far above the viewport top), so both
+    // positions resolve to the same 2.5-row screen y under their own frame's
+    // offset — well inside the 400px viewport.
+    let anchor_line = 1002usize;
+    let far_line = 1015usize;
+    let offset1 = (anchor_line - 2) as f32 * rh;
+    let offset2 = (far_line - 2) as f32 * rh;
+    let screen_y = 2.5 * rh;
+    let press_pos = egui::pos2(ox + 4.0, screen_y);
+    // Just past egui's click-vs-drag threshold, still on the anchor row.
+    let drag_start_pos = press_pos + egui::vec2(12.0, 0.0);
+    let far_pos = egui::pos2(ox + 4.0, screen_y);
+
+    // Frame 1: the press, on its own frame, so egui can classify the later
+    // move as a drag rather than fold it into a click.
+    scrolled_pointer_frame(
+        &ctx,
+        id,
+        &buffer,
+        vec![Event::PointerButton {
+            pos: press_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+        offset1,
+    );
+    // Frame 2: a small move while still down — `drag_started()`, so this
+    // frame's position (still the anchor row) fixes the anchor.
+    scrolled_pointer_frame(&ctx, id, &buffer, vec![Event::PointerMoved(drag_start_pos)], offset1);
+    // Frame 3: the viewport has scrolled down 13 rows (the anchor row is now
+    // above its top, no longer shaped) and the still-held pointer moves to a
+    // row deep in the *new* viewport — a plain `dragged()` frame extending
+    // the far end while the off-screen anchor stays put.
+    let out = scrolled_pointer_frame(&ctx, id, &buffer, vec![Event::PointerMoved(far_pos)], offset2);
+
+    let caret = ctx
+        .data(|d| d.get_temp::<ShellState>(id))
+        .map(|s| s.caret)
+        .expect("the drag gesture ran, so ShellState exists");
+
+    assert_eq!(
+        buffer.char_to_line(caret.anchor),
+        anchor_line,
+        "the anchor stays pinned to the line the drag started on"
+    );
+    assert_eq!(
+        buffer.char_to_line(caret.primary),
+        far_line,
+        "the moving end followed the pointer to the far line"
+    );
+    assert!(!caret.is_collapsed(), "a real multi-line selection, not a collapsed caret");
+
+    // The whole point: the anchor line is genuinely off-screen in the final
+    // frame (only the visible slice was shaped), yet the selection above is
+    // still correct. In the no-wrap case a visual row is its own line.
+    assert!(
+        !out.base.visible_rows.contains(&anchor_line),
+        "the anchor line must have scrolled out of the shaped viewport"
+    );
+    assert!(
+        out.base.visible_rows.contains(&far_line),
+        "the far line must be inside the shaped viewport it was clicked in"
+    );
+}
+
 /// The Track 7 Phase 2 checkpoint test: with a block selection already
 /// active (seeded directly rather than re-driving the drag gesture — that
 /// path is `alt_drag_produces_a_rectangular_block_selection_spanning_
