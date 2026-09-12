@@ -36,6 +36,7 @@ pub struct NewProjectWizardState {
     location: String,
     java_release: u32,
     build_tool: BuildTool,
+    language: ProjectLanguage,
     last_error: Option<String>,
     picker: crate::folder_picker::FolderPicker,
 }
@@ -47,6 +48,7 @@ impl NewProjectWizardState {
         self.location.clear();
         self.java_release = 21;
         self.build_tool = BuildTool::Maven;
+        self.language = ProjectLanguage::Java;
         self.last_error = None;
         self.open = true;
     }
@@ -108,16 +110,16 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
 
         egui::Grid::new("new_project_form").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(t().new_project.group_id);
-            ui.text_edit_singleline(&mut state.group_id);
+            ui.add(egui::TextEdit::singleline(&mut state.group_id).hint_text(t().new_project.group_id_hint));
             ui.end_row();
 
             ui.label(t().new_project.artifact_id);
-            ui.text_edit_singleline(&mut state.artifact_id);
+            ui.add(egui::TextEdit::singleline(&mut state.artifact_id).hint_text(t().new_project.artifact_id_hint));
             ui.end_row();
 
             ui.label(t().new_project.location);
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut state.location);
+                ui.add(egui::TextEdit::singleline(&mut state.location).hint_text(t().new_project.location_hint));
                 if ui.add_enabled(!state.picker_running(), egui::Button::new(t().new_project.browse)).clicked() {
                     state.picker.open(None);
                 }
@@ -140,6 +142,15 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut state.build_tool, BuildTool::Maven, t().new_project.build_tool_maven);
                     ui.selectable_value(&mut state.build_tool, BuildTool::Gradle, t().new_project.build_tool_gradle);
+                });
+            ui.end_row();
+
+            ui.label(t().new_project.language);
+            egui::ComboBox::new("new_project_language", "")
+                .selected_text(language_label(state.language))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.language, ProjectLanguage::Java, t().new_project.language_java);
+                    ui.selectable_value(&mut state.language, ProjectLanguage::Kotlin, t().new_project.language_kotlin);
                 });
             ui.end_row();
         });
@@ -188,6 +199,13 @@ fn build_tool_label(build_tool: BuildTool) -> &'static str {
     }
 }
 
+fn language_label(language: ProjectLanguage) -> &'static str {
+    match language {
+        ProjectLanguage::Java => t().new_project.language_java,
+        ProjectLanguage::Kotlin => t().new_project.language_kotlin,
+    }
+}
+
 fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState) -> Result<(), String> {
     let root = project_root(state);
     let spec = ScaffoldSpec {
@@ -195,7 +213,7 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
         artifact_id: state.artifact_id.trim().to_string(),
         java_release: state.java_release,
         build_tool: state.build_tool,
-        language: ProjectLanguage::Java,
+        language: state.language,
     };
     fg_core::write_scaffold(&root, &fg_core::scaffold_files(&spec)).map_err(|e| msg::scaffold_failed(&e))?;
 
@@ -231,6 +249,7 @@ mod tests {
             location: "/stale".to_string(),
             java_release: 8,
             build_tool: BuildTool::Gradle,
+            language: ProjectLanguage::Kotlin,
             last_error: Some("stale error".to_string()),
             picker: crate::folder_picker::FolderPicker::default(),
         };
@@ -242,6 +261,7 @@ mod tests {
         assert_eq!(state.location, "");
         assert_eq!(state.java_release, 21);
         assert_eq!(state.build_tool, BuildTool::Maven);
+        assert_eq!(state.language, ProjectLanguage::Java);
         assert!(state.last_error.is_none());
     }
 
@@ -321,6 +341,29 @@ mod tests {
         assert!(root.join("settings.gradle.kts").exists());
         assert!(root.join("build.gradle.kts").exists());
         assert!(root.join("src/main/java/com/example/Main.java").exists());
+        assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
+    }
+
+    #[test]
+    fn create_and_open_with_kotlin_scaffolds_kotlin_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = NewProjectWizardState {
+            group_id: "com.example".to_string(),
+            artifact_id: "my-app".to_string(),
+            location: dir.path().display().to_string(),
+            java_release: 17,
+            build_tool: BuildTool::Gradle,
+            language: ProjectLanguage::Kotlin,
+            ..Default::default()
+        };
+        let mut editor_state = EditorState::default();
+
+        create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
+
+        let root = dir.path().join("my-app");
+        assert!(root.join("build.gradle.kts").exists());
+        assert!(root.join("src/main/kotlin/com/example/Main.kt").exists());
+        assert!(!root.join("src/main/java/com/example/Main.java").exists());
         assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
     }
 

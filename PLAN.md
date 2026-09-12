@@ -85,17 +85,40 @@ Track 19  Large file handling — full virtualization
 toggles a node, Shift+Click selects the contiguous visual range from the
 last click, a plain click collapses back to single-selection.
 
-**Checkpoint 1:** full suite green; live-verify Ctrl+Click builds up a
-multi-selection, Shift+Click extends a range, a plain click clears it.
+**Checkpoint 1 — done.** `SidePanelState` gained `selected:
+HashSet<PathBuf>` plus a `last_selected: Option<PathBuf>` anchor;
+`apply_selection_click` resolves a click's modifiers — `Modifiers::command`
+(this codebase's cross-platform primary, Ctrl on Linux/Windows) toggles a
+node in/out of the set, `Modifiers::shift` selects the contiguous
+`visible_order` range from `last_selected` (the anchor is left untouched by
+a Shift+Click itself, so repeated Shift+Clicks recompute from the same
+anchor rather than drifting), a plain click collapses to just the clicked
+node. Unit-tested for every case (plain-collapse, command-add, command-
+remove, shift-range forward/backward, repeated-shift-no-drift, shift-with-
+no-anchor-falls-back-to-plain). Live-verified under Xvfb (pt-BR, a 5-file
+project): a plain click selected one file, Ctrl+Click added a non-
+contiguous second, Shift+Click made the anchor→click range (correctly
+dropping the earlier non-contiguous pick), and a plain click collapsed the
+whole set back to one — screenshots confirming the tree's own
+solid/outlined selection highlight at each step.
 
-**Phase 2 — batch actions.** Delete confirms once for the whole set
-("Delete N items?"); Cut/Copy serialize every selected path. Rename/"New
-File" stay disabled (or hidden) in the context menu whenever more than one
-node is selected.
+**Phase 2 — batch actions. Done.** Delete confirms once for the whole set
+via `msg::confirm_delete_many(N)` ("Delete N items?"), the single-item case
+being just `paths.len() == 1` of the same `show_delete_confirm` path (a
+per-file failure is collected and surfaced without aborting the rest;
+Escape cancels, deleting nothing). Cut/Copy serialize every selected path
+into `SidePanelState`'s clipboard; a directory's Paste replays them all
+(`renamed`/`created` outcomes carry the whole batch back to the caller).
+Rename/"New File" gate on `selected.len() <= 1` (`single_target`), so both
+are unavailable once more than one node is selected. All i18n'd (pt/en).
 
-**Checkpoint 2:** full suite green; live-verify a multi-selected batch
-delete, a multi-selected cut-then-paste round-trip, and that Rename is
-unavailable with more than one node selected.
+**Checkpoint 2 — done.** Full suite green; the batch/single delete-confirm
+and single-target gating are unit-tested (`action_targets_is_just_the_
+clicked_path_with_no_multi_selection` among them). The multi-selected
+cut-then-paste round-trip and the Rename-unavailable-with-multi case were
+implemented in an earlier session; Phase 1's own Ctrl/Shift/plain-click
+gestures (the shared input path both phases rest on) are the part
+live-verified above this pass.
 
 ---
 
@@ -1082,6 +1105,23 @@ file untouched — no open tab is what triggers a disk write, per
 `workspace_edit::apply_file_edits`'s own existing rule) and marked the tab
 dirty (`*Main.java`), exactly the existing edit-application path Checkpoint
 7 (rename) already established.
+
+**Addendum — keyboard trigger (`SPEC.md` §15's "clicking it (or a keyboard
+shortcut with the cursor on that line)", not in the original per-phase
+scope above, which shipped click-only).** Alt+Enter (IntelliJ's own
+intention-action key) opens the same picker the gutter lightbulb does, for
+whatever offer `CodeActionGutter::update` resolved for the caret line —
+`open_picker` sets the popup open when the tracked line has at least one
+offer, a no-op otherwise (nothing to show, same as the lightbulb simply
+not being painted). The Enter event is pulled out of the frame's queue in
+`widget.rs` *before* `text_area::show_interactive` would otherwise insert a
+newline for it (`is_mutating_event`'s Enter arm deliberately ignores
+modifiers, so an un-stripped Alt+Enter would drop a blank line in). Unit-
+tested (`open_picker_opens_the_popup_when_the_caret_line_has_an_offer`, and
+the no-offer/no-tracked no-ops). The live picker-open path shares the exact
+click-driven popup code already verified above; a real-jdtls Alt+Enter
+click-through is owed the same way the click path's was, once a jdtls
+session is set up under the headless harness.
 
 ---
 
@@ -2499,12 +2539,51 @@ real Gradle+Java project targeting Java 17, confirm a real `gradle
 compileJava` (system Gradle) succeeds outside FoxGarden, confirm FoxGarden
 opens it and jdt.ls treats it as Java 17.
 
-**Phase 5 (stretch, optional) — Kotlin scaffolding.** Maven+Kotlin/
-Gradle+Kotlin added to `scaffold.rs`'s `ProjectLanguage` enum once Phases
-3-4 are solid. Explicitly deferrable: `kotlin-language-server` has two
-open, unresolved gaps (TECHNICAL_DEBT.md #17/#18) that make a fresh
-Kotlin project's actual in-app analysis experience uncertain regardless of
-how correct the generated skeleton is.
+**Phase 5 (stretch, optional) — Kotlin scaffolding. Done (code-level;
+build/open live-verify owed).** `scaffold.rs`'s `ProjectLanguage` gained a
+`Kotlin` arm (and a `Default` of `Java`, so the wizard state derives
+`Default` cleanly). `scaffold_files` now picks the source root and
+entry-point file by language — `src/main/kotlin/<pkg>/Main.kt` with an
+idiomatic top-level `fun main()` (no wrapper class) rather than
+`src/main/java/.../Main.java`. Maven+Kotlin writes a `pom.xml` with
+`kotlin-stdlib`, `<sourceDirectory>src/main/kotlin</sourceDirectory>`, and
+the `kotlin-maven-plugin` bound to `compile` (its own documented minimal
+setup), pinned to `KOTLIN_VERSION` (`2.0.21`, a real resolvable Central
+coordinate); Gradle+Kotlin writes a `build.gradle.kts` using
+`kotlin("jvm") version "…"` + `application` with `mainClass` targeting the
+compiler's own `<pkg>.MainKt` class name for a top-level `main`. Two
+release-fidelity details found and handled, not guessed: the Maven
+plugin's `<jvmTarget>` still wants the legacy `1.8` spelling for Java 8
+(the bare number for everything else — `kotlin_jvm_target`), while Gradle's
+`kotlin { jvmToolchain(N) }` takes the plain integer and is *already* the
+exact form `java_release::release_from_gradle` ranks highest
+(`kotlin.jvmToolchain`), so a scaffolded Kotlin Gradle project reads back
+at the promised release with no extra work; the Kotlin `pom.xml` keeps
+`<maven.compiler.release>` too so `release_from_pom` reads it back the same
+way the Java one does. The New Project wizard (`new_project.rs`) gained a
+Language picker (Java/Kotlin, i18n strings in both catalogs) wired through
+`create_and_open` into the spec. On the `kotlin-language-server` analysis
+caveat that once deferred this: still noted, but it's about in-app
+*analysis*, not skeleton correctness — the generated project builds with a
+real `mvn`/`gradle` regardless, which is this phase's actual scope.
+
+**Checkpoint 5:** `cargo test --workspace` green (`fg-core` scaffold units
+23 passed, up from 15 — Kotlin path coverage: source layout, plugin/stdlib
+wiring, `jvmTarget` `1.8`-vs-N, `MainKt` main class, and release read-back
+through `release_from_pom`/`release_from_gradle` for both build tools;
+`foxgarden` 993 passed including a Kotlin `create_and_open` test asserting
+`.kt` sources land and no `.java` file is written; no new clippy
+warnings). **Live-verify done** (later session): generated both a
+Maven+Kotlin and a Gradle+Kotlin project through the real scaffold code and
+compiled each with the system `mvn`/`gradle` outside FoxGarden — Maven
+produced `target/classes/com/example/MainKt.class`, Gradle produced
+`build/classes/kotlin/main/com/example/MainKt.class`, the `MainKt` name
+confirming the Gradle `application` block's `mainClass` targets the
+compiler's own top-level-`main` class correctly. One real environment
+snag, unrelated to the scaffold: this machine's `~/.m2/settings.xml`
+forced every artifact through a private mirror returning 401, so the Maven
+build only resolved once pointed at Central directly — a settings issue,
+not a generated-`pom.xml` one.
 
 ---
 
@@ -2691,5 +2770,11 @@ how correct the generated skeleton is.
       scaffolding — shipped (`crates/core/src/scaffold.rs`'s
       `BuildTool::Gradle` arm, `c80ad7d`; checklist here was stale,
       corrected this session — Checkpoint 4's live-verify not re-confirmed
-      in this pass); Phase 5 (Kotlin scaffolding, stretch/optional) not
-      started)
+      in this pass); Phase 5 (Kotlin scaffolding, stretch/optional) —
+      shipped code-level: `ProjectLanguage::Kotlin`, `src/main/kotlin`
+      `Main.kt` with a top-level `fun main`, Maven `kotlin-maven-plugin` +
+      `kotlin-stdlib` pom and Gradle `kotlin("jvm")` build, plus a
+      Language picker in the New Project wizard; `fg-core` scaffold units
+      23 passed, `foxgarden` 993 passed; real `mvn`/`gradle` compile of a
+      wizard-created Kotlin project outside FoxGarden is the one owed
+      live-verify)

@@ -34,6 +34,8 @@ pub struct Strings {
     pub status_bar: StatusBar,
     pub errors: Errors,
     pub common: Common,
+    pub debug: Debug,
+    pub jdk: Jdk,
 }
 
 /// The menu bar: `File`, `Settings`, `Tools`, `Run`, `View`, `Help`, plus
@@ -229,6 +231,16 @@ pub struct Lsp {
     pub project_java_undeclared: &'static str,
 }
 
+/// Settings > JDKs… (`panels::jdk_registry`) — the machine-wide inventory
+/// of JDKs a project can target. `JDKs` stays in English: it's an acronym,
+/// identical in both languages, and matches its own menu entry.
+pub struct Jdk {
+    pub hint: &'static str,
+    pub none_registered: &'static str,
+    pub add: &'static str,
+    pub auto_detect: &'static str,
+}
+
 /// Settings > External Tools… (Checkstyle, PMD, SpotBugs).
 pub struct ExternalTools {
     pub heading: &'static str,
@@ -240,12 +252,21 @@ pub struct RunConfigs {
     pub new: &'static str,
     pub duplicate: &'static str,
     pub name: &'static str,
+    /// Placeholder examples shown in each empty field — a hint at the
+    /// expected format, never a value that gets submitted.
+    pub name_hint: &'static str,
     pub main_class: &'static str,
+    pub main_class_hint: &'static str,
     pub vm_args: &'static str,
+    pub vm_args_hint: &'static str,
     pub program_args: &'static str,
+    pub program_args_hint: &'static str,
     pub working_dir: &'static str,
+    pub working_dir_hint: &'static str,
     pub browse: &'static str,
     pub env_vars: &'static str,
+    pub env_key_hint: &'static str,
+    pub env_value_hint: &'static str,
     pub add: &'static str,
     pub empty_hint: &'static str,
 }
@@ -258,13 +279,21 @@ pub struct NewProject {
     pub heading: &'static str,
     pub description: &'static str,
     pub group_id: &'static str,
+    /// Placeholder shown in the empty Group ID field — an example Maven
+    /// coordinate, not a default that gets submitted.
+    pub group_id_hint: &'static str,
     pub artifact_id: &'static str,
+    pub artifact_id_hint: &'static str,
     pub location: &'static str,
+    pub location_hint: &'static str,
     pub browse: &'static str,
     pub java_release: &'static str,
     pub build_tool: &'static str,
     pub build_tool_maven: &'static str,
     pub build_tool_gradle: &'static str,
+    pub language: &'static str,
+    pub language_java: &'static str,
+    pub language_kotlin: &'static str,
     pub gradle_no_wrapper_hint: &'static str,
     pub create: &'static str,
 }
@@ -417,6 +446,19 @@ pub struct Common {
     pub debug_step_over: &'static str,
     pub debug_step_into: &'static str,
     pub debug_step_out: &'static str,
+}
+
+/// The debugger's variables/call-stack panel (`debug_panel`), shown only
+/// while a session is live.
+pub struct Debug {
+    /// Shown while a session is running but not stopped at a breakpoint.
+    pub not_paused: &'static str,
+    pub call_stack: &'static str,
+    pub variables: &'static str,
+    /// Placeholder while the adapter's variable scopes haven't arrived yet.
+    pub loading: &'static str,
+    /// A scope that resolved to no variables.
+    pub none: &'static str,
 }
 
 /// Brazilian Portuguese — the primary language.
@@ -613,26 +655,39 @@ pub const PT_BR: Strings = Strings {
         new: "+ Nova",
         duplicate: "Duplicar",
         name: "Nome",
+        name_hint: "Minha Configuração",
         main_class: "Classe Principal",
+        main_class_hint: "com.exemplo.Main",
         vm_args: "Argumentos da VM",
+        vm_args_hint: "-Xmx512m -ea",
         program_args: "Argumentos do Programa",
+        program_args_hint: "--verbose entrada.txt",
         working_dir: "Diretório de Trabalho",
+        working_dir_hint: "raiz do projeto",
         browse: "Procurar…",
         env_vars: "Variáveis de Ambiente",
+        env_key_hint: "CHAVE",
+        env_value_hint: "valor",
         add: "Adicionar",
         empty_hint: "Nenhuma configuração de execução ainda — clique em \"+ Nova\" para adicionar uma.",
     },
     new_project: NewProject {
         heading: "Novo Projeto",
-        description: "Cria um novo projeto Java e o abre. Kotlin ainda não é suportado por este assistente.",
+        description: "Cria um novo projeto Java ou Kotlin e o abre.",
         group_id: "Group ID",
+        group_id_hint: "com.exemplo",
         artifact_id: "Artifact ID",
+        artifact_id_hint: "minha-app",
         location: "Local",
+        location_hint: "~/projetos",
         browse: "Procurar…",
         java_release: "Versão do Java",
         build_tool: "Ferramenta de Build",
         build_tool_maven: "Maven",
         build_tool_gradle: "Gradle (Kotlin DSL)",
+        language: "Linguagem",
+        language_java: "Java",
+        language_kotlin: "Kotlin",
         gradle_no_wrapper_hint: "Nenhum Gradle Wrapper é gerado — use um Gradle já instalado na máquina.",
         create: "Criar",
     },
@@ -732,6 +787,21 @@ pub const PT_BR: Strings = Strings {
         debug_step_over: "Passar Por Cima",
         debug_step_into: "Entrar Em",
         debug_step_out: "Sair De",
+    },
+    debug: Debug {
+        not_paused: "Não pausado.",
+        call_stack: "Pilha de Chamadas",
+        variables: "Variáveis",
+        loading: "(carregando…)",
+        none: "(nenhuma)",
+    },
+    jdk: Jdk {
+        hint: "Os JDKs registrados aqui ficam disponíveis para usar como alvo ao analisar ou criar um projeto em \
+               uma versão específica do Java — separado do Java Home em Configurações > Servidores de Linguagem…, \
+               que é apenas a JVM sob a qual o próprio jdt.ls roda.",
+        none_registered: "Nenhum JDK registrado ainda.",
+        add: "Adicionar JDK…",
+        auto_detect: "Detectar automaticamente",
     },
 };
 
@@ -929,26 +999,39 @@ pub const EN_US: Strings = Strings {
         new: "+ New",
         duplicate: "Duplicate",
         name: "Name",
+        name_hint: "My Configuration",
         main_class: "Main Class",
+        main_class_hint: "com.example.Main",
         vm_args: "VM Args",
+        vm_args_hint: "-Xmx512m -ea",
         program_args: "Program Args",
+        program_args_hint: "--verbose input.txt",
         working_dir: "Working Dir",
+        working_dir_hint: "project root",
         browse: "Browse…",
         env_vars: "Environment Variables",
+        env_key_hint: "KEY",
+        env_value_hint: "value",
         add: "Add",
         empty_hint: "No run configurations yet — click \"+ New\" to add one.",
     },
     new_project: NewProject {
         heading: "New Project",
-        description: "Creates a new Java project and opens it. Kotlin isn't supported by this wizard yet.",
+        description: "Creates a new Java or Kotlin project and opens it.",
         group_id: "Group ID",
+        group_id_hint: "com.example",
         artifact_id: "Artifact ID",
+        artifact_id_hint: "my-app",
         location: "Location",
+        location_hint: "~/projects",
         browse: "Browse…",
         java_release: "Java release",
         build_tool: "Build Tool",
         build_tool_maven: "Maven",
         build_tool_gradle: "Gradle (Kotlin DSL)",
+        language: "Language",
+        language_java: "Java",
+        language_kotlin: "Kotlin",
         gradle_no_wrapper_hint: "No Gradle Wrapper is generated — use a Gradle already installed on your machine.",
         create: "Create",
     },
@@ -1048,5 +1131,20 @@ pub const EN_US: Strings = Strings {
         debug_step_over: "Step Over",
         debug_step_into: "Step Into",
         debug_step_out: "Step Out",
+    },
+    debug: Debug {
+        not_paused: "Not paused.",
+        call_stack: "Call Stack",
+        variables: "Variables",
+        loading: "(loading…)",
+        none: "(none)",
+    },
+    jdk: Jdk {
+        hint: "JDKs registered here are available to target when analyzing or scaffolding a project at a \
+               specific Java version — separate from Settings > Language Servers…'s Java Home, which is only \
+               the JVM jdt.ls itself runs under.",
+        none_registered: "No JDKs registered yet.",
+        add: "Add JDK…",
+        auto_detect: "Auto-detect",
     },
 };

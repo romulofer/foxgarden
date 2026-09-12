@@ -128,6 +128,48 @@ fn arrow_down_past_the_visible_window_scrolls_the_caret_into_view() {
     );
 }
 
+/// Regression test for scroll-follows-cursor on an *externally-driven* jump
+/// (`set_caret` — how `widget.rs` applies a Ctrl+D occurrence hop, Ctrl+J
+/// join, go-to-line, a getter/setter jump, …, all *after* `show` already ran
+/// that frame). Unlike an arrow key, the caret change here never happens
+/// between two of `show`'s own runs, so `caret_moved` can't see it — the
+/// `scroll_to_caret` flag `set_caret` raises is what forces the follow. Before
+/// that flag, a Ctrl+D landing far off-screen moved the caret but left the
+/// viewport behind.
+#[test]
+fn an_external_set_caret_jump_scrolls_the_caret_into_view() {
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("scroll_follow_external");
+    let lines: Vec<String> = (0..100).map(|i| format!("line{i}")).collect();
+    let buffer = Rope::from_str(&lines.join("\n"));
+
+    // Frame 1: caret at 0, line 0 visible.
+    let _ = frame(&ctx, id, &buffer, vec![], false);
+
+    // A jump to line 60, applied the way `widget.rs` applies Ctrl+D's own.
+    let target = buffer.line_to_char(60);
+    set_caret(&ctx, id, Caret::at(target));
+
+    // The frame that consumes the jump schedules the scroll but can't have
+    // shaped the far row yet — same one-frame lag the arrow-down test asserts.
+    let out = frame(&ctx, id, &buffer, vec![], false);
+    assert_eq!(buffer.char_to_line(out.caret.expect("focused").primary), 60);
+    assert!(
+        !out.base.row_galleys.iter().any(|(line, _)| *line == 60),
+        "line 60 shouldn't already be visible the same frame the jump is consumed"
+    );
+
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let _ = frame(&ctx, id, &buffer, vec![], false);
+    }
+    let out = frame(&ctx, id, &buffer, vec![], false);
+    assert!(
+        out.base.row_galleys.iter().any(|(line, _)| *line == 60),
+        "line 60 should be visible after the scroll took effect"
+    );
+}
+
 #[test]
 fn typing_inserts_text_and_advances_the_caret() {
     let ctx = egui::Context::default();

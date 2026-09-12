@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use fg_i18n::t;
+
 use crate::debug_state::DebugState;
 
 /// Draws the call stack and local variables for whatever `state` is
@@ -18,11 +20,11 @@ use crate::debug_state::DebugState;
 pub fn show(ui: &mut egui::Ui, state: &DebugState) -> Option<(PathBuf, usize)> {
     let mut clicked = None;
     if !state.is_paused() {
-        ui.label("Not paused.");
+        ui.label(t().debug.not_paused);
         return None;
     }
 
-    ui.strong("Call Stack");
+    ui.strong(t().debug.call_stack);
     egui::ScrollArea::vertical().id_salt("debug_call_stack").max_height(200.0).show(ui, |ui| {
         for frame in state.call_stack() {
             let label = match &frame.file {
@@ -46,16 +48,16 @@ pub fn show(ui: &mut egui::Ui, state: &DebugState) -> Option<(PathBuf, usize)> {
     });
 
     ui.separator();
-    ui.strong("Variables");
+    ui.strong(t().debug.variables);
     egui::ScrollArea::vertical().id_salt("debug_variables").show(ui, |ui| {
         let groups = state.variables();
         if groups.is_empty() {
-            ui.weak("(loading…)");
+            ui.weak(t().debug.loading);
         }
         for group in groups {
             egui::CollapsingHeader::new(&group.name).default_open(true).show(ui, |ui| {
                 if group.variables.is_empty() {
-                    ui.weak("(none)");
+                    ui.weak(t().debug.none);
                 }
                 for variable in &group.variables {
                     ui.horizontal(|ui| {

@@ -115,19 +115,19 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
     ui.vertical(|ui| {
         egui::Grid::new("run_config_fields").num_columns(2).show(ui, |ui| {
             ui.label(t().run_configs.name);
-            ui.text_edit_singleline(&mut config.name);
+            ui.add(egui::TextEdit::singleline(&mut config.name).hint_text(t().run_configs.name_hint));
             ui.end_row();
 
             ui.label(t().run_configs.main_class);
-            ui.text_edit_singleline(&mut config.main_class);
+            ui.add(egui::TextEdit::singleline(&mut config.main_class).hint_text(t().run_configs.main_class_hint));
             ui.end_row();
 
             ui.label(t().run_configs.vm_args);
-            ui.text_edit_singleline(&mut config.vm_args);
+            ui.add(egui::TextEdit::singleline(&mut config.vm_args).hint_text(t().run_configs.vm_args_hint));
             ui.end_row();
 
             ui.label(t().run_configs.program_args);
-            ui.text_edit_singleline(&mut config.program_args);
+            ui.add(egui::TextEdit::singleline(&mut config.program_args).hint_text(t().run_configs.program_args_hint));
             ui.end_row();
 
             ui.label(t().run_configs.working_dir);
@@ -137,7 +137,7 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
                     .as_ref()
                     .map(|d| d.display().to_string())
                     .unwrap_or_default();
-                if ui.text_edit_singleline(&mut dir_text).changed() {
+                if ui.add(egui::TextEdit::singleline(&mut dir_text).hint_text(t().run_configs.working_dir_hint)).changed() {
                     config.working_dir = (!dir_text.is_empty()).then(|| PathBuf::from(&dir_text));
                 }
                 if ui
@@ -171,9 +171,9 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
         }
 
         ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut state.new_env_key);
+            ui.add(egui::TextEdit::singleline(&mut state.new_env_key).hint_text(t().run_configs.env_key_hint));
             ui.label("=");
-            ui.text_edit_singleline(&mut state.new_env_value);
+            ui.add(egui::TextEdit::singleline(&mut state.new_env_value).hint_text(t().run_configs.env_value_hint));
             if ui.button(t().run_configs.add).clicked() && !state.new_env_key.is_empty() {
                 let key = std::mem::take(&mut state.new_env_key);
                 let value = std::mem::take(&mut state.new_env_value);

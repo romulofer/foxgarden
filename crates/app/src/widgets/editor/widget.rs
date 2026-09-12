@@ -1383,6 +1383,27 @@ pub fn show(
     // the gutter's left edge to right-align digits against. Both live
     // inside the *same* `ScrollArea` call site (`panels::tabs::show`), so
     // they scroll together as one unit rather than independently.
+    // Quick-fix keyboard trigger (`SPEC.md` §15's "clicking it (or a
+    // keyboard shortcut with the cursor on that line)"): Alt+Enter opens the
+    // same picker the gutter lightbulb does — IntelliJ's own intention-action
+    // key. The Enter event is pulled out of this frame's queue here, *before*
+    // `text_area::show_interactive` below would otherwise insert a newline
+    // for it (`is_mutating_event`'s Enter arm deliberately ignores modifiers,
+    // so an un-stripped Alt+Enter would drop a blank line in). Whether the
+    // caret line actually has an offer to show is decided later, once
+    // `code_action_gutter.update` has run — the same one-frame lifecycle the
+    // lightbulb itself has; the popup is opened there (`open_picker`).
+    let alt_enter_quickfix = ui.input_mut(|i| {
+        if !i.modifiers.alt {
+            return false;
+        }
+        let Some(pos) = i.events.iter().position(|e| matches!(e, Event::Key { key: Key::Enter, pressed: true, .. })) else {
+            return false;
+        };
+        i.events.remove(pos);
+        true
+    });
+
     let horizontal_response = ui.horizontal(|ui| {
         let gutter_left = ui.cursor().left();
         ui.add_space(gutter_width);
@@ -2093,6 +2114,11 @@ pub fn show(
         code_action_gutter.update(doc, caret_line, lsp);
     } else {
         code_action_gutter.clear();
+    }
+    // Alt+Enter (stripped from this frame's queue above) opens the picker for
+    // whatever offer `update` just resolved for the caret line, if any.
+    if alt_enter_quickfix {
+        code_action_gutter.open_picker();
     }
 
     // While Ctrl is held over an identifier the Ctrl+Click below would

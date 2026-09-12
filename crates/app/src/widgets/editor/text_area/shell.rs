@@ -55,6 +55,16 @@ struct ShellState {
     /// click instead of blinking mid-cycle right when the user is looking
     /// at it.
     last_interaction: f64,
+    /// Set by `set_caret` (an *externally* driven caret jump — Ctrl+D's
+    /// occurrence hop, Ctrl+J join, go-to-line, a getter/setter jump, …,
+    /// all applied by `widget.rs` *after* this frame's `show` already ran),
+    /// consumed once by the next `show` to force its scroll-follows-cursor
+    /// branch. Without it those jumps never scroll the viewport: the caret
+    /// change is already baked into `caret_at_frame_start` by the time
+    /// `show` next loads, so `caret_moved` reads false — unlike an
+    /// arrow/Home/End move, which happens *inside* `show` and so moves the
+    /// caret between that snapshot and the check.
+    scroll_to_caret: bool,
 }
 
 impl Default for ShellState {
@@ -66,6 +76,7 @@ impl Default for ShellState {
             block_selection: None,
             ime_range: None,
             last_interaction: 0.0,
+            scroll_to_caret: false,
         }
     }
 }
@@ -103,6 +114,11 @@ pub fn set_caret(ctx: &egui::Context, id: Id, caret: Caret) {
         state.caret = caret;
         state.history.break_run();
         state.last_interaction = now;
+        // An externally-driven jump lands the caret while `show` has already
+        // run this frame, so the next `show` must scroll the viewport to it
+        // explicitly — its own `caret_moved` check can't see a move that
+        // happened between two of its runs. See `ShellState::scroll_to_caret`.
+        state.scroll_to_caret = true;
     });
 }
 
@@ -211,6 +227,9 @@ pub fn show(
 ) -> ShellOutput {
     let mut state = load(ui, id);
     let caret_at_frame_start = state.caret;
+    // Consume any pending externally-driven scroll request (`set_caret`) —
+    // taken once here so it can't fire again on a later, unrelated frame.
+    let externally_moved = std::mem::take(&mut state.scroll_to_caret);
 
     // Read (and lock) focus *before* shaping below — `layout_visible`'s own
     // `ui.interact` call is what makes this widget "focusable," and if that
@@ -425,7 +444,7 @@ pub fn show(
     // TECHNICAL_DEBT.md #15 already documents for `tabs.rs`'s own
     // wrap-unaware jump-to-handler scroll math, now shared by this call
     // site too rather than a novel kind of imprecision.
-    if has_focus && caret_moved {
+    if has_focus && (caret_moved || externally_moved) {
         let line = final_buffer.char_to_line(state.caret.primary.min(final_buffer.len_chars()));
         let visual_row = if word_wrap {
             let total_lines = final_buffer.len_lines().max(1);

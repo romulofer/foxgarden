@@ -7,15 +7,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// Only Java is generated yet — Kotlin is Phase 5 (stretch), deferred
-/// behind two open `kotlin-language-server` gaps (TECHNICAL_DEBT.md
-/// #17/#18's own history) that make a fresh Kotlin project's actual
-/// in-app analysis experience uncertain regardless of skeleton
-/// correctness. Kept as an enum rather than skipped entirely so
-/// `ScaffoldSpec`'s shape doesn't have to change again once Phase 5 lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The language a scaffolded project's sources are written in — Java
+/// (Phase 3/4) or Kotlin (Phase 5). Each picks its own source root
+/// (`src/main/java` vs `src/main/kotlin`), entry-point file, and — for
+/// Maven — build plugin; Gradle differs only by the `kotlin("jvm")` plugin
+/// vs the bare `java` one. The `kotlin-language-server` gaps that once
+/// deferred this (`TECHNICAL_DEBT.md` #17/#18) are about in-app *analysis*,
+/// not skeleton correctness — a scaffolded Kotlin project still has to
+/// build with a real `mvn`/`gradle`, which is what these files guarantee.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectLanguage {
+    #[default]
     Java,
+    Kotlin,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +101,138 @@ fn main_java(spec: &ScaffoldSpec) -> String {
 const GITIGNORE: &str = "target/\n*.class\n.idea/\n*.iml\n";
 const GRADLE_GITIGNORE: &str = "build/\n.gradle/\n*.class\n.idea/\n*.iml\n";
 
+/// The Kotlin release pinned across every generated Kotlin build file — a
+/// real, resolvable Maven Central coordinate for both `kotlin-stdlib` and
+/// the `kotlin-maven-plugin`/`kotlin("jvm")` Gradle plugin, so a scaffolded
+/// project builds without the user having to pick a version.
+const KOTLIN_VERSION: &str = "2.0.21";
+
+/// Kotlin's `jvmTarget` (the Maven plugin's own accepted spelling): `"1.8"`
+/// for Java 8, the bare number otherwise. Unlike Gradle's `jvmToolchain`,
+/// which takes a plain integer, `kotlin-maven-plugin`'s `<jvmTarget>` still
+/// wants the legacy `1.8` form for 8 and rejects `8`.
+fn kotlin_jvm_target(java_release: u32) -> String {
+    if java_release == 8 { "1.8".to_string() } else { java_release.to_string() }
+}
+
+/// The generated `pom.xml` for a Kotlin project: `kotlin-stdlib` on the
+/// classpath, `src/main/kotlin` as the source root, and the
+/// `kotlin-maven-plugin` bound to `compile` (its own documented minimal
+/// setup). `<maven.compiler.release>` is kept too — harmless for a
+/// Kotlin build, and it keeps `java_release::release_from_pom` reading the
+/// wizard's promised level back the same way it does for a Java project.
+fn kotlin_pom_xml(spec: &ScaffoldSpec) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>{group_id}</groupId>
+  <artifactId>{artifact_id}</artifactId>
+  <version>1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <kotlin.version>{kotlin_version}</kotlin.version>
+    <maven.compiler.release>{java_release}</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib</artifactId>
+      <version>${{kotlin.version}}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <sourceDirectory>src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId>
+        <artifactId>kotlin-maven-plugin</artifactId>
+        <version>${{kotlin.version}}</version>
+        <executions>
+          <execution>
+            <id>compile</id>
+            <phase>compile</phase>
+            <goals>
+              <goal>compile</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <jvmTarget>{jvm_target}</jvmTarget>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+"#,
+        group_id = spec.group_id,
+        artifact_id = spec.artifact_id,
+        kotlin_version = KOTLIN_VERSION,
+        java_release = spec.java_release,
+        jvm_target = kotlin_jvm_target(spec.java_release),
+    )
+}
+
+/// The generated `src/main/kotlin/<package path>/Main.kt` — a top-level
+/// `fun main()`, the idiomatic Kotlin entry point (no wrapper class), which
+/// the compiler exposes as the JVM class `<package>.MainKt` (see
+/// `kotlin_build_gradle_kts`'s own `mainClass`).
+fn main_kotlin(spec: &ScaffoldSpec) -> String {
+    let package = package_path_components(&spec.group_id).join(".");
+    let mut out = String::new();
+    if !package.is_empty() {
+        out.push_str(&format!("package {package}\n\n"));
+    }
+    out.push_str("fun main() {\n    println(\"Hello, world!\")\n}\n");
+    out
+}
+
+/// `build.gradle.kts` for a Kotlin project: the `kotlin("jvm")` plugin
+/// (which pulls `kotlin-stdlib` in on its own, so no explicit dependency is
+/// needed) plus `application`, and `kotlin { jvmToolchain(N) }` — the exact
+/// form `java_release::release_from_gradle` ranks highest as
+/// `kotlin.jvmToolchain`, so a scaffolded Kotlin project reads back at the
+/// release the wizard promised, same guarantee the Java path has. The same
+/// no-wrapper stance as `build_gradle_kts` applies (`PLAN.md` Track 29
+/// Phase 4).
+fn kotlin_build_gradle_kts(spec: &ScaffoldSpec) -> String {
+    let package = package_path_components(&spec.group_id).join(".");
+    let main_class =
+        if package.is_empty() { "MainKt".to_string() } else { format!("{package}.MainKt") };
+    format!(
+        r#"plugins {{
+    kotlin("jvm") version "{kotlin_version}"
+    application
+}}
+
+kotlin {{
+    jvmToolchain({java_release})
+}}
+
+application {{
+    mainClass = "{main_class}"
+}}
+
+group = "{group_id}"
+version = "1.0-SNAPSHOT"
+
+repositories {{
+    mavenCentral()
+}}
+"#,
+        kotlin_version = KOTLIN_VERSION,
+        java_release = spec.java_release,
+        group_id = spec.group_id,
+    )
+}
+
 /// `settings.gradle.kts`: just the root project name, the same single
 /// responsibility a real `gradle init` gives this file.
 fn settings_gradle_kts(spec: &ScaffoldSpec) -> String {
@@ -151,17 +287,38 @@ repositories {{
 /// disk).
 pub fn scaffold_files(spec: &ScaffoldSpec) -> Vec<(PathBuf, String)> {
     let package_dir: PathBuf = package_path_components(&spec.group_id).into_iter().collect();
-    let main_path = Path::new("src/main/java").join(package_dir).join("Main.java");
+    // Source root and entry-point file follow the language, the same
+    // `src/main/<lang>` convention Maven and Gradle both use.
+    let (src_root, main_file) = match spec.language {
+        ProjectLanguage::Java => ("src/main/java", "Main.java"),
+        ProjectLanguage::Kotlin => ("src/main/kotlin", "Main.kt"),
+    };
+    let main_path = Path::new(src_root).join(package_dir).join(main_file);
+    let main_source = match spec.language {
+        ProjectLanguage::Java => main_java(spec),
+        ProjectLanguage::Kotlin => main_kotlin(spec),
+    };
     match (spec.build_tool, spec.language) {
         (BuildTool::Maven, ProjectLanguage::Java) => vec![
             (PathBuf::from("pom.xml"), pom_xml(spec)),
-            (main_path, main_java(spec)),
+            (main_path, main_source),
+            (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
+        ],
+        (BuildTool::Maven, ProjectLanguage::Kotlin) => vec![
+            (PathBuf::from("pom.xml"), kotlin_pom_xml(spec)),
+            (main_path, main_source),
             (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
         ],
         (BuildTool::Gradle, ProjectLanguage::Java) => vec![
             (PathBuf::from("settings.gradle.kts"), settings_gradle_kts(spec)),
             (PathBuf::from("build.gradle.kts"), build_gradle_kts(spec)),
-            (main_path, main_java(spec)),
+            (main_path, main_source),
+            (PathBuf::from(".gitignore"), GRADLE_GITIGNORE.to_string()),
+        ],
+        (BuildTool::Gradle, ProjectLanguage::Kotlin) => vec![
+            (PathBuf::from("settings.gradle.kts"), settings_gradle_kts(spec)),
+            (PathBuf::from("build.gradle.kts"), kotlin_build_gradle_kts(spec)),
+            (main_path, main_source),
             (PathBuf::from(".gitignore"), GRADLE_GITIGNORE.to_string()),
         ],
     }
@@ -348,5 +505,117 @@ mod tests {
         assert!(root.join("build.gradle.kts").exists());
         assert!(root.join("src/main/java/com/example/app/Main.java").exists());
         assert!(root.join(".gitignore").exists());
+    }
+
+    fn kotlin_maven_sample() -> ScaffoldSpec {
+        ScaffoldSpec { language: ProjectLanguage::Kotlin, ..sample() }
+    }
+
+    fn kotlin_gradle_sample() -> ScaffoldSpec {
+        ScaffoldSpec {
+            build_tool: BuildTool::Gradle,
+            language: ProjectLanguage::Kotlin,
+            ..sample()
+        }
+    }
+
+    #[test]
+    fn kotlin_maven_scaffold_puts_sources_under_src_main_kotlin_as_a_kt_file() {
+        let files = scaffold_files(&kotlin_maven_sample());
+        let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                Path::new("pom.xml"),
+                Path::new("src/main/kotlin/com/example/app/Main.kt"),
+                Path::new(".gitignore"),
+            ]
+        );
+    }
+
+    #[test]
+    fn kotlin_main_declares_the_package_and_a_top_level_main() {
+        let files = scaffold_files(&kotlin_maven_sample());
+        let (_, main) = &files[1];
+        assert!(main.starts_with("package com.example.app\n\n"), "{main}");
+        assert!(main.contains("fun main() {"), "{main}");
+        assert!(main.contains("println(\"Hello, world!\")"), "{main}");
+        // No wrapper class — the whole point of the idiomatic Kotlin entry
+        // point over a Java-style `class Main`.
+        assert!(!main.contains("class Main"), "{main}");
+    }
+
+    #[test]
+    fn kotlin_maven_pom_wires_the_kotlin_plugin_stdlib_and_source_root() {
+        let files = scaffold_files(&kotlin_maven_sample());
+        let (_, pom) = &files[0];
+        assert!(pom.contains("<artifactId>kotlin-maven-plugin</artifactId>"), "{pom}");
+        assert!(pom.contains("<artifactId>kotlin-stdlib</artifactId>"), "{pom}");
+        assert!(pom.contains("<sourceDirectory>src/main/kotlin</sourceDirectory>"), "{pom}");
+        assert!(pom.contains(&format!("<kotlin.version>{KOTLIN_VERSION}</kotlin.version>")), "{pom}");
+    }
+
+    #[test]
+    fn kotlin_maven_pom_release_reads_back_through_java_release_detect() {
+        // Same regression guard as the Java pom: a scaffolded Kotlin pom
+        // still has to report the wizard's promised level to this project's
+        // own detector.
+        let spec = ScaffoldSpec { java_release: 8, ..kotlin_maven_sample() };
+        let (_, pom) = &scaffold_files(&spec)[0];
+        assert_eq!(crate::java_release::release_from_pom(pom).map(|(major, _)| major), Some(8));
+    }
+
+    #[test]
+    fn kotlin_maven_jvm_target_uses_the_legacy_1_8_spelling_for_java_8() {
+        let spec = ScaffoldSpec { java_release: 8, ..kotlin_maven_sample() };
+        let (_, pom) = &scaffold_files(&spec)[0];
+        assert!(pom.contains("<jvmTarget>1.8</jvmTarget>"), "{pom}");
+
+        let spec = ScaffoldSpec { java_release: 17, ..kotlin_maven_sample() };
+        let (_, pom) = &scaffold_files(&spec)[0];
+        assert!(pom.contains("<jvmTarget>17</jvmTarget>"), "{pom}");
+    }
+
+    #[test]
+    fn kotlin_gradle_scaffold_returns_the_expected_paths() {
+        let files = scaffold_files(&kotlin_gradle_sample());
+        let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                Path::new("settings.gradle.kts"),
+                Path::new("build.gradle.kts"),
+                Path::new("src/main/kotlin/com/example/app/Main.kt"),
+                Path::new(".gitignore"),
+            ]
+        );
+    }
+
+    #[test]
+    fn kotlin_gradle_build_wires_the_jvm_plugin_and_the_kt_main_class() {
+        let files = scaffold_files(&kotlin_gradle_sample());
+        let (_, build) = &files[1];
+        assert!(build.contains(&format!(r#"kotlin("jvm") version "{KOTLIN_VERSION}""#)), "{build}");
+        // A top-level `fun main` compiles to `<package>.MainKt`, not `Main`.
+        assert!(build.contains(r#"mainClass = "com.example.app.MainKt""#), "{build}");
+    }
+
+    #[test]
+    fn kotlin_gradle_build_release_reads_back_through_java_release_detect() {
+        // `kotlin { jvmToolchain(N) }` is exactly the form
+        // `release_from_gradle` ranks highest, so a Kotlin Gradle project
+        // reads back at the promised release just like the Java one.
+        let spec = ScaffoldSpec { java_release: 21, ..kotlin_gradle_sample() };
+        let (_, build) = &scaffold_files(&spec)[1];
+        assert_eq!(crate::java_release::release_from_gradle(build).map(|(major, _)| major), Some(21));
+    }
+
+    #[test]
+    fn kotlin_single_segment_group_id_still_produces_a_valid_package_path_and_main_class() {
+        let spec = ScaffoldSpec { group_id: "app".to_string(), ..kotlin_gradle_sample() };
+        let files = scaffold_files(&spec);
+        assert_eq!(files[2].0, Path::new("src/main/kotlin/app/Main.kt"));
+        assert!(files[2].1.starts_with("package app\n\n"));
+        assert!(files[1].1.contains(r#"mainClass = "app.MainKt""#));
     }
 }

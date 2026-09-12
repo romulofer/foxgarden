@@ -114,6 +114,22 @@ impl CodeActionGutter {
         self.tracked = None;
     }
 
+    /// Opens the picker popup for the caret line's own offers from the
+    /// keyboard (Alt+Enter), the same popup clicking the lightbulb toggles
+    /// open — `SPEC.md` §15's "clicking it (or a keyboard shortcut with the
+    /// cursor on that line)". A no-op when the caret's line has no resolved
+    /// offer yet: nothing to show, exactly as the lightbulb simply isn't
+    /// painted in that case. Only inspects offers already resolved as of an
+    /// earlier frame, the same one-frame-behind lifecycle `has_offer`/the
+    /// gutter width already accept.
+    pub(super) fn open_picker(&mut self) {
+        if let Some(tracked) = self.tracked.as_mut()
+            && !tracked.offers.is_empty()
+        {
+            tracked.open = true;
+        }
+    }
+
     /// Called once a frame with `doc` and whichever line the caret is
     /// currently on. Fires a `textDocument/codeAction` request the instant
     /// that line's own active diagnostic (`doc.lsp_diagnostics` only — the
@@ -321,6 +337,35 @@ mod tests {
     #[test]
     fn offers_from_response_a_null_result_is_empty() {
         assert!(offers_from_response(serde_json::Value::Null).is_empty());
+    }
+
+    fn tracked_with_offers(offers: Vec<Offer>) -> CodeActionGutter {
+        CodeActionGutter {
+            tracked: Some(Tracked { doc_path: PathBuf::from("/a/Main.java"), line: 0, version: 0, pending: None, offers, open: false }),
+            confirmed: None,
+        }
+    }
+
+    fn dummy_offer() -> Offer {
+        Offer { title: "Organize imports".to_string(), edit: lsp_types::WorkspaceEdit::default() }
+    }
+
+    #[test]
+    fn open_picker_opens_the_popup_when_the_caret_line_has_an_offer() {
+        let mut gutter = tracked_with_offers(vec![dummy_offer()]);
+        gutter.open_picker();
+        assert!(gutter.tracked.as_ref().unwrap().open);
+    }
+
+    #[test]
+    fn open_picker_is_a_no_op_with_no_offer_to_show() {
+        let mut gutter = tracked_with_offers(Vec::new());
+        gutter.open_picker();
+        assert!(!gutter.tracked.as_ref().unwrap().open);
+
+        let mut empty = CodeActionGutter::default();
+        empty.open_picker();
+        assert!(empty.tracked.is_none());
     }
 
     /// Real captured jdtls 1.60.0 reply (trimmed), live-verifying this

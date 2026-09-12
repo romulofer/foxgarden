@@ -12,6 +12,8 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
+use fg_i18n::t;
+
 use crate::jdk_registry::JdkRegistry;
 use crate::lsp_manager::JavaRuntime;
 use crate::widgets::modal::show_modal;
@@ -98,25 +100,18 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
     let outcome = show_modal(ui, "jdk_registry_dialog", state.settings_open.then_some(()), |ui, ()| {
         ui.set_min_width(480.0);
         ui.heading("JDKs");
-        ui.label(
-            egui::RichText::new(
-                "JDKs registered here are available to target when analyzing or scaffolding a project at a \
-                 specific Java version — separate from Settings > Language Servers…'s Java Home, which is only \
-                 the JVM jdt.ls itself runs under.",
-            )
-            .weak(),
-        );
+        ui.label(egui::RichText::new(t().jdk.hint).weak());
         ui.separator();
 
         if registry.jdks.is_empty() {
-            ui.label(egui::RichText::new("No JDKs registered yet.").weak());
+            ui.label(egui::RichText::new(t().jdk.none_registered).weak());
         }
         let mut remove_index = None;
         for (index, jdk) in registry.jdks.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&jdk.label).strong());
                 ui.label(egui::RichText::new(jdk.home.display().to_string()).weak());
-                if ui.small_button("Remove").clicked() {
+                if ui.small_button(t().common.remove).clicked() {
                     remove_index = Some(index);
                 }
             });
@@ -127,10 +122,10 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(!state.picker_running(), egui::Button::new("Add JDK…")).clicked() {
+            if ui.add_enabled(!state.picker_running(), egui::Button::new(t().jdk.add)).clicked() {
                 state.picker.open(None);
             }
-            if ui.add_enabled(!state.auto_detect_running(), egui::Button::new("Auto-detect")).clicked() {
+            if ui.add_enabled(!state.auto_detect_running(), egui::Button::new(t().jdk.auto_detect)).clicked() {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let _ = tx.send(crate::lsp_manager::installed_runtimes());
@@ -146,7 +141,7 @@ pub fn show_settings(ui: &egui::Ui, state: &mut JdkRegistryState, registry: &mut
         }
 
         ui.separator();
-        ui.button("Close").clicked()
+        ui.button(t().common.close).clicked()
     });
     if let Some((close_clicked, escape_pressed)) = outcome
         && (close_clicked || escape_pressed)
