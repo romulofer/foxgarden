@@ -225,9 +225,13 @@ pub struct Lsp {
     pub up_to_date: &'static str,
     pub binary: &'static str,
     pub java_home: &'static str,
+    /// Hover on the Java Home label — why it exists and what blank means.
+    pub java_home_hover: &'static str,
     pub detect: &'static str,
     pub detect_hint: &'static str,
     pub project_java: &'static str,
+    /// Hover on the "Project Java" label — where the release is read from.
+    pub project_java_hover: &'static str,
     pub project_java_undeclared: &'static str,
 }
 
@@ -642,9 +646,15 @@ pub const PT_BR: Strings = Strings {
         up_to_date: "Atualizado",
         binary: "Binário",
         java_home: "Java Home",
+        java_home_hover: "O jdt.ls precisa de um JDK 21+ para rodar. Preenchido automaticamente com o JDK 21+ mais novo \
+                          encontrado nesta máquina; edite para apontar para outro (ex.: \
+                          ~/.sdkman/candidates/java/21.0.11-zulu). Vazio usa JAVA_HOME/PATH.",
         detect: "Detectar",
         detect_hint: "Procura um JDK 21 ou mais novo em JAVA_HOME, no PATH e nos diretórios de instalação usuais.",
         project_java: "Java do Projeto",
+        project_java_hover: "Lido dos arquivos de build do projeto (pom.xml, build.gradle, .java-version). Fontes Java e \
+                             Kotlin são diagnosticadas neste release, usando o JDK correspondente da lista encontrada \
+                             nesta máquina.",
         project_java_undeclared: "não declarado — o jdt.ls usa o release da própria JVM",
     },
     external_tools: ExternalTools {
@@ -986,9 +996,15 @@ pub const EN_US: Strings = Strings {
         up_to_date: "Up to date",
         binary: "Binary",
         java_home: "Java Home",
+        java_home_hover: "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on \
+                          this machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). \
+                          Blank falls back to JAVA_HOME/PATH.",
         detect: "Detect",
         detect_hint: "Scans JAVA_HOME, PATH and the usual JDK install directories for a JDK 21 or newer.",
         project_java: "Project Java",
+        project_java_hover: "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and \
+                             Kotlin sources are diagnosed at this release, using the matching JDK from the list found \
+                             on this machine.",
         project_java_undeclared: "not declared — jdt.ls uses its own JVM's release",
     },
     external_tools: ExternalTools {

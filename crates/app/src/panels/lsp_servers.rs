@@ -201,11 +201,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     // `JAVA_HOME`/`PATH`, same as leaving it unset.
     if let Server::Jdtls = server {
         ui.horizontal(|ui| {
-            ui.label(t().lsp.java_home).on_hover_text(
-                "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on this \
-                 machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). Blank \
-                 falls back to JAVA_HOME/PATH.",
-            );
+            ui.label(t().lsp.java_home).on_hover_text(t().lsp.java_home_hover);
             ui.add(
                 egui::TextEdit::singleline(&mut settings.jdtls_java_home)
                     .id_salt("jdtls_java_home")
@@ -229,10 +225,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         // this one its default, so diagnostics match the project's own
         // compiler rather than jdt.ls' JVM.
         ui.horizontal(|ui| {
-            ui.label(t().lsp.project_java).on_hover_text(
-                "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and Kotlin \
-                 sources are diagnosed at this release, using the matching JDK from the list found on this machine.",
-            );
+            ui.label(t().lsp.project_java).on_hover_text(t().lsp.project_java_hover);
             match &state.project_release {
                 Some(release) => {
                     ui.label(format!("{} — from {} ({})", release.major, release.file, release.setting));
