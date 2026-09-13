@@ -1605,6 +1605,18 @@ impl eframe::App for FoxGardenApp {
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
             self.side_panel_visible = !self.side_panel_visible;
         }
+        // Split / unsplit the editor (`PLAN.md` Track 11), Ctrl+\ as in VS
+        // Code. A no-op with no tab open — nothing to split into two panes.
+        if !terminal_focused
+            && self.state.active_tab.is_some()
+            && ui.input(|i| i.key_pressed(egui::Key::Backslash) && i.modifiers.command)
+        {
+            if self.state.is_split() {
+                self.state.unsplit();
+            } else {
+                self.state.split_editor();
+            }
+        }
         if ui.input(|i| i.key_pressed(egui::Key::Backtick) && i.modifiers.command) {
             self.terminal_panel_visible = !self.terminal_panel_visible;
             // Matches VSCode's own "opening the terminal for the first

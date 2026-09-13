@@ -3,8 +3,17 @@
 **/*.rs.bk
 *.pdb
 
-# Checkpoint planning docs (local only, not tracked on main — PLAN.md/
-# SPEC.md are tracked on the ide-henshin branch for the IDE pivot)
+# AI-agent instruction & planning docs — local only, not published.
+# (README.md and LICENSE stay tracked; everything here is internal.)
+AGENTS.md
+CLAUDE.md
+PLAN.md
+SPEC.md
+WIP.md
+FEATURES.md
+IMPLEMENTED_FEATURES.md
+TECHNICAL_DEBT.md
+ISSUES.md
 
 # Claude Code local (personal) settings
 .claude/settings.local.json

@@ -614,6 +614,22 @@ pub fn show(
                 ui.close();
             }
             ui.separator();
+            // Split editor (`PLAN.md` Track 11): one toggle, its label
+            // reflecting the current state, enabled only when there's a tab to
+            // split. Ctrl+\ mirrors VS Code's own split shortcut.
+            let split_label = if state.is_split() { t().tabs.unsplit_editor } else { t().tabs.split_editor };
+            if ui
+                .add_enabled(state.active_tab.is_some(), egui::Button::new(split_label).shortcut_text("Ctrl+\\"))
+                .clicked()
+            {
+                if state.is_split() {
+                    state.unsplit();
+                } else {
+                    state.split_editor();
+                }
+                ui.close();
+            }
+            ui.separator();
             if ui.checkbox(&mut view_settings.word_wrap, t().menu.word_wrap).changed() {
                 ui.close();
             }

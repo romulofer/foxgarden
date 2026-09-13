@@ -184,6 +184,11 @@ pub struct Tabs {
     pub more_tabs: &'static str,
     pub more_tabs_hint: &'static str,
     pub save_all: &'static str,
+    /// Shown in a split editor pane that has no tab active in it.
+    pub empty_pane: &'static str,
+    /// View-menu items for the split editor (`PLAN.md` Track 11).
+    pub split_editor: &'static str,
+    pub unsplit_editor: &'static str,
 }
 
 /// The tab context menu's "File History…" window (`PLAN.md` Track 4 Phase
@@ -224,6 +229,9 @@ pub struct Lsp {
     pub heading: &'static str,
     pub up_to_date: &'static str,
     pub binary: &'static str,
+    /// Placeholder in the empty binary-path field — points at what to do
+    /// when nothing is configured yet.
+    pub binary_hint: &'static str,
     pub java_home: &'static str,
     /// Hover on the Java Home label — why it exists and what blank means.
     pub java_home_hover: &'static str,
@@ -615,6 +623,9 @@ pub const PT_BR: Strings = Strings {
         more_tabs: "mais",
         more_tabs_hint: "Abas fora da vista — role a barra ou use Ctrl+E",
         save_all: "Salvar Todos",
+        empty_pane: "Nenhuma aba neste painel — clique em uma aba para abri-la aqui.",
+        split_editor: "Dividir Editor",
+        unsplit_editor: "Desfazer Divisão",
     },
     file_history: FileHistory {
         menu_item: "Histórico do Arquivo…",
@@ -645,6 +656,7 @@ pub const PT_BR: Strings = Strings {
         heading: "Servidores de Linguagem",
         up_to_date: "Atualizado",
         binary: "Binário",
+        binary_hint: "caminho do executável, ou use Instalar",
         java_home: "Java Home",
         java_home_hover: "O jdt.ls precisa de um JDK 21+ para rodar. Preenchido automaticamente com o JDK 21+ mais novo \
                           encontrado nesta máquina; edite para apontar para outro (ex.: \
@@ -965,6 +977,9 @@ pub const EN_US: Strings = Strings {
         more_tabs: "more",
         more_tabs_hint: "Tabs scrolled out of view — scroll the bar, or use Ctrl+E",
         save_all: "Save All",
+        empty_pane: "No tab in this pane — click a tab to open it here.",
+        split_editor: "Split Editor",
+        unsplit_editor: "Unsplit Editor",
     },
     file_history: FileHistory {
         menu_item: "File History…",
@@ -995,6 +1010,7 @@ pub const EN_US: Strings = Strings {
         heading: "Language Servers",
         up_to_date: "Up to date",
         binary: "Binary",
+        binary_hint: "path to the executable, or use Install",
         java_home: "Java Home",
         java_home_hover: "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on \
                           this machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). \

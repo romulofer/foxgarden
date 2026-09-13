@@ -70,6 +70,7 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -132,6 +133,7 @@ pub(super) fn typing_session(
                 ui,
                 doc,
                 parser,
+                0, // pane (Track 11)
                 EditorFont::Default,
                 14.0,
                 IndentSettings::default(),
@@ -224,6 +226,7 @@ pub(super) fn focused_frame_with_selection(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -286,6 +289,7 @@ pub(super) fn focused_frame_with_selection(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -337,6 +341,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -394,6 +399,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -455,6 +461,7 @@ pub(super) fn focused_frame_with_extra_selections(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -505,6 +512,7 @@ pub(super) fn focused_frame_with_extra_selections(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -560,6 +568,7 @@ pub(super) fn focused_frame_with_indent_settings(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             indent_settings,
@@ -608,6 +617,7 @@ pub(super) fn focused_frame_with_indent_settings(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             indent_settings,
@@ -662,6 +672,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             indent_settings,
@@ -719,6 +730,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             indent_settings,
@@ -828,6 +840,7 @@ pub(super) fn run_frame_reading_selection(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -959,6 +972,7 @@ pub(super) fn focused_frame_with_generate_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -1014,6 +1028,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -1072,6 +1087,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -1126,6 +1142,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -1171,6 +1188,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -1254,6 +1272,7 @@ pub(super) fn focused_frame_with_generate_method_request(
             ui,
             doc,
             parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),

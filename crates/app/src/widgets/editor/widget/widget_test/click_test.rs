@@ -29,6 +29,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -86,6 +87,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -154,6 +156,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -205,6 +208,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 ui,
                 &mut doc,
                 &mut parser,
+                0, // pane (Track 11)
                 EditorFont::Default,
                 14.0,
                 IndentSettings::default(),
@@ -272,6 +276,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -317,6 +322,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -386,6 +392,7 @@ fn triple_click_selects_the_whole_line() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -431,6 +438,7 @@ fn triple_click_selects_the_whole_line() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -492,6 +500,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -544,6 +553,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -601,6 +611,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -646,6 +657,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),

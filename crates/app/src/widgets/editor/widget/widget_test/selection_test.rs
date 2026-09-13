@@ -21,6 +21,7 @@ fn ctrl_w_expands_selection_by_syntax_node_and_ctrl_shift_w_shrinks_back() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -116,6 +117,7 @@ fn ctrl_w_still_expands_selection_on_a_read_only_java_file() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),

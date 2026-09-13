@@ -371,85 +371,136 @@ pub fn show(
 
     ui.separator();
 
-    let Some(active) = state.active_tab else {
+    if state.active_tab.is_none() {
         // No file open is the app's own front door, not an error state —
         // see `panels::welcome`.
         *welcome = crate::panels::welcome::show(ui, recent_projects, state.project.is_some());
         return;
-    };
-    let project = state.project.as_ref();
-    let Some(doc) = state.open_tabs.get_mut(active) else {
-        return;
-    };
-    let Some(parser) = parsers.get_mut(active) else {
-        return;
-    };
+    }
 
-    // `.both()`, not `.vertical()`: with `ViewSettings::word_wrap` off, a
-    // long line can run past the viewport width (the editor's own
-    // `desired_width(f32::INFINITY)` lets it), and a vertical-only
-    // `ScrollArea` would leave no way to reach it. Wrapped content never
-    // overflows horizontally by construction, so this is a no-op — no
-    // horizontal scrollbar appears — whenever wrapping is on.
-    egui::ScrollArea::both().show(ui, |ui| {
-        // The Spring endpoint map's jump-to-handler (PLAN.md Phase 4):
-        // scrolls the picked handler's line into view. `ui.next_widget_
-        // position()` is exactly where `editor::show`'s own first
-        // allocation will land (nothing's been drawn in this `ui` yet this
-        // frame), so it doubles as that call's own internal `content_
-        // origin` without needing anything back out of it. The target row
-        // is only approximate — the logical line treated as a visual row,
-        // ignoring word-wrap and any currently-collapsed folds before it —
-        // rather than reproducing `render.rs`'s own (internal-only)
-        // wrapped/folded row accounting; close enough in the common case
-        // (most source lines are short, wrap is the exception not the
-        // rule), and cheap to verify live rather than assume needs the
-        // fuller treatment.
-        if let Some(char_offset) = jump_to_char {
-            let font_id = egui::FontId::new(font_size, editor_font.family());
-            let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
-            let origin = ui.next_widget_position();
-            let approx_row = doc.buffer.char_to_line(char_offset.min(doc.buffer.len_chars()));
-            let rect = egui::Rect::from_min_size(
-                egui::pos2(origin.x, origin.y + approx_row as f32 * row_height),
-                egui::vec2(1.0, row_height),
+    let focused_pane = state.focused_pane();
+    let is_split = state.is_split();
+    // Where each pane's column landed this frame, so a press inside a pane can
+    // focus it below. The editor itself consumes the click, so this reads the
+    // raw press position against each column rect rather than a widget response.
+    let mut pane_rects: [Option<egui::Rect>; 2] = [None, None];
+
+    // Scoped so `render_pane`'s borrows of `state`/`parsers`/the editor state
+    // end before the focus check below reads `state` again.
+    {
+    // Renders one editor pane (`PLAN.md` Track 11). Called once when unsplit,
+    // twice (side by side) when split. Both panes draw from the shared
+    // `open_tabs`, so `parsers` stay index-aligned either way; only the
+    // *focused* pane consumes the one-shot requests (generate getters, a
+    // Spring jump-to, ...) so a getter generated for the pane the user is in
+    // doesn't also fire in the other one.
+    let mut render_pane = |ui: &mut egui::Ui, pane: usize, rect_out: &mut Option<egui::Rect>| {
+        *rect_out = Some(ui.max_rect());
+        let Some(active) = state.pane_active(pane) else {
+            ui.centered_and_justified(|ui| {
+                ui.weak(t().tabs.empty_pane);
+            });
+            return;
+        };
+        let focused = pane == focused_pane;
+        let gen_req = if focused { generate_request } else { None };
+        let gen_method_req = if focused { generate_method_request } else { None };
+        let override_req = focused && override_method_request;
+        let jump = if focused { jump_to_char } else { None };
+        let requests_for_pane = if focused { requests } else { Default::default() };
+
+        let project = state.project.as_ref();
+        let Some(doc) = state.open_tabs.get_mut(active) else {
+            return;
+        };
+        let Some(parser) = parsers.get_mut(active) else {
+            return;
+        };
+
+        // `.both()`, not `.vertical()`: with `ViewSettings::word_wrap` off, a
+        // long line can run past the viewport width (the editor's own
+        // `desired_width(f32::INFINITY)` lets it), and a vertical-only
+        // `ScrollArea` would leave no way to reach it. A distinct `id_salt`
+        // per pane keeps the two panes' own scroll offsets independent.
+        egui::ScrollArea::both().id_salt(("editor_scroll", pane)).show(ui, |ui| {
+            // The Spring endpoint map's jump-to-handler (PLAN.md Phase 4):
+            // scrolls the picked handler's line into view. `ui.next_widget_
+            // position()` is exactly where `editor::show`'s own first
+            // allocation will land, so it doubles as that call's own internal
+            // `content_origin`. The target row is only approximate (logical
+            // line as a visual row, ignoring wrap/folds), close enough in the
+            // common case.
+            if let Some(char_offset) = jump {
+                let font_id = egui::FontId::new(font_size, editor_font.family());
+                let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
+                let origin = ui.next_widget_position();
+                let approx_row = doc.buffer.char_to_line(char_offset.min(doc.buffer.len_chars()));
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(origin.x, origin.y + approx_row as f32 * row_height),
+                    egui::vec2(1.0, row_height),
+                );
+                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            }
+
+            editor::show(
+                ui,
+                doc,
+                parser,
+                pane,
+                editor_font,
+                font_size,
+                indent_settings,
+                view_settings,
+                gen_req,
+                generate_dialog,
+                gen_method_req,
+                generate_method_dialog,
+                project,
+                override_req,
+                override_method_dialog,
+                completion,
+                hover,
+                goto_definition,
+                peek,
+                requests_for_pane,
+                last_error,
+                pending_editor_input,
+                cached_clipboard_text,
+                custom_templates,
+                spring_config,
+                lsp,
+                find_references,
+                rename_box,
+                code_action_gutter,
+                debug_state,
+                trim_trailing_whitespace_on_save,
             );
-            ui.scroll_to_rect(rect, Some(egui::Align::Center));
-        }
+        });
+    };
 
-        editor::show(
-            ui,
-            doc,
-            parser,
-            editor_font,
-            font_size,
-            indent_settings,
-            view_settings,
-            generate_request,
-            generate_dialog,
-            generate_method_request,
-            generate_method_dialog,
-            project,
-            override_method_request,
-            override_method_dialog,
-            completion,
-            hover,
-            goto_definition,
-            peek,
-            requests,
-            last_error,
-            pending_editor_input,
-            cached_clipboard_text,
-            custom_templates,
-            spring_config,
-            lsp,
-            find_references,
-            rename_box,
-            code_action_gutter,
-            debug_state,
-            trim_trailing_whitespace_on_save,
-        );
-    });
+    if is_split {
+        let [rect0, rect1] = &mut pane_rects;
+        ui.columns(2, |cols| {
+            render_pane(&mut cols[0], 0, rect0);
+            render_pane(&mut cols[1], 1, rect1);
+        });
+    } else {
+        render_pane(ui, 0, &mut pane_rects[0]);
+    }
+    }
+
+    // A press inside a split pane focuses it. The editor consumed the click
+    // itself, so this checks the raw press origin against each column's rect
+    // rather than a widget response. Only meaningful while split.
+    if is_split
+        && let Some(pos) = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.press_origin()).flatten())
+    {
+        for (pane, rect) in pane_rects.iter().enumerate() {
+            if rect.is_some_and(|r| r.contains(pos)) {
+                state.focus_pane(pane);
+            }
+        }
+    }
 }
 
 /// Saves the active tab's document, if any. Shared by `Ctrl+S` here and the

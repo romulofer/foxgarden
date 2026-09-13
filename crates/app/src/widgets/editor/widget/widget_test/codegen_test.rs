@@ -257,6 +257,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -303,6 +304,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -366,6 +368,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -411,6 +414,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -468,6 +472,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -514,6 +519,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),

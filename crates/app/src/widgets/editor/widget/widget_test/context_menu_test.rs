@@ -45,6 +45,7 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 ui,
                 doc,
                 parser,
+                0, // pane (Track 11)
                 EditorFont::Default,
                 14.0,
                 IndentSettings::default(),

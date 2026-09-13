@@ -33,11 +33,44 @@ pub struct TerminalTab {
     pub last_interaction: f64,
 }
 
+/// A two-pane editor split (`PLAN.md` Track 11 / `SPEC.md` §11, which
+/// recommends split-in-two before any multi-window work). Both panes draw
+/// from the shared `EditorState::open_tabs` pool, so the app-side `parsers`
+/// stay index-aligned for whichever pane renders a given tab.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Split {
+    /// Each pane's own active tab, as an index into `open_tabs`: `[left,
+    /// right]`. Either can be `None` (that pane showing no tab). Private so
+    /// the "`active_tab` mirrors `active[focused]`" invariant can only be
+    /// changed through `EditorState`'s own methods.
+    active: [Option<usize>; 2],
+    /// Which pane (`0` left, `1` right) is focused. `EditorState::active_tab`
+    /// is always kept identical to `active[focused]`, so every existing
+    /// `active_tab` reader keeps acting on whatever pane the user is in.
+    focused: usize,
+}
+
 #[derive(Default)]
 pub struct EditorState {
     pub project: Option<Project>,
     pub open_tabs: Vec<Document>,
+    /// The focused pane's active tab, as an index into `open_tabs`. Kept as
+    /// a plain field (not a per-pane vec) so every existing reader is
+    /// unchanged: when the editor is split, this always mirrors the focused
+    /// pane's own active tab (`Split::active[focused]`); when it isn't, it's
+    /// simply the single pane's active tab, exactly as before.
     pub active_tab: Option<usize>,
+    /// The editor split (`Track 11`). `None` is single-pane — every
+    /// `active_tab` read then behaves exactly as it always has. `Some`
+    /// splits the editor area into two side-by-side panes over the same
+    /// `open_tabs` pool; the side panel and terminal stay shared chrome
+    /// (`SPEC.md` §11 non-goal), so only the editor's own focus is per-pane.
+    /// Public only so the pub `EditorState` stays constructible by struct
+    /// literal across crates (its tests do `EditorState { .., ..default() }`);
+    /// `Split`'s own fields are private, so the mirror invariant can still
+    /// only be touched through this type's methods — prefer `is_split`/
+    /// `split_editor`/`focus_pane`/`unsplit` over reading it directly.
+    pub split: Option<Split>,
     /// Recently closed tabs, most-recently-closed last. `close_tab` pushes
     /// onto this (capped at `MAX_CLOSED_TABS`, dropping the oldest);
     /// `reopen_last_closed_tab` pops off it.
@@ -48,6 +81,21 @@ pub struct EditorState {
     /// Which `terminal_tabs` entry the panel's own small tab strip has
     /// focused, if any.
     pub active_terminal: Option<usize>,
+}
+
+/// Re-points one pane's active-tab index after `open_tabs[removed]` is
+/// removed (`new_len` is the length *after* removal): the closed slot itself
+/// falls to its clamped neighbor, anything past it shifts down one, anything
+/// before it is untouched, and an emptied pool clears to `None`. Shared by
+/// `close_tab` across every pane so the shift rule lives in exactly one place.
+fn shift_active_after_close(active: Option<usize>, removed: usize, new_len: usize) -> Option<usize> {
+    match active {
+        None => None,
+        Some(_) if new_len == 0 => None,
+        Some(a) if a == removed => Some(removed.min(new_len - 1)),
+        Some(a) if a > removed => Some(a - 1),
+        Some(a) => Some(a),
+    }
 }
 
 impl EditorState {
@@ -80,10 +128,70 @@ impl EditorState {
         self.open_tabs.iter().position(|doc| doc.path() == path)
     }
 
+    /// Sets the *focused* pane's active tab, keeping `active_tab` and (when
+    /// split) `Split::active[focused]` in lockstep — the one place either is
+    /// written, so the "`active_tab` mirrors the focused pane" invariant
+    /// can't drift.
+    fn set_focused_active(&mut self, tab: Option<usize>) {
+        self.active_tab = tab;
+        if let Some(split) = &mut self.split {
+            split.active[split.focused] = tab;
+        }
+    }
+
+    /// Whether the editor is currently split into two panes.
+    pub fn is_split(&self) -> bool {
+        self.split.is_some()
+    }
+
+    /// The focused pane's index (`0` left, `1` right); always `0` when not split.
+    pub fn focused_pane(&self) -> usize {
+        self.split.as_ref().map_or(0, |split| split.focused)
+    }
+
+    /// The active-tab index (into `open_tabs`) for pane `pane`. Pane `0` is
+    /// the only pane when unsplit and returns `active_tab`; pane `1` exists
+    /// only while split.
+    pub fn pane_active(&self, pane: usize) -> Option<usize> {
+        match &self.split {
+            Some(split) => split.active.get(pane).copied().flatten(),
+            None => (pane == 0).then_some(self.active_tab).flatten(),
+        }
+    }
+
+    /// Splits the editor in two: the new right pane opens on the same tab the
+    /// current pane shows, and takes focus (matching how every editor's own
+    /// "Split Right" lands the cursor in the new pane). A no-op if already
+    /// split.
+    pub fn split_editor(&mut self) {
+        if self.split.is_none() {
+            self.split = Some(Split { active: [self.active_tab, self.active_tab], focused: 1 });
+        }
+    }
+
+    /// Collapses back to a single pane, keeping the focused pane's active tab
+    /// as the surviving one (`active_tab` already mirrors it). A no-op when
+    /// not split.
+    pub fn unsplit(&mut self) {
+        self.split = None;
+    }
+
+    /// Focuses pane `pane` (`0` or `1`), making its active tab the app-wide
+    /// `active_tab`. A no-op when not split or `pane` is out of range.
+    pub fn focus_pane(&mut self, pane: usize) {
+        if let Some(split) = &mut self.split
+            && pane < split.active.len()
+        {
+            split.focused = pane;
+            self.active_tab = split.active[pane];
+        }
+    }
+
     /// Opens `path` in a new tab, or focuses its existing tab if already open.
+    /// Either way it becomes the *focused pane's* active tab.
     pub fn open_tab(&mut self, path: PathBuf) -> Result<usize, OpenDocumentError> {
         if let Some(index) = self.find_tab(&path) {
-            self.active_tab = Some(index);
+            self.set_focused_active(Some(index));
             return Ok(index);
         }
 
@@ -91,32 +199,35 @@ impl EditorState {
         document.project_root = self.project.as_ref().map(|project| project.root.clone());
         self.open_tabs.push(document);
         let index = self.open_tabs.len() - 1;
-        self.active_tab = Some(index);
+        self.set_focused_active(Some(index));
         Ok(index)
     }
 
     pub fn focus_tab(&mut self, index: usize) {
         if index < self.open_tabs.len() {
-            self.active_tab = Some(index);
+            self.set_focused_active(Some(index));
         }
     }
 
     /// Removes the tab at `index`, pushing it onto `closed_tabs` (so
-    /// `reopen_last_closed_tab` can restore it later), and moves
-    /// `active_tab` to a sensible neighbor if the closed tab was active.
+    /// `reopen_last_closed_tab` can restore it later), and moves each pane's
+    /// active tab to a sensible neighbor if the closed tab was its active
+    /// one. Every pane's index (not just the focused one's) is adjusted for
+    /// the removed slot, since `open_tabs` is a shared pool: a tab the
+    /// *other* pane was showing must still point at the right document, or
+    /// go to a neighbor if it was the one closed.
     pub fn close_tab(&mut self, index: usize) {
         let document = self.open_tabs.remove(index);
+        let new_len = self.open_tabs.len();
 
-        self.active_tab = match self.active_tab {
-            None => None,
-            Some(active) if self.open_tabs.is_empty() => {
-                let _ = active;
-                None
+        self.active_tab = shift_active_after_close(self.active_tab, index, new_len);
+        if let Some(split) = &mut self.split {
+            for active in &mut split.active {
+                *active = shift_active_after_close(*active, index, new_len);
             }
-            Some(active) if active == index => Some(index.min(self.open_tabs.len() - 1)),
-            Some(active) if active > index => Some(active - 1),
-            Some(active) => Some(active),
-        };
+            // Keep the mirror invariant intact after the shift.
+            self.active_tab = split.active[split.focused];
+        }
 
         self.closed_tabs.push(document);
         if self.closed_tabs.len() > MAX_CLOSED_TABS {
@@ -133,13 +244,13 @@ impl EditorState {
         let document = self.closed_tabs.pop()?;
 
         if let Some(index) = self.find_tab(document.path()) {
-            self.active_tab = Some(index);
+            self.set_focused_active(Some(index));
             return Some(index);
         }
 
         self.open_tabs.push(document);
         let index = self.open_tabs.len() - 1;
-        self.active_tab = Some(index);
+        self.set_focused_active(Some(index));
         Some(index)
     }
 
@@ -403,5 +514,101 @@ mod tests {
             state.closed_tabs.is_empty(),
             "a closed terminal session has nothing to reopen, unlike a file tab"
         );
+    }
+
+    fn state_with_tabs(names: &[&str]) -> (tempfile::TempDir, EditorState) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = EditorState::new();
+        for name in names {
+            let path = test_support::placeholder_java_file(dir.path(), name);
+            state.open_tab(path).unwrap();
+        }
+        (dir, state)
+    }
+
+    #[test]
+    fn splitting_opens_a_second_pane_on_the_same_tab_and_focuses_it() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java"]);
+        state.focus_tab(0); // pane 0 (and the whole app) on A.java
+
+        state.split_editor();
+
+        assert!(state.is_split());
+        assert_eq!(state.focused_pane(), 1, "the new right pane takes focus");
+        assert_eq!(state.pane_active(0), Some(0), "left pane still shows A.java");
+        assert_eq!(state.pane_active(1), Some(0), "right pane opens on the same tab");
+        assert_eq!(state.active_tab, Some(0), "active_tab mirrors the focused (right) pane");
+    }
+
+    #[test]
+    fn each_pane_switches_tabs_independently() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java", "C.java"]);
+        state.focus_tab(0);
+        state.split_editor(); // right pane focused, both on A.java
+
+        state.focus_tab(2); // right pane -> C.java
+        assert_eq!(state.pane_active(1), Some(2));
+        assert_eq!(state.pane_active(0), Some(0), "left pane is untouched");
+
+        state.focus_pane(0);
+        assert_eq!(state.active_tab, Some(0), "focusing the left pane restores its own active tab");
+        state.focus_tab(1); // left pane -> B.java
+        assert_eq!(state.pane_active(0), Some(1));
+        assert_eq!(state.pane_active(1), Some(2), "right pane is untouched");
+    }
+
+    #[test]
+    fn closing_a_tab_reindexes_both_panes() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java", "C.java"]);
+        state.focus_tab(0);
+        state.split_editor();
+        state.focus_tab(2); // right pane on C.java (index 2)
+        state.focus_pane(0); // focus left pane, on A.java (index 0)
+
+        state.close_tab(1); // remove B.java; C.java shifts 2 -> 1
+
+        assert_eq!(state.pane_active(0), Some(0), "left pane still on A.java");
+        assert_eq!(state.pane_active(1), Some(1), "right pane's C.java followed the shift");
+        assert_eq!(state.active_tab, Some(0), "focused (left) pane's active is mirrored");
+    }
+
+    #[test]
+    fn closing_a_panes_own_active_tab_moves_it_to_a_neighbor() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java"]);
+        state.focus_tab(0);
+        state.split_editor();
+        state.focus_tab(1); // right pane on B.java (index 1)
+
+        state.close_tab(1); // close the right pane's own active tab
+
+        assert_eq!(state.pane_active(1), Some(0), "right pane falls back to the remaining tab");
+        assert_eq!(state.pane_active(0), Some(0), "left pane still on A.java");
+    }
+
+    #[test]
+    fn unsplitting_keeps_the_focused_panes_active_tab() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java"]);
+        state.focus_tab(0);
+        state.split_editor();
+        state.focus_tab(1); // right pane on B.java, focused
+
+        state.unsplit();
+
+        assert!(!state.is_split());
+        assert_eq!(state.focused_pane(), 0);
+        assert_eq!(state.active_tab, Some(1), "the focused pane's B.java survives the collapse");
+        assert_eq!(state.pane_active(1), None, "there is no second pane once collapsed");
+    }
+
+    #[test]
+    fn split_editor_is_a_no_op_when_already_split() {
+        let (_dir, mut state) = state_with_tabs(&["A.java", "B.java"]);
+        state.focus_tab(0);
+        state.split_editor();
+        state.focus_tab(1); // right pane -> B.java
+
+        state.split_editor(); // second call must not reset the panes
+
+        assert_eq!(state.pane_active(1), Some(1), "an already-split editor is left as-is");
     }
 }

@@ -190,6 +190,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
                     Server::Jdtls => "jdtls_binary_path",
                     Server::KotlinLanguageServer => "kotlin_language_server_binary_path",
                 })
+                .hint_text(t().lsp.binary_hint)
                 .desired_width(380.0),
         );
     });

@@ -450,6 +450,11 @@ pub fn show(
     ui: &mut egui::Ui,
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,
+    // Which editor pane this render is for (`PLAN.md` Track 11): `0` is the
+    // only pane when unsplit and the left pane when split; `1` is the right
+    // pane. Folded into the widget id so the same file open in both panes gets
+    // independent caret/scroll/undo state instead of sharing one.
+    pane: usize,
     editor_font: EditorFont,
     font_size: f32,
     indent_settings: IndentSettings,
@@ -548,7 +553,16 @@ pub fn show(
     // `TextEdit` inside a `ui.horizontal` one level deeper) — the opposite
     // of the position-independence this comment claims. `Id::new` is a
     // pure hash of the salt with no `Ui` involved, so it actually holds.
-    let id_salt = doc.path.to_string_lossy().into_owned();
+    // Pane 0 keeps the bare-path id so `jump_to`/`set_caret` (which target the
+    // primary pane) still resolve to it and a single-pane editor's persisted
+    // caret is byte-for-byte unchanged; a second pane on the same file gets a
+    // distinct id (a NUL separator can't collide with any real path byte) so
+    // the two panes don't share one caret/scroll/undo history.
+    let id_salt = if pane == 0 {
+        doc.path.to_string_lossy().into_owned()
+    } else {
+        format!("{}\u{0}pane{pane}", doc.path.to_string_lossy())
+    };
     let widget_id = egui::Id::new(&id_salt);
 
     let multi_cursor_active_at_start = !doc.extra_selections.is_empty();

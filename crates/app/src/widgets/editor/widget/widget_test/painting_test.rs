@@ -45,6 +45,7 @@ fn sticky_scroll_enabled_renders_without_panicking() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -96,6 +97,7 @@ fn renders_highlighted_valid_file_without_panicking() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -153,6 +155,7 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
                 ui,
                 doc,
                 parser,
+                0, // pane (Track 11)
                 EditorFont::Default,
                 14.0,
                 IndentSettings::default(),
@@ -242,6 +245,7 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -286,6 +290,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -338,6 +343,7 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
                 ui,
                 doc,
                 parser,
+                0, // pane (Track 11)
                 EditorFont::Default,
                 14.0,
                 IndentSettings::default(),
@@ -395,6 +401,7 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -455,6 +462,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
@@ -503,6 +511,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
             ui,
             &mut doc,
             &mut parser,
+            0, // pane (Track 11)
             EditorFont::Default,
             14.0,
             IndentSettings::default(),
