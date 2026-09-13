@@ -14,6 +14,7 @@ mod gradle;
 mod java_release;
 mod language;
 mod maven;
+mod profiler;
 mod project;
 mod project_config;
 mod run;
@@ -50,6 +51,7 @@ pub use java_release::{
 };
 pub use language::Language;
 pub use maven::{MavenClasspathError, MavenDependency, MavenParent, MavenProject, maven_classpath, parse_pom};
+pub use profiler::{FlameNode, ProfileEvent, parse_collapsed, profiler_command};
 pub use project::{FileKind, FileNode, Project};
 pub use project_config::{
     ProjectConfig, load_project_config, parse_project_config, save_project_config, serialize_project_config,

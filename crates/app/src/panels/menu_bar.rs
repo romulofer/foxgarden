@@ -97,6 +97,9 @@ pub struct MenuBarOutcome {
     /// which of `start`/`stop` this outcome means (`PLAN.md` Track 23
     /// Phase 1).
     pub debug_request: bool,
+    /// Run > Profile Running Process — attach async-profiler to the launched
+    /// `java` run and capture a CPU profile (`PLAN.md` Track 26 Phase 1).
+    pub profile_request: bool,
 }
 
 /// Clamp range for the Settings > Font Size control — small enough to stay
@@ -144,6 +147,8 @@ pub fn show(
     docker_build_run_running: bool,
     docker_compose_running: bool,
     debug_running: bool,
+    profile_available: bool,
+    profiling: bool,
 ) -> MenuBarOutcome {
     let mut outcome = MenuBarOutcome::default();
 
@@ -593,6 +598,23 @@ pub fn show(
                 .clicked()
             {
                 outcome.debug_request = true;
+                ui.close();
+            }
+            // Profiling attaches to the already-launched `java` run, so —
+            // unlike the mutually-exclusive Build/Run/Test entries above — it
+            // is deliberately *not* gated by `any_running`: a Run being in
+            // flight is exactly its precondition. `profile_available` is the
+            // caller's own "a `java` run has reached its launched stage and
+            // has a PID" answer; `profiling` relabels the entry while a
+            // capture is sampling.
+            if ui
+                .add_enabled(
+                    profile_available && !profiling,
+                    egui::Button::new(if profiling { t().common.profiling } else { t().menu.profile }),
+                )
+                .clicked()
+            {
+                outcome.profile_request = true;
                 ui.close();
             }
         });

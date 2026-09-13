@@ -180,6 +180,20 @@ impl BuildState {
         self.running() && matches!(self.stage, Some(Stage::Test { .. }))
     }
 
+    /// The PID of the launched `java` program, once a Run has reached its
+    /// `RunLaunched` stage — the profiler (`PLAN.md` Track 26) attaches to
+    /// this. `None` during the `RunCompiling` stage (the child is then the
+    /// `mvn`/`gradle` compiler, not the user's own JVM worth profiling) and
+    /// whenever nothing is running. Reads the shared `child` handle
+    /// `spawn_process`/`stop` also hold, so it reflects the process actually
+    /// alive right now.
+    pub fn run_pid(&self) -> Option<u32> {
+        if !matches!(self.stage, Some(Stage::RunLaunched)) {
+            return None;
+        }
+        self.child.lock().ok()?.as_ref().map(|child| child.id())
+    }
+
     pub fn is_coverage_running(&self) -> bool {
         self.running() && matches!(self.stage, Some(Stage::Coverage { .. }))
     }

@@ -96,6 +96,7 @@ pub struct Menu {
     pub docker_build_and_run: &'static str,
     pub docker_compose_up: &'static str,
     pub debug_project: &'static str,
+    pub profile: &'static str,
 
     pub view: &'static str,
     pub zen_mode: &'static str,
@@ -445,6 +446,10 @@ pub struct Common {
     /// same "one string, so the button and any status line can't drift
     /// apart" shape every other `running_*` entry here already follows.
     pub running_debug: &'static str,
+    /// The Run menu shows this in place of `menu.profile` while an
+    /// async-profiler capture is sampling the launched run (`PLAN.md` Track
+    /// 26 Phase 1).
+    pub profiling: &'static str,
     /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
     /// generic enough verb to belong here rather than under `Menu`/
     /// `RunConfigs`, matching this struct's own "shared by more than one
@@ -531,6 +536,7 @@ pub const PT_BR: Strings = Strings {
         docker_build_and_run: "Docker: Construir e Executar",
         docker_compose_up: "Docker Compose: Subir",
         debug_project: "Depurar Projeto",
+        profile: "Analisar Processo em Execução",
 
         view: "Exibir",
         zen_mode: "Modo Zen",
@@ -804,6 +810,7 @@ pub const PT_BR: Strings = Strings {
         running_docker_build: "Construindo e Executando Docker…",
         running_docker_compose: "Subindo Docker Compose…",
         running_debug: "Depurando…",
+        profiling: "Analisando…",
         stop: "Parar",
         debug_continue: "Continuar",
         debug_step_over: "Passar Por Cima",
@@ -885,6 +892,7 @@ pub const EN_US: Strings = Strings {
         docker_build_and_run: "Docker: Build & Run",
         docker_compose_up: "Docker Compose: Up",
         debug_project: "Debug Project",
+        profile: "Profile Running Process",
 
         view: "View",
         zen_mode: "Zen Mode",
@@ -1158,6 +1166,7 @@ pub const EN_US: Strings = Strings {
         running_docker_build: "Building & Running Docker…",
         running_docker_compose: "Bringing Up Docker Compose…",
         running_debug: "Debugging…",
+        profiling: "Profiling…",
         stop: "Stop",
         debug_continue: "Continue",
         debug_step_over: "Step Over",

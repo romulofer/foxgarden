@@ -295,6 +295,41 @@ msg! {
     }
 }
 
+// --- Profiler (async-profiler, PLAN.md Track 26) ------------------------
+
+msg! {
+    /// Shown when Profile is triggered but async-profiler isn't cached yet:
+    /// its download was kicked off, and the user should retry once it lands.
+    profiler_installing() {
+        pt: "baixando o async-profiler… tente Analisar de novo quando terminar",
+        en: "downloading async-profiler… try Profile again once it finishes",
+    }
+}
+
+msg! {
+    /// async-profiler's background install finished.
+    profiler_installed(version: &str) {
+        pt: "async-profiler {version} instalado",
+        en: "async-profiler {version} installed",
+    }
+}
+
+msg! {
+    /// A capture has begun against the launched run's JVM.
+    profiling_pid(pid: u32, secs: u32) {
+        pt: "analisando o processo {pid} por {secs}s…",
+        en: "profiling process {pid} for {secs}s…",
+    }
+}
+
+msg! {
+    /// A capture finished — `samples` is the profile's total sample count.
+    profile_captured(samples: u64) {
+        pt: "perfil capturado: {samples} amostras",
+        en: "profile captured: {samples} samples",
+    }
+}
+
 msg! {
     /// The `jacoco.xml` report couldn't be read/parsed after a "Run with
     /// Coverage" run finished successfully (`PLAN.md` Track 13 Phase 1) —

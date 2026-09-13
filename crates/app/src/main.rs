@@ -13,6 +13,8 @@ mod lsp_manager;
 mod lsp_settings;
 mod lsp_state;
 mod panels;
+mod profiler_manager;
+mod profiler_state;
 mod pty_session;
 mod rename;
 mod style;

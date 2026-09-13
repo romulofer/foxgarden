@@ -448,6 +448,10 @@ pub struct FoxGardenApp {
     /// in-flight `mvn`/`gradle` build — see `panels::build_panel::
     /// BuildState`. Runtime-only: a fresh launch has no build to resume.
     build_state: build_panel::BuildState,
+    /// async-profiler installer plus at most one in-flight capture against a
+    /// launched Run's JVM (`PLAN.md` Track 26 Phase 1) — see
+    /// `profiler_state::ProfilerState`. Runtime-only, same as `build_state`.
+    profiler_state: crate::profiler_state::ProfilerState,
     /// One in-flight or attached Java debug session (`PLAN.md` Track 23
     /// Phase 1) — see `debug_state::DebugState`. Runtime-only, same as
     /// `build_state`: no real process is ever worth trying to resume across
@@ -1286,6 +1290,7 @@ impl FoxGardenApp {
             file_history: crate::panels::file_history::FileHistoryState::default(),
             build_panel_visible,
             build_state: build_panel::BuildState::default(),
+            profiler_state: crate::profiler_state::ProfilerState::default(),
             debug_state: debug_state::DebugState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
@@ -1832,6 +1837,8 @@ impl eframe::App for FoxGardenApp {
                         self.build_state.is_docker_build_run_running(),
                         self.build_state.is_docker_compose_running(),
                         self.debug_state.is_running(),
+                        self.build_state.run_pid().is_some(),
+                        self.profiler_state.is_capturing(),
                     )
                 })
                 .inner;
@@ -2159,6 +2166,48 @@ impl eframe::App for FoxGardenApp {
             }
         }
 
+        // Profile Running Process (`PLAN.md` Track 26 Phase 1): attach
+        // async-profiler to the launched `java` run's PID and capture a CPU
+        // profile. The menu entry is only enabled when a run has reached its
+        // launched stage, so `run_pid()` is expected to be `Some` here; if
+        // async-profiler isn't cached yet, kick off its download and tell the
+        // user to retry rather than blocking the UI on the fetch.
+        if menu_outcome.profile_request
+            && let Some(pid) = self.build_state.run_pid()
+        {
+            match crate::profiler_manager::installed_asprof() {
+                Some(asprof) => {
+                    let secs = crate::profiler_state::DEFAULT_DURATION_SECS;
+                    self.profiler_state.start_capture(asprof, pid, fg_core::ProfileEvent::Cpu, secs);
+                    self.toasts.push(msg::profiling_pid(pid, secs));
+                }
+                None => {
+                    if !self.profiler_state.manager.installing() {
+                        self.profiler_state.manager.install();
+                    }
+                    self.toasts.push(msg::profiler_installing());
+                }
+            }
+        }
+
+        // async-profiler's background install finishing (Track 26 Phase 1).
+        if let Some(result) = self.profiler_state.manager.poll_install() {
+            match result {
+                Ok(installed) => self.toasts.push(msg::profiler_installed(&installed.version)),
+                Err(err) => crate::errors::report(&mut self.last_error, err),
+            }
+        }
+
+        // A capture finishing: surface a one-line summary (Track 26 Phase 1);
+        // the parsed tree is retained in `profiler_state.last_profile` for
+        // Phase 2's flame-graph widget.
+        if let Some(result) = self.profiler_state.poll_capture() {
+            match result {
+                Ok(tree) => self.toasts.push(msg::profile_captured(tree.total)),
+                Err(err) => crate::errors::report(&mut self.last_error, err),
+            }
+        }
+
         // Debug toolbar dispatch (`PLAN.md` Track 23 Phase 2) — each button
         // maps straight to its matching `DebugState` method, all of which
         // are harmless no-ops outside a paused session (Continue/Step) or
@@ -2307,6 +2356,13 @@ impl eframe::App for FoxGardenApp {
             self.lsp_servers.record_java_home_detection(found.is_some());
         }
         if self.lsp_servers.manager.busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        // Keep polling while an async-profiler download or capture runs on a
+        // background thread (`PLAN.md` Track 26 Phase 1), the same "no input
+        // event will wake us, so ask for a timed repaint" shape the language-
+        // server installer above uses.
+        if self.profiler_state.manager.installing() || self.profiler_state.is_capturing() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         self.diff.poll(&mut self.state);
