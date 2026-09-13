@@ -135,6 +135,7 @@ pub fn show(
     terminal_panel_visible: &mut bool,
     source_control_visible: &mut bool,
     build_panel_visible: &mut bool,
+    profiler_panel_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
     checkstyle_running: bool,
@@ -633,6 +634,9 @@ pub fn show(
                 ui.close();
             }
             if ui.checkbox(build_panel_visible, t().menu.build_output).changed() {
+                ui.close();
+            }
+            if ui.checkbox(profiler_panel_visible, t().menu.profiler_panel).changed() {
                 ui.close();
             }
             ui.separator();

@@ -104,6 +104,7 @@ pub struct Menu {
     pub terminal_panel: &'static str,
     pub source_control: &'static str,
     pub build_output: &'static str,
+    pub profiler_panel: &'static str,
     pub word_wrap: &'static str,
     pub render_whitespace: &'static str,
     pub indentation_guides: &'static str,
@@ -450,6 +451,11 @@ pub struct Common {
     /// async-profiler capture is sampling the launched run (`PLAN.md` Track
     /// 26 Phase 1).
     pub profiling: &'static str,
+    /// The profiler panel's own title and states (`PLAN.md` Track 26 Phase 2).
+    pub profiler_title: &'static str,
+    pub profiler_no_profile: &'static str,
+    pub profiler_reset_zoom: &'static str,
+    pub profiler_hint: &'static str,
     /// Stops a currently-running Run (`PLAN.md` Track 22 Phase 2) — a
     /// generic enough verb to belong here rather than under `Menu`/
     /// `RunConfigs`, matching this struct's own "shared by more than one
@@ -544,6 +550,7 @@ pub const PT_BR: Strings = Strings {
         terminal_panel: "Painel do Terminal",
         source_control: "Controle de Versão",
         build_output: "Saída da Compilação",
+        profiler_panel: "Painel de Perfil",
         word_wrap: "Quebra Automática de Linha",
         render_whitespace: "Exibir Espaços em Branco",
         indentation_guides: "Guias de Indentação",
@@ -811,6 +818,10 @@ pub const PT_BR: Strings = Strings {
         running_docker_compose: "Subindo Docker Compose…",
         running_debug: "Depurando…",
         profiling: "Analisando…",
+        profiler_title: "Perfil (Flame Graph)",
+        profiler_no_profile: "Nenhum perfil capturado ainda. Execute um projeto e use Executar › Analisar Processo em Execução.",
+        profiler_reset_zoom: "Reduzir Zoom",
+        profiler_hint: "Clique num quadro para dar zoom; clique no topo para reduzir.",
         stop: "Parar",
         debug_continue: "Continuar",
         debug_step_over: "Passar Por Cima",
@@ -900,6 +911,7 @@ pub const EN_US: Strings = Strings {
         terminal_panel: "Terminal Panel",
         source_control: "Source Control",
         build_output: "Build Output",
+        profiler_panel: "Profiler Panel",
         word_wrap: "Word Wrap",
         render_whitespace: "Render Whitespace",
         indentation_guides: "Indentation Guides",
@@ -1167,6 +1179,10 @@ pub const EN_US: Strings = Strings {
         running_docker_compose: "Bringing Up Docker Compose…",
         running_debug: "Debugging…",
         profiling: "Profiling…",
+        profiler_title: "Profile (Flame Graph)",
+        profiler_no_profile: "No profile captured yet. Run a project, then use Run › Profile Running Process.",
+        profiler_reset_zoom: "Reset Zoom",
+        profiler_hint: "Click a frame to zoom in; click the top frame to zoom out.",
         stop: "Stop",
         debug_continue: "Continue",
         debug_step_over: "Step Over",

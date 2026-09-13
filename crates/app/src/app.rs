@@ -452,6 +452,12 @@ pub struct FoxGardenApp {
     /// launched Run's JVM (`PLAN.md` Track 26 Phase 1) — see
     /// `profiler_state::ProfilerState`. Runtime-only, same as `build_state`.
     profiler_state: crate::profiler_state::ProfilerState,
+    /// The Profiler panel's zoom/focus state and whether it's docked open
+    /// (`PLAN.md` Track 26 Phase 2). Runtime-only: it opens itself when a
+    /// capture lands and has nothing worth persisting across a relaunch, the
+    /// same as `build_state`.
+    flame_graph: crate::widgets::flame_graph::FlameGraphState,
+    profiler_panel_visible: bool,
     /// One in-flight or attached Java debug session (`PLAN.md` Track 23
     /// Phase 1) — see `debug_state::DebugState`. Runtime-only, same as
     /// `build_state`: no real process is ever worth trying to resume across
@@ -1291,6 +1297,8 @@ impl FoxGardenApp {
             build_panel_visible,
             build_state: build_panel::BuildState::default(),
             profiler_state: crate::profiler_state::ProfilerState::default(),
+            flame_graph: crate::widgets::flame_graph::FlameGraphState::default(),
+            profiler_panel_visible: false,
             debug_state: debug_state::DebugState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
@@ -1825,6 +1833,7 @@ impl eframe::App for FoxGardenApp {
                         &mut self.terminal_panel_visible,
                         &mut self.source_control_visible,
                         &mut self.build_panel_visible,
+                        &mut self.profiler_panel_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
@@ -1935,6 +1944,15 @@ impl eframe::App for FoxGardenApp {
                         Err(err) => crate::errors::report(&mut self.last_error, msg::coverage_report_failed(&err.to_string())),
                     }
                 }
+            }
+
+            if self.profiler_panel_visible {
+                egui::Panel::bottom("profiler_panel")
+                    .resizable(true)
+                    .default_size(260.0)
+                    .show(ui, |ui| {
+                        crate::panels::profiler_panel::show(ui, &self.profiler_state, &mut self.flame_graph);
+                    });
             }
 
             if self.source_control_visible
@@ -2203,7 +2221,13 @@ impl eframe::App for FoxGardenApp {
         // Phase 2's flame-graph widget.
         if let Some(result) = self.profiler_state.poll_capture() {
             match result {
-                Ok(tree) => self.toasts.push(msg::profile_captured(tree.total)),
+                Ok(tree) => {
+                    self.toasts.push(msg::profile_captured(tree.total));
+                    // A fresh capture replaces the tree the old zoom pointed
+                    // into, so drop any stale focus and dock the panel open.
+                    self.flame_graph.reset();
+                    self.profiler_panel_visible = true;
+                }
                 Err(err) => crate::errors::report(&mut self.last_error, err),
             }
         }
