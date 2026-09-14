@@ -36,6 +36,21 @@ pub struct Strings {
     pub common: Common,
     pub debug: Debug,
     pub jdk: Jdk,
+    pub dock: Dock,
+}
+
+/// The bottom dock's own tab strip (`panels::bottom_dock`). Deliberately
+/// shorter than the `View` menu's own wording for the same panels
+/// (`menu.terminal_panel`/`menu.build_output`/`menu.profiler_panel`): a tab
+/// sits in a strip a few dozen pixels tall and competes for width with its
+/// siblings, where a menu row has a whole line to itself.
+pub struct Dock {
+    pub terminal: &'static str,
+    pub build: &'static str,
+    pub profiler: &'static str,
+    /// The strip's right-edge button, which closes the dock entirely
+    /// (whichever tab is showing) rather than switching tabs.
+    pub hide: &'static str,
 }
 
 /// The menu bar: `File`, `Settings`, `Tools`, `Run`, `View`, `Help`, plus
@@ -66,6 +81,9 @@ pub struct Menu {
     pub trim_trailing_whitespace: &'static str,
     pub trim_trailing_whitespace_hint: &'static str,
     pub language: &'static str,
+    /// Settings > Accessibility… — the low-vision settings dialog
+    /// (`panels::menu_bar::show_accessibility_settings`).
+    pub accessibility: &'static str,
     pub language_servers: &'static str,
     pub jdks: &'static str,
     pub external_tools: &'static str,
@@ -130,6 +148,16 @@ pub struct Menu {
 pub struct Dialogs {
     pub font_heading: &'static str,
     pub font_size: &'static str,
+
+    /// Settings > Accessibility…: a whole-interface zoom, distinct from
+    /// `font_size`, which only scales code in the editor — menus, the
+    /// project tree, tab labels and the status bar all stay put at their
+    /// own size otherwise, which is exactly the problem for a low-vision
+    /// user.
+    pub accessibility_heading: &'static str,
+    pub ui_scale: &'static str,
+    pub ui_scale_hint: &'static str,
+    pub ui_scale_reset: &'static str,
 
     pub live_templates_heading: &'static str,
     pub live_templates_intro: &'static str,
@@ -391,6 +419,9 @@ pub struct Errors {
     pub spotbugs_not_configured: &'static str,
     pub spotbugs_no_compiled_classes: &'static str,
     pub no_build_tool_detected: &'static str,
+    /// The run gutter's ▶ clicked with no project open at all — there's no
+    /// root to resolve a classpath against, so nothing to run.
+    pub no_project_open: &'static str,
     pub no_run_config: &'static str,
     pub coverage_requires_maven: &'static str,
     pub no_dockerfile_detected: &'static str,
@@ -512,6 +543,7 @@ pub const PT_BR: Strings = Strings {
         trim_trailing_whitespace: "Remover Espaços ao Salvar",
         trim_trailing_whitespace_hint: "Remove espaços e tabulações no fim de cada linha ao salvar. Desligue para não gerar diferenças em linhas que você não editou.",
         language: "Idioma",
+        accessibility: "Acessibilidade…",
         language_servers: "Servidores de Linguagem…",
         jdks: "JDKs…",
         external_tools: "Ferramentas Externas…",
@@ -574,6 +606,12 @@ pub const PT_BR: Strings = Strings {
     dialogs: Dialogs {
         font_heading: "Fonte",
         font_size: "Tamanho",
+        accessibility_heading: "Acessibilidade",
+        ui_scale: "Tamanho da interface",
+        ui_scale_hint: "Aumenta tudo junto — menus, árvore do projeto, abas, barra de status e o código — \
+                        ao contrário de Configurações > Fonte…, que muda só o tamanho do código. \
+                        Atalhos: Ctrl+= aumenta, Ctrl+- diminui, Ctrl+0 volta a 100%.",
+        ui_scale_reset: "Voltar a 100%",
 
         live_templates_heading: "Modelos Dinâmicos",
         live_templates_intro: "Digite um gatilho abaixo e pressione Tab sem seleção para expandi-lo.",
@@ -777,6 +815,7 @@ pub const PT_BR: Strings = Strings {
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
         checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
+        no_project_open: "Abra um projeto antes de executar — sem raiz não há classpath para resolver.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
         coverage_requires_maven: "Cobertura de código só é suportada em projetos Maven no momento.",
         no_dockerfile_detected: "Nenhum Dockerfile encontrado na raiz do projeto.",
@@ -843,6 +882,12 @@ pub const PT_BR: Strings = Strings {
         add: "Adicionar JDK…",
         auto_detect: "Detectar automaticamente",
     },
+    dock: Dock {
+        terminal: "Terminal",
+        build: "Compilação",
+        profiler: "Perfil",
+        hide: "Ocultar painel",
+    },
 };
 
 /// US English.
@@ -873,6 +918,7 @@ pub const EN_US: Strings = Strings {
         trim_trailing_whitespace: "Trim Trailing Whitespace on Save",
         trim_trailing_whitespace_hint: "Strips spaces and tabs at the end of every line when saving. Turn off to avoid touching lines you didn't edit.",
         language: "Language",
+        accessibility: "Accessibility…",
         language_servers: "Language Servers…",
         jdks: "JDKs…",
         external_tools: "External Tools…",
@@ -935,6 +981,12 @@ pub const EN_US: Strings = Strings {
     dialogs: Dialogs {
         font_heading: "Font",
         font_size: "Size",
+        accessibility_heading: "Accessibility",
+        ui_scale: "Interface size",
+        ui_scale_hint: "Scales everything together — menus, the project tree, tabs, the status bar and the \
+                        code — unlike Settings > Font…, which only changes the code's own size. \
+                        Shortcuts: Ctrl+= to enlarge, Ctrl+- to shrink, Ctrl+0 back to 100%.",
+        ui_scale_reset: "Back to 100%",
 
         live_templates_heading: "Live Templates",
         live_templates_intro: "Type a trigger below, then press Tab with no selection to expand it.",
@@ -1138,6 +1190,7 @@ pub const EN_US: Strings = Strings {
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
         checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
+        no_project_open: "Open a project before running — with no root there is no classpath to resolve.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
         coverage_requires_maven: "Code coverage is only supported for Maven projects right now.",
         no_dockerfile_detected: "No Dockerfile found at the project root.",
@@ -1203,5 +1256,11 @@ pub const EN_US: Strings = Strings {
         none_registered: "No JDKs registered yet.",
         add: "Add JDK…",
         auto_detect: "Auto-detect",
+    },
+    dock: Dock {
+        terminal: "Terminal",
+        build: "Build",
+        profiler: "Profiler",
+        hide: "Hide panel",
     },
 };

@@ -1,5 +1,6 @@
 use fg_i18n::{msg, t};
 use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 
 use egui::{Event, FontId, Key};
@@ -30,6 +31,7 @@ use super::multi_cursor::{self, MultiEditOp};
 use super::peek::PeekState;
 use super::references::FindReferencesState;
 use super::rename::RenameBox;
+use super::run_gutter;
 use super::painting::{
     paint_blame_annotation, paint_bracket_match, paint_diagnostic_ruler, paint_diagnostics, paint_extra_selections,
     paint_indent_guides,
@@ -305,6 +307,53 @@ fn foldable_ranges_for(
     folds
 }
 
+#[derive(Clone)]
+struct CachedMainEntries {
+    revision: u64,
+    entries: Arc<Vec<syntax::MainEntry>>,
+}
+
+/// Cache-checking wrapper around `syntax::main_entries`, keyed on the
+/// buffer revision alone — same shape and same reason as
+/// `foldable_ranges_for` above: it's a whole-tree walk, its answer only
+/// changes when the text does, and it's read on every frame the gutter is
+/// painted (which is every frame the file is on screen).
+fn main_entries_for(
+    ui: &egui::Ui,
+    widget_id: egui::Id,
+    parser: Option<&IncrementalParser>,
+    revision: u64,
+    source: &str,
+    path: &Path,
+) -> Arc<Vec<syntax::MainEntry>> {
+    let cache_id = egui::Id::new(("widget_main_entries", widget_id));
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedMainEntries>(cache_id))
+        && cached.revision == revision
+    {
+        return cached.entries;
+    }
+
+    // The file stem is what a Kotlin top-level `main` compiles into
+    // (`Main.kt` -> `MainKt`), so it has to come from the document's own
+    // path rather than anything in the text.
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let entries = parser
+        .and_then(|p| p.tree().map(|tree| syntax::main_entries(tree, source, p.language(), &stem)))
+        .unwrap_or_default();
+    let entries = Arc::new(entries);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedMainEntries {
+                revision,
+                entries: entries.clone(),
+            },
+        )
+    });
+    entries
+}
+
 #[derive(Clone, PartialEq)]
 struct OccurrenceHighlightKey {
     word: String,
@@ -482,6 +531,12 @@ pub fn show(
     code_action_gutter: &mut CodeActionGutter,
     debug_state: &crate::debug_state::DebugState,
     trim_trailing_whitespace_on_save: bool,
+    // Set to the entry point whose ▶ was clicked this frame, for the caller
+    // to turn into a real run — an out-parameter for the same reason
+    // `last_error` is one: this function already returns nothing and has
+    // several other "tell the caller what the user did" channels of exactly
+    // this shape.
+    run_request: &mut Option<syntax::MainEntry>,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1333,10 +1388,21 @@ pub fn show(
         .map(|c| doc.buffer.char_to_line(c.primary.min(doc.buffer.len_chars())))
         .filter(|&line| code_action_gutter.has_offer(&doc.path, line))
         .map_or(0.0, |_| code_action::GUTTER_WIDTH);
+    // Same "only reserve it when there's something to show" rule again: a
+    // file with no `main` in it — the overwhelming majority of a project's
+    // files — keeps exactly the gutter width it had before the run marker
+    // existed.
+    let main_entries = main_entries_for(ui, widget_id, parser.as_ref(), doc.buffer.revision(), &old_text, &doc.path);
+    let run_gutter_width = if main_entries.is_empty() {
+        0.0
+    } else {
+        run_gutter::RUN_GUTTER_WIDTH
+    };
     let gutter_width = digit_width * line_count.to_string().len() as f32
         + GUTTER_PADDING * 2.0
         + breakpoint_gutter_width
         + code_action_width
+        + run_gutter_width
         + fold_gutter_width
         + diff_gutter_width
         + coverage_gutter_width;
@@ -2331,13 +2397,28 @@ pub fn show(
             dark_mode,
         );
     }
+    // Immediately right of the quick-fix lightbulb and left of the fold
+    // column, so the run marker sits in the same "actions on this line"
+    // band rather than among the line numbers.
+    if run_gutter_width > 0.0
+        && let Some(entry) = run_gutter::show_run_gutter(
+            ui,
+            &shell_out.base,
+            &main_entries,
+            &id_salt,
+            gutter_left + breakpoint_gutter_width + code_action_width,
+            dark_mode,
+        )
+    {
+        *run_request = Some(entry);
+    }
     folding::show_fold_gutter(
         ui,
         &shell_out.base,
         &folds,
         &mut doc.folded_lines,
         &id_salt,
-        gutter_left + breakpoint_gutter_width + code_action_width,
+        gutter_left + breakpoint_gutter_width + code_action_width + run_gutter_width,
         dark_mode,
     );
     folding::paint_collapsed_markers(ui, &shell_out.base, &folds, &doc.folded_lines, dark_mode);

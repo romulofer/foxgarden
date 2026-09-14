@@ -153,6 +153,9 @@ pub fn show(
     // The welcome screen's own buttons, when it's the thing being shown
     // (no file open); left untouched otherwise.
     welcome: &mut crate::panels::welcome::WelcomeOutcome,
+    // Set to the entry point whose run-gutter ▶ was clicked this frame, for
+    // the caller to launch — see `editor::show`'s own parameter.
+    run_request: &mut Option<syntax::MainEntry>,
     recent_projects: &[PathBuf],
 ) {
     let mut focus_request = None;
@@ -474,6 +477,7 @@ pub fn show(
                 code_action_gutter,
                 debug_state,
                 trim_trailing_whitespace_on_save,
+                run_request,
             );
         });
     };

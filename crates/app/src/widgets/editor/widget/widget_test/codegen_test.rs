@@ -285,6 +285,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     text_area::set_caret(
@@ -332,6 +333,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -396,6 +398,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     text_area::set_caret(
@@ -442,6 +445,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -500,6 +504,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     text_area::set_caret(
@@ -547,6 +552,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 

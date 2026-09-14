@@ -6,22 +6,26 @@
 //! logic has its own unit tests in `pty_session`/`panels::git_stage`.
 
 use super::common_test::{E2e, MAIN_JAVA};
+use crate::panels::bottom_dock::BottomTab;
 use fg_i18n::t;
 
 #[test]
 fn the_terminal_panel_opens_and_closes_with_its_shortcut() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    assert!(!app.app().terminal_panel_visible, "the terminal starts closed");
+    assert!(!app.app().bottom_dock.is_open(), "the terminal starts closed");
 
     app.press(egui::Modifiers::COMMAND, egui::Key::Backtick);
-    assert!(app.app().terminal_panel_visible, "Ctrl+` opens the terminal panel");
+    assert!(
+        app.app().bottom_dock.shows(BottomTab::Terminal),
+        "Ctrl+` opens the terminal panel"
+    );
     assert!(
         !app.app().state.terminal_tabs.is_empty(),
         "opening the panel starts a session rather than showing an empty panel"
     );
 
     app.press(egui::Modifiers::COMMAND, egui::Key::Backtick);
-    assert!(!app.app().terminal_panel_visible, "and Ctrl+` again closes it");
+    assert!(!app.app().bottom_dock.is_open(), "and Ctrl+` again closes it");
 }
 
 #[test]
@@ -29,10 +33,30 @@ fn the_terminal_panel_can_also_be_toggled_from_the_view_menu() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
     app.menu(t().menu.view, t().menu.terminal_panel);
-    assert!(app.app().terminal_panel_visible);
+    assert!(app.app().bottom_dock.shows(BottomTab::Terminal));
 
     app.menu(t().menu.view, t().menu.terminal_panel);
-    assert!(!app.app().terminal_panel_visible);
+    assert!(!app.app().bottom_dock.is_open());
+}
+
+/// The dock's whole point (`FEATURES.md`'s "Tab-controlled bottom panels"):
+/// asking for a second bottom panel *replaces* what's showing rather than
+/// stacking a second one under it, and the strip stays open on the newly
+/// picked tab.
+#[test]
+fn a_second_bottom_panel_switches_tabs_instead_of_stacking() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.view, t().menu.terminal_panel);
+    assert!(app.app().bottom_dock.shows(BottomTab::Terminal));
+
+    app.menu(t().menu.view, t().menu.build_output);
+    assert!(app.app().bottom_dock.shows(BottomTab::Build));
+    assert!(
+        !app.app().bottom_dock.shows(BottomTab::Terminal),
+        "the terminal must give up the dock rather than stay open underneath"
+    );
+    assert!(app.shows(t().dock.terminal), "its tab stays reachable in the strip");
 }
 
 #[test]

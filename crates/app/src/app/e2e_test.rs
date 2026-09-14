@@ -49,6 +49,7 @@
 //!   launches; `egui_kittest`'s `CreationContext` has none, so
 //!   `super::app_test` uses its own `FakeStorage` instead.
 
+mod accessibility_test;
 mod common_test;
 
 mod completion_test;
@@ -60,4 +61,5 @@ mod menus_test;
 mod navigation_test;
 mod panels_test;
 mod project_tree_test;
+mod run_gutter_test;
 mod tabs_test;

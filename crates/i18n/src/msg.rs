@@ -278,6 +278,16 @@ msg! {
 }
 
 msg! {
+    /// The run gutter's ▶ tooltip (`widgets::editor::run_gutter`) —
+    /// `class` is the entry point's own simple class name, not its
+    /// package-qualified one, which is too long to read in a tooltip.
+    run_main_class(class: &str) {
+        pt: "Executar {class}",
+        en: "Run {class}",
+    }
+}
+
+msg! {
     /// A Docker action's own `Command::spawn` failing (`docker` missing
     /// from `PATH`, e.g.) — not the build/run itself failing, which
     /// instead shows up as ordinary lines in the build output panel

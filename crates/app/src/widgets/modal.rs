@@ -24,7 +24,23 @@ pub fn show_modal<T, R>(
 ) -> Option<(R, bool)> {
     let data = guard?;
     let ctx = ui.ctx().clone();
-    let response = egui::Modal::new(egui::Id::new(id)).show(&ctx, |ui| body(ui, &data));
+    // Capped to the window and scrollable inside that cap. A modal sizes
+    // itself to its content, which is fine at 100% and stops being fine
+    // under Settings > Accessibility…'s interface zoom: at 300% this
+    // dialog's own buttons rendered past the right and bottom edges of the
+    // window, including the "Back to 100%" that undoes the zoom — found
+    // live, and a trap rather than a cosmetic problem, since the setting
+    // that caused it was then unreachable. Every modal gets the same
+    // treatment because every modal has the same failure mode.
+    let screen = ctx.content_rect();
+    let max_size = egui::vec2(screen.width() * 0.9, screen.height() * 0.85);
+    let response = egui::Modal::new(egui::Id::new(id)).show(&ctx, |ui| {
+        ui.set_max_size(max_size);
+        egui::ScrollArea::both()
+            .id_salt((id, "modal_scroll"))
+            .show(ui, |ui| body(ui, &data))
+            .inner
+    });
     // Deliberately narrower than `ModalResponse::should_close` (which also
     // treats a backdrop click as a close) — only Escape was asked for, and
     // backdrop-click-to-close is a distinct UX decision this app hasn't

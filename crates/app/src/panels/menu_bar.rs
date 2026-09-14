@@ -4,6 +4,7 @@ use fg_core::EditorState;
 use fg_i18n::{Lang, msg, t};
 use syntax::{IncrementalParser, Scope};
 
+use super::bottom_dock::{BottomDock, BottomTab};
 use super::side_panel::SidePanelState;
 use super::tabs;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings};
@@ -26,6 +27,8 @@ pub struct MenuBarState {
     about_open: bool,
     /// Settings > Font… — see `show_font_settings`.
     font_settings_open: bool,
+    /// Settings > Accessibility… — see `show_accessibility_settings`.
+    accessibility_open: bool,
     /// Help > Live Templates… — see `show_live_templates`.
     live_templates_open: bool,
     /// A new custom Java template being typed, not yet added to
@@ -105,6 +108,13 @@ pub struct MenuBarOutcome {
 /// Clamp range for the Settings > Font Size control — small enough to stay
 /// legible, large enough to stay useful on a hi-DPI display.
 const FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
+/// Clamp range for Settings > Accessibility…'s interface scale. Down to
+/// 80% (a little tighter than default, for a large display), up to 300% —
+/// that upper end is the point of the setting: at 3× the menu bar, the
+/// project tree and the code are all legible to someone who can't read the
+/// default at all, and egui's own `zoom_factor` scales spacing and widget
+/// hit-targets with the text rather than just the glyphs.
+pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.8..=3.0;
 /// Clamp range for the Settings > Indentation width control.
 const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
 /// Clamp range for the Settings > Auto-save idle-seconds control — long
@@ -126,16 +136,15 @@ pub fn show(
     editor_font: &mut EditorFont,
     font_size: &mut f32,
     dark_mode: &mut bool,
+    ui_scale: &mut f32,
     indent_settings: &mut IndentSettings,
     view_settings: &mut ViewSettings,
     auto_save_settings: &mut AutoSaveSettings,
     trim_trailing_whitespace_on_save: &mut bool,
     zen_mode: &mut bool,
     side_panel_visible: &mut bool,
-    terminal_panel_visible: &mut bool,
+    bottom_dock: &mut BottomDock,
     source_control_visible: &mut bool,
-    build_panel_visible: &mut bool,
-    profiler_panel_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
     checkstyle_running: bool,
@@ -264,6 +273,10 @@ pub fn show(
             });
             if ui.button(t().menu.font).clicked() {
                 menu.font_settings_open = true;
+                ui.close();
+            }
+            if ui.button(t().menu.accessibility).clicked() {
+                menu.accessibility_open = true;
                 ui.close();
             }
             ui.menu_button(t().menu.indentation, |ui| {
@@ -627,16 +640,29 @@ pub fn show(
             if checkbox_with_shortcut(ui, side_panel_visible, t().menu.side_panel, "Ctrl+B").changed() {
                 ui.close();
             }
-            if checkbox_with_shortcut(ui, terminal_panel_visible, t().menu.terminal_panel, "Ctrl+`").changed() {
-                ui.close();
+            // The three bottom panels share one dock now (`panels::
+            // bottom_dock`), so each checkbox reads "is this the tab on
+            // screen" rather than owning a flag of its own: ticking one
+            // with another already showing switches tabs instead of
+            // stacking a second panel under it, and un-ticking the one
+            // showing closes the dock. `dock.toggle` is the single place
+            // that rule lives — see its own doc comment.
+            for (tab, label, shortcut) in [
+                (BottomTab::Terminal, t().menu.terminal_panel, Some("Ctrl+`")),
+                (BottomTab::Build, t().menu.build_output, None),
+                (BottomTab::Profiler, t().menu.profiler_panel, None),
+            ] {
+                let mut showing = bottom_dock.shows(tab);
+                let response = match shortcut {
+                    Some(shortcut) => checkbox_with_shortcut(ui, &mut showing, label, shortcut),
+                    None => ui.checkbox(&mut showing, label),
+                };
+                if response.changed() {
+                    bottom_dock.toggle(tab);
+                    ui.close();
+                }
             }
             if ui.checkbox(source_control_visible, t().menu.source_control).changed() {
-                ui.close();
-            }
-            if ui.checkbox(build_panel_visible, t().menu.build_output).changed() {
-                ui.close();
-            }
-            if ui.checkbox(profiler_panel_visible, t().menu.profiler_panel).changed() {
                 ui.close();
             }
             ui.separator();
@@ -755,6 +781,7 @@ pub fn show(
 
     show_about(ui, menu);
     show_font_settings(ui, menu, editor_font, font_size);
+    show_accessibility_settings(ui, menu, ui_scale);
     show_live_templates(ui, menu, *dark_mode, custom_templates);
 
     outcome
@@ -809,6 +836,54 @@ fn show_font_settings(ui: &egui::Ui, menu: &mut MenuBarState, editor_font: &mut 
         && (close_clicked || escape_pressed)
     {
         menu.font_settings_open = false;
+    }
+}
+
+/// Settings > Accessibility… — the whole-interface zoom, for a user who
+/// can't read the default size. Deliberately its own dialog rather than a
+/// second row inside Settings > Font…: that one is "what does *code* look
+/// like" (family + size, both editor-only), and burying an
+/// everything-scales control under a heading that says "Font" is exactly
+/// where a low-vision user wouldn't look for it.
+fn show_accessibility_settings(ui: &egui::Ui, menu: &mut MenuBarState, ui_scale: &mut f32) {
+    let outcome = show_modal(
+        ui,
+        "accessibility_dialog",
+        menu.accessibility_open.then_some(()),
+        |ui, ()| {
+            ui.heading(t().dialogs.accessibility_heading);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(t().dialogs.ui_scale);
+                // Shown as a percentage, not as the raw `1.4` multiplier
+                // egui wants — "140%" is how every other application spells
+                // this setting, and the conversion is this one line.
+                let mut percent = (*ui_scale * 100.0).round();
+                let range = (UI_SCALE_RANGE.start() * 100.0)..=(UI_SCALE_RANGE.end() * 100.0);
+                if ui.add(egui::Slider::new(&mut percent, range).suffix("%").step_by(5.0)).changed() {
+                    *ui_scale = percent / 100.0;
+                }
+            });
+            if ui.button(t().dialogs.ui_scale_reset).clicked() {
+                *ui_scale = 1.0;
+            }
+            ui.separator();
+            // Wrapped at a fixed width rather than left to size the dialog:
+            // this paragraph is the longest string in it, and an unwrapped
+            // label would make the whole modal as wide as the sentence —
+            // which at a 300% interface scale is several times the window.
+            ui.scope(|ui| {
+                ui.set_max_width(360.0);
+                ui.label(egui::RichText::new(t().dialogs.ui_scale_hint).weak().small());
+            });
+            ui.separator();
+            ui.button(t().common.close).clicked()
+        },
+    );
+    if let Some((close_clicked, escape_pressed)) = outcome
+        && (close_clicked || escape_pressed)
+    {
+        menu.accessibility_open = false;
     }
 }
 

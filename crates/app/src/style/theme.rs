@@ -77,6 +77,17 @@ const LIGHT_COVERAGE_PARTIAL: Color32 = Color32::from_rgb(179, 127, 0);
 
 const DARK_BREAKPOINT: Color32 = Color32::from_rgb(224, 82, 82);
 const LIGHT_BREAKPOINT: Color32 = Color32::from_rgb(202, 42, 42);
+
+/// The run gutter's ▶ (`widgets::editor::run_gutter`) — green, the
+/// universal "this starts something" color, and distinct from both the
+/// breakpoint column's red immediately to its left and
+/// `COVERAGE_COVERED`'s own teal-leaning green, which can share the same
+/// row. Dimmer at rest than on hover, so a file full of entry points
+/// doesn't read as a column of buttons demanding attention.
+const DARK_RUN_MARKER: Color32 = Color32::from_rgb(88, 166, 92);
+const LIGHT_RUN_MARKER: Color32 = Color32::from_rgb(56, 132, 60);
+const DARK_RUN_MARKER_HOVERED: Color32 = Color32::from_rgb(124, 214, 128);
+const LIGHT_RUN_MARKER_HOVERED: Color32 = Color32::from_rgb(30, 104, 34);
 const DARK_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(229, 192, 84, 40);
 const LIGHT_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(181, 137, 0, 30);
 
@@ -179,6 +190,14 @@ pub fn coverage_missed(dark_mode: bool) -> Color32 {
 
 pub fn breakpoint(dark_mode: bool) -> Color32 {
     if dark_mode { DARK_BREAKPOINT } else { LIGHT_BREAKPOINT }
+}
+
+pub fn run_marker(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_RUN_MARKER } else { LIGHT_RUN_MARKER }
+}
+
+pub fn run_marker_hovered(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_RUN_MARKER_HOVERED } else { LIGHT_RUN_MARKER_HOVERED }
 }
 
 pub fn debug_current_line(dark_mode: bool) -> Color32 {

@@ -223,8 +223,17 @@ pub fn show(
 /// floors to at least 1 each, since a session can never legitimately have
 /// zero rows or columns.
 fn grid_size(available: egui::Vec2, row_height: f32, col_width: f32) -> (u16, u16) {
-    let rows = (available.y / row_height).floor().max(1.0) as u16;
-    let cols = (available.x / col_width).floor().max(1.0) as u16;
+    // Both floored at *two*, not one. `vt100`'s own `col_wrap` is what a
+    // 1×n grid breaks: it wraps, scrolls by one row, and then computes
+    // `prev_pos.row -= scrolled` — which underflows and panics when the
+    // only row there is is row 0. The column side has the same shape one
+    // line above it (`cols - width`, underflowing on a double-width glyph
+    // in a one-column grid). Neither size is usable as a terminal anyway,
+    // so this is the floor that keeps a squeezed-shut panel from taking
+    // the whole app down with it — a real crash, found live, not a
+    // hypothetical.
+    let rows = (available.y / row_height).floor().max(2.0) as u16;
+    let cols = (available.x / col_width).floor().max(2.0) as u16;
     (rows, cols)
 }
 
@@ -340,8 +349,20 @@ mod grid_size_tests {
     }
 
     #[test]
-    fn a_rect_smaller_than_one_cell_still_floors_to_a_single_row_and_column() {
-        assert_eq!(grid_size(egui::vec2(2.0, 2.0), 20.0, 8.0), (1, 1));
+    fn a_rect_smaller_than_one_cell_still_floors_to_a_usable_grid() {
+        assert_eq!(grid_size(egui::vec2(2.0, 2.0), 20.0, 8.0), (2, 2));
+    }
+
+    /// A single-row (or single-column) grid is what `vt100`'s own
+    /// `col_wrap` underflows on, so a squeezed-shut panel must never
+    /// produce one — this is the regression guard for a real crash found
+    /// live, not a style preference.
+    #[test]
+    fn a_squeezed_panel_never_produces_a_single_row_or_column_grid() {
+        for size in [0.0, 1.0, 7.9, 8.0, 15.9, 19.9] {
+            let (rows, cols) = grid_size(egui::vec2(size, size), 20.0, 8.0);
+            assert!(rows >= 2 && cols >= 2, "{size}px produced a {rows}x{cols} grid");
+        }
     }
 
     #[test]

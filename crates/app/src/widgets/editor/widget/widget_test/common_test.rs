@@ -98,6 +98,7 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -161,6 +162,7 @@ pub(super) fn typing_session(
                 code_action_gutter,
                 &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
             );
         });
     };
@@ -254,6 +256,7 @@ pub(super) fn focused_frame_with_selection(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -317,6 +320,7 @@ pub(super) fn focused_frame_with_selection(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -369,6 +373,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -427,6 +432,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -489,6 +495,7 @@ pub(super) fn focused_frame_with_extra_selections(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -540,6 +547,7 @@ pub(super) fn focused_frame_with_extra_selections(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -596,6 +604,7 @@ pub(super) fn focused_frame_with_indent_settings(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -645,6 +654,7 @@ pub(super) fn focused_frame_with_indent_settings(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -700,6 +710,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -758,6 +769,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -868,6 +880,7 @@ pub(super) fn run_frame_reading_selection(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     text_area::peek_caret(ctx, id)
@@ -1000,6 +1013,7 @@ pub(super) fn focused_frame_with_generate_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     last_error
@@ -1056,6 +1070,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -1115,6 +1130,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     last_error
@@ -1170,6 +1186,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 
@@ -1220,6 +1237,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
 }
@@ -1300,6 +1318,7 @@ pub(super) fn focused_frame_with_generate_method_request(
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         );
     });
     last_error

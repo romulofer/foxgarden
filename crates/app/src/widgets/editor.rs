@@ -26,6 +26,7 @@ mod painting;
 mod peek;
 mod references;
 mod rename;
+mod run_gutter;
 mod spring_annotation_completion;
 mod spring_config_completion;
 mod spring_scan;

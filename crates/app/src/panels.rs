@@ -2,6 +2,7 @@
 //! status bar, and the tab bar (which also owns tab/parser lifecycle — see
 //! `tabs::open_parser_for`).
 
+pub mod bottom_dock;
 pub mod build_panel;
 pub mod command_palette;
 pub mod debug_panel;
