@@ -214,3 +214,9 @@ Contribuições e issues são bem-vindas. 🙌
 ### 📄 Licença
 
 [MIT](LICENSE) © Rômulo Fernandes Evangelista
+
+## ☕ Support
+
+If you find this project useful, consider supporting its development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-legendaryredfox-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/legendaryredfox)
