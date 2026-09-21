@@ -356,7 +356,11 @@ fn replace_block_selection_inserts_the_same_text_at_the_same_column_on_every_row
     let (out, new_block) = replace_block_selection(text, &index, block, "X");
     assert_eq!(out, "aaXaa\nbbXbb\nccXcc");
     assert_eq!(new_block.lines(), 0..=2);
-    assert_eq!(new_block.cols(), 3..3, "collapses right after the inserted char on every row");
+    assert_eq!(
+        new_block.cols(),
+        3..3,
+        "collapses right after the inserted char on every row"
+    );
 }
 
 #[test]
@@ -427,7 +431,10 @@ fn block_backspace_skips_only_the_rows_already_at_column_zero() {
     let index = idx(text);
     let block = BlockSelection::at(0, 1).moved_to(2, 1);
     let (out, _) = block_backspace(text, &index, block).expect("rows 0 and 2 have something to delete");
-    assert_eq!(out, "Xa\n\nXc", "the empty middle row is left untouched, not merged into row 0");
+    assert_eq!(
+        out, "Xa\n\nXc",
+        "the empty middle row is left untouched, not merged into row 0"
+    );
 }
 
 #[test]
@@ -478,7 +485,11 @@ fn block_paste_replaces_each_rows_own_column_range_with_its_matching_clipboard_l
     let block = BlockSelection::at(0, 1).moved_to(2, 3);
     let (out, new_block) = block_paste(text, &index, block, "11\n22\n33");
     assert_eq!(out, "a11a\nb22b\nc33c");
-    assert_eq!(new_block.cols(), 3..3, "collapses right after the first row's own pasted text");
+    assert_eq!(
+        new_block.cols(),
+        3..3,
+        "collapses right after the first row's own pasted text"
+    );
 }
 
 #[test]
@@ -487,7 +498,10 @@ fn block_paste_with_fewer_clipboard_lines_than_block_rows_leaves_the_extra_rows_
     let index = idx(text);
     let block = BlockSelection::at(0, 1).moved_to(2, 2); // spans 3 rows
     let (out, _) = block_paste(text, &index, block, "1\n2"); // only 2 clipboard lines
-    assert_eq!(out, "a1a\nb2b\ncXc", "row 2 has no matching clipboard line, so it's left exactly as-is");
+    assert_eq!(
+        out, "a1a\nb2b\ncXc",
+        "row 2 has no matching clipboard line, so it's left exactly as-is"
+    );
 }
 
 #[test]
@@ -496,7 +510,10 @@ fn block_paste_with_more_clipboard_lines_than_block_rows_drops_the_surplus() {
     let index = idx(text);
     let block = BlockSelection::at(0, 1).moved_to(1, 2);
     let (out, _) = block_paste(text, &index, block, "1\n2\n3\n4"); // 4 clipboard lines
-    assert_eq!(out, "a1a\nb2b", "clipboard lines 3/4 have no matching row and are simply dropped");
+    assert_eq!(
+        out, "a1a\nb2b",
+        "clipboard lines 3/4 have no matching row and are simply dropped"
+    );
 }
 
 #[test]

@@ -64,7 +64,15 @@ struct LaidOutFrame {
 /// zoomed subtree. Pure and context-free, so proportional widths are testable.
 fn layout_frames(node: &FlameNode, focus_path: &[usize], area: Rect) -> Vec<LaidOutFrame> {
     let mut frames = Vec::new();
-    layout_into(node, focus_path.to_vec(), 0, area.left(), area.width(), area.top(), &mut frames);
+    layout_into(
+        node,
+        focus_path.to_vec(),
+        0,
+        area.left(),
+        area.width(),
+        area.top(),
+        &mut frames,
+    );
     frames
 }
 
@@ -111,7 +119,11 @@ fn max_depth(node: &FlameNode, width: f32) -> usize {
         .iter()
         .map(|child| {
             let child_width = width * (child.total as f32 / node.total as f32);
-            if child_width >= MIN_FRAME_WIDTH { 1 + max_depth(child, child_width) } else { 0 }
+            if child_width >= MIN_FRAME_WIDTH {
+                1 + max_depth(child, child_width)
+            } else {
+                0
+            }
         })
         .max()
         .unwrap_or(0)
@@ -146,7 +158,9 @@ fn resolve_focus<'a>(root: &'a FlameNode, focus: &[usize]) -> (&'a FlameNode, Ve
 /// yellow→red band (the palette the FlameGraph tool established), varied by a
 /// cheap hash of the name.
 fn frame_color(name: &str) -> Color32 {
-    let hash = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let hash = name
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     let red = 205 + (hash % 50) as u8; // 205..=254
     let green = 80 + (hash / 50 % 110) as u8; // 80..=189
     let blue = 30 + (hash / 5000 % 30) as u8; // 30..=59
@@ -192,7 +206,12 @@ pub fn show(ui: &mut egui::Ui, root: &FlameNode, state: &mut FlameGraphState) {
                 fill = fill.gamma_multiply(1.25);
             }
             painter.rect_filled(frame.rect, 2.0, fill);
-            painter.rect_stroke(frame.rect, 2.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+            painter.rect_stroke(
+                frame.rect,
+                2.0,
+                Stroke::new(1.0, Color32::from_black_alpha(40)),
+                egui::StrokeKind::Inside,
+            );
 
             // Only label frames wide enough to fit at least a few glyphs;
             // narrower ones are still hoverable for their full name.
@@ -217,7 +236,9 @@ pub fn show(ui: &mut egui::Ui, root: &FlameNode, state: &mut FlameGraphState) {
             let of_root = 100.0 * total as f32 / root_total as f32;
             response.clone().on_hover_ui_at_pointer(|ui| {
                 ui.monospace(&name);
-                ui.label(format!("{total} samples · {of_focus:.1}% of view · {of_root:.1}% of total"));
+                ui.label(format!(
+                    "{total} samples · {of_focus:.1}% of view · {of_root:.1}% of total"
+                ));
             });
         }
 
@@ -251,107 +272,5 @@ fn elide(name: &str, width: f32) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn node(name: &str, total: u64, children: Vec<FlameNode>) -> FlameNode {
-        FlameNode { name: name.to_string(), total, children }
-    }
-
-    fn area() -> Rect {
-        Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 500.0))
-    }
-
-    #[test]
-    fn layout_gives_the_focus_node_full_width_at_the_top() {
-        let root = node("all", 10, vec![node("a", 6, vec![]), node("b", 4, vec![])]);
-        let frames = layout_frames(&root, &[], area());
-
-        let root_frame = &frames[0];
-        assert_eq!(root_frame.name, "all");
-        assert!((root_frame.rect.width() - 100.0).abs() < 0.01, "focus spans full width");
-        assert!((root_frame.rect.top() - 0.0).abs() < 0.01, "focus is the top row");
-    }
-
-    #[test]
-    fn children_widths_are_proportional_to_their_sample_counts() {
-        let root = node("all", 10, vec![node("a", 6, vec![]), node("b", 4, vec![])]);
-        let frames = layout_frames(&root, &[], area());
-
-        let a = frames.iter().find(|f| f.name == "a").unwrap();
-        let b = frames.iter().find(|f| f.name == "b").unwrap();
-        assert!((a.rect.width() - 60.0).abs() < 0.01, "6/10 of 100");
-        assert!((b.rect.width() - 40.0).abs() < 0.01, "4/10 of 100");
-        // b starts exactly where a ends — no gaps or overlaps.
-        assert!((b.rect.left() - a.rect.right()).abs() < 0.01);
-        // Children sit one row below their parent.
-        assert!((a.rect.top() - ROW_HEIGHT).abs() < 0.01);
-    }
-
-    #[test]
-    fn a_click_target_path_addresses_the_whole_tree() {
-        let root = node("all", 10, vec![node("a", 10, vec![node("c", 10, vec![])])]);
-        let frames = layout_frames(&root, &[], area());
-        let c = frames.iter().find(|f| f.name == "c").unwrap();
-        assert_eq!(c.path, vec![0, 0], "path is the child-index route from the root");
-    }
-
-    #[test]
-    fn layout_prepends_the_focus_path_to_every_frame() {
-        // Zoomed into node `a` (index 0): its subtree's paths must still be
-        // rooted at the real tree, so a further click resolves correctly.
-        let a = node("a", 10, vec![node("c", 10, vec![])]);
-        let frames = layout_frames(&a, &[0], area());
-        assert_eq!(frames[0].path, vec![0], "the focus node keeps its own path");
-        let c = frames.iter().find(|f| f.name == "c").unwrap();
-        assert_eq!(c.path, vec![0, 0]);
-    }
-
-    #[test]
-    fn tiny_frames_are_culled() {
-        // A child that's 1/1000 of the width falls below MIN_FRAME_WIDTH.
-        let root = node("all", 1000, vec![node("big", 999, vec![]), node("tiny", 1, vec![])]);
-        let frames = layout_frames(&root, &[], area());
-        assert!(frames.iter().any(|f| f.name == "big"));
-        assert!(!frames.iter().any(|f| f.name == "tiny"), "sub-pixel frame dropped");
-    }
-
-    #[test]
-    fn resolve_focus_falls_back_and_flags_a_stale_path() {
-        let root = node("all", 10, vec![node("a", 10, vec![])]);
-        // Index 5 doesn't exist — a stale focus over a changed tree.
-        let (node, valid, intact) = resolve_focus(&root, &[5]);
-        assert!(!intact);
-        assert!(valid.is_empty());
-        assert_eq!(node.name, "all", "falls back to the deepest reachable node");
-    }
-
-    #[test]
-    fn resolve_focus_follows_a_valid_path() {
-        let root = node("all", 10, vec![node("a", 10, vec![node("c", 10, vec![])])]);
-        let (node, valid, intact) = resolve_focus(&root, &[0, 0]);
-        assert!(intact);
-        assert_eq!(valid, vec![0, 0]);
-        assert_eq!(node.name, "c");
-    }
-
-    #[test]
-    fn max_depth_counts_reachable_rows() {
-        let root = node("all", 10, vec![node("a", 10, vec![node("c", 10, vec![])])]);
-        // all -> a -> c is two levels below the root.
-        assert_eq!(max_depth(&root, 100.0), 2);
-    }
-
-    #[test]
-    fn frame_color_is_deterministic_per_name() {
-        assert_eq!(frame_color("Spin.main"), frame_color("Spin.main"));
-    }
-
-    #[test]
-    fn elide_keeps_short_names_and_truncates_long_ones() {
-        assert_eq!(elide("main", 200.0), "main");
-        let long = elide("com.example.very.long.ClassName.method", 40.0);
-        assert!(long.ends_with('…'));
-        assert!(long.chars().count() < "com.example.very.long.ClassName.method".chars().count());
-    }
-}
+#[path = "flame_graph_test.rs"]
+mod flame_graph_test;

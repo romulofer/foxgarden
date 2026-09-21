@@ -82,7 +82,12 @@ impl FileHistoryState {
                 .filter_map(|snapshot| {
                     let content = std::fs::read_to_string(&snapshot.path).ok()?;
                     let (added, removed) = diff_view::diff_stat(&content, &live_content);
-                    Some(SnapshotRow { timestamp_nanos: snapshot.timestamp_nanos, content, added, removed })
+                    Some(SnapshotRow {
+                        timestamp_nanos: snapshot.timestamp_nanos,
+                        content,
+                        added,
+                        removed,
+                    })
                 })
                 .collect()
         }));
@@ -134,14 +139,23 @@ impl FileHistoryState {
 /// "a real, undoable content change from outside typing") is left to the
 /// caller, the same "this widget only reports the click, the caller owns
 /// `EditorState`" split `git_stage.rs`'s own hunk-stage buttons already use.
-pub fn show(ctx: &egui::Context, state: &mut FileHistoryState, editor_font: EditorFont, font_size: f32, dark_mode: bool) -> Option<String> {
+pub fn show(
+    ctx: &egui::Context,
+    state: &mut FileHistoryState,
+    editor_font: EditorFont,
+    font_size: f32,
+    dark_mode: bool,
+) -> Option<String> {
     state.poll();
     if state.running() {
         ctx.request_repaint();
     }
 
     let (file_path, mut mode) = state.open_for.clone()?;
-    let file_name = file_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let file_name = file_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut open = true;
     let mut revert_content = None;
 
@@ -165,15 +179,23 @@ pub fn show(ctx: &egui::Context, state: &mut FileHistoryState, editor_font: Edit
                 return;
             }
 
-            egui::ScrollArea::vertical().max_height(150.0).id_salt("file_history_rows").show(ui, |ui| {
-                for (index, row) in state.rows.iter().enumerate() {
-                    let is_selected = state.selected == Some(index);
-                    let label = format!("{}   +{} -{}", format_timestamp(row.timestamp_nanos), row.added, row.removed);
-                    if ui.selectable_label(is_selected, label).clicked() {
-                        state.selected = if is_selected { None } else { Some(index) };
+            egui::ScrollArea::vertical()
+                .max_height(150.0)
+                .id_salt("file_history_rows")
+                .show(ui, |ui| {
+                    for (index, row) in state.rows.iter().enumerate() {
+                        let is_selected = state.selected == Some(index);
+                        let label = format!(
+                            "{}   +{} -{}",
+                            format_timestamp(row.timestamp_nanos),
+                            row.added,
+                            row.removed
+                        );
+                        if ui.selectable_label(is_selected, label).clicked() {
+                            state.selected = if is_selected { None } else { Some(index) };
+                        }
                     }
-                }
-            });
+                });
 
             let Some(row) = state.selected.and_then(|index| state.rows.get(index)) else {
                 return;
@@ -183,7 +205,15 @@ pub fn show(ctx: &egui::Context, state: &mut FileHistoryState, editor_font: Edit
                 revert_content = Some(row.content.clone());
             }
             egui::ScrollArea::both().id_salt("file_history_diff").show(ui, |ui| {
-                diff_view::show_diff(ui, &row.content, &state.live_content, mode, editor_font, font_size, dark_mode);
+                diff_view::show_diff(
+                    ui,
+                    &row.content,
+                    &state.live_content,
+                    mode,
+                    editor_font,
+                    font_size,
+                    dark_mode,
+                );
             });
         });
 
@@ -221,25 +251,5 @@ fn format_timestamp(timestamp_nanos: u128) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_timestamp_buckets_a_recent_save_as_just_now() {
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        assert_eq!(format_timestamp(now_nanos), "just now");
-    }
-
-    #[test]
-    fn format_timestamp_buckets_an_hour_old_save_in_minutes() {
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let ten_minutes_ago = now_nanos - 10 * 60 * 1_000_000_000;
-        assert_eq!(format_timestamp(ten_minutes_ago), "10m ago");
-    }
-}
+#[path = "file_history_test.rs"]
+mod file_history_test;

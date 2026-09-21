@@ -29,7 +29,10 @@ fn an_idle_app_has_no_activities_at_all() {
 
 #[test]
 fn a_starting_language_server_is_named() {
-    let work = BackgroundWork { starting_servers: vec!["JDTLS"], ..BackgroundWork::default() };
+    let work = BackgroundWork {
+        starting_servers: vec!["JDTLS"],
+        ..BackgroundWork::default()
+    };
     assert_eq!(texts(&work), vec!["Iniciando JDTLS…"]);
 }
 
@@ -45,7 +48,10 @@ fn an_indexing_server_shows_its_latest_status_message() {
         indexing_servers: vec![("JDTLS", "Importing project br.ufsc.bridge.pec-backend".to_string())],
         ..BackgroundWork::default()
     };
-    assert_eq!(texts(&work), vec!["Indexando JDTLS… Importing project br.ufsc.bridge.pec-backend"]);
+    assert_eq!(
+        texts(&work),
+        vec!["Indexando JDTLS… Importing project br.ufsc.bridge.pec-backend"]
+    );
 }
 
 /// An install's own progress line is the reason installs report more than
@@ -54,14 +60,19 @@ fn an_indexing_server_shows_its_latest_status_message() {
 /// job for the whole of it.
 #[test]
 fn an_installs_progress_line_is_appended_to_its_label() {
-    let work =
-        BackgroundWork { installing: vec![("JDTLS", Some("Building…".to_string()))], ..BackgroundWork::default() };
+    let work = BackgroundWork {
+        installing: vec![("JDTLS", Some("Building…".to_string()))],
+        ..BackgroundWork::default()
+    };
     assert_eq!(texts(&work), vec!["Instalando JDTLS… Building…"]);
 }
 
 #[test]
 fn an_install_with_no_progress_line_is_just_its_label() {
-    let work = BackgroundWork { installing: vec![("PMD", None)], ..BackgroundWork::default() };
+    let work = BackgroundWork {
+        installing: vec![("PMD", None)],
+        ..BackgroundWork::default()
+    };
     assert_eq!(texts(&work), vec!["Instalando PMD…"]);
 }
 
@@ -109,7 +120,10 @@ fn a_starting_server_outranks_every_other_running_job() {
 /// spelled out twice.
 #[test]
 fn the_checkstyle_line_is_worded_exactly_as_the_tools_menu_words_it() {
-    let work = BackgroundWork { running_checkstyle: true, ..BackgroundWork::default() };
+    let work = BackgroundWork {
+        running_checkstyle: true,
+        ..BackgroundWork::default()
+    };
     assert_eq!(texts(&work), vec![t().common.running_checkstyle]);
 }
 
@@ -119,7 +133,12 @@ fn the_checkstyle_line_is_worded_exactly_as_the_tools_menu_words_it() {
 /// all.
 #[test]
 fn two_servers_starting_at_once_are_both_reported() {
-    let work =
-        BackgroundWork { starting_servers: vec!["JDTLS", "Kotlin Language Server"], ..BackgroundWork::default() };
-    assert_eq!(texts(&work), vec!["Iniciando JDTLS…", "Iniciando Kotlin Language Server…"]);
+    let work = BackgroundWork {
+        starting_servers: vec!["JDTLS", "Kotlin Language Server"],
+        ..BackgroundWork::default()
+    };
+    assert_eq!(
+        texts(&work),
+        vec!["Iniciando JDTLS…", "Iniciando Kotlin Language Server…"]
+    );
 }

@@ -56,7 +56,11 @@ impl RenameState {
     /// `last_error`. `None` on every other frame, including a still-
     /// pending one (stays tracked) and a failed/rejected request (dropped
     /// silently, same as everywhere else).
-    pub fn poll(&mut self, state: &mut EditorState, parsers: &mut [Option<IncrementalParser>]) -> Option<Result<usize, String>> {
+    pub fn poll(
+        &mut self,
+        state: &mut EditorState,
+        parsers: &mut [Option<IncrementalParser>],
+    ) -> Option<Result<usize, String>> {
         let rx = self.rx.as_ref()?;
         match rx.try_recv() {
             Ok(Ok(value)) => {
@@ -77,8 +81,15 @@ impl RenameState {
 /// result (nothing to rename) or a malformed reply — the latter dropped
 /// silently rather than surfaced, matching this app's every other "can't
 /// make sense of what the server sent" decode path.
-fn apply_reply(value: serde_json::Value, state: &mut EditorState, parsers: &mut [Option<IncrementalParser>]) -> Result<usize, String> {
-    let Some(edit) = serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(value).ok().flatten() else {
+fn apply_reply(
+    value: serde_json::Value,
+    state: &mut EditorState,
+    parsers: &mut [Option<IncrementalParser>],
+) -> Result<usize, String> {
+    let Some(edit) = serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(value)
+        .ok()
+        .flatten()
+    else {
         return Ok(0);
     };
     crate::workspace_edit::apply(edit, state, parsers)

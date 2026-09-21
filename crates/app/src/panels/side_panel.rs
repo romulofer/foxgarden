@@ -118,7 +118,11 @@ pub struct SidePanelOutcome {
 /// by the same frame). Anything unreadable is treated as a file, which is
 /// the harmless guess: the very next background refresh corrects it.
 fn kind_on_disk(path: &std::path::Path) -> fg_core::FileKind {
-    if path.is_dir() { fg_core::FileKind::Dir } else { fg_core::FileKind::File }
+    if path.is_dir() {
+        fg_core::FileKind::Dir
+    } else {
+        fg_core::FileKind::File
+    }
 }
 
 #[derive(Default)]
@@ -155,7 +159,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
 
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!panel.folder_picker.is_open(), egui::Button::new(icons::OPEN_FOLDER.to_string()))
+            .add_enabled(
+                !panel.folder_picker.is_open(),
+                egui::Button::new(icons::OPEN_FOLDER.to_string()),
+            )
             .on_hover_text(t().side_panel.open_folder_hint)
             .clicked()
         {
@@ -172,10 +179,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             outcome.error = Some(msg::failed_to_open_project(&err.to_string()));
         }
         if let Some(root) = state.project.as_ref().map(|p| p.root.clone()) {
-            if ui.button(icons::NEW_FILE.to_string()).on_hover_text(t().side_panel.new_file_hint).clicked() {
+            if ui
+                .button(icons::NEW_FILE.to_string())
+                .on_hover_text(t().side_panel.new_file_hint)
+                .clicked()
+            {
                 panel.begin_new_file(root.clone());
             }
-            if ui.button(icons::TERMINAL.to_string()).on_hover_text(t().side_panel.open_terminal_hint).clicked()
+            if ui
+                .button(icons::TERMINAL.to_string())
+                .on_hover_text(t().side_panel.open_terminal_hint)
+                .clicked()
                 && let Err(err) = terminal::open(&root)
             {
                 outcome.error = Some(msg::failed_to_open_terminal(&err.to_string()));
@@ -227,8 +241,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
     // *existing* file (also carried on `outcome.open`, via a tree click)
     // doesn't touch the filesystem, so re-walking the whole project for it
     // would be a pointless full directory read on every single file click.
-    outcome.tree_changed =
-        created || pasted || !outcome.renamed.is_empty() || !outcome.deleted.is_empty();
+    outcome.tree_changed = created || pasted || !outcome.renamed.is_empty() || !outcome.deleted.is_empty();
     // Patch the in-memory tree with exactly what changed, rather than
     // re-walking the project for it: the user sees the result in this same
     // frame, and the caller's own background refresh (which lands later)
@@ -265,11 +278,8 @@ fn expand_until_branching(ctx: &egui::Context, root: &FileNode) {
     // Bounded so a pathological chain (a deeply nested single-child tree)
     // can't expand the panel into an unreadable ladder.
     for _ in 0..8 {
-        let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ctx,
-            tree_node_id(&node.path),
-            false,
-        );
+        let mut collapsing =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ctx, tree_node_id(&node.path), false);
         collapsing.set_open(true);
         collapsing.store(ctx);
 
@@ -332,13 +342,7 @@ fn reveal(ctx: &egui::Context, panel: &mut SidePanelState, path: &Path) {
 /// `full_path`, when given, becomes the row's tooltip: two modules in the
 /// same project routinely hold files with identical names, and the tree
 /// shows only the name.
-fn row_label(
-    ui: &mut egui::Ui,
-    selected: bool,
-    icon: char,
-    name: &str,
-    full_path: Option<&Path>,
-) -> egui::Response {
+fn row_label(ui: &mut egui::Ui, selected: bool, icon: char, name: &str, full_path: Option<&Path>) -> egui::Response {
     let text = egui::RichText::new(format!("{icon} {name}"));
     let response = ui.add(egui::Button::selectable(selected, text).truncate());
     match full_path {
@@ -462,7 +466,9 @@ fn show_new_file_row(
 /// UserController.java") is always safe; `.` is left alone too since it
 /// resolves to the same directory it's already in.
 fn has_unsafe_path_component(input: &str) -> bool {
-    Path::new(input).components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+    Path::new(input)
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
@@ -483,7 +489,12 @@ fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
 /// range from `last_selected` (left untouched here, so repeated Shift+
 /// Clicks keep recomputing from the same anchor); anything else (a plain
 /// click) collapses the selection down to just `clicked`.
-fn apply_selection_click(panel: &mut SidePanelState, clicked: &Path, modifiers: egui::Modifiers, visible_order: &[PathBuf]) {
+fn apply_selection_click(
+    panel: &mut SidePanelState,
+    clicked: &Path,
+    modifiers: egui::Modifiers,
+    visible_order: &[PathBuf],
+) {
     if modifiers.shift
         && let Some(anchor) = panel.last_selected.clone()
         && let Some(start) = visible_order.iter().position(|p| p == &anchor)
@@ -806,7 +817,10 @@ struct CollapsedDir<'a> {
 /// with `.` for everything beneath it (see that function's `child_sep`).
 fn collapse_chain<'a>(start: &'a FileNode, sep: &str) -> CollapsedDir<'a> {
     if SOURCE_ROOT_DIR_NAMES.contains(&start.name.as_str()) {
-        return CollapsedDir { label: start.name.clone(), terminal: start };
+        return CollapsedDir {
+            label: start.name.clone(),
+            terminal: start,
+        };
     }
     let mut label = start.name.clone();
     let mut terminal = start;
@@ -858,7 +872,11 @@ fn render_node(
             // that subtree — `.` from here on, never reverting to `/`
             // (package structure never "un-nests" back into arbitrary
             // folders beneath a source root).
-            let child_sep = if SOURCE_ROOT_DIR_NAMES.contains(&terminal.name.as_str()) { "." } else { sep };
+            let child_sep = if SOURCE_ROOT_DIR_NAMES.contains(&terminal.name.as_str()) {
+                "."
+            } else {
+                sep
+            };
 
             // Split into the disclosure-triangle icon (toggles expand/
             // collapse, entirely on its own) and a custom label rendered as
@@ -874,13 +892,28 @@ fn render_node(
             // mixes in the enclosing `Ui`'s own id) so `reveal` can open a
             // directory's state from outside the tree's own layout.
             let collapsing_id = tree_node_id(&terminal.path);
-            let collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
-            let folder_icon = if collapsing.is_open() { icons::FOLDER_OPEN } else { icons::FOLDER };
+            let collapsing =
+                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
+            let folder_icon = if collapsing.is_open() {
+                icons::FOLDER_OPEN
+            } else {
+                icons::FOLDER
+            };
             let header =
                 collapsing.show_header(ui, |ui| row_label(ui, is_selected, folder_icon, &collapsed.label, None));
             let (_, header_response, _) = header.body(|ui| {
                 for child in &terminal.children {
-                    render_node(ui, child, child_sep, rename_draft, should_focus_rename, clipboard, selected, visible_order, actions);
+                    render_node(
+                        ui,
+                        child,
+                        child_sep,
+                        rename_draft,
+                        should_focus_rename,
+                        clipboard,
+                        selected,
+                        visible_order,
+                        actions,
+                    );
                 }
             });
             let label_response = header_response.inner;
@@ -889,7 +922,11 @@ fn render_node(
                 let modifiers = ui.input(|i| i.modifiers);
                 actions.select_click = Some((terminal.path.clone(), modifiers));
                 if !modifiers.command && !modifiers.shift {
-                    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), collapsing_id, false);
+                    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        collapsing_id,
+                        false,
+                    );
                     collapsing.toggle(ui);
                     collapsing.store(ui.ctx());
                 }
@@ -946,7 +983,13 @@ fn render_node(
             // that aren't valid UTF-8 text (binaries, etc), and that failure
             // is reported when the open is actually attempted, not guessed
             // at here from the extension alone.
-            let response = row_label(ui, is_selected, icons::for_file(&node.path), &node.name, Some(&node.path));
+            let response = row_label(
+                ui,
+                is_selected,
+                icons::for_file(&node.path),
+                &node.name,
+                Some(&node.path),
+            );
             if response.clicked() {
                 let modifiers = ui.input(|i| i.modifiers);
                 actions.select_click = Some((node.path.clone(), modifiers));

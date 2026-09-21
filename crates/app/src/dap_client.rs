@@ -43,7 +43,12 @@ enum IncomingMessage {
     /// `request_seq`. `success: false` carries `message` (a human-readable
     /// failure reason, per the DAP spec) rather than a structured error
     /// object the way LSP's `error.code` does.
-    Response { request_seq: i64, success: bool, body: Value, message: Option<String> },
+    Response {
+        request_seq: i64,
+        success: bool,
+        body: Value,
+        message: Option<String>,
+    },
     /// An event the adapter originated on its own (`initialized`, `output`,
     /// `stopped`, `terminated`, ...) — Phase 1 has no handler for any
     /// specific one yet, just the plumbing to not drop them unrouted; later
@@ -56,7 +61,11 @@ enum IncomingMessage {
     /// for this shape yet, same "plumbing without a handler" scope
     /// `lsp_client`'s own Phase 1 held itself to for server-to-client
     /// notifications it didn't yet need to act on.
-    ReverseRequest { seq: i64, command: String, arguments: Value },
+    ReverseRequest {
+        seq: i64,
+        command: String,
+        arguments: Value,
+    },
     /// Not a message shape this client expects — dropped by the reader loop
     /// rather than panicking on a malformed/unexpected adapter message.
     Unroutable,
@@ -67,7 +76,9 @@ enum IncomingMessage {
 /// own shape for the same reason: keep the protocol-shape decision testable
 /// without a real socket.
 fn classify(value: Value) -> IncomingMessage {
-    let Some(obj) = value.as_object() else { return IncomingMessage::Unroutable };
+    let Some(obj) = value.as_object() else {
+        return IncomingMessage::Unroutable;
+    };
     match obj.get("type").and_then(Value::as_str) {
         Some("response") => {
             let Some(request_seq) = obj.get("request_seq").and_then(Value::as_i64) else {
@@ -76,23 +87,36 @@ fn classify(value: Value) -> IncomingMessage {
             let success = obj.get("success").and_then(Value::as_bool).unwrap_or(false);
             let body = obj.get("body").cloned().unwrap_or(Value::Null);
             let message = obj.get("message").and_then(Value::as_str).map(str::to_string);
-            IncomingMessage::Response { request_seq, success, body, message }
+            IncomingMessage::Response {
+                request_seq,
+                success,
+                body,
+                message,
+            }
         }
         Some("event") => {
             let Some(event) = obj.get("event").and_then(Value::as_str) else {
                 return IncomingMessage::Unroutable;
             };
             let body = obj.get("body").cloned().unwrap_or(Value::Null);
-            IncomingMessage::Event { event: event.to_string(), body }
+            IncomingMessage::Event {
+                event: event.to_string(),
+                body,
+            }
         }
         Some("request") => {
-            let (Some(seq), Some(command)) =
-                (obj.get("seq").and_then(Value::as_i64), obj.get("command").and_then(Value::as_str))
-            else {
+            let (Some(seq), Some(command)) = (
+                obj.get("seq").and_then(Value::as_i64),
+                obj.get("command").and_then(Value::as_str),
+            ) else {
                 return IncomingMessage::Unroutable;
             };
             let arguments = obj.get("arguments").cloned().unwrap_or(Value::Null);
-            IncomingMessage::ReverseRequest { seq, command: command.to_string(), arguments }
+            IncomingMessage::ReverseRequest {
+                seq,
+                command: command.to_string(),
+                arguments,
+            }
         }
         _ => IncomingMessage::Unroutable,
     }
@@ -141,9 +165,18 @@ impl DapSession {
             loop {
                 match read_message(&mut reader) {
                     Ok(Some(value)) => match classify(value) {
-                        IncomingMessage::Response { request_seq, success, body, message } => {
+                        IncomingMessage::Response {
+                            request_seq,
+                            success,
+                            body,
+                            message,
+                        } => {
                             if let Some(tx) = pending_for_thread.lock().unwrap().remove(&request_seq) {
-                                let result = if success { Ok(body) } else { Err(message.unwrap_or_else(|| "request failed".to_string())) };
+                                let result = if success {
+                                    Ok(body)
+                                } else {
+                                    Err(message.unwrap_or_else(|| "request failed".to_string()))
+                                };
                                 let _ = tx.send(result);
                             }
                         }
@@ -172,7 +205,13 @@ impl DapSession {
             }
         });
 
-        Ok(Self { stream, writer_tx, next_seq: 1, pending, events_rx })
+        Ok(Self {
+            stream,
+            writer_tx,
+            next_seq: 1,
+            pending,
+            events_rx,
+        })
     }
 
     /// Sends a DAP request, returning a `Receiver` for its eventual
@@ -187,7 +226,10 @@ impl DapSession {
         let message = serde_json::json!({ "seq": seq, "type": "request", "command": command, "arguments": arguments });
         if self.writer_tx.send(message).is_err() {
             self.pending.lock().unwrap().remove(&seq);
-            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "debug adapter's writer thread has exited"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "debug adapter's writer thread has exited",
+            ));
         }
         Ok(rx)
     }
@@ -212,125 +254,5 @@ impl Drop for DapSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    #[test]
-    fn classify_reports_a_successful_response() {
-        let value = serde_json::json!({
-            "seq": 2, "type": "response", "request_seq": 1, "success": true, "command": "initialize", "body": {"ok": true}
-        });
-        assert_eq!(
-            classify(value),
-            IncomingMessage::Response { request_seq: 1, success: true, body: serde_json::json!({"ok": true}), message: None }
-        );
-    }
-
-    #[test]
-    fn classify_reports_a_failed_response_with_its_message() {
-        let value = serde_json::json!({
-            "seq": 2, "type": "response", "request_seq": 1, "success": false, "command": "launch", "message": "main class not found"
-        });
-        assert_eq!(
-            classify(value),
-            IncomingMessage::Response {
-                request_seq: 1,
-                success: false,
-                body: Value::Null,
-                message: Some("main class not found".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn classify_reports_an_event_with_no_request_seq_at_all() {
-        let value = serde_json::json!({"seq": 5, "type": "event", "event": "initialized"});
-        assert_eq!(classify(value), IncomingMessage::Event { event: "initialized".to_string(), body: Value::Null });
-    }
-
-    #[test]
-    fn classify_reports_an_output_event_with_its_body() {
-        let value = serde_json::json!({"seq": 6, "type": "event", "event": "output", "body": {"category": "stdout", "output": "hi\n"}});
-        assert_eq!(
-            classify(value),
-            IncomingMessage::Event { event: "output".to_string(), body: serde_json::json!({"category": "stdout", "output": "hi\n"}) }
-        );
-    }
-
-    #[test]
-    fn classify_reports_a_reverse_request() {
-        let value = serde_json::json!({"seq": 3, "type": "request", "command": "runInTerminal", "arguments": {"cwd": "/tmp"}});
-        assert_eq!(
-            classify(value),
-            IncomingMessage::ReverseRequest { seq: 3, command: "runInTerminal".to_string(), arguments: serde_json::json!({"cwd": "/tmp"}) }
-        );
-    }
-
-    #[test]
-    fn classify_reports_unroutable_for_an_unknown_type() {
-        assert_eq!(classify(serde_json::json!({"seq": 1, "type": "bogus"})), IncomingMessage::Unroutable);
-        assert_eq!(classify(serde_json::json!("not even an object")), IncomingMessage::Unroutable);
-    }
-
-    /// A genuine `TcpListener` fake adapter, mirroring `lsp_client`'s own
-    /// "one real fake-server-process test" discipline — proves
-    /// `DapSession::connect`/`send_request`'s actual socket/thread/channel
-    /// wiring, not just `classify`'s pure logic already covered above.
-    fn fake_adapter_returning(body: &str) -> (DapSession, std::thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("binding a loopback port always succeeds");
-        let port = listener.local_addr().unwrap().port();
-        let framed = {
-            let mut buf = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-            buf.extend_from_slice(body.as_bytes());
-            buf
-        };
-        let handle = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("the client connects");
-            socket.write_all(&framed).expect("writing the canned reply");
-            // Stays connected (discarding whatever the client writes)
-            // rather than closing right after — the same real observed-flake
-            // avoidance `lsp_client::tests::fake_server_returning` already
-            // documents for its own script: closing immediately can race a
-            // `send_request` write that hasn't happened on the wire yet.
-            let mut sink = Vec::new();
-            let _ = socket.read_to_end(&mut sink);
-        });
-        let session = DapSession::connect(port).expect("connecting to the fake adapter");
-        (session, handle)
-    }
-
-    #[test]
-    fn send_request_against_a_real_fake_adapter_receives_its_response() {
-        let (mut session, _handle) = fake_adapter_returning(
-            r#"{"seq":1,"type":"response","request_seq":1,"success":true,"command":"initialize","body":{"supportsConfigurationDoneRequest":true}}"#,
-        );
-        let rx = session.send_request("initialize", serde_json::json!({"clientID": "foxgarden"})).unwrap();
-        let result = rx.recv().expect("the fake adapter's response arrives");
-        assert_eq!(result, Ok(serde_json::json!({"supportsConfigurationDoneRequest": true})));
-    }
-
-    #[test]
-    fn send_request_against_a_real_fake_adapter_receives_its_failure_message() {
-        let (mut session, _handle) = fake_adapter_returning(
-            r#"{"seq":1,"type":"response","request_seq":1,"success":false,"command":"launch","message":"main class not found"}"#,
-        );
-        let rx = session.send_request("launch", serde_json::json!({})).unwrap();
-        let result = rx.recv().expect("the fake adapter's response arrives");
-        assert_eq!(result, Err("main class not found".to_string()));
-    }
-
-    #[test]
-    fn poll_events_receives_a_real_event_from_a_real_socket() {
-        let (session, _handle) = fake_adapter_returning(r#"{"seq":1,"type":"event","event":"initialized"}"#);
-        loop {
-            let events = session.poll_events();
-            if let Some((event, body)) = events.into_iter().next() {
-                assert_eq!(event, "initialized");
-                assert_eq!(body, Value::Null);
-                break;
-            }
-        }
-    }
-}
+#[path = "dap_client_test.rs"]
+mod dap_client_test;

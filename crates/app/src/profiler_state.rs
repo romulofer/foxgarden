@@ -37,7 +37,9 @@ fn read_capture(output_path: &Path) -> CaptureResult {
         .map_err(|e| format!("couldn't read the profiler's output at {}: {e}", output_path.display()))?;
     let tree = parse_collapsed(&text);
     if tree.total == 0 {
-        return Err("the profiler captured no samples — the process may have been idle, or the attach failed".to_string());
+        return Err(
+            "the profiler captured no samples — the process may have been idle, or the attach failed".to_string(),
+        );
     }
     Ok(tree)
 }
@@ -85,7 +87,9 @@ impl ProfilerState {
             let mut command = profiler_command(&asprof, pid, event, duration_secs, &output_path);
             let result = match command.status() {
                 Ok(status) if status.success() => read_capture(&output_path),
-                Ok(status) => Err(format!("asprof exited with {status} — is the target a JVM this profiler can attach to?")),
+                Ok(status) => Err(format!(
+                    "asprof exited with {status} — is the target a JVM this profiler can attach to?"
+                )),
                 Err(e) => Err(format!("couldn't launch asprof: {e}")),
             };
             // Best-effort cleanup: the parsed tree is what matters now, not
@@ -120,50 +124,5 @@ impl ProfilerState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn read_capture_folds_a_real_collapsed_file_into_a_tree() {
-        let dir = test_support::tempdir();
-        let path = dir.path().join("p.collapsed");
-        let mut f = std::fs::File::create(&path).unwrap();
-        write!(f, "a;b;c 5\na;b;d 3\n").unwrap();
-
-        let tree = read_capture(&path).expect("a non-empty profile parses");
-        assert_eq!(tree.total, 8);
-        assert_eq!(tree.children[0].name, "a");
-    }
-
-    #[test]
-    fn read_capture_rejects_an_empty_profile() {
-        let dir = test_support::tempdir();
-        let path = dir.path().join("empty.collapsed");
-        std::fs::File::create(&path).unwrap();
-
-        let error = read_capture(&path).expect_err("no samples must be an error");
-        assert!(error.contains("no samples"), "{error}");
-    }
-
-    #[test]
-    fn read_capture_errors_when_the_file_is_missing() {
-        let error = read_capture(Path::new("/no/such/profile.collapsed")).expect_err("a missing file must error");
-        assert!(error.contains("couldn't read"), "{error}");
-    }
-
-    #[test]
-    fn capture_output_path_is_unique_per_call() {
-        let a = capture_output_path(42);
-        let b = capture_output_path(42);
-        assert_ne!(a, b, "two captures of the same PID must not collide");
-        assert!(a.to_string_lossy().contains("foxgarden-profile-42-"));
-    }
-
-    #[test]
-    fn state_starts_idle() {
-        let state = ProfilerState::default();
-        assert!(!state.is_capturing());
-        assert!(state.last_profile.is_none());
-    }
-}
+#[path = "profiler_state_test.rs"]
+mod profiler_state_test;

@@ -1,7 +1,7 @@
-use fg_i18n::t;
 use super::text_offset::{byte_to_char, char_to_byte};
 use crate::widgets::modal::show_modal;
 use fg_core::{FileKind, FileNode};
+use fg_i18n::t;
 use syntax::{ClassFields, FieldInfo, MethodSignature};
 
 /// Which accessors to generate — driven by the Tools menu's separate

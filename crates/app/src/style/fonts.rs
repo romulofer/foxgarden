@@ -35,7 +35,11 @@ pub fn install(ctx: &egui::Context) {
     );
     fonts.families.insert(
         egui::FontFamily::Name(JETBRAINS_MONO_KEY.into()),
-        vec![JETBRAINS_MONO_KEY.to_owned(), "Hack".to_owned(), NERD_FONT_SYMBOLS_KEY.to_owned()],
+        vec![
+            JETBRAINS_MONO_KEY.to_owned(),
+            "Hack".to_owned(),
+            NERD_FONT_SYMBOLS_KEY.to_owned(),
+        ],
     );
     fonts
         .families

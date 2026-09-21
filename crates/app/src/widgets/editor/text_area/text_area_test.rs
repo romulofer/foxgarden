@@ -395,7 +395,9 @@ fn default_row_counts_assumes_one_row_and_zeroes_hidden_lines() {
 /// lines got shaped (`out.row_galleys.len()`) — a direct proxy for how many
 /// real `shape_line` calls this frame made.
 fn wrapped_shaped_count(total_lines: usize) -> usize {
-    let text: String = (0..total_lines).map(|i| format!("line {i} {}\n", "x".repeat(120))).collect();
+    let text: String = (0..total_lines)
+        .map(|i| format!("line {i} {}\n", "x".repeat(120)))
+        .collect();
     let buffer = ropey::Rope::from_str(&text);
     let ctx = egui::Context::default();
     let mut shaped = 0;
@@ -423,10 +425,7 @@ fn wrapped_layout_shapes_only_visible_lines_not_the_whole_buffer() {
     // depends on the viewport, not on total file size.
     let shaped_small = wrapped_shaped_count(2_000);
     let shaped_huge = wrapped_shaped_count(200_000);
-    assert_eq!(
-        shaped_small, shaped_huge,
-        "shaping must not scale with total file size"
-    );
+    assert_eq!(shaped_small, shaped_huge, "shaping must not scale with total file size");
     assert!(shaped_huge > 0, "some lines should still shape into the viewport");
     assert!(
         shaped_huge < 2_000,
@@ -458,16 +457,15 @@ fn wrapped_layout_reuses_a_learned_row_count_across_scroll_only_frames() {
                 &[],
                 &[],
             );
-            let counts =
-                super::render::cached_row_counts(
-                    ui,
-                    id,
-                    super::render::ContentKey::revision(0),
-                    &egui::FontId::monospace(14.0),
-                    100.0,
-                    &[],
-                    2_000,
-                );
+            let counts = super::render::cached_row_counts(
+                ui,
+                id,
+                super::render::ContentKey::revision(0),
+                &egui::FontId::monospace(14.0),
+                100.0,
+                &[],
+                2_000,
+            );
             first_prefix_at_line_1 = prefix_rows(&counts)[1];
         });
     });
@@ -486,16 +484,15 @@ fn wrapped_layout_reuses_a_learned_row_count_across_scroll_only_frames() {
     let _ = ctx.run_ui(sized_input(), |ui| {
         egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
             ui.set_max_width(100.0);
-            let counts =
-                super::render::cached_row_counts(
-                    ui,
-                    id,
-                    super::render::ContentKey::revision(0),
-                    &egui::FontId::monospace(14.0),
-                    100.0,
-                    &[],
-                    2_000,
-                );
+            let counts = super::render::cached_row_counts(
+                ui,
+                id,
+                super::render::ContentKey::revision(0),
+                &egui::FontId::monospace(14.0),
+                100.0,
+                &[],
+                2_000,
+            );
             second_prefix_at_line_1 = prefix_rows(&counts)[1];
         });
     });
@@ -554,7 +551,9 @@ fn wrapped_layout_after_an_edit_reshapes_only_the_new_visible_slice() {
 #[test]
 fn huge_file_first_open_and_per_keystroke_cost_stays_bounded() {
     // 200_000 deliberately long lines so word-wrap actually triggers.
-    let huge_text: String = (0..200_000).map(|i| format!("line {i} {}\n", "x".repeat(120))).collect();
+    let huge_text: String = (0..200_000)
+        .map(|i| format!("line {i} {}\n", "x".repeat(120)))
+        .collect();
     let buffer = ropey::Rope::from_str(&huge_text);
     let ctx = egui::Context::default();
     let id = egui::Id::new("huge");
@@ -608,5 +607,8 @@ fn huge_file_first_open_and_per_keystroke_cost_stays_bounded() {
             edit_shaped = out.row_galleys.len();
         });
     });
-    assert!(edit_shaped < 200, "post-edit reshape scaled with file size: {edit_shaped}");
+    assert!(
+        edit_shaped < 200,
+        "post-edit reshape scaled with file size: {edit_shaped}"
+    );
 }

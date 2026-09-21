@@ -7,7 +7,10 @@ use fg_i18n::{msg, t};
 #[test]
 fn clicking_a_file_in_the_tree_opens_it_in_a_tab() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
-    assert!(app.shows(t().welcome.tagline), "the welcome screen stands in for an empty editor");
+    assert!(
+        app.shows(t().welcome.tagline),
+        "the welcome screen stands in for an empty editor"
+    );
 
     app.click_tree("Main.java");
 
@@ -47,7 +50,11 @@ fn closing_a_clean_tab_with_the_x_button_removes_it() {
     assert_eq!(app.open_tab_names(), ["Other.kt"]);
     // One remaining widget with that label: the project tree row. A second
     // would mean the tab is still there.
-    assert_eq!(app.label_count("Main.java"), 1, "the closed tab must be gone from the tab bar");
+    assert_eq!(
+        app.label_count("Main.java"),
+        1,
+        "the closed tab must be gone from the tab bar"
+    );
 }
 
 #[test]

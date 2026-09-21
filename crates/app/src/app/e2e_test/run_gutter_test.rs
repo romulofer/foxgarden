@@ -13,7 +13,8 @@
 use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::{msg, t};
 
-const WITH_MAIN: &str = "public class App {\n    public static void main(String[] args) {\n        System.out.println(\"hi\");\n    }\n}\n";
+const WITH_MAIN: &str =
+    "public class App {\n    public static void main(String[] args) {\n        System.out.println(\"hi\");\n    }\n}\n";
 
 #[test]
 fn a_class_with_a_main_gets_a_run_marker() {

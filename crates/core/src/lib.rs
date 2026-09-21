@@ -30,7 +30,9 @@ pub use atomic_file::write_atomically;
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
 pub use boilerplate::generate as generate_boilerplate;
 pub use build_output::{BuildProblem, build_command, default_classes_dir, detect_build_tool, parse_build_output_line};
-pub use coverage::{CoverageStatus, LineCoverage, coverage_command, coverage_report_path, parse_jacoco_xml, resolve_coverage_paths};
+pub use coverage::{
+    CoverageStatus, LineCoverage, coverage_command, coverage_report_path, parse_jacoco_xml, resolve_coverage_paths,
+};
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
@@ -62,13 +64,15 @@ pub use scaffold::{BuildTool, ProjectLanguage, ScaffoldSpec, scaffold_files, wri
 pub use spring_config_metadata::{
     SpringConfigProperty, parse_metadata_json, scan_classpath_for_metadata, scan_jar_for_metadata,
 };
-pub use static_analysis::{StaticAnalysisError, checkstyle_diagnostics, line_col_to_byte, pmd_diagnostics, spotbugs_diagnostics};
+pub use static_analysis::{
+    StaticAnalysisError, checkstyle_diagnostics, line_col_to_byte, pmd_diagnostics, spotbugs_diagnostics,
+};
 pub use status::{
     GitCommandError, GitStatusError, StatusEntry, git_add, git_apply_cached, git_commit, git_push, git_reset_paths,
     git_status, git_user_first_name,
 };
-pub use text_buffer::TextBuffer;
 pub use test_report::{
     TestCase, TestOutcome, TestSummary, failure_line, parse_junit_xml, scan_test_reports, summarize, test_command,
     test_source_file,
 };
+pub use text_buffer::TextBuffer;

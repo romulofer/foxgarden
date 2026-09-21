@@ -197,7 +197,10 @@ pub fn show(
             }
             let any_dirty = state.open_tabs.iter().any(|doc| doc.is_dirty());
             if ui
-                .add_enabled(any_dirty, egui::Button::new(t().tabs.save_all).shortcut_text("Ctrl+Shift+S"))
+                .add_enabled(
+                    any_dirty,
+                    egui::Button::new(t().tabs.save_all).shortcut_text("Ctrl+Shift+S"),
+                )
                 .clicked()
             {
                 // No conflict set here: this is an explicit "save
@@ -526,12 +529,20 @@ pub fn show(
             // own `debug_running` — otherwise there would be no way to ever
             // click it again to reach `outcome.debug_request` and stop a
             // session already in flight.
-            let other_running =
-                build_running || run_running || test_running || coverage_running || docker_build_run_running || docker_compose_running;
+            let other_running = build_running
+                || run_running
+                || test_running
+                || coverage_running
+                || docker_build_run_running
+                || docker_compose_running;
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
-                    egui::Button::new(if build_running { t().common.running_build } else { t().menu.build }),
+                    egui::Button::new(if build_running {
+                        t().common.running_build
+                    } else {
+                        t().menu.build
+                    }),
                 )
                 .clicked()
             {
@@ -541,7 +552,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
-                    egui::Button::new(if run_running { t().common.running_run } else { t().menu.run_project }),
+                    egui::Button::new(if run_running {
+                        t().common.running_run
+                    } else {
+                        t().menu.run_project
+                    }),
                 )
                 .clicked()
             {
@@ -551,7 +566,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
-                    egui::Button::new(if test_running { t().common.running_tests } else { t().menu.run_tests }),
+                    egui::Button::new(if test_running {
+                        t().common.running_tests
+                    } else {
+                        t().menu.run_tests
+                    }),
                 )
                 .clicked()
             {
@@ -561,7 +580,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && !any_running,
-                    egui::Button::new(if coverage_running { t().common.running_coverage } else { t().menu.run_with_coverage }),
+                    egui::Button::new(if coverage_running {
+                        t().common.running_coverage
+                    } else {
+                        t().menu.run_with_coverage
+                    }),
                 )
                 .clicked()
             {
@@ -607,7 +630,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     state.project.is_some() && (debug_running || !other_running),
-                    egui::Button::new(if debug_running { t().common.stop } else { t().menu.debug_project }),
+                    egui::Button::new(if debug_running {
+                        t().common.stop
+                    } else {
+                        t().menu.debug_project
+                    }),
                 )
                 .clicked()
             {
@@ -624,7 +651,11 @@ pub fn show(
             if ui
                 .add_enabled(
                     profile_available && !profiling,
-                    egui::Button::new(if profiling { t().common.profiling } else { t().menu.profile }),
+                    egui::Button::new(if profiling {
+                        t().common.profiling
+                    } else {
+                        t().menu.profile
+                    }),
                 )
                 .clicked()
             {
@@ -669,9 +700,16 @@ pub fn show(
             // Split editor (`PLAN.md` Track 11): one toggle, its label
             // reflecting the current state, enabled only when there's a tab to
             // split. Ctrl+\ mirrors VS Code's own split shortcut.
-            let split_label = if state.is_split() { t().tabs.unsplit_editor } else { t().tabs.split_editor };
+            let split_label = if state.is_split() {
+                t().tabs.unsplit_editor
+            } else {
+                t().tabs.split_editor
+            };
             if ui
-                .add_enabled(state.active_tab.is_some(), egui::Button::new(split_label).shortcut_text("Ctrl+\\"))
+                .add_enabled(
+                    state.active_tab.is_some(),
+                    egui::Button::new(split_label).shortcut_text("Ctrl+\\"),
+                )
                 .clicked()
             {
                 if state.is_split() {
@@ -860,7 +898,10 @@ fn show_accessibility_settings(ui: &egui::Ui, menu: &mut MenuBarState, ui_scale:
                 // this setting, and the conversion is this one line.
                 let mut percent = (*ui_scale * 100.0).round();
                 let range = (UI_SCALE_RANGE.start() * 100.0)..=(UI_SCALE_RANGE.end() * 100.0);
-                if ui.add(egui::Slider::new(&mut percent, range).suffix("%").step_by(5.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut percent, range).suffix("%").step_by(5.0))
+                    .changed()
+                {
                     *ui_scale = percent / 100.0;
                 }
             });

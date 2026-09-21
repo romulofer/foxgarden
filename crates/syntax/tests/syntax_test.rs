@@ -172,9 +172,18 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
         has_scope_over("length", Scope::Parameter),
         "a formal parameter's own declaration site should be Scope::Parameter"
     );
-    assert!(has_scope_over("<", Scope::Operator), "binary_expression's operator field");
-    assert!(has_scope_over("==", Scope::Operator), "binary_expression's operator field");
-    assert!(has_scope_over("++", Scope::Operator), "update_expression's literal token");
+    assert!(
+        has_scope_over("<", Scope::Operator),
+        "binary_expression's operator field"
+    );
+    assert!(
+        has_scope_over("==", Scope::Operator),
+        "binary_expression's operator field"
+    );
+    assert!(
+        has_scope_over("++", Scope::Operator),
+        "update_expression's literal token"
+    );
     assert!(
         has_scope_over("outer", Scope::Label),
         "labeled_statement's own label identifier"
@@ -440,6 +449,9 @@ fn highlight_spans_in_returns_only_captures_inside_the_requested_range() {
     // also found by a whole-document run.
     let full = highlight_spans(tree, source, Language::Java);
     for span in &windowed {
-        assert!(full.contains(span), "windowed span {span:?} must agree with the full-document query");
+        assert!(
+            full.contains(span),
+            "windowed span {span:?} must agree with the full-document query"
+        );
     }
 }

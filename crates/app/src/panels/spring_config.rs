@@ -33,7 +33,10 @@ impl SpringConfigState {
     /// depending on a real `mvn`/`gradle` process.
     #[cfg(test)]
     pub(crate) fn with_properties(properties: Vec<SpringConfigProperty>) -> Self {
-        Self { properties, ..Self::default() }
+        Self {
+            properties,
+            ..Self::default()
+        }
     }
 
     /// The currently cached candidates — empty until a scan for
@@ -123,14 +126,19 @@ fn scan_project(project_root: &Path) -> Vec<SpringConfigProperty> {
 /// own classpath fails to resolve is skipped rather than failing the whole
 /// scan, same as `scan_classpath_for_metadata`'s own per-jar tolerance.
 fn maven_module_tree_classpath(project_root: &Path) -> Vec<PathBuf> {
-    let module_dirs = match std::fs::read_to_string(project_root.join("pom.xml")).ok().and_then(|xml| fg_core::parse_pom(&xml).ok()) {
-        Some(project) if !project.modules.is_empty() => {
-            project.modules.iter().map(|m| project_root.join(m)).collect()
-        }
+    let module_dirs = match std::fs::read_to_string(project_root.join("pom.xml"))
+        .ok()
+        .and_then(|xml| fg_core::parse_pom(&xml).ok())
+    {
+        Some(project) if !project.modules.is_empty() => project.modules.iter().map(|m| project_root.join(m)).collect(),
         _ => vec![project_root.to_path_buf()],
     };
 
-    module_dirs.iter().filter_map(|dir| fg_core::maven_classpath(dir).ok()).flatten().collect()
+    module_dirs
+        .iter()
+        .filter_map(|dir| fg_core::maven_classpath(dir).ok())
+        .flatten()
+        .collect()
 }
 
 /// A Gradle project's own classpath, every subproject's `compile`/`runtime`
@@ -141,7 +149,10 @@ fn maven_module_tree_classpath(project_root: &Path) -> Vec<PathBuf> {
 fn gradle_project_classpath(project_root: &Path) -> Vec<PathBuf> {
     fg_core::gradle_classpaths(project_root)
         .map(|classpaths| {
-            classpaths.into_iter().flat_map(|c| c.compile.into_iter().chain(c.runtime)).collect()
+            classpaths
+                .into_iter()
+                .flat_map(|c| c.compile.into_iter().chain(c.runtime))
+                .collect()
         })
         .unwrap_or_default()
 }

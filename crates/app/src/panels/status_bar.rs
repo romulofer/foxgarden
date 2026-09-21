@@ -98,7 +98,11 @@ impl BackgroundWork {
         let tools = &static_analysis.tool_manager;
         Self {
             starting_servers: lsp.starting_servers(),
-            indexing_servers: lsp.indexing_servers().into_iter().map(|(name, message)| (name, message.to_string())).collect(),
+            indexing_servers: lsp
+                .indexing_servers()
+                .into_iter()
+                .map(|(name, message)| (name, message.to_string()))
+                .collect(),
             installing: installing_servers(servers).chain(installing_tools(tools)).collect(),
             checking_versions: checking_servers(servers).chain(checking_tools(tools)).collect(),
             detecting_java_home: servers.detecting_java_home(),
@@ -138,7 +142,10 @@ fn checking_servers(servers: &LspManagerState) -> impl Iterator<Item = &'static 
 }
 
 fn checking_tools(tools: &ToolManagerState) -> impl Iterator<Item = &'static str> {
-    ALL_TOOLS.into_iter().filter(|&tool| tools.checking(tool)).map(|tool| tool.display_name())
+    ALL_TOOLS
+        .into_iter()
+        .filter(|&tool| tools.checking(tool))
+        .map(|tool| tool.display_name())
 }
 
 /// One job, as the bar words it.
@@ -179,10 +186,16 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
         activities.push(Activity::new(msg::starting_language_server(name)));
     }
     for (name, message) in &work.indexing_servers {
-        activities.push(Activity { label: msg::indexing_language_server(name), detail: Some(message.clone()) });
+        activities.push(Activity {
+            label: msg::indexing_language_server(name),
+            detail: Some(message.clone()),
+        });
     }
     for (name, detail) in &work.installing {
-        activities.push(Activity { label: msg::installing_named(name), detail: detail.clone() });
+        activities.push(Activity {
+            label: msg::installing_named(name),
+            detail: detail.clone(),
+        });
     }
     if work.running_checkstyle {
         activities.push(Activity::new(t().common.running_checkstyle.to_string()));

@@ -24,5 +24,5 @@ pub mod spring_endpoints;
 pub mod static_analysis;
 pub mod status_bar;
 pub mod tabs;
-pub mod welcome;
 pub mod terminal_panel;
+pub mod welcome;

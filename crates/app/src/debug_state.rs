@@ -48,11 +48,20 @@ enum Phase {
     /// moment (`PLAN.md` Track 23 Phase 2) — sent once the adapter's own
     /// `initialized` event arrives, before `configurationDone` (see
     /// `Launching`'s own doc comment for why that ordering matters).
-    RequestingPort { rx: Receiver<Result<Value, ResponseError>>, launch_args: Value, initial_breakpoints: Vec<(PathBuf, HashSet<usize>)> },
+    RequestingPort {
+        rx: Receiver<Result<Value, ResponseError>>,
+        launch_args: Value,
+        initial_breakpoints: Vec<(PathBuf, HashSet<usize>)>,
+    },
     /// Connected; waiting on the DAP `initialize` response (adapter
     /// capabilities — unused by Phase 1, but required by the protocol
     /// before any other request is valid).
-    AwaitingInitializeResponse { session: DapSession, rx: Receiver<DapResult>, launch_args: Value, initial_breakpoints: Vec<(PathBuf, HashSet<usize>)> },
+    AwaitingInitializeResponse {
+        session: DapSession,
+        rx: Receiver<DapResult>,
+        launch_args: Value,
+        initial_breakpoints: Vec<(PathBuf, HashSet<usize>)>,
+    },
     /// `launch` has been sent; waiting for *both* its own response and the
     /// adapter's `initialized` event (order between the two is not fixed by
     /// the DAP spec) before `configurationDone` is safe to send — the
@@ -76,7 +85,10 @@ enum Phase {
     /// already running by this point in practice (java-debug starts the
     /// JVM once `launch` lands) — this step just confirms the adapter
     /// considers its own setup finished.
-    AwaitingConfigurationDone { session: DapSession, rx: Receiver<DapResult> },
+    AwaitingConfigurationDone {
+        session: DapSession,
+        rx: Receiver<DapResult>,
+    },
     /// Attached and running (or paused). Kept polling (`poll_events`) so a
     /// real `terminated`/`exited` event — the debuggee finishing on its own
     /// — is noticed rather than left to look like a still-running session
@@ -155,8 +167,15 @@ pub struct VariableEntry {
 /// values.
 enum VarFetch {
     Idle,
-    AwaitingScopes { rx: Receiver<DapResult> },
-    AwaitingVariables { name: String, remaining: Vec<(String, i64)>, rx: Receiver<DapResult>, collected: Vec<VariableGroup> },
+    AwaitingScopes {
+        rx: Receiver<DapResult>,
+    },
+    AwaitingVariables {
+        name: String,
+        remaining: Vec<(String, i64)>,
+        rx: Receiver<DapResult>,
+        collected: Vec<VariableGroup>,
+    },
 }
 
 /// The DAP `launch` request's own `arguments` object — every field here is
@@ -173,9 +192,15 @@ enum VarFetch {
 /// resolution — this app resolves it client-side already, no reason to ask
 /// jdt.ls to redo it.
 fn build_launch_args(project_root: &Path, run_config: &RunConfig, classpath: &[PathBuf]) -> Value {
-    let project_name =
-        project_root.file_name().and_then(|name| name.to_str()).unwrap_or("FoxGarden project").to_string();
-    let cwd = run_config.working_dir.clone().unwrap_or_else(|| project_root.to_path_buf());
+    let project_name = project_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("FoxGarden project")
+        .to_string();
+    let cwd = run_config
+        .working_dir
+        .clone()
+        .unwrap_or_else(|| project_root.to_path_buf());
     let env: HashMap<&str, &str> = run_config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     json!({
         "type": "java",
@@ -207,7 +232,10 @@ pub struct DebugState {
 
 impl Default for DebugState {
     fn default() -> Self {
-        Self { phase: Phase::Idle, last_sent_breakpoints: HashMap::new() }
+        Self {
+            phase: Phase::Idle,
+            last_sent_breakpoints: HashMap::new(),
+        }
     }
 }
 
@@ -282,7 +310,11 @@ impl DebugState {
             .request_start_debug_session()
             .ok_or_else(|| "the Java language server isn't ready yet".to_string())?;
         self.last_sent_breakpoints.clear();
-        self.phase = Phase::RequestingPort { rx, launch_args, initial_breakpoints };
+        self.phase = Phase::RequestingPort {
+            rx,
+            launch_args,
+            initial_breakpoints,
+        };
         Ok(())
     }
 
@@ -308,27 +340,40 @@ impl DebugState {
     /// uses for its own handshakes.
     pub fn poll(&mut self) {
         self.phase = match std::mem::replace(&mut self.phase, Phase::Idle) {
-            Phase::RequestingPort { rx, launch_args, initial_breakpoints } => {
-                poll_requesting_port(rx, launch_args, initial_breakpoints)
-            }
-            Phase::AwaitingInitializeResponse { session, rx, launch_args, initial_breakpoints } => {
-                poll_awaiting_initialize(session, rx, launch_args, initial_breakpoints)
-            }
-            Phase::Launching { session, launch_rx, launch_done, initialized_event_seen, initial_breakpoints, breakpoints_sent } => {
-                poll_launching(
-                    session,
-                    launch_rx,
-                    launch_done,
-                    initialized_event_seen,
-                    initial_breakpoints,
-                    breakpoints_sent,
-                    &mut self.last_sent_breakpoints,
-                )
-            }
+            Phase::RequestingPort {
+                rx,
+                launch_args,
+                initial_breakpoints,
+            } => poll_requesting_port(rx, launch_args, initial_breakpoints),
+            Phase::AwaitingInitializeResponse {
+                session,
+                rx,
+                launch_args,
+                initial_breakpoints,
+            } => poll_awaiting_initialize(session, rx, launch_args, initial_breakpoints),
+            Phase::Launching {
+                session,
+                launch_rx,
+                launch_done,
+                initialized_event_seen,
+                initial_breakpoints,
+                breakpoints_sent,
+            } => poll_launching(
+                session,
+                launch_rx,
+                launch_done,
+                initialized_event_seen,
+                initial_breakpoints,
+                breakpoints_sent,
+                &mut self.last_sent_breakpoints,
+            ),
             Phase::AwaitingConfigurationDone { session, rx } => poll_awaiting_configuration_done(session, rx),
-            Phase::Attached { session, paused, stack_trace_rx, var_fetch } => {
-                poll_attached(session, paused, stack_trace_rx, var_fetch)
-            }
+            Phase::Attached {
+                session,
+                paused,
+                stack_trace_rx,
+                var_fetch,
+            } => poll_attached(session, paused, stack_trace_rx, var_fetch),
             other @ (Phase::Idle | Phase::Failed(_)) => other,
         };
     }
@@ -340,7 +385,9 @@ impl DebugState {
     /// per-document context to filter with.
     pub fn paused_location(&self) -> Option<(&Path, usize)> {
         match &self.phase {
-            Phase::Attached { paused: Some(frame), .. } => Some((frame.file.as_path(), frame.line)),
+            Phase::Attached {
+                paused: Some(frame), ..
+            } => Some((frame.file.as_path(), frame.line)),
             _ => None,
         }
     }
@@ -351,7 +398,9 @@ impl DebugState {
     /// the same "nothing to show" case to a caller).
     pub fn call_stack(&self) -> &[StackFrameSummary] {
         match &self.phase {
-            Phase::Attached { paused: Some(frame), .. } => &frame.stack,
+            Phase::Attached {
+                paused: Some(frame), ..
+            } => &frame.stack,
             _ => &[],
         }
     }
@@ -362,7 +411,9 @@ impl DebugState {
     /// resolves finishes fetching.
     pub fn variables(&self) -> &[VariableGroup] {
         match &self.phase {
-            Phase::Attached { paused: Some(frame), .. } => &frame.variables,
+            Phase::Attached {
+                paused: Some(frame), ..
+            } => &frame.variables,
             _ => &[],
         }
     }
@@ -403,7 +454,15 @@ impl DebugState {
     /// sense while genuinely paused, and all four optimistically clear
     /// `paused` the same way.
     fn send_paused_thread_command(&mut self, command: &str) {
-        let Phase::Attached { session, paused, stack_trace_rx, var_fetch } = &mut self.phase else { return };
+        let Phase::Attached {
+            session,
+            paused,
+            stack_trace_rx,
+            var_fetch,
+        } = &mut self.phase
+        else {
+            return;
+        };
         let Some(frame) = paused.take() else { return };
         *stack_trace_rx = None;
         *var_fetch = VarFetch::Idle;
@@ -424,7 +483,9 @@ impl DebugState {
         if to_send.is_empty() {
             return;
         }
-        let Phase::Attached { session, .. } = &mut self.phase else { return };
+        let Phase::Attached { session, .. } = &mut self.phase else {
+            return;
+        };
         for (path, lines) in to_send {
             let _ = session.send_request("setBreakpoints", set_breakpoints_args(&path, &lines));
             self.last_sent_breakpoints.insert(path, lines);
@@ -509,7 +570,12 @@ fn poll_awaiting_initialize(
     match rx.try_recv() {
         Ok(Ok(_capabilities)) => launch(session, launch_args, initial_breakpoints),
         Ok(Err(message)) => Phase::Failed(format!("DAP initialize failed: {message}")),
-        Err(TryRecvError::Empty) => Phase::AwaitingInitializeResponse { session, rx, launch_args, initial_breakpoints },
+        Err(TryRecvError::Empty) => Phase::AwaitingInitializeResponse {
+            session,
+            rx,
+            launch_args,
+            initial_breakpoints,
+        },
         Err(TryRecvError::Disconnected) => Phase::Failed("the debug adapter closed the connection".to_string()),
     }
 }
@@ -563,7 +629,14 @@ fn poll_launching(
     if launch_done && initialized_event_seen {
         return configuration_done(session);
     }
-    Phase::Launching { session, launch_rx, launch_done, initialized_event_seen, initial_breakpoints, breakpoints_sent }
+    Phase::Launching {
+        session,
+        launch_rx,
+        launch_done,
+        initialized_event_seen,
+        initial_breakpoints,
+        breakpoints_sent,
+    }
 }
 
 fn configuration_done(mut session: DapSession) -> Phase {
@@ -581,7 +654,12 @@ fn configuration_done(mut session: DapSession) -> Phase {
 
 fn poll_awaiting_configuration_done(session: DapSession, rx: Receiver<DapResult>) -> Phase {
     match rx.try_recv() {
-        Ok(Ok(_)) => Phase::Attached { session, paused: None, stack_trace_rx: None, var_fetch: VarFetch::Idle },
+        Ok(Ok(_)) => Phase::Attached {
+            session,
+            paused: None,
+            stack_trace_rx: None,
+            var_fetch: VarFetch::Idle,
+        },
         Ok(Err(message)) => Phase::Failed(format!("configurationDone failed: {message}")),
         Err(TryRecvError::Empty) => Phase::AwaitingConfigurationDone { session, rx },
         Err(TryRecvError::Disconnected) => Phase::Failed("the debug adapter closed the connection".to_string()),
@@ -658,7 +736,12 @@ fn poll_attached(
         }
         var_fetch = poll_var_fetch(&mut session, var_fetch, frame);
     }
-    Phase::Attached { session, paused, stack_trace_rx, var_fetch }
+    Phase::Attached {
+        session,
+        paused,
+        stack_trace_rx,
+        var_fetch,
+    }
 }
 
 /// Advances the `scopes`/`variables` chain by exactly one step, writing the
@@ -677,18 +760,34 @@ fn poll_var_fetch(session: &mut DapSession, var_fetch: VarFetch, frame: &mut Pau
             }
             Err(TryRecvError::Empty) => VarFetch::AwaitingScopes { rx },
         },
-        VarFetch::AwaitingVariables { name, remaining, rx, mut collected } => match rx.try_recv() {
+        VarFetch::AwaitingVariables {
+            name,
+            remaining,
+            rx,
+            mut collected,
+        } => match rx.try_recv() {
             Ok(Ok(body)) => {
-                collected.push(VariableGroup { name, variables: parse_variables(&body) });
+                collected.push(VariableGroup {
+                    name,
+                    variables: parse_variables(&body),
+                });
                 advance_variables_fetch(session, frame, remaining, collected)
             }
             Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
-                collected.push(VariableGroup { name, variables: Vec::new() });
+                collected.push(VariableGroup {
+                    name,
+                    variables: Vec::new(),
+                });
                 frame.variables = collected;
                 frame.variables_fetched = true;
                 VarFetch::Idle
             }
-            Err(TryRecvError::Empty) => VarFetch::AwaitingVariables { name, remaining, rx, collected },
+            Err(TryRecvError::Empty) => VarFetch::AwaitingVariables {
+                name,
+                remaining,
+                rx,
+                collected,
+            },
         },
         VarFetch::Idle => VarFetch::Idle,
     }
@@ -710,7 +809,12 @@ fn advance_variables_fetch(
     }
     let (name, variables_reference) = remaining.remove(0);
     match session.send_request("variables", json!({ "variablesReference": variables_reference })) {
-        Ok(rx) => VarFetch::AwaitingVariables { name, remaining, rx, collected },
+        Ok(rx) => VarFetch::AwaitingVariables {
+            name,
+            remaining,
+            rx,
+            collected,
+        },
         Err(_) => {
             frame.variables = collected;
             frame.variables_fetched = true;
@@ -746,15 +850,26 @@ fn parse_top_stack_frame(body: &Value) -> Option<(i64, PathBuf, usize)> {
 /// since a native/synthetic frame still belongs in the stack the user sees,
 /// it just isn't a click-to-jump target.
 fn parse_call_stack(body: &Value) -> Vec<StackFrameSummary> {
-    let Some(frames) = body.get("stackFrames").and_then(Value::as_array) else { return Vec::new() };
+    let Some(frames) = body.get("stackFrames").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     frames
         .iter()
         .filter_map(|frame| {
             let id = frame.get("id")?.as_i64()?;
             let name = frame.get("name")?.as_str()?.to_string();
             let line = frame.get("line")?.as_u64()?;
-            let file = frame.get("source").and_then(|s| s.get("path")).and_then(Value::as_str).map(PathBuf::from);
-            Some(StackFrameSummary { id, name, file, line: line.saturating_sub(1) as usize })
+            let file = frame
+                .get("source")
+                .and_then(|s| s.get("path"))
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            Some(StackFrameSummary {
+                id,
+                name,
+                file,
+                line: line.saturating_sub(1) as usize,
+            })
         })
         .collect()
 }
@@ -768,14 +883,20 @@ fn parse_call_stack(body: &Value) -> Vec<StackFrameSummary> {
 /// static-fields dump is rarely what "local variables" means to a user
 /// stepping through code, and can legitimately be large.
 fn parse_scopes(body: &Value) -> Vec<(String, i64)> {
-    let Some(scopes) = body.get("scopes").and_then(Value::as_array) else { return Vec::new() };
+    let Some(scopes) = body.get("scopes").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     scopes
         .iter()
         .filter(|scope| !scope.get("expensive").and_then(Value::as_bool).unwrap_or(false))
         .filter_map(|scope| {
             let name = scope.get("name")?.as_str()?.to_string();
             let variables_reference = scope.get("variablesReference")?.as_i64()?;
-            if variables_reference == 0 { None } else { Some((name, variables_reference)) }
+            if variables_reference == 0 {
+                None
+            } else {
+                Some((name, variables_reference))
+            }
         })
         .collect()
 }
@@ -785,218 +906,28 @@ fn parse_scopes(body: &Value) -> Vec<(String, i64)> {
 /// for an object is already e.g. `"Foo@1 (id=2)"`, not a reference this app
 /// would need to resolve further for Phase 3's stated scope).
 fn parse_variables(body: &Value) -> Vec<VariableEntry> {
-    let Some(variables) = body.get("variables").and_then(Value::as_array) else { return Vec::new() };
+    let Some(variables) = body.get("variables").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     variables
         .iter()
         .filter_map(|variable| {
             let name = variable.get("name")?.as_str()?.to_string();
-            let value = variable.get("value").and_then(Value::as_str).unwrap_or_default().to_string();
-            let kind = variable.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+            let value = variable
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let kind = variable
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             Some(VariableEntry { name, value, kind })
         })
         .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config(main_class: &str) -> RunConfig {
-        RunConfig {
-            name: "test".to_string(),
-            main_class: main_class.to_string(),
-            vm_args: "-Xmx128m".to_string(),
-            program_args: "foo".to_string(),
-            env: vec![("MY_ENV".to_string(), "hello".to_string())],
-            working_dir: None,
-        }
-    }
-
-    #[test]
-    fn build_launch_args_carries_every_field_the_real_extension_forwards() {
-        let root = Path::new("/projects/demo-app");
-        let classpath = vec![PathBuf::from("/projects/demo-app/target/classes"), PathBuf::from("/home/.m2/x.jar")];
-        let args = build_launch_args(root, &config("com.example.Main"), &classpath);
-
-        assert_eq!(args["mainClass"], "com.example.Main");
-        assert_eq!(args["projectName"], "demo-app");
-        assert_eq!(args["cwd"], "/projects/demo-app");
-        assert_eq!(args["classPaths"], serde_json::json!(["/projects/demo-app/target/classes", "/home/.m2/x.jar"]));
-        assert_eq!(args["modulePaths"], serde_json::json!([]));
-        assert_eq!(args["args"], "foo");
-        assert_eq!(args["vmArgs"], "-Xmx128m");
-        assert_eq!(args["env"]["MY_ENV"], "hello");
-        assert_eq!(args["console"], "internalConsole");
-    }
-
-    #[test]
-    fn build_launch_args_prefers_working_dir_over_project_root() {
-        let root = Path::new("/projects/demo-app");
-        let mut cfg = config("com.example.Main");
-        cfg.working_dir = Some(PathBuf::from("/projects/demo-app/sub"));
-        let args = build_launch_args(root, &cfg, &[]);
-        assert_eq!(args["cwd"], "/projects/demo-app/sub");
-    }
-
-    #[test]
-    fn debug_state_starts_idle_and_reports_attached_status_correctly() {
-        let state = DebugState::default();
-        assert_eq!(state.status(), DebugStatus::Idle);
-        assert!(state.can_start());
-    }
-
-    #[test]
-    fn stop_from_idle_is_a_harmless_no_op() {
-        let mut state = DebugState::default();
-        state.stop();
-        assert_eq!(state.status(), DebugStatus::Idle);
-    }
-
-    #[test]
-    fn step_and_continue_from_idle_are_harmless_no_ops() {
-        let mut state = DebugState::default();
-        state.continue_();
-        state.step_over();
-        state.step_into();
-        state.step_out();
-        assert_eq!(state.status(), DebugStatus::Idle);
-        assert!(!state.is_paused());
-        assert_eq!(state.paused_location(), None);
-    }
-
-    #[test]
-    fn parse_stopped_thread_id_reads_a_real_stopped_event_body() {
-        let body = serde_json::json!({ "reason": "breakpoint", "threadId": 7, "allThreadsStopped": true });
-        assert_eq!(parse_stopped_thread_id(&body), Some(7));
-    }
-
-    #[test]
-    fn parse_stopped_thread_id_is_none_without_one() {
-        assert_eq!(parse_stopped_thread_id(&serde_json::json!({ "reason": "breakpoint" })), None);
-    }
-
-    #[test]
-    fn parse_top_stack_frame_reads_the_first_frames_file_and_converts_to_0_indexed() {
-        let body = serde_json::json!({
-            "stackFrames": [
-                { "id": 1, "name": "main", "line": 12, "column": 1, "source": { "name": "Main.java", "path": "/projects/demo-app/src/main/java/com/example/Main.java" } },
-                { "id": 2, "name": "caller", "line": 40, "column": 1, "source": { "name": "Other.java", "path": "/projects/demo-app/src/main/java/com/example/Other.java" } },
-            ],
-            "totalFrames": 2,
-        });
-        let (id, file, line) = parse_top_stack_frame(&body).expect("a real top frame with a file source parses");
-        assert_eq!(id, 1);
-        assert_eq!(file, PathBuf::from("/projects/demo-app/src/main/java/com/example/Main.java"));
-        assert_eq!(line, 11);
-    }
-
-    #[test]
-    fn parse_call_stack_keeps_every_frame_including_ones_without_a_file() {
-        let body = serde_json::json!({
-            "stackFrames": [
-                { "id": 1, "name": "main", "line": 12, "column": 1, "source": { "name": "Main.java", "path": "/projects/demo-app/src/main/java/com/example/Main.java" } },
-                { "id": 2, "name": "decompiled", "line": 3, "column": 1, "source": { "name": "Foo.class", "sourceReference": 42 } },
-            ],
-        });
-        let stack = parse_call_stack(&body);
-        assert_eq!(stack.len(), 2);
-        assert_eq!(stack[0].id, 1);
-        assert_eq!(stack[0].name, "main");
-        assert_eq!(stack[0].file, Some(PathBuf::from("/projects/demo-app/src/main/java/com/example/Main.java")));
-        assert_eq!(stack[0].line, 11);
-        assert_eq!(stack[1].id, 2);
-        assert_eq!(stack[1].file, None);
-        assert_eq!(stack[1].line, 2);
-    }
-
-    #[test]
-    fn parse_call_stack_is_empty_for_no_frames() {
-        assert!(parse_call_stack(&serde_json::json!({ "stackFrames": [] })).is_empty());
-    }
-
-    #[test]
-    fn parse_scopes_drops_expensive_and_empty_scopes() {
-        let body = serde_json::json!({
-            "scopes": [
-                { "name": "Locals", "variablesReference": 100, "expensive": false },
-                { "name": "Arguments", "variablesReference": 101, "expensive": false },
-                { "name": "Static", "variablesReference": 102, "expensive": true },
-                { "name": "Empty", "variablesReference": 0, "expensive": false },
-            ],
-        });
-        assert_eq!(parse_scopes(&body), vec![("Locals".to_string(), 100), ("Arguments".to_string(), 101)]);
-    }
-
-    #[test]
-    fn parse_variables_reads_name_value_and_type() {
-        let body = serde_json::json!({
-            "variables": [
-                { "name": "count", "value": "3", "type": "int", "variablesReference": 0 },
-                { "name": "self", "value": "Foo@1 (id=2)", "type": "Foo", "variablesReference": 5 },
-            ],
-        });
-        let variables = parse_variables(&body);
-        assert_eq!(variables.len(), 2);
-        assert_eq!(variables[0].name, "count");
-        assert_eq!(variables[0].value, "3");
-        assert_eq!(variables[0].kind, "int");
-        assert_eq!(variables[1].name, "self");
-        assert_eq!(variables[1].value, "Foo@1 (id=2)");
-    }
-
-    #[test]
-    fn parse_top_stack_frame_is_none_for_an_empty_stack() {
-        assert_eq!(parse_top_stack_frame(&serde_json::json!({ "stackFrames": [], "totalFrames": 0 })), None);
-    }
-
-    #[test]
-    fn parse_top_stack_frame_is_none_without_a_real_file_source() {
-        let body = serde_json::json!({
-            "stackFrames": [{ "id": 1, "name": "decompiled", "line": 3, "column": 1, "source": { "name": "Foo.class", "sourceReference": 42 } }],
-        });
-        assert_eq!(parse_top_stack_frame(&body), None);
-    }
-
-    #[test]
-    fn breakpoints_to_resend_includes_a_file_with_a_new_or_changed_set() {
-        let mut last_sent = HashMap::new();
-        last_sent.insert(PathBuf::from("/a/Main.java"), HashSet::from([3]));
-        let unchanged = HashSet::from([3]);
-        let changed = HashSet::from([5, 6]);
-        let brand_new = HashSet::from([1]);
-        let current = vec![
-            (Path::new("/a/Main.java"), &unchanged),
-            (Path::new("/a/Other.java"), &changed),
-            (Path::new("/a/New.java"), &brand_new),
-        ];
-        let mut to_send = breakpoints_to_resend(&last_sent, current.into_iter());
-        to_send.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(
-            to_send,
-            vec![
-                (PathBuf::from("/a/New.java"), HashSet::from([1])),
-                (PathBuf::from("/a/Other.java"), HashSet::from([5, 6])),
-            ]
-        );
-    }
-
-    #[test]
-    fn breakpoints_to_resend_excludes_a_file_that_never_had_breakpoints_and_still_doesnt() {
-        let last_sent = HashMap::new();
-        let empty = HashSet::new();
-        let current = vec![(Path::new("/a/Untouched.java"), &empty)];
-        assert!(breakpoints_to_resend(&last_sent, current.into_iter()).is_empty());
-    }
-
-    #[test]
-    fn breakpoints_to_resend_includes_a_file_whose_breakpoints_were_all_cleared() {
-        let mut last_sent = HashMap::new();
-        last_sent.insert(PathBuf::from("/a/Main.java"), HashSet::from([3]));
-        let empty = HashSet::new();
-        let current = vec![(Path::new("/a/Main.java"), &empty)];
-        assert_eq!(
-            breakpoints_to_resend(&last_sent, current.into_iter()),
-            vec![(PathBuf::from("/a/Main.java"), HashSet::new())]
-        );
-    }
-}
+#[path = "debug_state_test.rs"]
+mod debug_state_test;

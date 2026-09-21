@@ -28,13 +28,19 @@ pub struct ContentKey {
 impl ContentKey {
     /// For text that is exactly what a `TextBuffer` currently holds.
     pub fn revision(revision: u64) -> Self {
-        Self { revision, edited_hash: 0 }
+        Self {
+            revision,
+            edited_hash: 0,
+        }
     }
 
     /// For a within-frame edited copy of the buffer at `revision` — hashed
     /// so it can't collide with the un-edited text at that same revision.
     pub fn edited(revision: u64, buffer: &Rope) -> Self {
-        Self { revision, edited_hash: hash_rope_content(buffer) | 1 }
+        Self {
+            revision,
+            edited_hash: hash_rope_content(buffer) | 1,
+        }
     }
 }
 

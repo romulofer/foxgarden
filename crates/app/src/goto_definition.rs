@@ -44,7 +44,11 @@ pub enum Target {
 
 enum Stage {
     Locating(Receiver<Result<serde_json::Value, ResponseError>>),
-    FetchingSource { uri: Uri, range: lsp_types::Range, rx: Receiver<Result<serde_json::Value, ResponseError>> },
+    FetchingSource {
+        uri: Uri,
+        range: lsp_types::Range,
+        rx: Receiver<Result<serde_json::Value, ResponseError>>,
+    },
 }
 
 /// One slot for whichever request is currently in flight — same "one
@@ -119,7 +123,10 @@ impl GotoDefinitionState {
             self.stage = Some(Stage::FetchingSource { uri, range, rx });
             None
         } else {
-            Some(Target::File { path: uri_to_path(&uri)?, range })
+            Some(Target::File {
+                path: uri_to_path(&uri)?,
+                range,
+            })
         }
     }
 }
@@ -133,19 +140,23 @@ impl GotoDefinitionState {
 /// treats "nothing to jump to" as a silent no-op, same as `hover`'s own
 /// decode step.
 fn first_location(value: serde_json::Value) -> Option<(Uri, lsp_types::Range)> {
-    let response = serde_json::from_value::<Option<lsp_types::GotoDefinitionResponse>>(value).ok().flatten()?;
+    let response = serde_json::from_value::<Option<lsp_types::GotoDefinitionResponse>>(value)
+        .ok()
+        .flatten()?;
     match response {
         lsp_types::GotoDefinitionResponse::Scalar(location) => Some((location.uri, location.range)),
-        lsp_types::GotoDefinitionResponse::Array(locations) => {
-            locations.into_iter().next().map(|location| (location.uri, location.range))
-        }
+        lsp_types::GotoDefinitionResponse::Array(locations) => locations
+            .into_iter()
+            .next()
+            .map(|location| (location.uri, location.range)),
         // `target_selection_range` (the definition's own name span), not
         // `target_range` (the whole declaration, doc comment and all) — the
         // same "jump to the symbol itself, not its surrounding block" target
         // a `Location`'s single `range` already is for the other two shapes.
-        lsp_types::GotoDefinitionResponse::Link(links) => {
-            links.into_iter().next().map(|link| (link.target_uri, link.target_selection_range))
-        }
+        lsp_types::GotoDefinitionResponse::Link(links) => links
+            .into_iter()
+            .next()
+            .map(|link| (link.target_uri, link.target_selection_range)),
     }
 }
 
@@ -193,90 +204,5 @@ fn jdt_cache_path(uri: &str) -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use super::*;
-
-    #[test]
-    fn first_location_reads_a_scalar_location() {
-        let value = serde_json::json!({
-            "uri": "file:///a/Foo.java",
-            "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 5 } }
-        });
-        let (uri, range) = first_location(value).unwrap();
-        assert_eq!(uri.as_str(), "file:///a/Foo.java");
-        assert_eq!(range.start.line, 1);
-    }
-
-    #[test]
-    fn first_location_reads_the_first_entry_of_an_array() {
-        let value = serde_json::json!([
-            { "uri": "file:///a/Foo.java", "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } } },
-            { "uri": "file:///a/Bar.java", "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } } }
-        ]);
-        let (uri, _) = first_location(value).unwrap();
-        assert_eq!(uri.as_str(), "file:///a/Foo.java");
-    }
-
-    #[test]
-    fn first_location_reads_a_location_links_own_target_selection_range_not_its_target_range() {
-        let value = serde_json::json!([{
-            "targetUri": "jdt://contents/rt.jar/java.lang/String.class?=x",
-            "targetRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 100, "character": 0 } },
-            "targetSelectionRange": { "start": { "line": 10, "character": 4 }, "end": { "line": 10, "character": 10 } }
-        }]);
-        let (uri, range) = first_location(value).unwrap();
-        assert!(uri.as_str().starts_with("jdt:"));
-        assert_eq!(range.start.line, 10);
-    }
-
-    #[test]
-    fn first_location_a_null_result_is_none() {
-        assert!(first_location(serde_json::Value::Null).is_none());
-    }
-
-    #[test]
-    fn first_location_an_empty_array_is_none() {
-        assert!(first_location(serde_json::json!([])).is_none());
-    }
-
-    #[test]
-    fn jdt_cache_path_names_the_file_from_the_uris_trailing_class_segment() {
-        let path = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-        let name = path.file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("String-"), "unexpected cache file name: {name}");
-        assert!(name.ends_with(".java"));
-    }
-
-    #[test]
-    fn jdt_cache_path_is_stable_across_calls_for_the_same_uri() {
-        let a = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-        let b = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn jdt_cache_path_differs_for_two_uris_with_the_same_trailing_class_name() {
-        // Two different JARs can each contain a same-named class — the
-        // human-readable name alone must never be what dedupes the cache.
-        let a = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-        let b = jdt_cache_path("jdt://contents/other.jar/some.pkg/String.class?=y").unwrap();
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn handle_source_writes_the_reply_text_and_resolves_the_byte_offset() {
-        let uri = Uri::from_str("jdt://contents/rt.jar/java.lang/String.class?=handle_source_test").unwrap();
-        let range = lsp_types::Range {
-            start: lsp_types::Position { line: 0, character: 6 },
-            end: lsp_types::Position { line: 0, character: 6 },
-        };
-        let value = serde_json::json!("class String {}");
-        let target = handle_source(&uri, range, value).expect("decodes a plain string reply");
-        let Target::Ready { path, byte_offset } = target else { panic!("expected Target::Ready") };
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class String {}");
-        assert_eq!(byte_offset, 6);
-        let _ = std::fs::remove_file(&path);
-    }
-}
+#[path = "goto_definition_test.rs"]
+mod goto_definition_test;

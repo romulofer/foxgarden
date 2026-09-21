@@ -429,11 +429,21 @@ fn action_targets_uses_the_whole_selection_even_if_a_different_node_was_right_cl
 }
 
 fn dir(name: &str, children: Vec<FileNode>) -> FileNode {
-    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::Dir, children }
+    FileNode {
+        path: PathBuf::from(name),
+        name: name.to_string(),
+        kind: FileKind::Dir,
+        children,
+    }
 }
 
 fn file(name: &str) -> FileNode {
-    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::File, children: Vec::new() }
+    FileNode {
+        path: PathBuf::from(name),
+        name: name.to_string(),
+        kind: FileKind::File,
+        children: Vec::new(),
+    }
 }
 
 #[test]
@@ -458,7 +468,13 @@ fn collapse_chain_joins_a_run_of_single_child_directories() {
         "br",
         vec![dir(
             "ufsc",
-            vec![dir("bridge", vec![dir("pec", vec![dir("backend", vec![dir("app", vec![]), dir("async", vec![])])])])],
+            vec![dir(
+                "bridge",
+                vec![dir(
+                    "pec",
+                    vec![dir("backend", vec![dir("app", vec![]), dir("async", vec![])])],
+                )],
+            )],
         )],
     );
     let collapsed = collapse_chain(&node, "/");

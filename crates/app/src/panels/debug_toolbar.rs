@@ -25,16 +25,28 @@ pub struct DebugToolbarOutcome {
 pub fn show(ui: &mut egui::Ui, paused: bool) -> DebugToolbarOutcome {
     let mut outcome = DebugToolbarOutcome::default();
     ui.horizontal(|ui| {
-        if ui.add_enabled(paused, egui::Button::new(t().common.debug_continue)).clicked() {
+        if ui
+            .add_enabled(paused, egui::Button::new(t().common.debug_continue))
+            .clicked()
+        {
             outcome.continue_request = true;
         }
-        if ui.add_enabled(paused, egui::Button::new(t().common.debug_step_over)).clicked() {
+        if ui
+            .add_enabled(paused, egui::Button::new(t().common.debug_step_over))
+            .clicked()
+        {
             outcome.step_over_request = true;
         }
-        if ui.add_enabled(paused, egui::Button::new(t().common.debug_step_into)).clicked() {
+        if ui
+            .add_enabled(paused, egui::Button::new(t().common.debug_step_into))
+            .clicked()
+        {
             outcome.step_into_request = true;
         }
-        if ui.add_enabled(paused, egui::Button::new(t().common.debug_step_out)).clicked() {
+        if ui
+            .add_enabled(paused, egui::Button::new(t().common.debug_step_out))
+            .clicked()
+        {
             outcome.step_out_request = true;
         }
         ui.separator();

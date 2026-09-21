@@ -25,8 +25,8 @@ fn this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
     let tree = tree_of(source);
     let cursor = source.find("helper").unwrap();
 
-    let items =
-        java_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+    let items = java_dot_completion_candidates(&tree, source, cursor, "this", None)
+        .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["MAX", "helper", "run", "x"]);
 }
@@ -86,7 +86,11 @@ fn a_local_variable_typed_as_another_project_class_offers_that_classs_public_mem
 #[test]
 fn an_external_receivers_one_level_supertype_is_included() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("Baz.java"), "public class Baz {\n    public void inherited() {\n    }\n}\n").unwrap();
+    std::fs::write(
+        dir.path().join("Baz.java"),
+        "public class Baz {\n    public void inherited() {\n    }\n}\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.path().join("Bar.java"),
         "public class Bar extends Baz {\n    public void baz() {\n    }\n}\n",
@@ -136,7 +140,8 @@ fn dispatcher_routes_java_to_java_dot_completion_candidates() {
     let tree = tree_of(source);
     let cursor = source.find("int x").unwrap();
 
-    let items = dot_completion_candidates(Language::Java, &tree, source, cursor, "this", None).expect("Java should dispatch to java_dot_completion_candidates");
+    let items = dot_completion_candidates(Language::Java, &tree, source, cursor, "this", None)
+        .expect("Java should dispatch to java_dot_completion_candidates");
     assert_eq!(labels(&items), vec!["helper", "run"]);
 }
 
@@ -151,8 +156,8 @@ fn kotlin_this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
     let tree = kotlin_tree_of(source);
     let cursor = source.find("helper").unwrap();
 
-    let items =
-        kotlin_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+    let items = kotlin_dot_completion_candidates(&tree, source, cursor, "this", None)
+        .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["helper", "run", "x"]);
 }
@@ -212,7 +217,11 @@ fn kotlin_a_local_variable_typed_as_another_project_class_offers_that_classs_pub
 #[test]
 fn kotlin_an_external_receivers_one_level_supertype_is_included() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("Baz.kt"), "open class Baz {\n    fun inherited() {\n    }\n}\n").unwrap();
+    std::fs::write(
+        dir.path().join("Baz.kt"),
+        "open class Baz {\n    fun inherited() {\n    }\n}\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.path().join("Bar.kt"),
         "class Bar : Baz() {\n    fun baz() {\n    }\n}\n",
@@ -235,8 +244,8 @@ fn kotlin_a_constructor_promoted_property_is_offered_via_this() {
     let tree = kotlin_tree_of(source);
     let cursor = source.find("run").unwrap();
 
-    let items =
-        kotlin_dot_completion_candidates(&tree, source, cursor, "this", None).expect("this. should resolve inside its own class");
+    let items = kotlin_dot_completion_candidates(&tree, source, cursor, "this", None)
+        .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["run", "x"]);
 }
@@ -292,7 +301,11 @@ fn dispatcher_routes_kotlin_to_kotlin_dot_completion_candidates() {
 // as a byte offset without needing `char_to_byte`.
 
 fn visible_labels(state: &CompletionState, text: &str, cursor_byte: usize) -> Vec<String> {
-    let mut labels: Vec<String> = state.visible(text, cursor_byte).iter().map(|i| i.label.clone()).collect();
+    let mut labels: Vec<String> = state
+        .visible(text, cursor_byte)
+        .iter()
+        .map(|i| i.label.clone())
+        .collect();
     labels.sort_unstable();
     labels
 }
@@ -314,7 +327,10 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
     let mut completion = None;
 
     let initial_caret = before.len();
-    let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    let frames: Vec<Vec<egui::Event>> = "super."
+        .chars()
+        .map(|c| vec![egui::Event::Text(c.to_string())])
+        .collect();
 
     typing_session(
         &mut doc,
@@ -330,8 +346,9 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
         frames,
     );
 
-    let state = completion
-        .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
+    let state = completion.expect(
+        "typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open",
+    );
     let text = doc.buffer.to_string();
     let cursor_byte = initial_caret + "super.".len();
     assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["run"]);
@@ -340,7 +357,11 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
 #[test]
 fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediately() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("Base.kt"), "open class Base {\n    fun run() {\n    }\n}\n").unwrap();
+    std::fs::write(
+        dir.path().join("Base.kt"),
+        "open class Base {\n    fun run() {\n    }\n}\n",
+    )
+    .unwrap();
     let before = "class Foo : Base() {\n    fun go() {\n        ";
     let after = "\n    }\n}\n";
     let source = format!("{before}{after}");
@@ -350,7 +371,10 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
     let mut completion = None;
 
     let initial_caret = before.len();
-    let frames: Vec<Vec<egui::Event>> = "super.".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    let frames: Vec<Vec<egui::Event>> = "super."
+        .chars()
+        .map(|c| vec![egui::Event::Text(c.to_string())])
+        .collect();
 
     typing_session(
         &mut doc,
@@ -366,8 +390,9 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
         frames,
     );
 
-    let state = completion
-        .expect("typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open");
+    let state = completion.expect(
+        "typing \"super.\" one character at a time, with nothing else in between, should leave dot-completion open",
+    );
     let text = doc.buffer.to_string();
     let cursor_byte = initial_caret + "super.".len();
     assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["run"]);
@@ -452,7 +477,12 @@ fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
 }
 
 fn spring_prop(name: &str) -> fg_core::SpringConfigProperty {
-    fg_core::SpringConfigProperty { name: name.to_string(), type_name: None, description: None, default_value: None }
+    fg_core::SpringConfigProperty {
+        name: name.to_string(),
+        type_name: None,
+        description: None,
+        default_value: None,
+    }
 }
 
 #[test]
@@ -467,11 +497,27 @@ fn typing_a_partial_key_in_application_properties_opens_spring_config_completion
     ]);
 
     let initial_caret = 0;
-    let frames: Vec<Vec<egui::Event>> = "server.po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    let frames: Vec<Vec<egui::Event>> = "server.po"
+        .chars()
+        .map(|c| vec![egui::Event::Text(c.to_string())])
+        .collect();
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut completion,
+        &mut spring_config,
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        initial_caret,
+        frames,
+    );
 
-    let state = completion.expect("typing a partial dotted key in a .properties file should open Spring config completion");
+    let state =
+        completion.expect("typing a partial dotted key in a .properties file should open Spring config completion");
     let text = doc.buffer.to_string();
     let cursor_byte = "server.po".len();
     assert_eq!(
@@ -490,11 +536,29 @@ fn typing_past_the_equals_sign_in_application_properties_does_not_open_completio
         crate::panels::spring_config::SpringConfigState::with_properties(vec![spring_prop("server.port")]);
 
     let initial_caret = "server.port=".len();
-    let frames = vec![vec![egui::Event::Text("8".to_string())], vec![egui::Event::Text("0".to_string())]];
+    let frames = vec![
+        vec![egui::Event::Text("8".to_string())],
+        vec![egui::Event::Text("0".to_string())],
+    ];
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut completion,
+        &mut spring_config,
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        initial_caret,
+        frames,
+    );
 
-    assert!(completion.is_none(), "typing a value after '=' must not open key completion");
+    assert!(
+        completion.is_none(),
+        "typing a value after '=' must not open key completion"
+    );
 }
 
 #[test]
@@ -512,7 +576,19 @@ fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor
     let initial_caret = before.len();
     let frames: Vec<Vec<egui::Event>> = "po".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut completion,
+        &mut spring_config,
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        initial_caret,
+        frames,
+    );
 
     let state = completion.expect("typing a partial key nested under server: in a .yml file should open completion");
     let text = doc.buffer.to_string();
@@ -535,10 +611,25 @@ fn accepting_a_spring_annotation_inserts_it_and_adds_the_import_alphabetically()
     let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
 
     let initial_caret = before.len();
-    let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    let mut frames: Vec<Vec<egui::Event>> = "@Compo"
+        .chars()
+        .map(|c| vec![egui::Event::Text(c.to_string())])
+        .collect();
     frames.push(vec![key_event(egui::Key::Enter)]);
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut completion,
+        &mut spring_config,
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        initial_caret,
+        frames,
+    );
 
     assert!(completion.is_none(), "accepting the completion should close the popup");
     let text = doc.buffer.to_string();
@@ -560,11 +651,29 @@ fn accepting_a_spring_annotation_already_imported_does_not_duplicate_the_import(
     let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
 
     let initial_caret = before.len();
-    let mut frames: Vec<Vec<egui::Event>> = "@Compo".chars().map(|c| vec![egui::Event::Text(c.to_string())]).collect();
+    let mut frames: Vec<Vec<egui::Event>> = "@Compo"
+        .chars()
+        .map(|c| vec![egui::Event::Text(c.to_string())])
+        .collect();
     frames.push(vec![key_event(egui::Key::Enter)]);
 
-    typing_session(&mut doc, &mut parser, None, &mut completion, &mut spring_config, &mut crate::lsp_state::LspState::default(), &mut FindReferencesState::default(), &mut RenameBox::default(), &mut CodeActionGutter::default(), initial_caret, frames);
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut completion,
+        &mut spring_config,
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        initial_caret,
+        frames,
+    );
 
     let text = doc.buffer.to_string();
-    assert_eq!(text.matches("import org.springframework.stereotype.Component;").count(), 1);
+    assert_eq!(
+        text.matches("import org.springframework.stereotype.Component;").count(),
+        1
+    );
 }

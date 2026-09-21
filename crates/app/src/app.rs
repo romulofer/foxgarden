@@ -11,7 +11,6 @@ use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::debug_state;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
-use crate::rename::RenameState;
 use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
@@ -36,15 +35,16 @@ use crate::panels::status_bar;
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
 use crate::pty_session::PtySession;
+use crate::rename::RenameState;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-use crate::widgets::modal::show_modal;
 use crate::widgets::editor::{
     CodeActionGutter, CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState,
     OverrideMethodDialog, PeekState, RenameBox, UserTemplates, jump_to,
 };
+use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
 /// Newline-joined roots of previously opened projects, most recent first —
@@ -903,7 +903,11 @@ fn restore_session(
 fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState, recent_projects: &[PathBuf]) {
     storage.set_string(
         RECENT_PROJECTS_KEY,
-        recent_projects.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n"),
+        recent_projects
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
     if let Some(project) = &state.project {
         storage.set_string(LAST_PROJECT_KEY, project.root.to_string_lossy().into_owned());
@@ -979,9 +983,15 @@ fn restore_bottom_dock(storage: &dyn eframe::Storage) -> BottomDock {
             .unwrap_or_default();
         return BottomDock::restored(open == "true", active);
     }
-    let terminal_was_open = storage.get_string(TERMINAL_PANEL_VISIBLE_KEY).is_some_and(|v| v == "true");
+    let terminal_was_open = storage
+        .get_string(TERMINAL_PANEL_VISIBLE_KEY)
+        .is_some_and(|v| v == "true");
     let build_was_open = storage.get_string(BUILD_PANEL_VISIBLE_KEY).is_some_and(|v| v == "true");
-    let active = if terminal_was_open { BottomTab::Terminal } else { BottomTab::Build };
+    let active = if terminal_was_open {
+        BottomTab::Terminal
+    } else {
+        BottomTab::Build
+    };
     BottomDock::restored(terminal_was_open || build_was_open, active)
 }
 
@@ -1225,7 +1235,10 @@ fn persist_settings(
         .to_string(),
     );
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
-    storage.set_string(TRIM_TRAILING_WHITESPACE_KEY, trim_trailing_whitespace_on_save.to_string());
+    storage.set_string(
+        TRIM_TRAILING_WHITESPACE_KEY,
+        trim_trailing_whitespace_on_save.to_string(),
+    );
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
     storage.set_string(
@@ -1480,8 +1493,13 @@ impl FoxGardenApp {
         let outcome = show_modal(ui, "restore_drafts", Some(names.len()), |ui, _| {
             ui.label(msg::unsaved_work_found(names.len()));
             ui.weak(names.join("\n"));
-            ui.horizontal(|ui| (ui.button(t().common.restore).clicked(), ui.button(t().tabs.discard).clicked()))
-                .inner
+            ui.horizontal(|ui| {
+                (
+                    ui.button(t().common.restore).clicked(),
+                    ui.button(t().tabs.discard).clicked(),
+                )
+            })
+            .inner
         });
 
         let Some(((restore, discard), escaped)) = outcome else {
@@ -1553,15 +1571,13 @@ impl FoxGardenApp {
             Command::RecentFiles => self.quick_switcher.toggle(),
             // The editor owns diagnostic navigation (it needs the caret),
             // so this arrives as the same key event pressing F8 does.
-            Command::NextDiagnostic => self
-                .pending_editor_input
-                .push(egui::Event::Key {
-                    key: egui::Key::F8,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }),
+            Command::NextDiagnostic => self.pending_editor_input.push(egui::Event::Key {
+                key: egui::Key::F8,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }),
             Command::ToggleSidePanel => self.side_panel_visible = !self.side_panel_visible,
             Command::ToggleTerminal => self.bottom_dock.toggle(BottomTab::Terminal),
             Command::ToggleSourceControl => self.source_control_visible = !self.source_control_visible,
@@ -1672,9 +1688,7 @@ impl eframe::App for FoxGardenApp {
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
             self.quick_switcher.toggle();
         }
-        if !terminal_focused
-            && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && !i.modifiers.shift)
-        {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && !i.modifiers.shift) {
             self.go_to_file.toggle();
         }
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && i.modifiers.shift) {
@@ -1931,10 +1945,9 @@ impl eframe::App for FoxGardenApp {
             // terminal panels below, since its whole purpose is 1:1 tied to
             // `self.debug_state` actually running.
             if self.debug_state.is_running() {
-                egui::Panel::top("debug_toolbar")
-                    .show(ui, |ui| {
-                        debug_toolbar_outcome = debug_toolbar::show(ui, self.debug_state.is_paused());
-                    });
+                egui::Panel::top("debug_toolbar").show(ui, |ui| {
+                    debug_toolbar_outcome = debug_toolbar::show(ui, self.debug_state.is_paused());
+                });
             }
 
             // Same "tied 1:1 to a live session" visibility rule as the
@@ -1999,25 +2012,23 @@ impl eframe::App for FoxGardenApp {
                 egui::Panel::bottom("bottom_dock")
                     .resizable(true)
                     .default_size(240.0)
-                    .show(ui, |ui| {
-                        match bottom_dock::show_tabs(ui, &mut self.bottom_dock) {
-                            BottomTab::Terminal => {
-                                terminal_outcome = terminal_panel::show(
-                                    ui,
-                                    &mut self.state,
-                                    &mut self.terminal_sessions,
-                                    self.editor_font,
-                                    self.font_size,
-                                    self.dark_mode,
-                                    self.view_settings.cursor_blink,
-                                );
-                            }
-                            BottomTab::Build => {
-                                build_click = build_panel::show(ui, &mut self.build_state);
-                            }
-                            BottomTab::Profiler => {
-                                crate::panels::profiler_panel::show(ui, &self.profiler_state, &mut self.flame_graph);
-                            }
+                    .show(ui, |ui| match bottom_dock::show_tabs(ui, &mut self.bottom_dock) {
+                        BottomTab::Terminal => {
+                            terminal_outcome = terminal_panel::show(
+                                ui,
+                                &mut self.state,
+                                &mut self.terminal_sessions,
+                                self.editor_font,
+                                self.font_size,
+                                self.dark_mode,
+                                self.view_settings.cursor_blink,
+                            );
+                        }
+                        BottomTab::Build => {
+                            build_click = build_panel::show(ui, &mut self.build_state);
+                        }
+                        BottomTab::Profiler => {
+                            crate::panels::profiler_panel::show(ui, &self.profiler_state, &mut self.flame_graph);
                         }
                     });
             }
@@ -2174,7 +2185,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(tool) => match self.build_state.start_build(&root, tool) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
@@ -2194,7 +2207,9 @@ impl eframe::App for FoxGardenApp {
                 Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
                     Some(config) => match self.build_state.start_run(&root, tool, config) {
                         Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                        Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+                        Err(err) => {
+                            crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                        }
                     },
                     None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                 },
@@ -2208,7 +2223,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(tool) => match self.build_state.start_test(&root, tool) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
@@ -2220,9 +2237,13 @@ impl eframe::App for FoxGardenApp {
             match fg_core::detect_build_tool(&root) {
                 Some(fg_core::BuildTool::Maven) => match self.build_state.start_coverage(&root) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                    }
                 },
-                Some(fg_core::BuildTool::Gradle) => crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string()),
+                Some(fg_core::BuildTool::Gradle) => {
+                    crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string())
+                }
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
@@ -2233,7 +2254,9 @@ impl eframe::App for FoxGardenApp {
             if fg_core::has_dockerfile(&root) {
                 match self.build_state.start_docker_build_and_run(&root) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string()))
+                    }
                 }
             } else {
                 crate::errors::report(&mut self.last_error, t().errors.no_dockerfile_detected.to_string());
@@ -2246,7 +2269,9 @@ impl eframe::App for FoxGardenApp {
             match fg_core::compose_file(&root) {
                 Some(compose_file) => match self.build_state.start_docker_compose_up(&compose_file) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_compose_file_detected.to_string()),
             }
@@ -2275,7 +2300,8 @@ impl eframe::App for FoxGardenApp {
                                 .map(|doc| (doc.path.clone(), doc.breakpoints.clone()))
                                 .collect();
                             if let Err(err) =
-                                self.debug_state.start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
+                                self.debug_state
+                                    .start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
                             {
                                 crate::errors::report(&mut self.last_error, err);
                             }
@@ -2299,7 +2325,8 @@ impl eframe::App for FoxGardenApp {
             match crate::profiler_manager::installed_asprof() {
                 Some(asprof) => {
                     let secs = crate::profiler_state::DEFAULT_DURATION_SECS;
-                    self.profiler_state.start_capture(asprof, pid, fg_core::ProfileEvent::Cpu, secs);
+                    self.profiler_state
+                        .start_capture(asprof, pid, fg_core::ProfileEvent::Cpu, secs);
                     self.toasts.push(msg::profiling_pid(pid, secs));
                 }
                 None => {
@@ -2405,9 +2432,13 @@ impl eframe::App for FoxGardenApp {
                     Some(tool) => {
                         let classes_dir = fg_core::default_classes_dir(&root, tool);
                         if classes_dir.is_dir() {
-                            self.static_analysis.run_spotbugs(PathBuf::from(binary), classes_dir, root);
+                            self.static_analysis
+                                .run_spotbugs(PathBuf::from(binary), classes_dir, root);
                         } else {
-                            crate::errors::report(&mut self.last_error, t().errors.spotbugs_no_compiled_classes.to_string());
+                            crate::errors::report(
+                                &mut self.last_error,
+                                t().errors.spotbugs_no_compiled_classes.to_string(),
+                            );
                         }
                     }
                     None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
@@ -2602,7 +2633,8 @@ impl eframe::App for FoxGardenApp {
                 &recent_to_offer,
             );
             if welcome.open_folder {
-                self.side_panel.open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
+                self.side_panel
+                    .open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
             }
             if welcome.new_project {
                 self.new_project_wizard.open();
@@ -2651,9 +2683,10 @@ impl eframe::App for FoxGardenApp {
                         };
                         match self.build_state.start_run(&root, tool, config) {
                             Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                            Err(err) => {
-                                crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
-                            }
+                            Err(err) => crate::errors::report(
+                                &mut self.last_error,
+                                msg::failed_to_start_build(&err.to_string()),
+                            ),
                         }
                     }
                     None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
@@ -2672,7 +2705,14 @@ impl eframe::App for FoxGardenApp {
         // conversion is needed the way `goto_definition`'s own `Target::
         // File` still requires below.
         if let Some((path, byte)) = self.find_references.take_navigation() {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
             self.pending_navigation = Some((path, byte));
         }
 
@@ -2684,7 +2724,8 @@ impl eframe::App for FoxGardenApp {
         if let Some((char_offset, new_name)) = self.rename_box.take_confirmed()
             && let Some(index) = self.state.active_tab
         {
-            self.rename.request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
+            self.rename
+                .request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
         }
         if let Some(Err(err)) = self.rename.poll(&mut self.state, &mut self.parsers) {
             crate::errors::report(&mut self.last_error, msg::failed_to_rename(&err));
@@ -2727,12 +2768,18 @@ impl eframe::App for FoxGardenApp {
                     (path, byte)
                 }
             };
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
             if let Some(byte) = byte {
                 self.pending_navigation = Some((path.clone(), byte));
             }
-            if is_decompiled
-                && let Some(doc) = self.state.open_tabs.iter_mut().find(|doc| doc.path() == path.as_path())
+            if is_decompiled && let Some(doc) = self.state.open_tabs.iter_mut().find(|doc| doc.path() == path.as_path())
             {
                 doc.read_only = true;
             }
@@ -2828,6 +2875,6 @@ impl eframe::App for FoxGardenApp {
 }
 
 #[cfg(test)]
-mod e2e_test;
-#[cfg(test)]
 mod app_test;
+#[cfg(test)]
+mod e2e_test;

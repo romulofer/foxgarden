@@ -66,14 +66,14 @@ fn queued_pending_input_is_drained_as_real_input_before_text_edit_runs() {
                 pending_input,
                 &mut None,
                 &UserTemplates::default(),
-            &mut crate::panels::spring_config::SpringConfigState::default(),
-            &mut crate::lsp_state::LspState::default(),
-            &mut FindReferencesState::default(),
-            &mut RenameBox::default(),
-            &mut CodeActionGutter::default(),
-            &crate::debug_state::DebugState::default(),
-        true,
-        &mut None,
+                &mut crate::panels::spring_config::SpringConfigState::default(),
+                &mut crate::lsp_state::LspState::default(),
+                &mut FindReferencesState::default(),
+                &mut RenameBox::default(),
+                &mut CodeActionGutter::default(),
+                &crate::debug_state::DebugState::default(),
+                true,
+                &mut None,
             );
         });
     };

@@ -28,15 +28,15 @@ use super::diff_gutter;
 use super::folding;
 use super::hover::HoverState;
 use super::multi_cursor::{self, MultiEditOp};
+use super::painting::{
+    paint_blame_annotation, paint_bracket_match, paint_diagnostic_ruler, paint_diagnostics, paint_extra_selections,
+    paint_indent_guides, paint_line_numbers, paint_occurrence_highlights, paint_paused_line_highlight,
+    paint_sticky_scroll, paint_whitespace,
+};
 use super::peek::PeekState;
 use super::references::FindReferencesState;
 use super::rename::RenameBox;
 use super::run_gutter;
-use super::painting::{
-    paint_blame_annotation, paint_bracket_match, paint_diagnostic_ruler, paint_diagnostics, paint_extra_selections,
-    paint_indent_guides,
-    paint_line_numbers, paint_occurrence_highlights, paint_paused_line_highlight, paint_sticky_scroll, paint_whitespace,
-};
 use super::spring_annotation_completion;
 use super::spring_config_completion;
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
@@ -259,7 +259,11 @@ fn highlight_window(
         .min(total_lines);
 
     let start = doc.buffer.line_to_byte(first.min(total_lines));
-    let end = if last >= total_lines { source.len() } else { doc.buffer.line_to_byte(last) };
+    let end = if last >= total_lines {
+        source.len()
+    } else {
+        doc.buffer.line_to_byte(last)
+    };
     start..end.max(start)
 }
 
@@ -337,9 +341,15 @@ fn main_entries_for(
     // The file stem is what a Kotlin top-level `main` compiles into
     // (`Main.kt` -> `MainKt`), so it has to come from the document's own
     // path rather than anything in the text.
-    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     let entries = parser
-        .and_then(|p| p.tree().map(|tree| syntax::main_entries(tree, source, p.language(), &stem)))
+        .and_then(|p| {
+            p.tree()
+                .map(|tree| syntax::main_entries(tree, source, p.language(), &stem))
+        })
         .unwrap_or_default();
     let entries = Arc::new(entries);
     ui.ctx().data_mut(|d| {
@@ -1353,8 +1363,11 @@ pub fn show(
     // excluded: Phase 1's own research found no evidence java-debug
     // supports it, so a breakpoint gutter that can never actually pause
     // anything would be misleading.
-    let breakpoint_gutter_width =
-        if doc.language == Some(Language::Java) { breakpoint_gutter::BREAKPOINT_GUTTER_WIDTH } else { 0.0 };
+    let breakpoint_gutter_width = if doc.language == Some(Language::Java) {
+        breakpoint_gutter::BREAKPOINT_GUTTER_WIDTH
+    } else {
+        0.0
+    };
     let fold_gutter_width = if folds.is_empty() {
         0.0
     } else {
@@ -1392,7 +1405,14 @@ pub fn show(
     // file with no `main` in it — the overwhelming majority of a project's
     // files — keeps exactly the gutter width it had before the run marker
     // existed.
-    let main_entries = main_entries_for(ui, widget_id, parser.as_ref(), doc.buffer.revision(), &old_text, &doc.path);
+    let main_entries = main_entries_for(
+        ui,
+        widget_id,
+        parser.as_ref(),
+        doc.buffer.revision(),
+        &old_text,
+        &doc.path,
+    );
     let run_gutter_width = if main_entries.is_empty() {
         0.0
     } else {
@@ -1477,7 +1497,16 @@ pub fn show(
         if !i.modifiers.alt {
             return false;
         }
-        let Some(pos) = i.events.iter().position(|e| matches!(e, Event::Key { key: Key::Enter, pressed: true, .. })) else {
+        let Some(pos) = i.events.iter().position(|e| {
+            matches!(
+                e,
+                Event::Key {
+                    key: Key::Enter,
+                    pressed: true,
+                    ..
+                }
+            )
+        }) else {
             return false;
         };
         i.events.remove(pos);
@@ -1663,8 +1692,10 @@ pub fn show(
                             let anchor_byte = char_to_byte(&old_text, segment_range.start);
                             let current_line = old_text[..line_start_byte].matches('\n').count();
                             let indent = line_before_cursor.len() - line_before_cursor.trim_start().len();
-                            let ancestor = spring_config_completion::yaml_ancestor_path(&old_text, current_line, indent);
-                            let candidates = spring_config_completion::yaml_completion_candidates(properties, &ancestor);
+                            let ancestor =
+                                spring_config_completion::yaml_ancestor_path(&old_text, current_line, indent);
+                            let candidates =
+                                spring_config_completion::yaml_completion_candidates(properties, &ancestor);
                             *completion = Some(CompletionState::open(anchor_byte, candidates));
                         }
                     }
@@ -1744,9 +1775,12 @@ pub fn show(
         {
             let anchor_byte = char_to_byte(&old_text, cursor_char);
             let at_byte = anchor_byte.saturating_sub(1);
-            let inside_comment_or_string = syntax::highlight_spans(tree, &old_text, language).iter().any(|(range, scope)| {
-                range.contains(&at_byte) && matches!(scope, Scope::Comment | Scope::DocComment | Scope::String)
-            });
+            let inside_comment_or_string =
+                syntax::highlight_spans(tree, &old_text, language)
+                    .iter()
+                    .any(|(range, scope)| {
+                        range.contains(&at_byte) && matches!(scope, Scope::Comment | Scope::DocComment | Scope::String)
+                    });
 
             if !inside_comment_or_string {
                 let candidates = spring_annotation_completion::spring_annotation_candidates();
@@ -2017,7 +2051,10 @@ pub fn show(
                             }
                             Some(super_path) => match std::fs::read_to_string(&super_path) {
                                 Err(err) => {
-                                    crate::errors::report(last_error, msg::failed_to_read(&super_path.display().to_string(), &err.to_string()));
+                                    crate::errors::report(
+                                        last_error,
+                                        msg::failed_to_read(&super_path.display().to_string(), &err.to_string()),
+                                    );
                                 }
                                 Ok(super_source) => {
                                     let mut super_parser = IncrementalParser::new(Language::Java);
@@ -2164,7 +2201,9 @@ pub fn show(
         // rectangle from an already-dismissed tooltip freeze this forever.
         let pointer_over_tooltip = hover.has_content()
             && ui.ctx().pointer_hover_pos().is_some_and(|pos| {
-                ui.ctx().memory(|mem| mem.area_rect(hover_id)).is_some_and(|rect| rect.contains(pos))
+                ui.ctx()
+                    .memory(|mem| mem.area_rect(hover_id))
+                    .is_some_and(|rect| rect.contains(pos))
             });
         if !pointer_over_tooltip {
             let hovered = shell_out
@@ -2252,7 +2291,13 @@ pub fn show(
         peek.request(doc, caret.primary, char_to_byte(&text, caret.primary), lsp);
     }
     peek.update(lsp, doc);
-    peek.paint(ui, egui::Id::new(("peek_popup", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
+    peek.paint(
+        ui,
+        egui::Id::new(("peek_popup", widget_id)),
+        &shell_out.base,
+        &doc.buffer,
+        editor_rect,
+    );
 
     // Find references (`PLAN.md` Track 20 Phase 6): Shift+F12 requests
     // `textDocument/references` at the current caret and lists every hit
@@ -2265,7 +2310,13 @@ pub fn show(
         find_references.request(doc, caret.primary, char_to_byte(&text, caret.primary), lsp);
     }
     find_references.update(lsp, doc);
-    find_references.paint(ui, egui::Id::new(("find_references_popup", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
+    find_references.paint(
+        ui,
+        egui::Id::new(("find_references_popup", widget_id)),
+        &shell_out.base,
+        &doc.buffer,
+        editor_rect,
+    );
 
     // Rename symbol (`PLAN.md` Track 20 Phase 7): F2 opens an inline "new
     // name" box pre-filled with the identifier under the caret —
@@ -2279,7 +2330,13 @@ pub fn show(
     {
         rename_box.start(doc, caret.primary);
     }
-    rename_box.paint(ui, egui::Id::new(("rename_box", widget_id)), &shell_out.base, &doc.buffer, editor_rect);
+    rename_box.paint(
+        ui,
+        egui::Id::new(("rename_box", widget_id)),
+        &shell_out.base,
+        &doc.buffer,
+        editor_rect,
+    );
 
     // Passive, read-only highlight of every occurrence of the word under
     // (or touching) the cursor — distinct from `Ctrl+D`'s *active*
@@ -2371,7 +2428,13 @@ pub fn show(
         gutter_font_id,
         ui.visuals().dark_mode,
     );
-    diff_gutter::paint_diff_gutter(ui, &shell_out.base, &doc.diff_hunks, gutter_left + gutter_width, dark_mode);
+    diff_gutter::paint_diff_gutter(
+        ui,
+        &shell_out.base,
+        &doc.diff_hunks,
+        gutter_left + gutter_width,
+        dark_mode,
+    );
     coverage_gutter::paint_coverage_gutter(
         ui,
         &shell_out.base,
@@ -2382,7 +2445,9 @@ pub fn show(
     if view_settings.show_inline_blame
         && let Some(primary_caret) = shell_out.caret
     {
-        let cursor_line = doc.buffer.char_to_line(primary_caret.primary.min(doc.buffer.len_chars()));
+        let cursor_line = doc
+            .buffer
+            .char_to_line(primary_caret.primary.min(doc.buffer.len_chars()));
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -2881,51 +2946,8 @@ fn is_multi_cursor_collapse_event(event: &Event) -> bool {
 }
 
 #[cfg(test)]
-mod diagnostic_navigation_test {
-    use super::*;
-
-    fn diagnostic_at(start: usize) -> Diagnostic {
-        Diagnostic {
-            range: start..start + 1,
-            message: "boom".to_string(),
-            severity: fg_core::Severity::Error,
-        }
-    }
-
-    #[test]
-    fn f8_walks_forward_and_wraps_at_the_end() {
-        let diagnostics = [diagnostic_at(10), diagnostic_at(40), diagnostic_at(90)];
-        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
-
-        assert_eq!(neighbouring_diagnostic(&refs, 0, true), Some(10));
-        assert_eq!(neighbouring_diagnostic(&refs, 10, true), Some(40));
-        assert_eq!(neighbouring_diagnostic(&refs, 95, true), Some(10), "past the last one, wrap to the first");
-    }
-
-    #[test]
-    fn shift_f8_walks_backward_and_wraps_at_the_start() {
-        let diagnostics = [diagnostic_at(10), diagnostic_at(40)];
-        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
-
-        assert_eq!(neighbouring_diagnostic(&refs, 40, false), Some(10));
-        assert_eq!(neighbouring_diagnostic(&refs, 0, false), Some(40), "before the first one, wrap to the last");
-    }
-
-    /// Several tools can report the same position (a syntax error the LSP
-    /// also flags); stepping must not stall on it.
-    #[test]
-    fn duplicate_positions_count_once() {
-        let diagnostics = [diagnostic_at(10), diagnostic_at(10), diagnostic_at(50)];
-        let refs: Vec<&Diagnostic> = diagnostics.iter().collect();
-
-        assert_eq!(neighbouring_diagnostic(&refs, 10, true), Some(50));
-    }
-
-    #[test]
-    fn nothing_to_step_through_is_not_a_jump_to_zero() {
-        assert_eq!(neighbouring_diagnostic(&[], 0, true), None);
-    }
-}
+#[path = "diagnostic_navigation_test.rs"]
+mod diagnostic_navigation_test;
 
 #[cfg(test)]
 mod widget_test;
