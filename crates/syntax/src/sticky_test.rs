@@ -2,7 +2,7 @@ use super::*;
 use crate::IncrementalParser;
 
 fn parsed(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 

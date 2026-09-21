@@ -40,7 +40,7 @@ fn remove_event(path: PathBuf) -> notify::Result<notify::Event> {
 fn process_file_events_reloads_a_clean_tab_transparently() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
     assert!(!state.open_tabs[index].is_dirty());
@@ -77,7 +77,7 @@ fn process_file_events_reloads_a_clean_tab_transparently() {
 fn process_file_events_flags_a_conflict_for_a_dirty_tab() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
     state.open_tabs[index].buffer.insert(0, "// my local edit\n");
@@ -113,7 +113,7 @@ fn process_file_events_flags_a_conflict_for_a_dirty_tab() {
 fn process_file_events_ignores_its_own_recent_save() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
 
@@ -145,7 +145,7 @@ fn process_file_events_ignores_its_own_recent_save() {
 fn process_file_events_marks_an_externally_deleted_tab() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
 
@@ -174,7 +174,7 @@ fn process_file_events_ignores_paths_with_no_open_tab() {
     let dir = tempfile::tempdir().unwrap();
     let unrelated = dir.path().join("Unrelated.java");
     std::fs::write(&unrelated, "class Unrelated {}\n").unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers = Vec::new();
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -203,7 +203,7 @@ fn persisted_session_round_trips_open_tabs_and_active_tab() {
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
     let b = test_support::placeholder_java_file(dir.path(), "B.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tab(a.clone()).unwrap();
     state.open_tab(b.clone()).unwrap();
     state.focus_tab(0); // B was opened last (and thus focused); explicitly refocus A
@@ -211,7 +211,7 @@ fn persisted_session_round_trips_open_tabs_and_active_tab() {
     let mut storage = FakeStorage::default();
     persist_session(&mut storage, &state, &[]);
 
-    let mut restored_state = EditorState::new();
+    let mut restored_state = test_support::editor_state();
     let mut restored_parsers: Vec<Option<IncrementalParser>> = Vec::new();
     restore_session(&storage, &mut restored_state, &mut restored_parsers, &mut None);
 
@@ -232,7 +232,7 @@ fn restore_session_skips_tabs_whose_file_no_longer_exists() {
     let open_tabs = format!("{}\n{}", kept.display(), deleted.display());
     storage.set_string(OPEN_TABS_KEY, open_tabs);
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     restore_session(&storage, &mut state, &mut parsers, &mut None);
 
@@ -244,7 +244,7 @@ fn restore_session_skips_tabs_whose_file_no_longer_exists() {
 #[test]
 fn restore_session_with_no_saved_keys_is_a_no_op() {
     let storage = FakeStorage::default();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
 
     restore_session(&storage, &mut state, &mut parsers, &mut None);
@@ -595,7 +595,7 @@ fn close_tabs_under_closes_every_tab_inside_a_deleted_directory() {
     let b = test_support::placeholder_java_file(dir.path(), "pkg/sub/B.java");
     let root = test_support::placeholder_java_file(dir.path(), "Root.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     for path in [&a, &b, &root] {
         state.open_tab(path.clone()).unwrap();
@@ -614,7 +614,7 @@ fn close_tabs_under_closes_a_single_file_by_exact_path() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     state.open_tab(a.clone()).unwrap();
     parsers.push(None);
@@ -632,7 +632,7 @@ fn handle_rename_repoints_every_tab_inside_a_renamed_directory() {
     let a = test_support::placeholder_java_file(dir.path(), "old_pkg/A.java");
     let b = test_support::placeholder_java_file(dir.path(), "old_pkg/sub/B.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     for path in [&a, &b] {
         let index = state.open_tab(path.clone()).unwrap();
@@ -652,7 +652,7 @@ fn renaming_the_open_file_itself_leaves_it_saveable() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "Old.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     let index = state.open_tab(a.clone()).unwrap();
     parsers.push(tabs::open_parser_for(&mut state.open_tabs[index]));
@@ -677,7 +677,7 @@ fn handle_rename_repoints_a_single_tab_by_exact_path() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "Old.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
     state.open_tab(a.clone()).unwrap();
     parsers.push(tabs::open_parser_for(&mut state.open_tabs[0]));
@@ -702,7 +702,7 @@ fn resolve_pending_navigation_converts_byte_to_char_offset_and_clears_the_field(
     let source = "// café\nclass Foo { void bar() {} }\n";
     std::fs::write(&path, source).unwrap();
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tab(path.clone()).unwrap();
 
     let byte_offset = source.find("bar").unwrap();
@@ -721,14 +721,14 @@ fn resolve_pending_navigation_converts_byte_to_char_offset_and_clears_the_field(
 
 #[test]
 fn resolve_pending_navigation_is_none_with_nothing_pending() {
-    let state = EditorState::new();
+    let state = test_support::editor_state();
     let mut pending = None;
     assert_eq!(resolve_pending_navigation(&state, &mut pending), None);
 }
 
 #[test]
 fn resolve_pending_navigation_leaves_the_field_pending_if_the_document_isnt_open() {
-    let state = EditorState::new();
+    let state = test_support::editor_state();
     let mut pending = Some((PathBuf::from("/not/open.java"), 5));
     assert_eq!(resolve_pending_navigation(&state, &mut pending), None);
     assert!(pending.is_some(), "left pending for a later frame to retry");
@@ -836,7 +836,7 @@ fn auto_save_focus_loss_trigger_saves_only_the_dirty_tab() {
     let dirty_path = test_support::placeholder_java_file(dir.path(), "Dirty.java");
     let clean_path = test_support::placeholder_java_file(dir.path(), "Clean.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let dirty_index = state.open_tab(dirty_path.clone()).unwrap();
     let clean_index = state.open_tab(clean_path.clone()).unwrap();
     let mut parsers = vec![
@@ -884,7 +884,7 @@ fn auto_save_idle_trigger_fires_only_after_the_threshold_with_no_activity() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Idle.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let mut parsers = vec![tabs::open_parser_for(&mut state.open_tabs[index])];
     state.open_tabs[index].buffer.insert(0, "// idle edit\n");
@@ -926,7 +926,7 @@ fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
     let conflicted_path = test_support::placeholder_java_file(dir.path(), "Conflicted.java");
     let plain_path = test_support::placeholder_java_file(dir.path(), "Plain.java");
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let conflicted_index = state.open_tab(conflicted_path.clone()).unwrap();
     let plain_index = state.open_tab(plain_path.clone()).unwrap();
     let mut parsers = vec![
@@ -962,7 +962,7 @@ fn auto_save_skips_a_tab_showing_the_external_conflict_banner() {
 fn resolve_pending_navigation_clamps_a_byte_offset_stale_past_the_buffers_current_length() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "Foo.java");
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     let index = state.open_tab(path.clone()).unwrap();
     let len_bytes = state.open_tabs[index].buffer.len_bytes();
 

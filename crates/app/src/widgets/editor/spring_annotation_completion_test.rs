@@ -3,7 +3,7 @@ use super::*;
 use syntax::IncrementalParser;
 
 fn parsed(language: Language, source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(language);
+    let mut parser = IncrementalParser::new(language).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 

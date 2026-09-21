@@ -2057,7 +2057,13 @@ pub fn show(
                                     );
                                 }
                                 Ok(super_source) => {
-                                    let mut super_parser = IncrementalParser::new(Language::Java);
+                                    let Some(mut super_parser) = IncrementalParser::new(Language::Java) else {
+                                        crate::errors::report(
+                                            last_error,
+                                            msg::no_grammar_for_language(Language::Java.id()),
+                                        );
+                                        return;
+                                    };
                                     let super_tree = super_parser.parse(&super_source);
                                     let inherited = syntax::methods_in_type(super_tree, &super_source, &super_name);
                                     let already_here = syntax::methods_in_type(tree, &text_now, &class_name);
@@ -2734,7 +2740,7 @@ fn java_dot_completion_candidates(
         let super_name = syntax::superclass_name(tree, source, &class_name)?;
         let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))?;
         let super_source = std::fs::read_to_string(&super_path).ok()?;
-        let mut super_parser = IncrementalParser::new(Language::Java);
+        let mut super_parser = IncrementalParser::new(Language::Java)?;
         let super_tree = super_parser.parse(&super_source).clone();
         return Some(java_members_as_items(&super_tree, &super_source, &super_name, true));
     }
@@ -2742,7 +2748,7 @@ fn java_dot_completion_candidates(
     let type_name = syntax::type_of_identifier_java(tree, source, cursor_byte, receiver)?;
     let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "java"))?;
     let type_source = std::fs::read_to_string(&type_path).ok()?;
-    let mut type_parser = IncrementalParser::new(Language::Java);
+    let mut type_parser = IncrementalParser::new(Language::Java)?;
     let type_tree = type_parser.parse(&type_source).clone();
 
     let mut items = java_members_as_items(&type_tree, &type_source, &type_name, false);
@@ -2751,7 +2757,7 @@ fn java_dot_completion_candidates(
         && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))
         && let Ok(super_source) = std::fs::read_to_string(&super_path)
     {
-        let mut super_parser = IncrementalParser::new(Language::Java);
+        let mut super_parser = IncrementalParser::new(Language::Java)?;
         let super_tree = super_parser.parse(&super_source).clone();
         items.extend(java_members_as_items(&super_tree, &super_source, &super_name, false));
     }
@@ -2809,7 +2815,7 @@ fn kotlin_dot_completion_candidates(
         let super_name = syntax::kotlin_superclass_name(tree, source, &class_name)?;
         let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))?;
         let super_source = std::fs::read_to_string(&super_path).ok()?;
-        let mut super_parser = IncrementalParser::new(Language::Kotlin);
+        let mut super_parser = IncrementalParser::new(Language::Kotlin)?;
         let super_tree = super_parser.parse(&super_source).clone();
         return Some(kotlin_members_as_items(&super_tree, &super_source, &super_name, true));
     }
@@ -2817,7 +2823,7 @@ fn kotlin_dot_completion_candidates(
     let type_name = syntax::type_of_identifier_kotlin(tree, source, cursor_byte, receiver)?;
     let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "kt"))?;
     let type_source = std::fs::read_to_string(&type_path).ok()?;
-    let mut type_parser = IncrementalParser::new(Language::Kotlin);
+    let mut type_parser = IncrementalParser::new(Language::Kotlin)?;
     let type_tree = type_parser.parse(&type_source).clone();
 
     let mut items = kotlin_members_as_items(&type_tree, &type_source, &type_name, false);
@@ -2826,7 +2832,7 @@ fn kotlin_dot_completion_candidates(
         && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))
         && let Ok(super_source) = std::fs::read_to_string(&super_path)
     {
-        let mut super_parser = IncrementalParser::new(Language::Kotlin);
+        let mut super_parser = IncrementalParser::new(Language::Kotlin)?;
         let super_tree = super_parser.parse(&super_source).clone();
         items.extend(kotlin_members_as_items(&super_tree, &super_source, &super_name, false));
     }

@@ -53,10 +53,20 @@ pub fn for_file(path: &std::path::Path) -> char {
         Some("yml" | "yaml") => YAML,
         Some("xml") => XML,
         _ => {
+            // Checked by name rather than through the language registry:
+            // this whole function is a hardcoded extension-to-glyph table
+            // (see the arms above), so routing one of its cases through a
+            // registry it otherwise never consults would be inconsistent
+            // rather than more correct. Contributed icons are a real idea,
+            // but they belong with the contributed-UI question `SPEC.md`
+            // §24 defers until a second extension exists to shape it.
             let is_dockerfile = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| fg_core::Language::from_filename(n).is_some());
+                .is_some_and(|n| {
+                    let lower = n.to_lowercase();
+                    lower == "dockerfile" || lower.starts_with("dockerfile.") || lower.ends_with(".dockerfile")
+                });
             if is_dockerfile { DOCKER } else { FILE }
         }
     }

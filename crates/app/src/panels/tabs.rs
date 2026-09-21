@@ -44,7 +44,13 @@ pub(crate) fn open_parser_for(doc: &mut Document) -> Option<IncrementalParser> {
         doc.diagnostics.clear();
         return None;
     };
-    let mut parser = IncrementalParser::new(language);
+    // A registered language this build has no grammar for lands here and
+    // is treated exactly like a file with no language at all: it opens and
+    // edits, with no tree and so no diagnostics.
+    let Some(mut parser) = IncrementalParser::new(language) else {
+        doc.diagnostics.clear();
+        return None;
+    };
     reparse_from_scratch(doc, &mut parser);
     Some(parser)
 }

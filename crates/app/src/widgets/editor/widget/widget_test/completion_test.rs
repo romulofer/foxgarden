@@ -9,7 +9,7 @@ use super::common_test::*;
 use fg_core::Language;
 
 fn tree_of(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 
@@ -146,7 +146,7 @@ fn dispatcher_routes_java_to_java_dot_completion_candidates() {
 }
 
 fn kotlin_tree_of(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Kotlin);
+    let mut parser = IncrementalParser::new(Language::Kotlin).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 

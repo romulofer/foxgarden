@@ -12,6 +12,7 @@
 //! `Document`) it produced — callers must keep it alive (`let (_dir, ...)`,
 //! not `let (_, ...)`) for as long as the path is used.
 
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 
 use fg_core::Document;
@@ -53,8 +54,33 @@ pub fn temp_file(name: &str, contents: &str) -> (TempDir, PathBuf) {
 /// on disk.
 pub fn temp_document(name: &str, contents: &str) -> (TempDir, Document) {
     let (dir, path) = temp_file(name, contents);
-    let doc = Document::open(path).expect("open just-written fixture file");
+    let doc = Document::open(path, languages()).expect("open just-written fixture file");
     (dir, doc)
+}
+
+/// An `EditorState` that recognizes this build's languages.
+///
+/// The right default for essentially every test, and the reason this
+/// exists rather than letting tests call `EditorState::new()`: that
+/// constructor now yields an editor with *no* languages registered, so a
+/// test using it would still open files and still pass, while quietly no
+/// longer exercising any language-dependent behavior at all. A test that
+/// genuinely wants an editor that recognizes nothing should say so by
+/// calling `EditorState::new()` deliberately.
+pub fn editor_state() -> fg_core::EditorState {
+    fg_core::EditorState::with_languages(fg_languages::builtin_registry())
+}
+
+/// The languages this build ships with, for tests that open real files and
+/// expect them to be recognized.
+///
+/// Built once per test binary rather than per call: registering leaks each
+/// language's id for the process (that is what keeps `Language` `Copy` —
+/// see `PLAN.md` Track 24 Checkpoint 1), so a fresh registry per fixture
+/// would leak a little more on every one of several hundred tests.
+pub fn languages() -> &'static fg_extension::Registry {
+    static LANGUAGES: OnceLock<fg_extension::Registry> = OnceLock::new();
+    LANGUAGES.get_or_init(fg_languages::builtin_registry)
 }
 
 /// A fresh temp directory containing `name`, written with placeholder

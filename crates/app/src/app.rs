@@ -637,7 +637,13 @@ fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<Incrementa
 /// empty-suffix case is handled separately, without going through `join` at
 /// all.
 fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
-    for (index, doc) in state.open_tabs.iter_mut().enumerate() {
+    // Split-borrowed so the loop below can read the language registry
+    // while holding `open_tabs` mutably — they are separate fields, but
+    // only an explicit destructure tells the borrow checker that.
+    let EditorState {
+        languages, open_tabs, ..
+    } = state;
+    for (index, doc) in open_tabs.iter_mut().enumerate() {
         let Ok(suffix) = doc.path().strip_prefix(old) else {
             continue;
         };
@@ -648,10 +654,9 @@ fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParse
         };
         doc.path = new_path.clone();
 
-        let new_language = new_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension);
+        let new_language = languages
+            .language_for_path(&new_path)
+            .map(|registered| Language::new(registered.static_id));
         if new_language != doc.language {
             doc.language = new_language;
             parsers[index] = tabs::open_parser_for(doc);
@@ -1264,7 +1269,12 @@ fn persist_settings(
 
 impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut state = EditorState::new();
+        // Registering the shipped extensions is what gives this editor any
+        // languages at all — an `EditorState` with an empty registry opens
+        // every file as plain text. The registrations go in before
+        // anything restores a session below, since a restored tab's
+        // language is resolved as it is opened.
+        let mut state = EditorState::with_languages(fg_languages::builtin_registry());
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
         let mut editor_font = EditorFont::default();
@@ -1631,7 +1641,10 @@ impl FoxGardenApp {
         Some(status_bar::DocumentStatus {
             line: line + 1,
             column: column + 1,
-            language: doc.language,
+            language_name: doc
+                .language
+                .and_then(|language| self.state.languages.language(language.id()))
+                .map(|registered| registered.language.display_name.clone()),
             indent: self.indent_settings,
             errors,
             warnings,
@@ -1836,7 +1849,7 @@ impl eframe::App for FoxGardenApp {
             &self.lsp_settings,
             self.state.project.as_ref().map(|project| project.root.as_path()),
             &mut self.state.open_tabs,
-            &wake,
+            wake,
         );
         if self.last_error.is_none() {
             self.last_error = lsp_errors.into_iter().next();

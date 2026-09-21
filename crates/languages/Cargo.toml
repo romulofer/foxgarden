@@ -1,10 +1,11 @@
 [package]
-name = "test-support"
+name = "fg-languages"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "fg_languages"
+path = "src/lib.rs"
+
 [dependencies]
-fg-core = { path = "../core" }
 fg-extension = { path = "../extension" }
-fg-languages = { path = "../languages" }
-tempfile = "3.27.0"

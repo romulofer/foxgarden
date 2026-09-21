@@ -3,7 +3,7 @@ use crate::IncrementalParser;
 use fg_core::Language;
 
 fn classes_in(source: &str) -> Vec<ClassFields> {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     let tree = parser.parse(source);
     java_classes_with_fields(tree, source)
 }
@@ -141,7 +141,7 @@ fn insertion_byte_points_just_before_the_closing_brace() {
 }
 
 fn tree_of(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 

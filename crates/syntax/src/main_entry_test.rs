@@ -2,13 +2,13 @@ use super::*;
 use crate::IncrementalParser;
 
 fn java(source: &str) -> Vec<MainEntry> {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     let tree = parser.parse(source).clone();
     main_entries(&tree, source, Language::Java, "Main")
 }
 
 fn kotlin(source: &str, file_stem: &str) -> Vec<MainEntry> {
-    let mut parser = IncrementalParser::new(Language::Kotlin);
+    let mut parser = IncrementalParser::new(Language::Kotlin).expect("a bundled grammar must load");
     let tree = parser.parse(source).clone();
     main_entries(&tree, source, Language::Kotlin, file_stem)
 }

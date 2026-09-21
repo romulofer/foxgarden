@@ -5,13 +5,13 @@ use fg_core::Document;
 fn doc_at(dir: &tempfile::TempDir, name: &str) -> Document {
     let path = dir.path().join(name);
     std::fs::write(&path, "").unwrap();
-    Document::open(path).unwrap()
+    Document::open(path, test_support::languages()).unwrap()
 }
 
 #[test]
 fn recent_files_lists_open_tabs_before_closed_ones() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tabs.push(doc_at(&dir, "Open.java"));
     state.closed_tabs.push(doc_at(&dir, "Closed.java"));
 
@@ -26,7 +26,7 @@ fn recent_files_lists_open_tabs_before_closed_ones() {
 #[test]
 fn recent_files_lists_closed_tabs_most_recently_closed_first() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.closed_tabs.push(doc_at(&dir, "First.java"));
     state.closed_tabs.push(doc_at(&dir, "Second.java"));
 
@@ -41,7 +41,7 @@ fn recent_files_lists_closed_tabs_most_recently_closed_first() {
 #[test]
 fn recent_files_does_not_duplicate_a_path_that_is_both_open_and_in_closed_tabs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tabs.push(doc_at(&dir, "Both.java"));
     state.closed_tabs.push(doc_at(&dir, "Both.java"));
 
@@ -92,7 +92,7 @@ fn toggle_twice_closes_it_again() {
 #[test]
 fn the_active_tab_is_offered_last_not_first() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tabs.push(doc_at(&dir, "First.java"));
     state.open_tabs.push(doc_at(&dir, "Second.java"));
     state.active_tab = Some(1);
@@ -107,7 +107,7 @@ fn the_active_tab_is_offered_last_not_first() {
 fn a_candidate_carries_its_directory_inside_the_project() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("service/src")).unwrap();
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_project(dir.path().to_path_buf()).unwrap();
 
     let nested = dir.path().join("service/src/App.java");

@@ -11,6 +11,8 @@ directories = "6.0.0"
 eframe = { version = "0.35.0", features = ["persistence"] }
 egui = "0.35.0"
 fg-core = { path = "../core" }
+fg-extension = { path = "../extension" }
+fg-languages = { path = "../languages" }
 fg-i18n = { path = "../i18n" }
 flate2 = "1.1.5"
 lsp-types = "0.97.0"

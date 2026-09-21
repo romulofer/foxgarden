@@ -242,7 +242,7 @@ fn override_method_finds_an_inherited_method_via_the_project_tree() {
     let foo_path = dir.path().join("Foo.java");
     std::fs::write(&foo_path, "public class Foo extends Base {\n}\n").unwrap();
 
-    let mut doc = Document::open(foo_path).unwrap();
+    let mut doc = Document::open(foo_path, test_support::languages()).unwrap();
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
@@ -355,7 +355,7 @@ fn override_method_excludes_a_method_the_current_class_already_overrides() {
     let foo_source = "public class Foo extends Base {\n    public void run() {\n    }\n}\n";
     std::fs::write(&foo_path, foo_source).unwrap();
 
-    let mut doc = Document::open(foo_path).unwrap();
+    let mut doc = Document::open(foo_path, test_support::languages()).unwrap();
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
@@ -461,7 +461,7 @@ fn override_method_on_a_superclass_not_found_in_the_project_reports_why() {
     let foo_source = "public class Foo extends SomeLibraryClass {\n}\n";
     std::fs::write(&foo_path, foo_source).unwrap();
 
-    let mut doc = Document::open(foo_path).unwrap();
+    let mut doc = Document::open(foo_path, test_support::languages()).unwrap();
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 

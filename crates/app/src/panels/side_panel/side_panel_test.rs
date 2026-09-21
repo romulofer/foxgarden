@@ -62,8 +62,10 @@ fn apply_tree_actions_rejects_a_traversal_rename_and_leaves_the_file_untouched()
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     let actions = TreeActions {
         confirm_rename: Some("../outside.txt".to_string()),
@@ -83,8 +85,10 @@ fn apply_tree_actions_rejects_a_rename_containing_a_path_separator_even_without_
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     // No `..`, but still names a different directory entirely — rename is
     // "give this exact node a new name," not "move it."
@@ -105,8 +109,10 @@ fn apply_tree_actions_still_allows_an_ordinary_rename() {
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     let actions = TreeActions {
         confirm_rename: Some("Renamed.java".to_string()),

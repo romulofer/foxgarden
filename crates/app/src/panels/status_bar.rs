@@ -17,7 +17,6 @@
 //! actually says is then a pure function over a plain struct, and no test
 //! of it has to spawn a real child process to reach a given line.
 
-use fg_core::Language;
 use fg_i18n::{msg, t};
 
 use crate::style::icons;
@@ -270,10 +269,15 @@ pub struct DocumentStatus {
     /// refers to them), not the 0-based indices the buffer uses.
     pub line: usize,
     pub column: usize,
-    /// `None` for a file whose extension maps to no supported language —
-    /// worth saying explicitly, since that's also why it has no
-    /// highlighting or completion.
-    pub language: Option<Language>,
+    /// The language's display name, already resolved. `None` for a file
+    /// no registered extension claims — worth saying explicitly, since
+    /// that's also why it has no highlighting or completion.
+    ///
+    /// Resolved by the caller rather than here because a display name now
+    /// comes from whichever extension contributed the language (`PLAN.md`
+    /// Track 24 Phase 2), and the status bar has no business holding a
+    /// registry just to render one word.
+    pub language_name: Option<String>,
     pub indent: IndentSettings,
     pub errors: usize,
     pub warnings: usize,
@@ -288,8 +292,8 @@ fn show_document_status(ui: &mut egui::Ui, document: &DocumentStatus) {
     };
     ui.weak(indent);
     ui.weak("·");
-    ui.weak(match document.language {
-        Some(language) => language.display_name().to_string(),
+    ui.weak(match &document.language_name {
+        Some(name) => name.clone(),
         None => t().status_bar.plain_text.to_string(),
     });
     ui.weak("·");

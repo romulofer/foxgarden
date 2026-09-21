@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use fg_extension::Registry;
+
 use crate::document::{Document, OpenDocumentError};
 use crate::project::Project;
 
@@ -52,6 +54,23 @@ pub struct Split {
 
 #[derive(Default)]
 pub struct EditorState {
+    /// Every language this build can recognize, as contributed by the
+    /// registered extensions (`PLAN.md` Track 24 Phase 2).
+    ///
+    /// Held here rather than passed to each `open_tab` call because the
+    /// set of languages is a property of the running editor, not of one
+    /// file being opened — and because `open_tab` has 17 call sites that
+    /// have no business knowing about the registry.
+    ///
+    /// **`Default` leaves this empty, which means no file is recognized.**
+    /// That is deliberate: `fg-core` must not depend on the crate that
+    /// knows what Java is, so it cannot default to the shipped languages
+    /// even though they exist. Whoever builds the real editor installs
+    /// them (`EditorState::with_languages`); a test that does not care
+    /// gets documents with `language: None`, which is a state the editor
+    /// already handles everywhere, since any unrecognized file has always
+    /// produced it.
+    pub languages: Registry,
     pub project: Option<Project>,
     pub open_tabs: Vec<Document>,
     /// The focused pane's active tab, as an index into `open_tabs`. Kept as
@@ -101,6 +120,18 @@ fn shift_active_after_close(active: Option<usize>, removed: usize, new_len: usiz
 impl EditorState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An editor that recognizes the languages in `languages`.
+    ///
+    /// The real entry point for anything that opens actual files —
+    /// `new`/`default` recognize nothing at all, for the reason the
+    /// `languages` field documents.
+    pub fn with_languages(languages: Registry) -> Self {
+        Self {
+            languages,
+            ..Self::default()
+        }
     }
 
     pub fn open_project(&mut self, root: PathBuf) -> std::io::Result<()> {
@@ -198,7 +229,7 @@ impl EditorState {
             return Ok(index);
         }
 
-        let mut document = Document::open(path)?;
+        let mut document = Document::open(path, &self.languages)?;
         document.project_root = self.project.as_ref().map(|project| project.root.clone());
         self.open_tabs.push(document);
         let index = self.open_tabs.len() - 1;

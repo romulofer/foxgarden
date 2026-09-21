@@ -21,8 +21,10 @@ fn open_settings_opens_the_dialog_and_clears_the_previous_error() {
 #[test]
 fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut state = JdkRegistryState::default();
-    state.auto_detect_rx = Some(rx);
+    let mut state = JdkRegistryState {
+        auto_detect_rx: Some(rx),
+        ..Default::default()
+    };
     assert!(state.auto_detect_running());
 
     // Nothing sent yet — still running, not a false "found nothing"
@@ -44,8 +46,10 @@ fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
 #[test]
 fn poll_auto_detect_on_a_disconnected_sender_clears_the_slot_without_a_result() {
     let (tx, rx) = std::sync::mpsc::channel::<Vec<JavaRuntime>>();
-    let mut state = JdkRegistryState::default();
-    state.auto_detect_rx = Some(rx);
+    let mut state = JdkRegistryState {
+        auto_detect_rx: Some(rx),
+        ..Default::default()
+    };
     drop(tx);
 
     assert!(state.poll_auto_detect().is_empty());

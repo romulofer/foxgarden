@@ -1,0 +1,18 @@
+[package]
+name = "fg-extension"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "fg_extension"
+path = "src/lib.rs"
+
+# Deliberately minimal. This crate defines what an extension may contribute
+# and nothing about any particular language, so it must not depend on
+# `fg-core` (which still owns Maven/Gradle/JDK concepts) or on `syntax`.
+# `tree-sitter-language` is a single-type crate (`LanguageFn`) and is the
+# only honest way to describe a grammar that is compiled into the binary.
+[dependencies]
+tree-sitter-language = "0.1"
+
+[dev-dependencies]

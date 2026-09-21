@@ -22,7 +22,7 @@ pub(super) fn open_fixture(contents: &str, filename: &str) -> (tempfile::TempDir
 /// recognized language — `show`'s tests always exercise the "has a
 /// language" path unless a test says otherwise.
 pub(super) fn parsed(language: Language, source: &str) -> Option<IncrementalParser> {
-    let mut parser = IncrementalParser::new(language);
+    let mut parser = IncrementalParser::new(language).expect("a bundled grammar must load");
     parser.parse(source);
     Some(parser)
 }
@@ -110,6 +110,10 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
 /// frame establishes focus and lets the caret be placed via
 /// `text_area::set_caret` (same shape `focused_frame_with_selection`
 /// above uses); each of `frames_events` then gets its own real frame.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors `show`'s own parameter list, which carries the same allowance for the same reason — a test driver that bundled them would stop matching the call it exists to exercise"
+)]
 pub(super) fn typing_session(
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,

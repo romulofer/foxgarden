@@ -423,10 +423,10 @@ fn show_new_file_row(
                 if new_path.exists() {
                     outcome.error = Some(msg::file_already_exists(&new_path.display().to_string()));
                 } else {
-                    let content = new_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .and_then(fg_core::Language::from_extension)
+                    let content = state
+                        .languages
+                        .language_for_path(&new_path)
+                        .map(|registered| fg_core::Language::new(registered.static_id))
                         .zip(project_root.as_ref())
                         .map(|(language, root)| fg_core::generate_boilerplate(language, root, &new_path))
                         .unwrap_or_default();

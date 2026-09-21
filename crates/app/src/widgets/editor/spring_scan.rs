@@ -148,10 +148,10 @@ pub fn scan_project_endpoints_cached(root: &FileNode, cache: &mut EndpointCache)
 /// result back at the right slot.
 fn scan_file(files: &[(PathBuf, Language)], i: usize) -> (usize, Option<Vec<EndpointInfo>>) {
     let (path, language) = &files[i];
-    let result = std::fs::read_to_string(path).ok().map(|source| {
-        let mut parser = IncrementalParser::new(*language);
+    let result = std::fs::read_to_string(path).ok().and_then(|source| {
+        let mut parser = IncrementalParser::new(*language)?;
         let tree = parser.parse(&source).clone();
-        syntax::endpoints_in_file(*language, &tree, &source)
+        Some(syntax::endpoints_in_file(*language, &tree, &source))
     });
     (i, result)
 }
@@ -164,17 +164,26 @@ fn collect_source_files(node: &FileNode, out: &mut Vec<(PathBuf, Language)>) {
             }
         }
         FileKind::File => {
+            // Matched against this scan's own two languages directly
+            // rather than resolved through the language registry: a Spring
+            // endpoint scan is only ever interested in Java and Kotlin, so
+            // consulting the registry would only be a longer way of
+            // reaching the same two-way filter on the line below. This
+            // whole module belongs to the `spring` extension (Track 24
+            // Phase 6), and naming its own languages is exactly what an
+            // extension is allowed to do.
             let Some(language) = node
                 .path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .and_then(Language::from_extension)
+                .and_then(|ext| match ext {
+                    "java" => Some(Language::Java),
+                    "kt" => Some(Language::Kotlin),
+                    _ => None,
+                })
             else {
                 return;
             };
-            if !matches!(language, Language::Java | Language::Kotlin) {
-                return;
-            }
             out.push((node.path.clone(), language));
         }
     }

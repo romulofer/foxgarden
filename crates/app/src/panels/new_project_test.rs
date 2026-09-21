@@ -72,7 +72,7 @@ fn create_and_open_scaffolds_saves_config_and_opens_the_project() {
         java_release: 17,
         ..Default::default()
     };
-    let mut editor_state = EditorState::default();
+    let mut editor_state = test_support::editor_state();
 
     create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
 
@@ -97,7 +97,7 @@ fn create_and_open_with_gradle_scaffolds_gradle_files() {
         build_tool: BuildTool::Gradle,
         ..Default::default()
     };
-    let mut editor_state = EditorState::default();
+    let mut editor_state = test_support::editor_state();
 
     create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
 
@@ -123,7 +123,7 @@ fn create_and_open_with_kotlin_scaffolds_kotlin_sources() {
         language: ProjectLanguage::Kotlin,
         ..Default::default()
     };
-    let mut editor_state = EditorState::default();
+    let mut editor_state = test_support::editor_state();
 
     create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
 
@@ -148,7 +148,7 @@ fn create_and_open_reports_a_scaffold_failure_without_touching_editor_state() {
         java_release: 17,
         ..Default::default()
     };
-    let mut editor_state = EditorState::default();
+    let mut editor_state = test_support::editor_state();
 
     let error = create_and_open(&state, &mut editor_state).unwrap_err();
     assert!(!error.is_empty());

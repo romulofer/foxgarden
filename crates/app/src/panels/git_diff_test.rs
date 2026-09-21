@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn poll_returns_early_with_nothing_running() {
     let mut diff = DiffState::default();
-    let mut state = EditorState::default();
+    let mut state = test_support::editor_state();
     diff.poll(&mut state); // must not panic with no scans in flight
 }
 
@@ -54,7 +54,7 @@ fn run_then_poll_applies_real_blame_lines_to_the_matching_open_tab() {
     run(&["add", "."]);
     run(&["commit", "-q", "-m", "init"]);
 
-    let doc = fg_core::Document::open(file.clone()).unwrap();
+    let doc = fg_core::Document::open(file.clone(), test_support::languages()).unwrap();
     let mut state = EditorState {
         open_tabs: vec![doc],
         ..Default::default()
@@ -76,7 +76,7 @@ fn run_then_poll_applies_real_blame_lines_to_the_matching_open_tab() {
 fn poll_drops_a_result_for_a_path_thats_no_longer_open() {
     let mut diff = DiffState::default();
     diff.run(PathBuf::from("/tmp/gone.java"), PathBuf::from("."));
-    let mut state = EditorState::default(); // nothing open
+    let mut state = test_support::editor_state(); // nothing open
 
     loop {
         diff.poll(&mut state);

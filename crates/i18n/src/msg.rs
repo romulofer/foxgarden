@@ -510,6 +510,18 @@ msg! {
     }
 }
 
+msg! {
+    // Reachable since languages became extension-contributed (`PLAN.md`
+    // Track 24 Phase 2): a language can be registered without this build
+    // having a grammar for it, and anything that reads code structure
+    // needs one. Names the language so the message says which support is
+    // missing rather than just that something failed.
+    no_grammar_for_language(language: &str) {
+        pt: "Sem gramática instalada para {language}; este recurso precisa dela.",
+        en: "No grammar installed for {language}; this feature needs one.",
+    }
+}
+
 // --- File > New Project… -------------------------------------------------
 
 msg! {

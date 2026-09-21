@@ -2,7 +2,7 @@ use super::*;
 use crate::IncrementalParser;
 
 fn parsed(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 
@@ -165,7 +165,7 @@ class Foo {}
 
 #[test]
 fn kotlin_folds_a_run_of_consecutive_imports() {
-    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
     // `class Foo {}` is a single-line (empty) body, same "not foldable on
     // its own" convention the Java import-run tests use above — keeps
     // this test focused on import-block folding, not class-body folding
@@ -188,7 +188,7 @@ class Foo {}
 
 #[test]
 fn kotlin_a_lone_import_is_not_foldable() {
-    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
     let source = "import org.springframework.web.bind.annotation.GetMapping\n\nclass Foo {}\n";
     let tree = parser.parse(source).clone();
     assert!(foldable_ranges(&tree, source, fg_core::Language::Kotlin).is_empty());
@@ -196,7 +196,7 @@ fn kotlin_a_lone_import_is_not_foldable() {
 
 #[test]
 fn kotlin_folds_a_class_body_a_method_body_and_a_control_flow_block() {
-    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
     let source = "\
 class Foo {
     fun bar(): Int {
@@ -220,7 +220,7 @@ class Foo {
 
 #[test]
 fn kotlin_folds_an_enum_class_body() {
-    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
     let source = "enum class Color {\n    RED, GREEN\n}\n";
     let tree = parser.parse(source).clone();
     let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);
@@ -231,7 +231,7 @@ fn kotlin_folds_an_enum_class_body() {
 
 #[test]
 fn kotlin_folds_a_multi_line_block_comment() {
-    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin);
+    let mut parser = IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
     let source = "/*\n * docs\n */\nclass Foo {}\n";
     let tree = parser.parse(source).clone();
     let ranges = foldable_ranges(&tree, source, fg_core::Language::Kotlin);

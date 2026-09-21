@@ -4,7 +4,7 @@ use super::*;
 fn reopening_same_file_focuses_existing_tab_without_duplicating() {
     let dir = tempfile::tempdir().unwrap();
     let path = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     let first_index = state.open_tab(path.clone()).unwrap();
     let second_index = state.open_tab(path).unwrap();
@@ -18,7 +18,7 @@ fn reopening_same_file_focuses_existing_tab_without_duplicating() {
 fn opening_a_tab_within_an_open_project_records_its_root() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_project(dir.path().to_path_buf()).unwrap();
     let index = state.open_tab(a).unwrap();
@@ -30,7 +30,7 @@ fn opening_a_tab_within_an_open_project_records_its_root() {
 fn opening_a_tab_with_no_project_open_records_no_root() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     let index = state.open_tab(a).unwrap();
 
@@ -43,7 +43,7 @@ fn closing_active_tab_selects_sensible_neighbor() {
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
     let b = test_support::placeholder_java_file(dir.path(), "B.java");
     let c = test_support::placeholder_java_file(dir.path(), "C.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a).unwrap();
     state.open_tab(b).unwrap();
@@ -68,7 +68,7 @@ fn reopen_last_closed_tab_restores_it_and_focuses_it() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
     let b = test_support::placeholder_java_file(dir.path(), "B.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a).unwrap();
     state.open_tab(b).unwrap();
@@ -86,7 +86,7 @@ fn reopen_last_closed_tab_pops_in_lifo_order() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
     let b = test_support::placeholder_java_file(dir.path(), "B.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a).unwrap();
     state.open_tab(b).unwrap();
@@ -104,7 +104,7 @@ fn reopen_last_closed_tab_pops_in_lifo_order() {
 
 #[test]
 fn reopen_last_closed_tab_with_nothing_closed_is_a_no_op() {
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
     assert!(state.reopen_last_closed_tab().is_none());
 }
 
@@ -112,7 +112,7 @@ fn reopen_last_closed_tab_with_nothing_closed_is_a_no_op() {
 fn reopening_a_tab_already_open_focuses_it_instead_of_duplicating() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a.clone()).unwrap();
     state.close_tab(0);
@@ -127,7 +127,7 @@ fn reopening_a_tab_already_open_focuses_it_instead_of_duplicating() {
 #[test]
 fn closed_tabs_is_capped_and_drops_the_oldest() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     let paths: Vec<PathBuf> = (0..=MAX_CLOSED_TABS)
         .map(|i| test_support::placeholder_java_file(dir.path(), &format!("F{i}.java")))
@@ -165,7 +165,7 @@ fn closed_tabs_is_capped_and_drops_the_oldest() {
 fn open_project_clears_closed_tabs_from_the_previous_project() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a).unwrap();
     state.close_tab(0);
@@ -181,7 +181,7 @@ fn open_project_clears_closed_tabs_from_the_previous_project() {
 fn new_terminal_tab_appends_and_focuses_it_independently_of_file_tabs() {
     let dir = tempfile::tempdir().unwrap();
     let a = test_support::placeholder_java_file(dir.path(), "A.java");
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
 
     state.open_tab(a).unwrap();
     let index = state.new_terminal_tab();
@@ -196,7 +196,7 @@ fn new_terminal_tab_appends_and_focuses_it_independently_of_file_tabs() {
 
 #[test]
 fn close_terminal_tab_selects_sensible_neighbor() {
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
     state.new_terminal_tab(); // 0
     state.new_terminal_tab(); // 1
     state.new_terminal_tab(); // 2, active
@@ -214,7 +214,7 @@ fn close_terminal_tab_selects_sensible_neighbor() {
 
 #[test]
 fn closing_a_terminal_tab_never_pushes_onto_closed_tabs() {
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
     state.new_terminal_tab();
     state.close_terminal_tab(0);
 
@@ -226,7 +226,7 @@ fn closing_a_terminal_tab_never_pushes_onto_closed_tabs() {
 
 fn state_with_tabs(names: &[&str]) -> (tempfile::TempDir, EditorState) {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = EditorState::new();
+    let mut state = EditorState::with_languages(fg_languages::builtin_registry());
     for name in names {
         let path = test_support::placeholder_java_file(dir.path(), name);
         state.open_tab(path).unwrap();

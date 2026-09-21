@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use fg_core::Language;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
@@ -83,32 +84,38 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
     }
 }
 
-/// The compiled query is a pure function of `language` (one of two possible
-/// values), but compiling it — parsing the query DSL and validating every
-/// pattern against the grammar — is real work, not a cheap lookup. Cache it
-/// per language instead of recompiling it on every call: `highlight_spans`
-/// is invoked from the editor's layouter closure, which egui runs every
-/// frame the editor is shown (not just on edits), so an uncached call here
-/// would redo this work dozens of times a second even while idle.
-fn cached_query(language: Language) -> &'static Query {
-    static JAVA: OnceLock<Query> = OnceLock::new();
-    static KOTLIN: OnceLock<Query> = OnceLock::new();
-    static PROPERTIES: OnceLock<Query> = OnceLock::new();
-    static YAML: OnceLock<Query> = OnceLock::new();
-    static XML: OnceLock<Query> = OnceLock::new();
-    static DOCKERFILE: OnceLock<Query> = OnceLock::new();
-    let cell = match language {
-        Language::Java => &JAVA,
-        Language::Kotlin => &KOTLIN,
-        Language::Properties => &PROPERTIES,
-        Language::Yaml => &YAML,
-        Language::Xml => &XML,
-        Language::Dockerfile => &DOCKERFILE,
-    };
-    cell.get_or_init(|| {
-        Query::new(&ts_language(language), highlights_query_source(language))
-            .expect("bundled highlight query must compile")
-    })
+/// The compiled query is a pure function of `language`, but compiling it —
+/// parsing the query DSL and validating every pattern against the grammar
+/// — is real work, not a cheap lookup. Cache it per language instead of
+/// recompiling it on every call: `highlight_spans` is invoked from the
+/// editor's layouter closure, which egui runs every frame the editor is
+/// shown (not just on edits), so an uncached call here would redo this
+/// work dozens of times a second even while idle.
+///
+/// This used to be one `OnceLock` per enum variant, which stopped being
+/// possible when the set of languages opened up (`PLAN.md` Track 24 Phase
+/// 2) — there is no longer a known set to declare statics for. A map
+/// behind a lock replaces them, with the same "compile once per language,
+/// ever" guarantee. Entries are never evicted, so the returned reference
+/// can be `&'static`: a compiled query is small, bounded by the number of
+/// registered languages, and lives as long as the grammar it was built
+/// against, which is the whole process (Track 24 Checkpoint 0).
+///
+/// `None` if this build has no grammar or no query for the language, which
+/// is not an error — that file paints unhighlighted.
+fn cached_query(language: Language) -> Option<&'static Query> {
+    static CACHE: OnceLock<Mutex<HashMap<Language, &'static Query>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let mut cache = cache.lock().expect("highlight query cache lock");
+    if let Some(query) = cache.get(&language) {
+        return Some(query);
+    }
+    let compiled = Query::new(&ts_language(language)?, highlights_query_source(language)?)
+        .expect("bundled highlight query must compile");
+    let query: &'static Query = Box::leak(Box::new(compiled));
+    cache.insert(language, query);
+    Some(query)
 }
 
 /// Runs the language's highlight query over `tree`, returning byte ranges
@@ -146,7 +153,12 @@ pub fn highlight_spans_in(
     language: Language,
     byte_range: Range<usize>,
 ) -> Vec<(Range<usize>, Scope)> {
-    let query = cached_query(language);
+    // No grammar or no query for this language means nothing to highlight
+    // — the file still opens and edits, it just paints plain, exactly as
+    // an unrecognized file always has.
+    let Some(query) = cached_query(language) else {
+        return Vec::new();
+    };
     let capture_names = query.capture_names();
 
     let mut cursor = QueryCursor::new();

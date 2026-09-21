@@ -43,8 +43,11 @@ pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &s
         // Nothing else the editor can open is a JVM entry point — a
         // `pom.xml`, an `application.yml` and a `Dockerfile` all have real
         // run *actions* of their own elsewhere (Run > Build, Docker), but
-        // none of them has a `main` to put a gutter marker beside.
-        Language::Properties | Language::Yaml | Language::Xml | Language::Dockerfile => Vec::new(),
+        // none of them has a `main` to put a gutter marker beside. The
+        // same holds, for the same reason, for any language contributed by
+        // an extension this function has never heard of: finding *its*
+        // entry points is that extension's job, not this one's.
+        _ => Vec::new(),
     }
 }
 

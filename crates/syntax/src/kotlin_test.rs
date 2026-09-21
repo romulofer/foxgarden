@@ -3,7 +3,7 @@ use crate::IncrementalParser;
 use fg_core::Language;
 
 fn parsed(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Kotlin);
+    let mut parser = IncrementalParser::new(Language::Kotlin).expect("a bundled grammar must load");
     parser.parse(source).clone()
 }
 

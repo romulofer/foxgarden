@@ -660,7 +660,7 @@ fn java_hover_against_a_real_server_documents_a_project_owned_symbol() {
     );
     let dir = test_support::tempdir();
     let path = test_support::write_file(dir.path(), "Sample.java", source);
-    let mut doc = Document::open(path).expect("open the fixture");
+    let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
     let settings = LspSettings {
         enabled: true,
         jdtls_binary: binary.display().to_string(),
@@ -764,7 +764,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
         .expect("mvn is on PATH");
     assert!(compile.success(), "real mvn compile of the fixture project failed");
 
-    let mut doc = Document::open(main_dir.join("Main.java")).expect("open the fixture");
+    let mut doc = Document::open(main_dir.join("Main.java"), test_support::languages()).expect("open the fixture");
     let settings = LspSettings {
         enabled: true,
         jdtls_binary: binary.display().to_string(),
@@ -934,7 +934,7 @@ fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
     let before_dot = "fun main() {\n    val list = mutableListOf<String>()\n    list\n}\n";
     let dir = test_support::tempdir();
     let path = test_support::write_file(dir.path(), "src/main/kotlin/Sample.kt", before_dot);
-    let mut doc = Document::open(path).expect("open the fixture");
+    let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
     let settings = LspSettings {
         enabled: true,
         kotlin_language_server_binary: binary.display().to_string(),

@@ -3,6 +3,7 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use fg_extension::Registry;
 use ropey::Rope;
 
 use crate::blame::BlameLine;
@@ -140,22 +141,20 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn open(path: PathBuf) -> Result<Self, OpenDocumentError> {
-        // Falls back to a bare-file-name check (`from_filename`) only when
-        // there's no extension-based match — a plain `Dockerfile` has no
-        // extension at all for `from_extension` to key off, but something
-        // like `notes.dockerfile.bak` should still lose to whatever
-        // `from_extension` says about its actual (`bak`) extension, not be
-        // second-guessed by the name check.
-        let language = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension)
-            .or_else(|| {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(Language::from_filename)
-            });
+    /// Opens `path`, asking `languages` what language it is.
+    ///
+    /// The registry is a parameter rather than something this function
+    /// reaches for because a document's language is not knowledge the core
+    /// has any more — it belongs to whichever extension contributed the
+    /// language, and passing it in is what makes that visible at every
+    /// call site instead of hidden behind a global (`PLAN.md` Track 24
+    /// Phase 2). A file no registered extension claims opens perfectly
+    /// normally with `language: None`, exactly as an unrecognized
+    /// extension always did.
+    pub fn open(path: PathBuf, languages: &Registry) -> Result<Self, OpenDocumentError> {
+        let language = languages
+            .language_for_path(&path)
+            .map(|registered| Language::new(registered.static_id));
 
         // The side panel lets any file in the tree be clicked — including
         // build artifacts (`target/*.class`, jars) and binary assets, since

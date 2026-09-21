@@ -11,16 +11,26 @@ pub struct IncrementalParser {
 }
 
 impl IncrementalParser {
-    pub fn new(language: Language) -> Self {
+    /// A parser for `language`, or `None` if this build has no grammar for
+    /// it.
+    ///
+    /// Fallible since `Language` stopped being a closed enum (`PLAN.md`
+    /// Track 24 Phase 2): an extension can contribute a language this
+    /// build has no grammar for, and that is a normal state rather than an
+    /// error. Every caller already had to handle a parser-less document —
+    /// `Option<IncrementalParser>` is how the editor has always
+    /// represented a file it cannot parse — so `None` here lands on paths
+    /// that already exist.
+    pub fn new(language: Language) -> Option<Self> {
         let mut parser = Parser::new();
         parser
-            .set_language(&ts_language(language))
-            .expect("bundled grammar must load");
-        Self {
+            .set_language(&ts_language(language)?)
+            .expect("a bundled grammar must load");
+        Some(Self {
             parser,
             language,
             tree: None,
-        }
+        })
     }
 
     pub fn language(&self) -> Language {

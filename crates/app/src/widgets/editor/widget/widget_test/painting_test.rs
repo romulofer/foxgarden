@@ -562,7 +562,7 @@ fn realistic_paste_reparses_and_highlights_correctly() {
     let mut new_text = old_text.to_string();
     new_text.insert_str(insert_at, pasted);
 
-    let mut parser = IncrementalParser::new(Language::Java);
+    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     parser.parse(old_text);
     let edit = syntax::diff_edit(old_text, &new_text);
     parser.reparse(&new_text, edit);
@@ -585,7 +585,7 @@ fn realistic_paste_reparses_and_highlights_correctly() {
     // Cross-check against a from-scratch full parse of the same final
     // text: if incremental reparse after this paste produced the same
     // tree a fresh parse would, the highlighting can't be stale.
-    let mut full_parser = IncrementalParser::new(Language::Java);
+    let mut full_parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     full_parser.parse(&new_text);
     let full_spans = syntax::highlight_spans(full_parser.tree().unwrap(), &new_text, Language::Java);
     assert_eq!(spans, full_spans);

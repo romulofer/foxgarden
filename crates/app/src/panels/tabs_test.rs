@@ -19,7 +19,7 @@ fn save_tab_reparses_so_trimmed_content_is_not_highlighted_against_a_stale_tree(
     // tree and a fresh one produced identical spans by accident).
     std::fs::write(&path, "public class Hello {   \n    private String name;\n}\n").unwrap();
 
-    let mut state = EditorState::new();
+    let mut state = test_support::editor_state();
     state.open_tab(path).unwrap();
     let parser = open_parser_for(&mut state.open_tabs[0]);
     let mut parsers = vec![parser];
@@ -43,7 +43,7 @@ fn save_tab_reparses_so_trimmed_content_is_not_highlighted_against_a_stale_tree(
     // must match exactly. Before the fix, the tree still reflected the
     // pre-trim (longer) text, so node byte ranges no longer lined up
     // with `text` at all past the trimmed line.
-    let mut fresh_parser = IncrementalParser::new(Language::Java);
+    let mut fresh_parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
     fresh_parser.parse(&text);
     let fresh_spans = syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
     assert_eq!(spans, fresh_spans);
