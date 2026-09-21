@@ -1,6 +1,7 @@
 
 use super::*;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn framed(body: &str) -> Vec<u8> {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body).into_bytes()
@@ -189,7 +190,56 @@ fn fake_server_returning(body: &str) -> LspSession {
         "printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
         body.len()
     );
-    LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None).expect("sh is always available")
+    LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None, Arc::new(|| {}))
+        .expect("sh is always available")
+}
+
+/// Same fake server, but spawned with a `Waker` that counts its calls —
+/// `wake_count` is what the wakeup tests assert on.
+fn fake_server_waking(body: &str) -> (LspSession, Arc<AtomicUsize>) {
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let script = format!(
+        "printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
+        body.len()
+    );
+    let for_thread = Arc::clone(&wakes);
+    let session = LspSession::spawn(
+        Path::new("sh"),
+        &["-c".to_string(), script],
+        None,
+        Arc::new(move || {
+            for_thread.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .expect("sh is always available");
+    (session, wakes)
+}
+
+/// The reader thread waking its event loop is what lets an idle-but-alive
+/// session stop being polled on a timer at all (`LspState::wants_repaint`
+/// deliberately does not count a `Ready` slot). An unprompted notification
+/// — no request of this client's own to correlate it with — is exactly the
+/// case that has nothing else to trigger a poll.
+#[test]
+fn an_unprompted_notification_wakes_the_event_loop() {
+    let (session, wakes) = fake_server_waking(
+        r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a.java"}}"#,
+    );
+    loop {
+        if !session.poll_server_messages().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(wakes.load(Ordering::SeqCst) >= 1, "the notification woke nothing");
+}
+
+#[test]
+fn a_response_wakes_the_event_loop() {
+    let (mut session, wakes) = fake_server_waking(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
+    let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
+    let _ = rx.recv().expect("the fake server's response arrives");
+    assert!(wakes.load(Ordering::SeqCst) >= 1, "the response woke nothing");
 }
 
 #[test]

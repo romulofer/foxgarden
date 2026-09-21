@@ -1,6 +1,12 @@
 
 use super::*;
 
+/// A `Waker` for tests that don't assert on wakeups — nothing here runs a
+/// UI event loop, so there is nothing to wake.
+fn noop_waker() -> Waker {
+    Arc::new(|| {})
+}
+
 /// A `SessionConfig` for tests that only care about the fields they set
 /// — the Java release/runtimes ones default to "nothing detected", which
 /// is exactly a machine with no JDK scan finished and a project that
@@ -429,7 +435,7 @@ read_message()
 write_message(b'{"jsonrpc":"2.0","id":0,"result":[{"label":"add(E e) : boolean","kind":2}]}')
 sys.stdin.buffer.read()
 "#;
-    let session = LspSession::spawn(Path::new("python3"), &["-c".to_string(), script.to_string()], None)
+    let session = LspSession::spawn(Path::new("python3"), &["-c".to_string(), script.to_string()], None, noop_waker())
         .expect("python3 is always available");
     let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
     let root = doc.path.parent().unwrap().to_path_buf();
@@ -468,7 +474,7 @@ fn fake_server_sending(body: &str) -> LspSession {
         "printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
         body.len()
     );
-    LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None).expect("sh is always available")
+    LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None, noop_waker()).expect("sh is always available")
 }
 
 fn ready_slot_around(session: LspSession) -> Slot {
@@ -600,7 +606,7 @@ fn real_server_binary(env_var: &str, cache_relative: &str) -> PathBuf {
 fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
     let deadline = Instant::now() + Duration::from_secs(240);
     while !matches!(state.kotlin, Slot::Ready { .. }) {
-        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc));
+        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), &noop_waker());
         assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
         assert!(
             Instant::now() < deadline,
@@ -615,7 +621,7 @@ fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &
 fn sync_until_java_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
     let deadline = Instant::now() + Duration::from_secs(240);
     while !matches!(state.java, Slot::Ready { .. }) {
-        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc));
+        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), &noop_waker());
         assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
         assert!(Instant::now() < deadline, "jdtls never finished its handshake");
         std::thread::sleep(Duration::from_millis(100));
@@ -804,7 +810,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             debug.poll();
-            let _ = state.sync(&settings, Some(root), std::slice::from_mut(doc));
+            let _ = state.sync(&settings, Some(root), std::slice::from_mut(doc), &noop_waker());
             if let Some((file, line)) = debug.paused_location() {
                 break (file.to_path_buf(), line);
             }
@@ -857,7 +863,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     let variables_deadline = Instant::now() + Duration::from_secs(30);
     loop {
         debug.poll();
-        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc));
+        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), &noop_waker());
         if !debug.variables().is_empty() {
             break;
         }
@@ -889,7 +895,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         debug.poll();
-        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc));
+        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), &noop_waker());
         match debug.status() {
             crate::debug_state::DebugStatus::Idle => break,
             crate::debug_state::DebugStatus::Failed(message) => panic!("debug session failed: {message}"),

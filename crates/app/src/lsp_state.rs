@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -24,7 +25,7 @@ use lsp_types::{
 };
 use serde_json::json;
 
-use crate::lsp_client::{LspSession, ResponseError};
+use crate::lsp_client::{LspSession, ResponseError, Waker};
 use crate::lsp_manager;
 use crate::lsp_settings::LspSettings;
 
@@ -245,6 +246,7 @@ impl LspState {
         settings: &LspSettings,
         project_root: Option<&Path>,
         documents: &mut [Document],
+        wake: &Waker,
     ) -> Vec<String> {
         let mut errors = self.poll_retiring();
         let java_needed = documents.iter().any(|doc| doc.language == Some(Language::Java));
@@ -260,7 +262,7 @@ impl LspState {
                 ServerKind::Java => &mut self.java,
                 ServerKind::Kotlin => &mut self.kotlin,
             };
-            reconcile_slot(slot, config, kind, &mut self.retiring, &mut errors);
+            reconcile_slot(slot, config, kind, &mut self.retiring, &mut errors, wake);
             sync_documents(slot, kind, documents, &mut errors);
             apply_server_messages(slot, kind, documents, &mut errors);
         }
@@ -305,20 +307,21 @@ impl LspState {
     }
 
     /// Whether anything here is still waiting on a background reply — a
-    /// handshake in flight, a live session whose server can publish
-    /// diagnostics unprompted at any time (real servers do, right after
-    /// `didOpen`, with no further client action to react to), or a shutdown
-    /// awaiting its response. The caller's own event loop only calls back
-    /// into `sync` in reaction to a repaint (an input event or an explicit
-    /// request) — with nothing requesting one, a session sitting idle
-    /// between user keystrokes would have its own async replies (the
-    /// `initialize` response, a `publishDiagnostics` the server sent on its
-    /// own initiative) queue up unread until the next unrelated repaint,
-    /// exactly the failure this app's own `pty_session`/`terminal_widget`
-    /// already guard their own background work against.
+    /// handshake in flight, or a shutdown awaiting its response. Both are
+    /// bounded waits on a reply that may never come (a server that dies
+    /// mid-handshake sends nothing at all), so they keep polling on a timer.
+    ///
+    /// A `Ready` slot deliberately does *not* count, even though its server
+    /// can publish diagnostics unprompted at any time: those arrive on the
+    /// reader thread, which wakes the event loop itself via the
+    /// `lsp_client::Waker` every session is spawned with. Counting `Ready`
+    /// here instead meant a single idle-but-alive language server pinned the
+    /// whole app to a permanent 5/second repaint that never settled — one
+    /// open Java file was enough to keep it awake indefinitely with nothing
+    /// in flight and no input.
     pub fn wants_repaint(&self) -> bool {
         fn slot_pending(slot: &Slot) -> bool {
-            matches!(slot, Slot::Starting(_) | Slot::Ready { .. })
+            matches!(slot, Slot::Starting(_))
         }
         slot_pending(&self.java) || slot_pending(&self.kotlin) || !self.retiring.is_empty()
     }
@@ -742,6 +745,7 @@ fn reconcile_slot(
     kind: ServerKind,
     retiring: &mut Vec<RetiringSession>,
     errors: &mut Vec<String>,
+    wake: &Waker,
 ) {
     if !slot_matches(slot, desired.as_ref()) {
         retire_slot(std::mem::take(slot), retiring);
@@ -751,7 +755,7 @@ fn reconcile_slot(
         return;
     }
     let Some(config) = desired else { return };
-    match start_session(kind, config.clone()) {
+    match start_session(kind, config.clone(), wake) {
         Ok(starting) => *slot = Slot::Starting(starting),
         Err(message) => {
             errors.push(message.clone());
@@ -1233,7 +1237,11 @@ fn retire_slot(slot: Slot, retiring: &mut Vec<RetiringSession>) {
     }
 }
 
-fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSession, String> {
+fn start_session(
+    kind: ServerKind,
+    config: SessionConfig,
+    wake: &Waker,
+) -> Result<RunningSession, String> {
     // jdt.ls' own `bin/jdtls` launcher otherwise falls back to whatever
     // `java` its own `JAVA_HOME`/`PATH` resolves to at spawn time, which may
     // not meet its Java 21 runtime minimum at all — pinning it here via its
@@ -1260,7 +1268,7 @@ fn start_session(kind: ServerKind, config: SessionConfig) -> Result<RunningSessi
             Vec::new()
         }
     };
-    let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root)).map_err(|error| {
+    let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root), Arc::clone(wake)).map_err(|error| {
         format!(
             "failed to start {} at {}: {error}",
             kind.name(),

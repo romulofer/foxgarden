@@ -147,6 +147,11 @@ const DRAFT_INTERVAL_SECONDS: f64 = 5.0;
 
 pub struct FoxGardenApp {
     state: EditorState,
+    /// Built once, on the first frame that has an `egui::Context` to clone,
+    /// and handed to every language server spawned after it — a per-frame
+    /// `Arc::new` for something only a session spawn ever consumes would be
+    /// pure allocation on the paint path.
+    lsp_wake: Option<crate::lsp_client::Waker>,
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
     /// open document.
     parsers: Vec<Option<IncrementalParser>>,
@@ -1334,6 +1339,7 @@ impl FoxGardenApp {
 
         let mut app = Self {
             state,
+            lsp_wake: None,
             parsers,
             pending_close: Vec::new(),
             toasts: crate::toasts::Toasts::default(),
@@ -1816,10 +1822,21 @@ impl eframe::App for FoxGardenApp {
         // The process owner only polls channels/child state here; it never
         // waits. This keeps an unavailable or slow external language server
         // completely off the editor's keystroke-to-pixels path.
+        //
+        // The waker below is handed to every session spawned here, so its
+        // reader thread wakes the UI the moment a reply or an unprompted
+        // `publishDiagnostics` lands — the alternative is polling a
+        // live-but-idle server forever on a timer, which is what
+        // `LspState::wants_repaint` used to do.
+        let wake = self.lsp_wake.get_or_insert_with(|| {
+            let ctx = ui.ctx().clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+        });
         let lsp_errors = self.lsp.sync(
             &self.lsp_settings,
             self.state.project.as_ref().map(|project| project.root.as_path()),
             &mut self.state.open_tabs,
+            &wake,
         );
         if self.last_error.is_none() {
             self.last_error = lsp_errors.into_iter().next();

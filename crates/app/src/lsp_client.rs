@@ -178,6 +178,18 @@ pub(crate) fn write_message<W: Write>(writer: &mut W, value: &Value) -> std::io:
 
 type PendingResponses = Arc<Mutex<HashMap<i64, Sender<Result<Value, ResponseError>>>>>;
 
+/// Called from the reader thread whenever a message lands, to wake whatever
+/// event loop polls this session. Deliberately a plain callback rather than
+/// an `egui::Context`: a server's replies arriving has nothing to do with
+/// which UI framework is waiting for them, and it keeps this module's own
+/// tests able to observe wakeups without standing up a UI.
+///
+/// Without this, an idle-but-alive session forces its poller to wake on a
+/// timer forever just in case an unprompted `publishDiagnostics` shows up —
+/// which is exactly the permanent background repaint `LspState::
+/// wants_repaint` used to require.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
 /// A running language server: its background writer thread's send half,
 /// the child process itself, and the background reader thread's parsed
 /// messages routed either to a pending request's own one-shot `Receiver`
@@ -200,7 +212,7 @@ impl LspSession {
     /// "inspectable via logging" checkpoint wording), so letting it flow
     /// straight to this app's own stderr is the simplest way to actually
     /// inspect it.
-    pub fn spawn(binary: &Path, args: &[String], cwd: Option<&Path>) -> std::io::Result<Self> {
+    pub fn spawn(binary: &Path, args: &[String], cwd: Option<&Path>, wake: Waker) -> std::io::Result<Self> {
         let mut command = Command::new(binary);
         command
             .args(args)
@@ -235,6 +247,7 @@ impl LspSession {
                         IncomingMessage::Response { id, result } => {
                             if let Some(tx) = pending_for_thread.lock().unwrap().remove(&id) {
                                 let _ = tx.send(result);
+                                wake();
                             }
                         }
                         IncomingMessage::ServerMessage { method, params, id } => {
@@ -246,6 +259,7 @@ impl LspSession {
                             if server_tx.send((method, params)).is_err() {
                                 break; // LspSession (and its Receiver) dropped
                             }
+                            wake();
                         }
                         IncomingMessage::Unroutable => {}
                     },
