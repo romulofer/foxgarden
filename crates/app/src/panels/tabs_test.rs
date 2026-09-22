@@ -43,7 +43,11 @@ fn save_tab_reparses_so_trimmed_content_is_not_highlighted_against_a_stale_tree(
     // must match exactly. Before the fix, the tree still reflected the
     // pre-trim (longer) text, so node byte ranges no longer lined up
     // with `text` at all past the trimmed line.
-    let mut fresh_parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut fresh_parser = IncrementalParser::new(Language::Java).expect("an installed grammar must load");
     fresh_parser.parse(&text);
     let fresh_spans = syntax::highlight_spans(fresh_parser.tree().unwrap(), &text, Language::Java);
     assert_eq!(spans, fresh_spans);

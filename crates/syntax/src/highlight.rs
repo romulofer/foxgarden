@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use fg_core::Language;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::language::{highlights_query_source, ts_language};
+use crate::grammars::{highlights_query_source, ts_language};
 
 /// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with
 /// `Property` and `Tag` for the markup/config languages added afterward:
@@ -101,21 +101,36 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
 /// registered languages, and lives as long as the grammar it was built
 /// against, which is the whole process (Track 24 Checkpoint 0).
 ///
-/// `None` if this build has no grammar or no query for the language, which
-/// is not an error — that file paints unhighlighted.
+/// `None` if no grammar or no query was installed for the language, or if
+/// the query it contributed does not compile against the grammar it was
+/// paired with — none of which is an error here: that file paints
+/// unhighlighted, exactly as an unrecognized file always has. A query that
+/// fails to compile used to be impossible (every query was `include_str!`'d
+/// from this repository and checked by its own tests); since Track 24 Phase
+/// 3 it arrives from an extension, so it is a runtime outcome rather than a
+/// build-time guarantee, and a bad query from a third party must not be
+/// able to panic the editor.
+///
+/// A compile *failure* is cached like a success, since retrying it on every
+/// frame of a file the editor has already established it cannot highlight
+/// would be the expensive half of this function running forever. What is
+/// deliberately never cached is "nothing installed for this language yet":
+/// that answer depends on whether `grammars::install` has run, so caching
+/// it would let a lookup made before installation permanently blind a
+/// language that is installed a moment later.
 fn cached_query(language: Language) -> Option<&'static Query> {
-    static CACHE: OnceLock<Mutex<HashMap<Language, &'static Query>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<Language, Option<&'static Query>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     let mut cache = cache.lock().expect("highlight query cache lock");
     if let Some(query) = cache.get(&language) {
-        return Some(query);
+        return *query;
     }
-    let compiled = Query::new(&ts_language(language)?, highlights_query_source(language)?)
-        .expect("bundled highlight query must compile");
-    let query: &'static Query = Box::leak(Box::new(compiled));
+    let ts = ts_language(language)?;
+    let source = highlights_query_source(language)?;
+    let query = Query::new(&ts, source).ok().map(|q| &*Box::leak(Box::new(q)));
     cache.insert(language, query);
-    Some(query)
+    query
 }
 
 /// Runs the language's highlight query over `tree`, returning byte ranges

@@ -1,7 +1,7 @@
 use fg_core::Language;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
-use crate::language::ts_language;
+use crate::grammars::ts_language;
 
 /// Owns an incremental tree-sitter parse for a single document.
 pub struct IncrementalParser {
@@ -23,9 +23,13 @@ impl IncrementalParser {
     /// that already exist.
     pub fn new(language: Language) -> Option<Self> {
         let mut parser = Parser::new();
-        parser
-            .set_language(&ts_language(language)?)
-            .expect("a bundled grammar must load");
+        // `None` rather than a panic on a grammar that refuses to load:
+        // since Track 24 Phase 3 the grammar comes from an extension, and
+        // an extension's mistake must not be able to take the editor down.
+        // `grammars::install` has already ABI-checked whatever is in the
+        // store, so this is the residue — a grammar that passed that check
+        // and still failed here degrades to an unparsed document.
+        parser.set_language(&ts_language(language)?).ok()?;
         Some(Self {
             parser,
             language,

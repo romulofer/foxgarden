@@ -9,7 +9,11 @@ use super::common_test::*;
 use fg_core::Language;
 
 fn tree_of(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Java).expect("a bundled grammar must load");
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(Language::Java).expect("an installed grammar must load");
     parser.parse(source).clone()
 }
 
@@ -146,7 +150,11 @@ fn dispatcher_routes_java_to_java_dot_completion_candidates() {
 }
 
 fn kotlin_tree_of(source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(Language::Kotlin).expect("a bundled grammar must load");
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(Language::Kotlin).expect("an installed grammar must load");
     parser.parse(source).clone()
 }
 

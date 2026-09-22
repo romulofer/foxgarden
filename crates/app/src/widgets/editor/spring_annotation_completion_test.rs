@@ -3,7 +3,11 @@ use super::*;
 use syntax::IncrementalParser;
 
 fn parsed(language: Language, source: &str) -> Tree {
-    let mut parser = IncrementalParser::new(language).expect("a bundled grammar must load");
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(language).expect("an installed grammar must load");
     parser.parse(source).clone()
 }
 

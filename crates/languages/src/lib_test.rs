@@ -87,9 +87,30 @@ fn an_unrelated_filename_is_not_mistaken_for_a_dockerfile() {
     );
 }
 
+/// Every shipped language arrives with something to parse it with. This is
+/// the claim Phase 3 moved out of `crates/syntax`: before, a language's
+/// grammar was a `match` arm in the editor, so the two could not disagree;
+/// now they are separate declarations, and a language contributed without
+/// its grammar would open files that silently never highlight or fold.
+#[test]
+fn every_shipped_language_contributes_a_grammar_and_a_highlight_query() {
+    let registry = builtin_registry();
+    for language in registry.languages() {
+        let id = &language.language.id;
+        let grammar = registry
+            .grammar(id)
+            .unwrap_or_else(|| panic!("{id} ships without a grammar"));
+        assert!(
+            grammar.highlight_query.as_ref().is_some_and(|q| !q.trim().is_empty()),
+            "{id} ships without a highlight query"
+        );
+    }
+}
+
 /// The JVM languages and the general file types come from different
-/// extensions — the split this crate exists to make, and the thing Phase 6
-/// relies on when `spring` moves out on its own.
+/// extensions — the split this crate exists to make. `spring` is no longer
+/// even in this repository (`../spring-foxgarden`); what keeps it wired in
+/// is the path dependency in this crate's `Cargo.toml` and nothing else.
 #[test]
 fn jvm_languages_and_file_types_come_from_different_extensions() {
     let registry = builtin_registry();

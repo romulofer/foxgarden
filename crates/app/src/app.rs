@@ -1277,6 +1277,16 @@ impl FoxGardenApp {
         let mut state = EditorState::with_languages(fg_languages::builtin_registry());
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
+        // Declaring a language and being able to parse it are two separate
+        // things since Track 24 Phase 3: an extension contributes a
+        // grammar, and this is where the editor actually loads the ones it
+        // was given. One grammar failing is not a reason to refuse to
+        // start — that language degrades to "opens, edits, paints plain" —
+        // so the failures are surfaced and the rest of the session
+        // proceeds.
+        for error in syntax::install_grammars(&state.languages) {
+            crate::errors::report(&mut last_error, error.to_string());
+        }
         let mut editor_font = EditorFont::default();
         let mut font_size = DEFAULT_FONT_SIZE;
         let mut dark_mode = DEFAULT_DARK_MODE;

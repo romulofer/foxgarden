@@ -22,7 +22,11 @@ pub(super) fn open_fixture(contents: &str, filename: &str) -> (tempfile::TempDir
 /// recognized language — `show`'s tests always exercise the "has a
 /// language" path unless a test says otherwise.
 pub(super) fn parsed(language: Language, source: &str) -> Option<IncrementalParser> {
-    let mut parser = IncrementalParser::new(language).expect("a bundled grammar must load");
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(language).expect("an installed grammar must load");
     parser.parse(source);
     Some(parser)
 }

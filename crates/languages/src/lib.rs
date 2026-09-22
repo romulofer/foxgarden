@@ -1,32 +1,25 @@
-//! `PLAN.md` Track 24 Phase 2: the languages this build ships with, as
-//! real extensions registering through the real API.
+//! Which extensions this build ships with, and the one place that knows
+//! it (`PLAN.md` Track 24 Phases 2 and 3).
 //!
-//! Split into two from the start, rather than one "builtins" blob, because
-//! that is the split Track 24 is heading for: the JVM half becomes the
-//! `spring` extension (Phase 6), and the rest is general file-type support
-//! that has nothing to do with the JVM and should not be entangled with
-//! it. Having two here also means the registry is exercised by more than a
-//! single extension from the first moment it is used for real — a registry
-//! that has only ever held one extension has not been shown to hold two.
+//! Two extensions, and they no longer sit side by side in this file: the
+//! JVM half is `foxgarden-spring`, a separate project under
+//! `../spring-foxgarden` that reaches the editor only through
+//! `fg-extension`, while `file-types` below is general file-type support
+//! with nothing to do with the JVM. That split is the whole point of the
+//! track — a YAML file is not a JVM concept, and someone running this
+//! editor on a project with no JVM in it should still get YAML.
 //!
-//! What these contribute today is deliberately thin: identity only (ids,
-//! display names, how to recognize a file). Grammars and highlight queries
-//! stay compiled into `crates/syntax` until Phase 3 moves them here, and
-//! language servers stay in `lsp_state` until Phase 4.
+//! Each language brings its own grammar and highlight query now (Phase 3):
+//! `crates/syntax` no longer links a single grammar crate, so the answer to
+//! "which languages can this editor parse" lives here and in the add-on
+//! rather than in a `match` in the middle of the editor.
 
 use fg_extension::{
-    Contributions, Extension, ExtensionManifest, FilenamePattern, LanguageContribution, Registry,
-    RegisterError, CURRENT_SCHEMA_VERSION,
+    Contributions, Extension, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
+    LanguageContribution, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
 };
 
-fn manifest(id: &str, name: &str) -> ExtensionManifest {
-    ExtensionManifest {
-        id: id.to_string(),
-        name: name.to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        schema_version: CURRENT_SCHEMA_VERSION,
-    }
-}
+pub use foxgarden_spring::SpringExtension;
 
 fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContribution {
     LanguageContribution {
@@ -37,36 +30,26 @@ fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContri
     }
 }
 
-/// The JVM languages. Becomes the `spring` extension proper in Phase 6,
-/// once the build tooling, JDK registry, run/debug and Spring panels join
-/// them here.
-pub struct SpringExtension;
-
-impl Extension for SpringExtension {
-    fn manifest(&self) -> ExtensionManifest {
-        manifest("spring", "Java, Kotlin and Spring")
-    }
-
-    fn contributions(&self) -> Contributions {
-        Contributions {
-            languages: vec![
-                language("java", "Java", &["java"]),
-                language("kotlin", "Kotlin", &["kt"]),
-            ],
-            ..Default::default()
-        }
+fn grammar(language_id: &str, source: GrammarSource, highlight_query: &str) -> GrammarContribution {
+    GrammarContribution {
+        language_id: language_id.to_string(),
+        source,
+        highlight_query: Some(highlight_query.to_string()),
     }
 }
 
 /// Config and markup formats the editor opens but has no language tooling
-/// for. Deliberately separate from `spring`: a `.yaml` file is not a JVM
-/// concept, and someone running this editor on a project with no JVM in it
-/// should still get YAML support.
+/// for.
 pub struct FileTypesExtension;
 
 impl Extension for FileTypesExtension {
     fn manifest(&self) -> ExtensionManifest {
-        manifest("file-types", "Common file types")
+        ExtensionManifest {
+            id: "file-types".to_string(),
+            name: "Common file types".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
     }
 
     fn contributions(&self) -> Contributions {
@@ -89,6 +72,33 @@ impl Extension for FileTypesExtension {
                     ..language("dockerfile", "Dockerfile", &["dockerfile"])
                 },
             ],
+            grammars: vec![
+                // Three of these four queries ship inside their own grammar
+                // crate, so they travel with the grammar they were written
+                // against automatically. Dockerfile's is this repository's
+                // own (`queries/highlights_dockerfile.scm`) — see its header
+                // for what it does differently.
+                grammar(
+                    "properties",
+                    GrammarSource::Builtin(tree_sitter_properties::LANGUAGE),
+                    tree_sitter_properties::HIGHLIGHTS_QUERY,
+                ),
+                grammar(
+                    "yaml",
+                    GrammarSource::Builtin(tree_sitter_yaml::LANGUAGE),
+                    tree_sitter_yaml::HIGHLIGHTS_QUERY,
+                ),
+                grammar(
+                    "xml",
+                    GrammarSource::Builtin(tree_sitter_xml::LANGUAGE_XML),
+                    tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+                ),
+                grammar(
+                    "dockerfile",
+                    GrammarSource::Builtin(tree_sitter_containerfile::LANGUAGE),
+                    include_str!("../queries/highlights_dockerfile.scm"),
+                ),
+            ],
             ..Default::default()
         }
     }
@@ -107,6 +117,12 @@ pub fn register_builtins(registry: &mut Registry) -> Result<(), RegisterError> {
 }
 
 /// A registry with exactly this build's own languages in it.
+///
+/// Holds the *declarations* only. Making the editor able to parse with the
+/// grammars they declare is a second step (`syntax::install_grammars`),
+/// kept separate because this crate deliberately does not depend on the
+/// editor's tree-sitter machinery — an extension describes a grammar, it
+/// does not load one.
 pub fn builtin_registry() -> Registry {
     let mut registry = Registry::new();
     register_builtins(&mut registry).expect("this build's own extensions must not conflict");

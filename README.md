@@ -89,8 +89,9 @@ two parts of one file, side by side.
 ### 🛠️ Build & run
 
 ```bash
-# clone
+# clone — the JVM support is a separate project and has to sit beside this one
 git clone https://github.com/romulofer/foxgarden.git
+git clone https://github.com/legendaryredfox/spring-foxgarden.git
 cd foxgarden
 
 # run (debug builds are near-release speed for dependencies)
@@ -100,7 +101,10 @@ cargo run --release
 cargo test --workspace
 ```
 
-**Requirements:** a recent Rust toolchain (edition 2024). Java language features
+**Requirements:** a recent Rust toolchain (edition 2024). Java, Kotlin and
+Spring support comes from the `spring-foxgarden` add-on, which the build
+expects at `../spring-foxgarden` — the editor itself knows nothing about the
+JVM and reaches it only through its extension API. Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
@@ -188,8 +192,9 @@ compartilham o mesmo projeto e conjunto de abas, mas cada um mantém sua aba ati
 ### 🛠️ Compilar & executar
 
 ```bash
-# clonar
+# clonar — o suporte JVM é um projeto à parte e precisa ficar ao lado deste
 git clone https://github.com/romulofer/foxgarden.git
+git clone https://github.com/legendaryredfox/spring-foxgarden.git
 cd foxgarden
 
 # executar (builds de debug rodam dependências em velocidade quase-release)
@@ -199,7 +204,10 @@ cargo run --release
 cargo test --workspace
 ```
 
-**Requisitos:** uma toolchain Rust recente (edição 2024). Recursos de Java exigem
+**Requisitos:** uma toolchain Rust recente (edição 2024). O suporte a Java,
+Kotlin e Spring vem do add-on `spring-foxgarden`, que o build espera em
+`../spring-foxgarden` — o editor em si não sabe nada sobre a JVM e só a
+alcança pela API de extensões. Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.

@@ -53,6 +53,7 @@ pub fn temp_file(name: &str, contents: &str) -> (TempDir, PathBuf) {
 /// widget/editor tests that need a ready-to-edit document, not just a path
 /// on disk.
 pub fn temp_document(name: &str, contents: &str) -> (TempDir, Document) {
+    install_grammars();
     let (dir, path) = temp_file(name, contents);
     let doc = Document::open(path, languages()).expect("open just-written fixture file");
     (dir, doc)
@@ -68,7 +69,29 @@ pub fn temp_document(name: &str, contents: &str) -> (TempDir, Document) {
 /// genuinely wants an editor that recognizes nothing should say so by
 /// calling `EditorState::new()` deliberately.
 pub fn editor_state() -> fg_core::EditorState {
+    install_grammars();
     fg_core::EditorState::with_languages(fg_languages::builtin_registry())
+}
+
+/// Makes this build's grammars parseable, once per test binary.
+///
+/// Separate from `languages()` because they answer different questions:
+/// the registry says *which* languages exist, `syntax`'s grammar store says
+/// what can actually be parsed (`PLAN.md` Track 24 Phase 3). A test binary
+/// that skips this still opens Java files and still resolves them as Java —
+/// it just gets no parse tree, so anything about highlighting, folding,
+/// completion or diagnostics quietly tests nothing. Every fixture here
+/// installs for that reason; a test building a parser by hand should call
+/// this itself.
+///
+/// Idempotent: the store keeps the grammar a language already has, so
+/// several fixtures (and several tests) calling this is fine.
+pub fn install_grammars() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let errors = syntax::install_grammars(languages());
+        assert!(errors.is_empty(), "this build's own grammars must install: {errors:?}");
+    });
 }
 
 /// The languages this build ships with, for tests that open real files and

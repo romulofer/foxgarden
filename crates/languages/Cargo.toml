@@ -7,5 +7,15 @@ edition.workspace = true
 name = "fg_languages"
 path = "src/lib.rs"
 
+# The composition root for "which extensions does this build ship with".
+# `foxgarden-spring` is a whole separate project (`../spring-foxgarden`)
+# named here as a path dependency, which is what Phase A of `PLAN.md` Track
+# 24 looks like: out of the tree, but still compiled in. When Phase B lands
+# a loader, this is the one file that changes.
 [dependencies]
 fg-extension = { path = "../extension" }
+foxgarden-spring = { path = "../../../spring-foxgarden/crates/spring" }
+tree-sitter-yaml = "0.7.2"
+tree-sitter-xml = "0.7.0"
+tree-sitter-properties = "0.3.0"
+tree-sitter-containerfile = "0.9.2"

@@ -1222,6 +1222,11 @@ name = "fg-languages"
 version = "0.2.0"
 dependencies = [
  "fg-extension",
+ "foxgarden-spring",
+ "tree-sitter-containerfile",
+ "tree-sitter-properties",
+ "tree-sitter-xml",
+ "tree-sitter-yaml",
 ]
 
 [[package]]
@@ -1360,6 +1365,15 @@ dependencies = [
  "ureq",
  "vt100",
  "zip",
+]
+
+[[package]]
+name = "foxgarden-spring"
+version = "0.1.0"
+dependencies = [
+ "fg-extension",
+ "tree-sitter-java",
+ "tree-sitter-kotlin-ng",
 ]
 
 [[package]]
@@ -3620,13 +3634,11 @@ name = "syntax"
 version = "0.2.0"
 dependencies = [
  "fg-core",
+ "fg-extension",
+ "fg-languages",
+ "libloading",
  "tree-sitter",
- "tree-sitter-containerfile",
- "tree-sitter-java",
- "tree-sitter-kotlin-ng",
- "tree-sitter-properties",
- "tree-sitter-xml",
- "tree-sitter-yaml",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -3669,6 +3681,7 @@ dependencies = [
  "fg-core",
  "fg-extension",
  "fg-languages",
+ "syntax",
  "tempfile",
 ]
 
