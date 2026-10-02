@@ -221,7 +221,7 @@ pub(crate) fn gradle_command(project_root: &Path) -> Command {
 /// always set (see this module's own top-level doc comment). `--no-parallel`
 /// always set too — a real, found-not-assumed bug: a project with
 /// `org.gradle.parallel=true` in its own `gradle.properties` (the real
-/// `boost` project this module validated against has exactly this) runs
+/// a project with this setting) runs
 /// each project's `doLast` concurrently, and their `println` output
 /// interleaves *line-by-line* across projects — confirmed by a real run
 /// producing `FOXGARDEN_JSON_BEGIN`/`FOXGARDEN_JSON_END` markers with
@@ -254,8 +254,8 @@ const CLASSPATH_TASK: &str = "foxgardenGradleClasspathDump";
 /// One project's own resolved classpath — real jar files on disk, not
 /// declared coordinates (`GradleDependency`'s own scope). `compile`/
 /// `runtime` mirror Gradle's own `compileClasspath`/`runtimeClasspath`
-/// configurations; a project with neither (the real `boost` project's own
-/// `frontend` module, for instance — no JVM plugin applied at all) simply
+/// configurations; a project with neither (a `frontend` module with no JVM
+/// plugin applied, for instance) simply
 /// never appears in `gradle_classpaths`' own result rather than appearing
 /// with two empty lists, so a caller can't mistake "not a JVM module" for
 /// "a JVM module with zero dependencies."
@@ -323,7 +323,7 @@ pub fn gradle_classpaths(project_root: &Path) -> Result<Vec<GradleClasspath>, Gr
 }
 
 /// Pure parser for `gradle_classpaths`' own captured stdout — verified
-/// against real captured output from the same real `boost` project
+/// against real captured output from a multi-module project
 /// (this module's tests), not a guessed shape.
 fn parse_classpath_output(stdout: &str) -> Result<Vec<GradleClasspath>, String> {
     split_marked_blocks(stdout, "FOXGARDEN_CP_JSON_BEGIN", "FOXGARDEN_CP_JSON_END")?

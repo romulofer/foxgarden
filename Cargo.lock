@@ -1371,7 +1371,9 @@ dependencies = [
 name = "foxgarden-spring"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "fg-extension",
+ "serde_json",
  "tree-sitter-java",
  "tree-sitter-kotlin-ng",
 ]

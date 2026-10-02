@@ -43,13 +43,13 @@ const SPINNER_SIZE: f32 = 12.0;
 pub struct BackgroundWork {
     /// Display names of language servers still inside their `initialize`
     /// handshake (`"JDTLS"`).
-    pub starting_servers: Vec<&'static str>,
+    pub starting_servers: Vec<String>,
     /// Display name plus latest `language/status` message of every `Ready`
     /// server still importing its project in the background
     /// (`LspState::indexing_servers`) — the handshake above finishes in
     /// seconds regardless of project size; this is the (often much longer)
     /// import that follows it, with jdt.ls' own progress text.
-    pub indexing_servers: Vec<(&'static str, String)>,
+    pub indexing_servers: Vec<(String, String)>,
     /// Running installs: display name plus the job's own latest progress
     /// line, when it reports one. Language-server installs do (jdt.ls is
     /// built from source and takes minutes — see `lsp_manager`); external
@@ -97,11 +97,7 @@ impl BackgroundWork {
         let tools = &static_analysis.tool_manager;
         Self {
             starting_servers: lsp.starting_servers(),
-            indexing_servers: lsp
-                .indexing_servers()
-                .into_iter()
-                .map(|(name, message)| (name, message.to_string()))
-                .collect(),
+            indexing_servers: lsp.indexing_servers(),
             installing: installing_servers(servers).chain(installing_tools(tools)).collect(),
             checking_versions: checking_servers(servers).chain(checking_tools(tools)).collect(),
             detecting_java_home: servers.detecting_java_home(),

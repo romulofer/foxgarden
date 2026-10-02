@@ -45,9 +45,9 @@ impl Extension for FakeExtension {
     }
 }
 
-fn registry_with(extension: &FakeExtension) -> Registry {
+fn registry_with(extension: FakeExtension) -> Registry {
     let mut registry = Registry::new();
-    registry.register(extension).expect("fixture must register");
+    registry.register(Box::new(extension)).expect("fixture must register");
     registry
 }
 
@@ -55,7 +55,7 @@ fn registry_with(extension: &FakeExtension) -> Registry {
 /// binary, so a test that installs has to install under an id nothing else
 /// uses. Tests below take their ids from their own names for that reason.
 fn install_fake(id: &'static str, language_id: &'static str, source: GrammarSource) -> Vec<GrammarError> {
-    install(&registry_with(&FakeExtension {
+    install(&registry_with(FakeExtension {
         id,
         language_id,
         source,

@@ -56,7 +56,7 @@ fn elvish() -> Contributions {
 #[test]
 fn a_registered_language_is_findable_by_id_and_by_extension() {
     let mut registry = Registry::new();
-    registry.register(&FakeExtension::new("rivendell", elvish)).unwrap();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
 
     assert_eq!(registry.extensions().len(), 1);
     assert_eq!(registry.language("elvish").unwrap().language.display_name, "ELVISH");
@@ -82,7 +82,7 @@ fn an_unregistered_extension_resolves_to_nothing_rather_than_a_default() {
 fn a_filename_pattern_resolves_a_file_with_no_usable_extension() {
     let mut registry = Registry::new();
     registry
-        .register(&FakeExtension::new("containers", || Contributions {
+        .register(Box::new(FakeExtension::new("containers", || Contributions {
             languages: vec![LanguageContribution {
                 id: "dockerfile".to_string(),
                 display_name: "Dockerfile".to_string(),
@@ -92,7 +92,7 @@ fn a_filename_pattern_resolves_a_file_with_no_usable_extension() {
                 }],
             }],
             ..Default::default()
-        }))
+        })))
         .unwrap();
 
     for name in ["Dockerfile", "dockerfile", "Dockerfile.dev", "dev.Dockerfile"] {
@@ -108,7 +108,7 @@ fn a_filename_pattern_resolves_a_file_with_no_usable_extension() {
 fn a_grammar_attaches_to_its_language() {
     let mut registry = Registry::new();
     registry
-        .register(&FakeExtension::new("rivendell", || Contributions {
+        .register(Box::new(FakeExtension::new("rivendell", || Contributions {
             languages: vec![lang("elvish", &["elv"])],
             grammars: vec![GrammarContribution {
                 language_id: "elvish".to_string(),
@@ -119,7 +119,7 @@ fn a_grammar_attaches_to_its_language() {
                 highlight_query: Some("(identifier) @variable".to_string()),
             }],
             ..Default::default()
-        }))
+        })))
         .unwrap();
 
     let grammar = registry.grammar("elvish").expect("grammar registered");
@@ -130,17 +130,18 @@ fn a_grammar_attaches_to_its_language() {
 fn a_language_server_is_findable_by_the_language_it_serves() {
     let mut registry = Registry::new();
     registry
-        .register(&FakeExtension::new("rivendell", || Contributions {
+        .register(Box::new(FakeExtension::new("rivendell", || Contributions {
             languages: vec![lang("elvish", &["elv"]), lang("khuzdul", &["khz"])],
             language_servers: vec![LanguageServerContribution {
                 id: "elvish-ls".to_string(),
+                display_name: "Elvish Language Server".to_string(),
                 language_ids: vec!["elvish".to_string(), "khuzdul".to_string()],
                 binary_name: "elvish-language-server".to_string(),
                 args: Vec::new(),
                 initialization_options: Some(r#"{"verbose":true}"#.to_string()),
             }],
             ..Default::default()
-        }))
+        })))
         .unwrap();
 
     // One server serving two languages is found under both — the case a
@@ -157,7 +158,7 @@ fn an_extension_built_for_another_schema_version_is_refused() {
     ext.schema_version = CURRENT_SCHEMA_VERSION + 7;
 
     assert_eq!(
-        registry.register(&ext),
+        registry.register(Box::new(ext)),
         Err(RegisterError::IncompatibleSchema {
             extension_id: "from-the-future".to_string(),
             found: CURRENT_SCHEMA_VERSION + 7,
@@ -170,10 +171,10 @@ fn an_extension_built_for_another_schema_version_is_refused() {
 #[test]
 fn two_extensions_claiming_one_language_is_refused_naming_the_incumbent() {
     let mut registry = Registry::new();
-    registry.register(&FakeExtension::new("rivendell", elvish)).unwrap();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
 
     assert_eq!(
-        registry.register(&FakeExtension::new("lothlorien", elvish)),
+        registry.register(Box::new(FakeExtension::new("lothlorien", elvish))),
         Err(RegisterError::DuplicateLanguage {
             language_id: "elvish".to_string(),
             extension_id: "lothlorien".to_string(),
@@ -185,9 +186,9 @@ fn two_extensions_claiming_one_language_is_refused_naming_the_incumbent() {
 #[test]
 fn registering_the_same_extension_twice_is_refused() {
     let mut registry = Registry::new();
-    registry.register(&FakeExtension::new("rivendell", elvish)).unwrap();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
     assert_eq!(
-        registry.register(&FakeExtension::new("rivendell", Contributions::default)),
+        registry.register(Box::new(FakeExtension::new("rivendell", Contributions::default))),
         Err(RegisterError::DuplicateExtension {
             extension_id: "rivendell".to_string(),
         })
@@ -198,7 +199,7 @@ fn registering_the_same_extension_twice_is_refused() {
 fn a_grammar_for_an_unregistered_language_is_refused() {
     let mut registry = Registry::new();
     assert_eq!(
-        registry.register(&FakeExtension::new("orphan", || Contributions {
+        registry.register(Box::new(FakeExtension::new("orphan", || Contributions {
             grammars: vec![GrammarContribution {
                 language_id: "westron".to_string(),
                 source: GrammarSource::SharedLibrary {
@@ -208,7 +209,7 @@ fn a_grammar_for_an_unregistered_language_is_refused() {
                 highlight_query: None,
             }],
             ..Default::default()
-        })),
+        }))),
         Err(RegisterError::UnknownLanguage {
             language_id: "westron".to_string(),
             extension_id: "orphan".to_string(),
@@ -243,7 +244,7 @@ fn a_second_grammar_for_one_language_is_refused() {
     };
 
     assert_eq!(
-        registry.register(&FakeExtension::new("rivendell", two_grammars)),
+        registry.register(Box::new(FakeExtension::new("rivendell", two_grammars))),
         Err(RegisterError::DuplicateGrammar {
             language_id: "elvish".to_string(),
             extension_id: "rivendell".to_string(),
@@ -270,7 +271,7 @@ fn a_refused_extension_leaves_nothing_registered() {
         ..Default::default()
     };
 
-    assert!(registry.register(&FakeExtension::new("rivendell", good_language_bad_grammar)).is_err());
+    assert!(registry.register(Box::new(FakeExtension::new("rivendell", good_language_bad_grammar))).is_err());
     assert!(
         registry.language("elvish").is_none(),
         "the valid language must not survive its extension being refused"
@@ -283,10 +284,10 @@ fn a_refused_extension_leaves_nothing_registered() {
 fn one_extension_declaring_a_language_twice_is_refused() {
     let mut registry = Registry::new();
     assert!(matches!(
-        registry.register(&FakeExtension::new("confused", || Contributions {
+        registry.register(Box::new(FakeExtension::new("confused", || Contributions {
             languages: vec![lang("elvish", &["elv"]), lang("elvish", &["elvish"])],
             ..Default::default()
-        })),
+        }))),
         Err(RegisterError::DuplicateLanguage { .. })
     ));
 }

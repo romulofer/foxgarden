@@ -74,26 +74,24 @@ fn gradle_command_ignores_a_unix_only_gradlew_with_no_bat_counterpart() {
     assert_eq!(cmd.get_program(), "gradle");
 }
 
-/// Real output captured this session running the validated init script
-/// (`gradle --offline --init-script <script> -q foxgardenDump2`)
-/// against `bridge.ufsc.tech:boost`, a real multi-module Kotlin/Spring
-/// Gradle project — `frontend`/`database` (no JVM dependencies of their
-/// own) and `backend` (22 real dependencies across 5 configurations,
+/// Output from running the validated init script against a multi-module
+/// Kotlin/Spring Gradle project — `frontend`/`database` (no JVM dependencies
+/// of their own) and `backend` (22 real dependencies across 5 configurations,
 /// including a real inter-project `project(":database")` reference and
 /// a mix of versioned and unversioned — Spring's dependency-management
 /// plugin supplies the rest — module coordinates).
 const REAL_DUMP_OUTPUT: &str = r#"
 FOXGARDEN_JSON_BEGIN
-{"path":":","name":"boost","group":"bridge.ufsc.tech","version":"0.0.1-SNAPSHOT","projectDir":"/home/romulo2/bridge/boost","dependencies":[]}
+{"path":":","name":"demo","group":"com.example","version":"0.0.1-SNAPSHOT","projectDir":"/home/user/projects/demo","dependencies":[]}
 FOXGARDEN_JSON_END
 FOXGARDEN_JSON_BEGIN
-{"path":":frontend","name":"frontend","group":"bridge.ufsc.tech","version":"0.0.1-SNAPSHOT","projectDir":"/home/romulo2/bridge/boost/frontend","dependencies":[]}
+{"path":":frontend","name":"frontend","group":"com.example","version":"0.0.1-SNAPSHOT","projectDir":"/home/user/projects/demo/frontend","dependencies":[]}
 FOXGARDEN_JSON_END
 FOXGARDEN_JSON_BEGIN
-{"path":":database","name":"database","group":"bridge.ufsc.tech","version":"0.0.1-SNAPSHOT","projectDir":"/home/romulo2/bridge/boost/database","dependencies":[]}
+{"path":":database","name":"database","group":"com.example","version":"0.0.1-SNAPSHOT","projectDir":"/home/user/projects/demo/database","dependencies":[]}
 FOXGARDEN_JSON_END
 FOXGARDEN_JSON_BEGIN
-{"path":":backend","name":"backend","group":"bridge.ufsc.tech","version":"0.0.1-SNAPSHOT","projectDir":"/home/romulo2/bridge/boost/backend","dependencies":[{"configuration":"developmentOnly","kind":"module","group":"org.springframework.boot","artifact":"spring-boot-devtools","version":null},{"configuration":"implementation","kind":"project","path":":database"},{"configuration":"implementation","kind":"module","group":"org.springframework.boot","artifact":"spring-boot-starter-actuator","version":null},{"configuration":"implementation","kind":"module","group":"org.springdoc","artifact":"springdoc-openapi-starter-webmvc-ui","version":"3.0.3"},{"configuration":"runtimeOnly","kind":"module","group":"org.postgresql","artifact":"postgresql","version":null},{"configuration":"testImplementation","kind":"module","group":"org.mockito.kotlin","artifact":"mockito-kotlin","version":"5.4.0"},{"configuration":"testRuntimeOnly","kind":"module","group":"org.junit.platform","artifact":"junit-platform-launcher","version":null}]}
+{"path":":backend","name":"backend","group":"com.example","version":"0.0.1-SNAPSHOT","projectDir":"/home/user/projects/demo/backend","dependencies":[{"configuration":"developmentOnly","kind":"module","group":"org.springframework.boot","artifact":"spring-boot-devtools","version":null},{"configuration":"implementation","kind":"project","path":":database"},{"configuration":"implementation","kind":"module","group":"org.springframework.boot","artifact":"spring-boot-starter-actuator","version":null},{"configuration":"implementation","kind":"module","group":"org.springdoc","artifact":"springdoc-openapi-starter-webmvc-ui","version":"3.0.3"},{"configuration":"runtimeOnly","kind":"module","group":"org.postgresql","artifact":"postgresql","version":null},{"configuration":"testImplementation","kind":"module","group":"org.mockito.kotlin","artifact":"mockito-kotlin","version":"5.4.0"},{"configuration":"testRuntimeOnly","kind":"module","group":"org.junit.platform","artifact":"junit-platform-launcher","version":null}]}
 FOXGARDEN_JSON_END
 "#;
 
@@ -111,7 +109,7 @@ fn parses_real_captured_multi_module_dump_output() {
 
     let backend = &projects[3];
     assert_eq!(backend.name, "backend");
-    assert_eq!(backend.project_dir, PathBuf::from("/home/romulo2/bridge/boost/backend"));
+    assert_eq!(backend.project_dir, PathBuf::from("/home/user/projects/demo/backend"));
     assert_eq!(backend.dependencies.len(), 7);
 
     assert_eq!(
@@ -172,7 +170,7 @@ fn no_markers_at_all_yields_an_empty_list_not_an_error() {
 /// being trusted for this fixture.
 const REAL_CLASSPATH_OUTPUT: &str = r#"
 FOXGARDEN_CP_JSON_BEGIN
-{"path":":","compile":["/home/romulo2/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/a4c6e1f6c196339473cd2e1b037f0eb97c62755b/commons-io-2.14.0.jar"],"runtime":["/home/romulo2/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/a4c6e1f6c196339473cd2e1b037f0eb97c62755b/commons-io-2.14.0.jar"]}
+{"path":":","compile":["/home/user/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/a4c6e1f6c196339473cd2e1b037f0eb97c62755b/commons-io-2.14.0.jar"],"runtime":["/home/user/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/a4c6e1f6c196339473cd2e1b037f0eb97c62755b/commons-io-2.14.0.jar"]}
 FOXGARDEN_CP_JSON_END
 "#;
 
@@ -184,7 +182,7 @@ fn parses_real_captured_classpath_output() {
     assert_eq!(
         classpaths[0].compile,
         vec![PathBuf::from(
-            "/home/romulo2/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/\
+            "/home/user/.gradle/caches/modules-2/files-2.1/commons-io/commons-io/2.14.0/\
                  a4c6e1f6c196339473cd2e1b037f0eb97c62755b/commons-io-2.14.0.jar"
         )]
     );
@@ -194,7 +192,7 @@ fn parses_real_captured_classpath_output() {
 #[test]
 fn a_project_with_no_jvm_configurations_at_all_is_simply_absent() {
     // Mirrors what CLASSPATH_INIT_SCRIPT itself does for a non-JVM
-    // module (the real `boost` project's own `frontend`, for instance):
+    // module (a `frontend` subproject with no JVM dependencies, for instance):
     // no block is printed for it at all, rather than an empty-lists one
     // — nothing for this parser to special-case, just confirming an
     // empty dump parses to an empty list rather than an error.

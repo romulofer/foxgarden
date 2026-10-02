@@ -177,6 +177,9 @@ impl std::fmt::Debug for GrammarSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguageServerContribution {
     pub id: String,
+    /// Human-readable name for error messages and the status bar — "Eclipse
+    /// JDT Language Server", not the stable `id` the registry keys on.
+    pub display_name: String,
     /// Which registered languages this server serves. More than one is
     /// legitimate — a single server handling several languages is common.
     pub language_ids: Vec<LanguageId>,
@@ -186,6 +189,54 @@ pub struct LanguageServerContribution {
     pub args: Vec<String>,
     /// LSP `initializationOptions`, as unparsed JSON. `None` sends none.
     pub initialization_options: Option<String>,
+}
+
+/// One JDK installation, for extensions that need to communicate which JVMs
+/// are available on this machine. Named `JdkRuntime` rather than the
+/// jdt.ls-specific vocabulary (`java.configuration.runtimes`) to stay
+/// language-server-neutral.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JdkRuntime {
+    /// Eclipse execution environment name that jdt.ls uses to identify this
+    /// release — e.g. `"JavaSE-21"`, `"JavaSE-1.8"`.
+    pub name: String,
+    pub path: PathBuf,
+    pub major: u32,
+}
+
+/// Runtime context the core passes to an extension when starting a language
+/// server — everything an extension might need to compute a final binary
+/// path, launch arguments, and `initializationOptions`.
+#[derive(Debug, Clone, Default)]
+pub struct ServerStartContext {
+    /// The binary path the user configured for this server — empty means
+    /// "no path configured yet", which the extension should treat as an
+    /// error rather than a fallback.
+    pub configured_binary: String,
+    /// A JVM home hint from settings (empty = auto-detect). Only meaningful
+    /// for servers that run on the JVM themselves.
+    pub java_home: String,
+    /// The Java release the current project declares, if any.
+    pub java_release: Option<u32>,
+    /// Every JDK found on this machine, for servers that need to tell the
+    /// language server which runtimes are available.
+    pub jdk_runtimes: Vec<JdkRuntime>,
+}
+
+/// How an extension says to actually start one of its servers, computed from
+/// the `ServerStartContext` the core supplies.
+#[derive(Debug, Clone)]
+pub struct ResolvedServerStart {
+    pub binary: PathBuf,
+    pub args: Vec<String>,
+    /// `initializationOptions`, as unparsed JSON. `None` sends none.
+    pub initialization_options: Option<String>,
+    /// Opaque string the core stores as a restart-detection key. If this
+    /// value differs from the previously stored one the running session is
+    /// retired and a new one started. An empty string means "never restart
+    /// because of environment changes" — correct for servers whose
+    /// configuration is entirely static.
+    pub restart_key: String,
 }
 
 /// What one extension contributes, gathered in one place.
@@ -209,9 +260,46 @@ pub struct Contributions {
 /// implementors backed by something loaded at runtime, which is why this
 /// is a trait rather than a struct: the core consumes extensions through
 /// it without knowing which kind it has.
-pub trait Extension {
+pub trait Extension: Send + Sync {
     fn manifest(&self) -> ExtensionManifest;
     fn contributions(&self) -> Contributions;
+
+    /// Every JDK this extension knows about on this machine — populated by
+    /// extensions that know how to scan for JDKs (the spring extension is
+    /// the canonical one). Called once per frame so the background scan
+    /// result lands without a session restart.
+    ///
+    /// The default returns an empty list, correct for extensions that do
+    /// not work with the JVM at all.
+    fn jdk_runtimes(&self) -> Vec<JdkRuntime> {
+        Vec::new()
+    }
+
+    /// How to start server `server_id`, given runtime `context`. Called
+    /// every frame so the extension can react to environment changes
+    /// (completed JDK scans, changed settings) by returning a different
+    /// `restart_key`.
+    ///
+    /// The default implementation builds a `ResolvedServerStart` straight
+    /// from the static `LanguageServerContribution` this extension declared
+    /// — correct for extensions whose server configuration is fully static.
+    /// Extensions with dynamic init options (jdt.ls runtimes, debug
+    /// bundles) override this.
+    ///
+    /// Returns `None` when this extension does not own `server_id`.
+    fn resolve_server_start(&self, server_id: &str, context: &ServerStartContext) -> Option<Result<ResolvedServerStart, String>> {
+        let server = self
+            .contributions()
+            .language_servers
+            .into_iter()
+            .find(|s| s.id == server_id)?;
+        Some(Ok(ResolvedServerStart {
+            binary: PathBuf::from(context.configured_binary.trim()),
+            args: server.args,
+            initialization_options: server.initialization_options,
+            restart_key: String::new(),
+        }))
+    }
 }
 
 /// Everything a registry knows about one registered language, gathered

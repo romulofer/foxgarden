@@ -30,7 +30,7 @@ fn an_idle_app_has_no_activities_at_all() {
 #[test]
 fn a_starting_language_server_is_named() {
     let work = BackgroundWork {
-        starting_servers: vec!["JDTLS"],
+        starting_servers: vec!["JDTLS".to_string()],
         ..BackgroundWork::default()
     };
     assert_eq!(texts(&work), vec!["Iniciando JDTLS…"]);
@@ -45,12 +45,12 @@ fn a_starting_language_server_is_named() {
 #[test]
 fn an_indexing_server_shows_its_latest_status_message() {
     let work = BackgroundWork {
-        indexing_servers: vec![("JDTLS", "Importing project br.ufsc.bridge.pec-backend".to_string())],
+        indexing_servers: vec![("JDTLS".to_string(), "Importing project com.example.app".to_string())],
         ..BackgroundWork::default()
     };
     assert_eq!(
         texts(&work),
-        vec!["Indexando JDTLS… Importing project br.ufsc.bridge.pec-backend"]
+        vec!["Indexando JDTLS… Importing project com.example.app"]
     );
 }
 
@@ -106,7 +106,7 @@ fn every_flag_produces_its_own_line() {
 #[test]
 fn a_starting_server_outranks_every_other_running_job() {
     let work = BackgroundWork {
-        starting_servers: vec!["Kotlin Language Server"],
+        starting_servers: vec!["Kotlin Language Server".to_string()],
         checking_versions: vec!["PMD"],
         detecting_java_home: true,
         running_git: true,
@@ -134,7 +134,7 @@ fn the_checkstyle_line_is_worded_exactly_as_the_tools_menu_words_it() {
 #[test]
 fn two_servers_starting_at_once_are_both_reported() {
     let work = BackgroundWork {
-        starting_servers: vec!["JDTLS", "Kotlin Language Server"],
+        starting_servers: vec!["JDTLS".to_string(), "Kotlin Language Server".to_string()],
         ..BackgroundWork::default()
     };
     assert_eq!(

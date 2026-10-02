@@ -101,8 +101,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import br.ufsc.bridge.pec.backend.app.config.security.UserPrincipal;
-import br.ufsc.bridge.pec.backend.module.Resources;
+import com.example.app.config.security.UserPrincipal;
+import com.example.app.module.Resources;
 
 class Foo {}
 ";

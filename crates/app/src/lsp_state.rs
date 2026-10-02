@@ -1,4 +1,5 @@
-//! App-owned lifecycle for the two supported language servers.
+//! App-owned lifecycle for language servers registered via the extension
+//! model (`fg_extension::Registry`).
 //!
 //! `lsp_client` intentionally knows only how to speak JSON-RPC to one child
 //! process. This module decides *whether* a process should exist for the
@@ -13,6 +14,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use fg_core::{Diagnostic, Document, Language, Severity};
+use fg_extension::{Registry, ServerStartContext};
+use serde_json::{self, json};
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics};
 use lsp_types::request::Request as _;
@@ -23,150 +26,36 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem, Uri, WorkspaceFolder,
 };
-use serde_json::json;
 
 use crate::lsp_client::{LspSession, ResponseError, Waker};
 use crate::lsp_manager;
 use crate::lsp_settings::LspSettings;
 
+fn slot_display_name(slot: &Slot) -> &str {
+    match slot {
+        Slot::Starting(running) => &running.config.display_name,
+        Slot::Ready { config, .. } => &config.display_name,
+        Slot::Failed { config } => &config.display_name,
+        Slot::Empty => "",
+    }
+}
+
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServerKind {
-    Java,
-    Kotlin,
-}
-
-impl ServerKind {
-    fn language(self) -> Language {
-        match self {
-            Self::Java => Language::Java,
-            Self::Kotlin => Language::Kotlin,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Java => "JDTLS",
-            Self::Kotlin => "Kotlin Language Server",
-        }
-    }
-
-    fn configured_binary(self, settings: &LspSettings) -> &str {
-        match self {
-            Self::Java => &settings.jdtls_binary,
-            Self::Kotlin => &settings.kotlin_language_server_binary,
-        }
-    }
-
-    /// `debug_bundles` is a plain parameter, not read off `config`, so this
-    /// stays a pure function of its own arguments — directly unit-testable
-    /// (`initialize_params_has_one_root_workspace_and_jdtls_capabilities`)
-    /// with no real filesystem I/O against this machine's actual cache
-    /// directory. `start_session` is the only real caller and is the one
-    /// place that resolves `lsp_manager::ensure_debug_plugin_jar` for real,
-    /// mirroring `ensure_kotlin_stdlib_override_for`'s own "prepared right
-    /// before spawning, not earlier" placement.
-    fn initialization_options(self, config: &SessionConfig, debug_bundles: &[String]) -> serde_json::Value {
-        match self {
-            // The local Zed Java reference establishes these as useful,
-            // conservative JDTLS capabilities. Classpath injection remains
-            // deliberately absent until a real JDTLS probe establishes its
-            // documented configuration contract (PLAN.md Track 20).
-            Self::Java => json!({
-                "extendedClientCapabilities": {
-                    "classFileContentsSupport": true,
-                    "resolveAdditionalTextEditsSupport": true,
-                },
-                "settings": { "java": { "configuration": { "runtimes": jdtls_runtimes(config) } } },
-                "bundles": debug_bundles,
-            }),
-            // kotlin-language-server has usable workspace settings, but no
-            // project-specific setting is safe to invent here.
-            Self::Kotlin => json!({}),
-        }
-    }
-}
-
-/// The `bundles` list a Java session's `initializationOptions` carries —
-/// jdt.ls loads each entry as an extra OSGi bundle on top of its own core
-/// (`PLAN.md` Track 23), which is how `com.microsoft.java.debug.plugin`
-/// (real DAP support, not a jdt.ls-native feature) gets into a running
-/// session at all. Only ever called for `ServerKind::Java` (`start_session`'s
-/// own match arm gates it, mirroring the Kotlin-only `ensure_kotlin_stdlib_
-/// override_for` call in the arm right next to it) — real filesystem I/O
-/// against this machine's actual cache directory, so it must never run from
-/// anywhere a fast/non-`#[ignore]`d unit test can reach, unlike the rest of
-/// `initialize_params`'s own construction. Best-effort, mirroring
-/// `ensure_kotlin_stdlib_override_for`'s own "never blocks/fails the
-/// caller" shape: a failure here (a read-only cache directory, say)
-/// degrades to "no debugger available this session" rather than breaking
-/// hover/diagnostics/completion, which have nothing to do with debugging.
-/// Track 23's own "Debug" action is where that degradation becomes a real,
-/// user-visible error — `vscode.java.startDebugSession` against a session
-/// with no debug bundle loaded fails with jdt.ls' own "unknown command"
-/// response, not a silent no-op.
-fn debug_plugin_bundles() -> Vec<String> {
-    match lsp_manager::ensure_debug_plugin_jar() {
-        Ok(path) => vec![path.display().to_string()],
-        Err(error) => {
-            eprintln!("java-debug plugin unavailable, Debug will not work this session: {error}");
-            Vec::new()
-        }
-    }
-}
-
-/// jdt.ls' own `java.configuration.runtimes` list: every JDK this machine
-/// has, named by its Eclipse execution environment, with the one matching
-/// the project's declared release marked `default`.
-///
-/// This is what makes older projects diagnosable at all. jdt.ls itself only
-/// runs on a JDK 21, and left to itself it compiles against *that* — so a
-/// Java 8 codebase gets no error on `var`, no error on a `record`, and no
-/// warning where its real compiler would reject the file outright. Handing
-/// it the JDK 8 install and telling it that's the project's environment
-/// makes its diagnostics match the build. A project whose declared release
-/// has no matching JDK installed still gets the full list (jdt.ls can then
-/// at least report the mismatch itself) but no `default` — claiming an
-/// environment that isn't there produces worse errors than saying nothing.
-fn jdtls_runtimes(config: &SessionConfig) -> Vec<serde_json::Value> {
-    config
-        .runtimes
-        .iter()
-        .map(|runtime| {
-            json!({
-                "name": runtime.name,
-                "path": runtime.path.display().to_string(),
-                "default": Some(runtime.major) == config.java_release,
-            })
-        })
-        .collect()
-}
 
 #[derive(Clone, PartialEq, Eq)]
 struct SessionConfig {
     root: PathBuf,
     binary: PathBuf,
-    /// `LspSettings::jdtls_java_home` at the time this config was built —
-    /// `""` for `ServerKind::Kotlin`, which has no such setting. Part of the
-    /// config (not read fresh at spawn time) so editing it in Settings >
-    /// Language Servers… changes this, `slot_matches` sees a different
-    /// `SessionConfig`, and the running session restarts under the newly
-    /// chosen JVM the same way changing the binary path already does.
-    java_home: String,
-    /// The Java release this project declares (`fg_core::detect_java_release`
-    /// — `pom.xml`/Gradle/`.java-version`), or `None` when it declares none;
-    /// always `None` for `ServerKind::Kotlin`. Part of the config for the
-    /// same reason `java_home` is: a server told at `initialize` time which
-    /// execution environment is the default never revisits it, so changing
-    /// a `pom.xml`'s compiler release has to restart the session.
-    java_release: Option<u32>,
-    /// Every JDK found on this machine (`lsp_manager::runtimes_snapshot`) —
-    /// what lets a project be linted at a release *older* than the JVM
-    /// jdt.ls itself runs on. Empty for `ServerKind::Kotlin`, and empty for
-    /// Java until the background scan lands, at which point this differs and
-    /// the session restarts with the real list.
-    runtimes: Vec<lsp_manager::JavaRuntime>,
+    args: Vec<String>,
+    /// Pre-built `initializationOptions` JSON string from the extension.
+    initialization_options: Option<String>,
+    /// Opaque key from the extension — any change triggers a session restart.
+    restart_key: String,
+    /// Human-readable name for error messages and the status bar.
+    display_name: String,
+    /// Language ids this server handles, for document filtering.
+    language_ids: Vec<String>,
 }
 
 struct RunningSession {
@@ -212,7 +101,7 @@ enum Slot {
         /// handshake (`initialize` request/response) finishes in a couple
         /// of seconds regardless of project size, well before jdt.ls's own
         /// project import does — on a real multi-module Maven reactor that
-        /// import alone measured 24s (`br.ufsc.bridge/pec`, ~40 modules).
+        /// import alone measured 24s (a real ~40-module Maven reactor).
         /// Once `initialize` answers, this `Slot` is already `Ready`
         /// (correctly — `didOpen`/requests are legal to send), so without
         /// this field the status bar's "Starting…" line simply vanishes for
@@ -225,15 +114,17 @@ enum Slot {
     },
 }
 
-/// At most one session per supported language for FoxGarden's one project.
+/// One session per registered server for FoxGarden's one project.
 /// Failed configurations stay failed until their project/binary setting
 /// changes, preventing an invalid executable from being spawned every frame.
 #[derive(Default)]
 pub struct LspState {
-    java: Slot,
-    kotlin: Slot,
+    /// Keyed by the server's registered id (e.g. `"jdtls"`).
+    servers: HashMap<String, Slot>,
     retiring: Vec<RetiringSession>,
     java_release: JavaReleaseCache,
+    /// Maps language id → server id, rebuilt each `sync` call.
+    lang_to_server: HashMap<String, String>,
 }
 
 impl LspState {
@@ -246,61 +137,73 @@ impl LspState {
         settings: &LspSettings,
         project_root: Option<&Path>,
         documents: &mut [Document],
+        registry: &Registry,
         wake: &Waker,
     ) -> Vec<String> {
         let mut errors = self.poll_retiring();
-        let java_needed = documents.iter().any(|doc| doc.language == Some(Language::Java));
-        let kotlin_needed = documents.iter().any(|doc| doc.language == Some(Language::Kotlin));
 
-        for kind in [ServerKind::Java, ServerKind::Kotlin] {
-            let needed = match kind {
-                ServerKind::Java => java_needed,
-                ServerKind::Kotlin => kotlin_needed,
+        // Rebuild the language → server_id cache used by request methods.
+        self.lang_to_server.clear();
+        for server in registry.language_servers() {
+            for lang_id in &server.language_ids {
+                self.lang_to_server.insert(lang_id.clone(), server.id.clone());
+            }
+        }
+
+        let open_language_ids: HashSet<&str> = documents
+            .iter()
+            .filter_map(|doc| doc.language)
+            .map(|lang| lang.id())
+            .collect();
+
+        // Convert lsp_manager runtimes to fg_extension::JdkRuntime for the context.
+        let jdk_runtimes: Vec<fg_extension::JdkRuntime> = lsp_manager::runtimes_snapshot()
+            .into_iter()
+            .map(|r| fg_extension::JdkRuntime { major: r.major, name: r.name, path: r.path })
+            .collect();
+
+        for server in registry.language_servers() {
+            let needed = server.language_ids.iter().any(|id| open_language_ids.contains(id.as_str()));
+            let java_release = project_root.and_then(|root| self.java_release.release_for(root));
+            let ctx = ServerStartContext {
+                configured_binary: settings.binary_for(&server.id).to_string(),
+                java_home: settings.java_home_for(&server.id).to_string(),
+                java_release,
+                jdk_runtimes: jdk_runtimes.clone(),
             };
-            let config = desired_config(kind, settings, project_root, needed, &mut self.java_release);
-            let slot = match kind {
-                ServerKind::Java => &mut self.java,
-                ServerKind::Kotlin => &mut self.kotlin,
-            };
-            reconcile_slot(slot, config, kind, &mut self.retiring, &mut errors, wake);
-            sync_documents(slot, kind, documents, &mut errors);
-            apply_server_messages(slot, kind, documents, &mut errors);
+            let config = desired_config(server, settings, project_root, needed, registry, ctx);
+            let slot = self.servers.entry(server.id.clone()).or_default();
+            reconcile_slot(slot, config, &server.id, server.display_name.as_str(), &mut self.retiring, &mut errors, wake);
+            sync_documents(slot, &server.language_ids, server.display_name.as_str(), documents, &mut errors);
+            apply_server_messages(slot, server.display_name.as_str(), documents, &mut errors);
         }
         errors
     }
 
     /// The display names of every server whose `initialize` handshake is
     /// still in flight, for the status bar to report.
-    ///
-    /// Starting a language server is this app's longest-running unprompted
-    /// job by far — jdt.ls indexes a real project for tens of seconds
-    /// before it answers anything — and until it lands, an open `.java`
-    /// file simply has no completions, no hovers, and no diagnostics, with
-    /// nothing anywhere to say why. This is what the bar says instead.
-    pub fn starting_servers(&self) -> Vec<&'static str> {
-        [(ServerKind::Java, &self.java), (ServerKind::Kotlin, &self.kotlin)]
-            .into_iter()
-            .filter(|(_, slot)| matches!(slot, Slot::Starting(_)))
-            .map(|(kind, _)| kind.name())
+    pub fn starting_servers(&self) -> Vec<String> {
+        self.servers
+            .values()
+            .filter_map(|slot| match slot {
+                Slot::Starting(running) => Some(running.config.display_name.clone()),
+                _ => None,
+            })
             .collect()
     }
 
     /// The display name plus latest `language/status` message of every
     /// `Ready` server still importing its project, for the status bar to
-    /// report — `starting_servers`'s own blind spot: this app's `initialize`
-    /// handshake (what `starting_servers` tracks) finishes in a couple of
-    /// seconds regardless of project size, well before jdt.ls's own project
-    /// import does (24s measured on a real ~40-module Maven reactor), and
-    /// that gap used to run with nothing on screen to say completions/
-    /// diagnostics were still about to be wrong or missing.
-    pub fn indexing_servers(&self) -> Vec<(&'static str, &str)> {
-        [(ServerKind::Java, &self.java), (ServerKind::Kotlin, &self.kotlin)]
-            .into_iter()
-            .filter_map(|(kind, slot)| match slot {
+    /// report.
+    pub fn indexing_servers(&self) -> Vec<(String, String)> {
+        self.servers
+            .values()
+            .filter_map(|slot| match slot {
                 Slot::Ready {
+                    config,
                     status_message: Some(message),
                     ..
-                } => Some((kind.name(), message.as_str())),
+                } => Some((config.display_name.clone(), message.clone())),
                 _ => None,
             })
             .collect()
@@ -323,7 +226,7 @@ impl LspState {
         fn slot_pending(slot: &Slot) -> bool {
             matches!(slot, Slot::Starting(_))
         }
-        slot_pending(&self.java) || slot_pending(&self.kotlin) || !self.retiring.is_empty()
+        self.servers.values().any(slot_pending) || !self.retiring.is_empty()
     }
 
     /// Sends a `textDocument/completion` request at `byte_offset` in
@@ -345,17 +248,12 @@ impl LspState {
         doc: &mut Document,
         byte_offset: usize,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -390,17 +288,12 @@ impl LspState {
         doc: &mut Document,
         byte_offset: usize,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -427,17 +320,12 @@ impl LspState {
         doc: &mut Document,
         byte_offset: usize,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -471,17 +359,12 @@ impl LspState {
         doc: &mut Document,
         byte_offset: usize,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -515,17 +398,12 @@ impl LspState {
         byte_offset: usize,
         new_name: &str,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -560,17 +438,12 @@ impl LspState {
         doc: &mut Document,
         diagnostic: &Diagnostic,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let kind = match doc.language {
-            Some(Language::Java) => ServerKind::Java,
-            Some(Language::Kotlin) => ServerKind::Kotlin,
-            _ => return None,
-        };
-        let slot = match kind {
-            ServerKind::Java => &mut self.java,
-            ServerKind::Kotlin => &mut self.kotlin,
-        };
+        let server_id = doc.language.and_then(|lang| self.lang_to_server.get(lang.id())).cloned()?;
+        let slot = self.servers.get_mut(&server_id)?;
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        let display_name = slot_display_name(slot).to_string();
         let mut errors = Vec::new();
-        if !sync_one_document(slot, kind, doc, &mut errors) {
+        if !sync_one_document(slot, lang_id, &display_name, doc, &mut errors) {
             return None;
         }
         let Slot::Ready { session, .. } = slot else { return None };
@@ -618,7 +491,8 @@ impl LspState {
         &mut self,
         uri: &str,
     ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let Slot::Ready { session, .. } = &mut self.java else {
+        let server_id = self.lang_to_server.get("java").cloned()?;
+        let Slot::Ready { session, .. } = self.servers.get_mut(&server_id)? else {
             return None;
         };
         session
@@ -640,7 +514,8 @@ impl LspState {
     /// here — jdt.ls' own "unknown command" error response covers that case
     /// with a real, inspectable message rather than a client-side guess.
     pub fn request_start_debug_session(&mut self) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let Slot::Ready { session, .. } = &mut self.java else {
+        let server_id = self.lang_to_server.get("java").cloned()?;
+        let Slot::Ready { session, .. } = self.servers.get_mut(&server_id)? else {
             return None;
         };
         let params = lsp_types::ExecuteCommandParams {
@@ -675,8 +550,9 @@ impl LspState {
 
 impl Drop for LspState {
     fn drop(&mut self) {
-        retire_slot(std::mem::take(&mut self.java), &mut self.retiring);
-        retire_slot(std::mem::take(&mut self.kotlin), &mut self.retiring);
+        for slot in self.servers.values_mut() {
+            retire_slot(std::mem::take(slot), &mut self.retiring);
+        }
         // App shutdown cannot rely on another UI frame to receive shutdown
         // responses. `LspSession::Drop` kills whatever remains as the
         // bounded fallback documented by the Phase 1 plan.
@@ -711,38 +587,43 @@ impl JavaReleaseCache {
 }
 
 fn desired_config(
-    kind: ServerKind,
+    server: &fg_extension::LanguageServerContribution,
     settings: &LspSettings,
     root: Option<&Path>,
     needed: bool,
-    java_release: &mut JavaReleaseCache,
+    registry: &Registry,
+    ctx: ServerStartContext,
 ) -> Option<SessionConfig> {
     if !settings.enabled || !needed {
         return None;
     }
-    let binary = kind.configured_binary(settings).trim();
+    if ctx.configured_binary.trim().is_empty() {
+        return None;
+    }
     let root = root?;
-    let (java_home, release, runtimes) = match kind {
-        ServerKind::Java => (
-            settings.jdtls_java_home.trim().to_string(),
-            java_release.release_for(root),
-            lsp_manager::runtimes_snapshot(),
-        ),
-        ServerKind::Kotlin => (String::new(), None, Vec::new()),
+    let resolved = match registry.resolve_server_start(&server.id, &ctx)? {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}: {e}", server.display_name);
+            return None;
+        }
     };
-    (!binary.is_empty()).then(|| SessionConfig {
+    Some(SessionConfig {
         root: root.to_path_buf(),
-        binary: PathBuf::from(binary),
-        java_home,
-        java_release: release,
-        runtimes,
+        binary: resolved.binary,
+        args: resolved.args,
+        initialization_options: resolved.initialization_options,
+        restart_key: resolved.restart_key,
+        display_name: server.display_name.clone(),
+        language_ids: server.language_ids.clone(),
     })
 }
 
 fn reconcile_slot(
     slot: &mut Slot,
     desired: Option<SessionConfig>,
-    kind: ServerKind,
+    server_id: &str,
+    display_name: &str,
     retiring: &mut Vec<RetiringSession>,
     errors: &mut Vec<String>,
     wake: &Waker,
@@ -751,11 +632,11 @@ fn reconcile_slot(
         retire_slot(std::mem::take(slot), retiring);
     }
     if !matches!(slot, Slot::Empty) {
-        poll_slot(slot, kind, errors);
+        poll_slot(slot, errors);
         return;
     }
     let Some(config) = desired else { return };
-    match start_session(kind, config.clone(), wake) {
+    match start_session(server_id, display_name, config.clone(), wake) {
         Ok(starting) => *slot = Slot::Starting(starting),
         Err(message) => {
             errors.push(message.clone());
@@ -767,21 +648,29 @@ fn reconcile_slot(
 fn slot_matches(slot: &Slot, desired: Option<&SessionConfig>) -> bool {
     match (slot, desired) {
         (Slot::Empty, None) => true,
-        (Slot::Starting(running), Some(config)) => running.config == *config,
-        (Slot::Ready { config: existing, .. }, Some(config)) => existing == config,
-        (Slot::Failed { config: existing, .. }, Some(config)) => existing == config,
+        (Slot::Starting(running), Some(config)) => configs_equivalent(&running.config, config),
+        (Slot::Ready { config: existing, .. }, Some(config)) => configs_equivalent(existing, config),
+        (Slot::Failed { config: existing, .. }, Some(config)) => configs_equivalent(existing, config),
         _ => false,
     }
 }
 
-fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
+fn configs_equivalent(a: &SessionConfig, b: &SessionConfig) -> bool {
+    a.root == b.root
+        && a.binary == b.binary
+        && a.args == b.args
+        && a.restart_key == b.restart_key
+        && a.initialization_options == b.initialization_options
+}
+
+fn poll_slot(slot: &mut Slot, errors: &mut Vec<String>) {
     match slot {
         Slot::Starting(running) => match running.initialize_rx.try_recv() {
             Ok(Ok(result)) => {
                 let sync_kind = advertised_sync_kind(&result);
                 if let Err(error) = running.session.initialized() {
                     let config = running.config.clone();
-                    let message = format!("failed to finish {} initialization: {error}", kind.name());
+                    let message = format!("failed to finish {} initialization: {error}", config.display_name);
                     errors.push(message.clone());
                     *slot = Slot::Failed { config };
                 } else {
@@ -800,13 +689,13 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
             }
             Ok(Err(error)) => {
                 let config = running.config.clone();
-                let message = format!("{} initialization failed: {}", kind.name(), error.message);
+                let message = format!("{} initialization failed: {}", config.display_name, error.message);
                 errors.push(message.clone());
                 *slot = Slot::Failed { config };
             }
             Err(TryRecvError::Disconnected) => {
                 let config = running.config.clone();
-                let message = format!("{} exited before initialization completed", kind.name());
+                let message = format!("{} exited before initialization completed", config.display_name);
                 errors.push(message.clone());
                 *slot = Slot::Failed { config };
             }
@@ -815,18 +704,14 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
         Slot::Ready { config, session, .. } => match session.try_wait() {
             Ok(Some(status)) => {
                 let config = config.clone();
-                let message = format!("{} exited unexpectedly ({status})", kind.name());
+                let message = format!("{} exited unexpectedly ({status})", config.display_name);
                 errors.push(message.clone());
                 *slot = Slot::Failed { config };
             }
-            Ok(None) => {
-                // Phase 2 owns notifications such as publishDiagnostics;
-                // drain none here so it can consume them with their document
-                // version/URI lifecycle rules rather than losing them.
-            }
+            Ok(None) => {}
             Err(error) => {
                 let config = config.clone();
-                let message = format!("failed to poll {}: {error}", kind.name());
+                let message = format!("failed to poll {}: {error}", config.display_name);
                 errors.push(message.clone());
                 *slot = Slot::Failed { config };
             }
@@ -840,7 +725,13 @@ fn poll_slot(slot: &mut Slot, kind: ServerKind, errors: &mut Vec<String>) {
 /// `incremental_change`, which derives the edit by diffing against the text
 /// the server was last actually sent rather than trusting the editor's edit
 /// paths to report themselves.
-fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document], errors: &mut Vec<String>) {
+fn sync_documents(
+    slot: &mut Slot,
+    language_ids: &[String],
+    display_name: &str,
+    documents: &mut [Document],
+    errors: &mut Vec<String>,
+) {
     let Slot::Ready {
         session,
         open_documents,
@@ -849,11 +740,11 @@ fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document],
     else {
         return;
     };
-    let current: HashSet<PathBuf> = documents
-        .iter()
-        .filter(|doc| doc.language == Some(kind.language()))
-        .map(|doc| doc.path.clone())
-        .collect();
+    let serves = |doc: &&Document| {
+        doc.language
+            .is_some_and(|lang| language_ids.iter().any(|id| id == lang.id()))
+    };
+    let current: HashSet<PathBuf> = documents.iter().filter(serves).map(|doc| doc.path.clone()).collect();
     let closed: Vec<PathBuf> = open_documents
         .keys()
         .filter(|path| !current.contains(*path))
@@ -868,24 +759,21 @@ fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document],
                 if let Err(error) =
                     session.send_notification(DidCloseTextDocument::METHOD, serde_json::to_value(params).unwrap())
                 {
-                    errors.push(format!(
-                        "failed to close {kind_name} LSP document: {error}",
-                        kind_name = kind.name()
-                    ));
+                    errors.push(format!("failed to close {display_name} LSP document: {error}"));
                     return;
                 }
             }
-            // Can't send a well-formed `didClose` without a valid URI (the
-            // file's own path no longer canonicalizes, e.g. deleted out
-            // from under an open tab) — surfaced rather than silently
-            // dropped, same as the open/change loop below does for the
-            // same failure.
             Err(error) => errors.push(error),
         }
         open_documents.remove(&path);
     }
-    for doc in documents.iter_mut().filter(|doc| doc.language == Some(kind.language())) {
-        if !sync_one_document(slot, kind, doc, errors) {
+    let language_ids = language_ids.to_vec();
+    for doc in documents.iter_mut().filter(|doc| {
+        doc.language
+            .is_some_and(|lang| language_ids.iter().any(|id| id == lang.id()))
+    }) {
+        let lang_id = doc.language.map(|l| l.id()).unwrap_or("");
+        if !sync_one_document(slot, lang_id, display_name, doc, errors) {
             return;
         }
     }
@@ -909,7 +797,7 @@ fn sync_documents(slot: &mut Slot, kind: ServerKind, documents: &mut [Document],
 /// same abort-the-rest-of-this-frame behavior as before this was
 /// extracted); `true` otherwise, including the common "nothing to send"
 /// case.
-fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, errors: &mut Vec<String>) -> bool {
+fn sync_one_document(slot: &mut Slot, lang_id: &str, display_name: &str, doc: &mut Document, errors: &mut Vec<String>) -> bool {
     let Slot::Ready {
         session,
         open_documents,
@@ -964,11 +852,7 @@ fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, erro
             )
         }
         None => {
-            let language_id = match kind {
-                ServerKind::Java => "java",
-                ServerKind::Kotlin => "kotlin",
-            }
-            .to_string();
+            let language_id = lang_id.to_string();
             let text = doc.buffer.to_string();
             let params = DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
@@ -998,7 +882,7 @@ fn sync_one_document(slot: &mut Slot, kind: ServerKind, doc: &mut Document, erro
             errors.push(format!(
                 "failed to synchronize {} with {}: {error}",
                 doc.path.display(),
-                kind.name()
+                display_name
             ));
             false
         }
@@ -1092,7 +976,7 @@ struct LanguageStatusParams {
     message: String,
 }
 
-fn apply_server_messages(slot: &mut Slot, kind: ServerKind, documents: &mut [Document], errors: &mut Vec<String>) {
+fn apply_server_messages(slot: &mut Slot, display_name: &str, documents: &mut [Document], errors: &mut Vec<String>) {
     let Slot::Ready {
         session,
         status_message,
@@ -1143,7 +1027,7 @@ fn apply_server_messages(slot: &mut Slot, kind: ServerKind, documents: &mut [Doc
                     // already reported the failure) — nothing left to show.
                     "ServiceReady" => *status_message = None,
                     "Error" => {
-                        errors.push(format!("{}: {}", kind.name(), status.message));
+                        errors.push(format!("{}: {}", display_name, status.message));
                         *status_message = Some(status.message);
                     }
                     _ => *status_message = Some(status.message),
@@ -1238,47 +1122,19 @@ fn retire_slot(slot: Slot, retiring: &mut Vec<RetiringSession>) {
 }
 
 fn start_session(
-    kind: ServerKind,
+    server_id: &str,
+    display_name: &str,
     config: SessionConfig,
     wake: &Waker,
 ) -> Result<RunningSession, String> {
-    // jdt.ls' own `bin/jdtls` launcher otherwise falls back to whatever
-    // `java` its own `JAVA_HOME`/`PATH` resolves to at spawn time, which may
-    // not meet its Java 21 runtime minimum at all — pinning it here via its
-    // own documented `--java-executable` flag makes every JDTLS session use
-    // the exact JVM `lsp_manager::resolve_jdtls_java` already verified,
-    // rather than risking a second, unverified resolution.
-    let mut debug_bundles = Vec::new();
-    let args = match kind {
-        ServerKind::Java => {
-            let java = lsp_manager::resolve_jdtls_java(&config.java_home)?;
-            // Best-effort (`debug_plugin_bundles`'s own doc comment) — a
-            // Java session still starts, with hover/diagnostics/completion
-            // fully working, even if this fails.
-            debug_bundles = debug_plugin_bundles();
-            vec!["--java-executable".to_string(), java.display().to_string()]
-        }
-        ServerKind::Kotlin => {
-            // See `lsp_manager::ensure_kotlin_stdlib_override_for`'s own doc
-            // comment (TECHNICAL_DEBT.md #17) — pins kotlin-language-server
-            // to a version-matched stdlib regardless of what's on `PATH`,
-            // best-effort so a failure here never blocks starting the
-            // session itself.
-            lsp_manager::ensure_kotlin_stdlib_override_for(&config.binary);
-            Vec::new()
-        }
-    };
-    let mut session = LspSession::spawn(&config.binary, &args, Some(&config.root), Arc::clone(wake)).map_err(|error| {
-        format!(
-            "failed to start {} at {}: {error}",
-            kind.name(),
-            config.binary.display()
-        )
+    let _ = server_id;
+    let mut session = LspSession::spawn(&config.binary, &config.args, Some(&config.root), Arc::clone(wake)).map_err(|error| {
+        format!("failed to start {} at {}: {error}", display_name, config.binary.display())
     })?;
-    let params = initialize_params(kind, &config, &debug_bundles)?;
+    let params = initialize_params(display_name, &config)?;
     let initialize_rx = session
         .initialize(params)
-        .map_err(|error| format!("failed to initialize {}: {error}", kind.name()))?;
+        .map_err(|error| format!("failed to initialize {display_name}: {error}"))?;
     Ok(RunningSession {
         config,
         session,
@@ -1286,13 +1142,14 @@ fn start_session(
     })
 }
 
-fn initialize_params(
-    kind: ServerKind,
-    config: &SessionConfig,
-    debug_bundles: &[String],
-) -> Result<InitializeParams, String> {
+fn initialize_params(display_name: &str, config: &SessionConfig) -> Result<InitializeParams, String> {
     let root = config.root.as_path();
     let uri = file_uri(root)?;
+    let init_opts = config
+        .initialization_options
+        .as_deref()
+        .map(|s| serde_json::from_str::<serde_json::Value>(s).unwrap_or(serde_json::Value::Null));
+    let _ = display_name;
     #[allow(deprecated)]
     let params = InitializeParams {
         process_id: Some(std::process::id()),
@@ -1305,7 +1162,7 @@ fn initialize_params(
                 .unwrap_or("FoxGarden project")
                 .to_string(),
         }]),
-        initialization_options: Some(kind.initialization_options(config, debug_bundles)),
+        initialization_options: init_opts,
         // `snippet_support: Some(false)` — Phase 5's own completion
         // candidates are inserted as plain text (`completion::
         // bare_label_and_has_params`), never a real tab-stop-navigable

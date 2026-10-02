@@ -75,7 +75,7 @@ fn parses_a_simple_single_module_project() {
     assert_eq!(project.dependencies[1].version.as_deref(), Some("3.43.0.0"));
 }
 
-/// A real multi-module parent `pom.xml` (`br.ufsc.bridge:pec`, trimmed
+/// A multi-module parent `pom.xml` (trimmed
 /// to a representative slice of its real `<properties>`/`<modules>`/
 /// `<dependencyManagement>` — the parent's own `<parent>` on
 /// `spring-boot-starter-parent`, comments between properties, and a
@@ -90,9 +90,9 @@ const PARENT_POM: &str = r#"<project xmlns="http://maven.apache.org/POM/4.0.0" x
         <version>2.7.18</version>
     </parent>
 
-    <name>UFSC – Sistema – PEC</name>
-    <groupId>br.ufsc.bridge</groupId>
-    <artifactId>pec</artifactId>
+    <name>Example – Core Application</name>
+    <groupId>com.example</groupId>
+    <artifactId>app</artifactId>
     <version>5.4.27-SNAPSHOT</version>
     <packaging>pom</packaging>
 
@@ -115,7 +115,7 @@ const PARENT_POM: &str = r#"<project xmlns="http://maven.apache.org/POM/4.0.0" x
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>br.ufsc.bridge.pec</groupId>
+                <groupId>com.example.app</groupId>
                 <artifactId>backend</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -132,8 +132,8 @@ const PARENT_POM: &str = r#"<project xmlns="http://maven.apache.org/POM/4.0.0" x
 #[test]
 fn parses_a_multi_module_parent_pom_without_mistaking_dependency_management_for_real_dependencies() {
     let project = parse_pom(PARENT_POM).unwrap();
-    assert_eq!(project.group_id.as_deref(), Some("br.ufsc.bridge"));
-    assert_eq!(project.artifact_id, "pec");
+    assert_eq!(project.group_id.as_deref(), Some("com.example"));
+    assert_eq!(project.artifact_id, "app");
     assert_eq!(project.packaging, "pom");
 
     assert_eq!(
@@ -172,7 +172,7 @@ fn parses_a_multi_module_parent_pom_without_mistaking_dependency_management_for_
     assert!(project.dependencies.is_empty());
 }
 
-/// A real child module's `pom.xml` (`br.ufsc.bridge.pec:backend`):
+/// A real child module's `pom.xml` (`com.example.app:backend`):
 /// inherits `groupId`/`version` from its `<parent>` rather than
 /// declaring its own, and most dependencies below carry no `<version>`
 /// at all — resolved transitively via the parent's own Spring Boot BOM,
@@ -180,13 +180,13 @@ fn parses_a_multi_module_parent_pom_without_mistaking_dependency_management_for_
 const BACKEND_POM: &str = r#"<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>br.ufsc.bridge</groupId>
-        <artifactId>pec</artifactId>
+        <groupId>com.example</groupId>
+        <artifactId>app</artifactId>
         <version>5.4.27-SNAPSHOT</version>
     </parent>
 
-    <name>UFSC – Backend – PEC</name>
-    <groupId>br.ufsc.bridge.pec</groupId>
+    <name>Example – Backend Module</name>
+    <groupId>com.example.app</groupId>
     <artifactId>backend</artifactId>
 
     <dependencies>
@@ -214,14 +214,14 @@ fn backend_pom_with_most_versions_inherited_from_the_parent_bom() {
     let project = parse_pom(BACKEND_POM).unwrap();
     // Its own <groupId> is present here (real pom.xml), but no <version>
     // of its own at all — inherited from <parent>.
-    assert_eq!(project.group_id.as_deref(), Some("br.ufsc.bridge.pec"));
+    assert_eq!(project.group_id.as_deref(), Some("com.example.app"));
     assert_eq!(project.artifact_id, "backend");
     assert_eq!(project.version, None);
     assert_eq!(
         project.parent,
         Some(MavenParent {
-            group_id: "br.ufsc.bridge".to_string(),
-            artifact_id: "pec".to_string(),
+            group_id: "com.example".to_string(),
+            artifact_id: "app".to_string(),
             version: "5.4.27-SNAPSHOT".to_string(),
         })
     );

@@ -111,8 +111,8 @@ impl Extension for FileTypesExtension {
 /// registration path that aborts the process on a bad contribution is not
 /// one that can ever be pointed at somebody else's extension.
 pub fn register_builtins(registry: &mut Registry) -> Result<(), RegisterError> {
-    registry.register(&SpringExtension)?;
-    registry.register(&FileTypesExtension)?;
+    registry.register(Box::new(SpringExtension))?;
+    registry.register(Box::new(FileTypesExtension))?;
     Ok(())
 }
 

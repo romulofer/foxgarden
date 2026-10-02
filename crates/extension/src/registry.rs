@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    Contributions, Extension, ExtensionManifest, GrammarContribution, LanguageId, LanguageIndex,
-    LanguageServerContribution, RegisteredLanguage, CURRENT_SCHEMA_VERSION,
+    Contributions, Extension, ExtensionManifest, GrammarContribution, JdkRuntime, LanguageId,
+    LanguageIndex, LanguageServerContribution, RegisteredLanguage, ResolvedServerStart,
+    ServerStartContext, CURRENT_SCHEMA_VERSION,
 };
 
 /// Why a registration was refused.
@@ -108,12 +109,30 @@ impl std::error::Error for RegisterError {}
 /// — where the only extension is one we ship and control — because the
 /// failure it prevents (an extension that is partly live) is exactly the
 /// kind that becomes untraceable once extensions come from elsewhere.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Registry {
-    extensions: Vec<ExtensionManifest>,
+    /// Stored in registration order so index lookups for `server_extension`
+    /// remain valid after further registrations.
+    extensions: Vec<Box<dyn Extension>>,
+    /// Manifests in the same order as `extensions`, kept separately so
+    /// `extensions()` can return a slice without borrowing from temporaries.
+    manifests: Vec<ExtensionManifest>,
+    /// Maps each registered server id to the index of the extension that
+    /// owns it in `extensions`, for fast dynamic dispatch.
+    server_extension: HashMap<String, usize>,
     languages: HashMap<LanguageId, RegisteredLanguage>,
     language_servers: Vec<LanguageServerContribution>,
     index: LanguageIndex,
+}
+
+impl std::fmt::Debug for Registry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registry")
+            .field("extensions", &self.manifests.iter().map(|m| &m.id).collect::<Vec<_>>())
+            .field("languages", &self.languages.keys().collect::<Vec<_>>())
+            .field("language_servers", &self.language_servers.iter().map(|s| &s.id).collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl Registry {
@@ -123,12 +142,17 @@ impl Registry {
 
     /// Validates and registers everything `extension` contributes.
     ///
-    /// On `Err` the registry is untouched.
-    pub fn register(&mut self, extension: &dyn Extension) -> Result<(), RegisterError> {
+    /// On `Err` the registry is untouched — the extension is dropped.
+    pub fn register(&mut self, extension: Box<dyn Extension>) -> Result<(), RegisterError> {
         let manifest = extension.manifest();
         let contributions = extension.contributions();
         self.validate(&manifest, &contributions)?;
+        let idx = self.extensions.len();
+        for server in &contributions.language_servers {
+            self.server_extension.insert(server.id.clone(), idx);
+        }
         self.commit(manifest, contributions);
+        self.extensions.push(extension);
         Ok(())
     }
 
@@ -146,7 +170,7 @@ impl Registry {
                 expected: CURRENT_SCHEMA_VERSION,
             });
         }
-        if self.extensions.iter().any(|e| e.id == manifest.id) {
+        if self.manifests.iter().any(|e| e.id == manifest.id) {
             return Err(RegisterError::DuplicateExtension {
                 extension_id: manifest.id.clone(),
             });
@@ -226,6 +250,7 @@ impl Registry {
     /// case this could otherwise have to handle.
     fn commit(&mut self, manifest: ExtensionManifest, contributions: Contributions) {
         let extension_id = manifest.id.clone();
+        self.manifests.push(manifest);
         for language in contributions.languages {
             self.index.insert(&language);
             let static_id: &'static str = Box::leak(language.id.clone().into_boxed_str());
@@ -245,11 +270,27 @@ impl Registry {
             }
         }
         self.language_servers.extend(contributions.language_servers);
-        self.extensions.push(manifest);
     }
 
+    /// The manifests of all registered extensions, in registration order.
     pub fn extensions(&self) -> &[ExtensionManifest] {
-        &self.extensions
+        &self.manifests
+    }
+
+    /// Every JDK found by any extension that scans for them.
+    pub fn jdk_runtimes(&self) -> Vec<JdkRuntime> {
+        self.extensions.iter().flat_map(|e| e.jdk_runtimes()).collect()
+    }
+
+    /// How to start `server_id`, as the owning extension sees fit. Returns
+    /// `None` when no registered extension owns that server id.
+    pub fn resolve_server_start(
+        &self,
+        server_id: &str,
+        context: &ServerStartContext,
+    ) -> Option<Result<ResolvedServerStart, String>> {
+        let idx = self.server_extension.get(server_id)?;
+        self.extensions[*idx].resolve_server_start(server_id, context)
     }
 
     pub fn language(&self, id: &str) -> Option<&RegisteredLanguage> {

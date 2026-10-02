@@ -20,28 +20,6 @@ fn install_sync_rejects_a_version_that_is_not_the_bundled_one() {
     assert!(error.contains("1.59.0"), "{error}");
 }
 
-#[test]
-fn write_debug_plugin_jar_writes_the_real_vendored_bytes() {
-    if !vendored_archives_present() {
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let path = write_debug_plugin_jar(dir.path()).unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), JAVA_DEBUG_PLUGIN_JAR);
-}
-
-#[test]
-fn write_debug_plugin_jar_is_idempotent_and_skips_a_redundant_write() {
-    if !vendored_archives_present() {
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let path = write_debug_plugin_jar(dir.path()).unwrap();
-    let written_at = std::fs::metadata(&path).unwrap().modified().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_debug_plugin_jar(dir.path()).unwrap();
-    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), written_at);
-}
 
 #[test]
 fn latest_tag_reads_a_release_response() {
@@ -102,7 +80,7 @@ fn vendored_archives_present() -> bool {
     let missing = ALL_SERVERS
         .iter()
         .any(|server| reject_lfs_pointer(server.bundled_archive()).is_err())
-        || reject_lfs_pointer(JAVA_DEBUG_PLUGIN_JAR).is_err();
+;
     if missing {
         eprintln!("skipping: vendor/lsp-servers/ holds Git LFS pointers, not the real archives — run `git lfs pull`");
     }
@@ -143,156 +121,6 @@ fn bundled_archives_extract_with_the_launcher_at_its_documented_path() {
     }
 }
 
-/// Regression for TECHNICAL_DEBT.md #17: the override must only pick up
-/// real stdlib jars, matching `kotlin-language-server`'s own
-/// `WithStdlibResolver.isStdlib` filter (excludes `-common`, and this
-/// codebase's own scan also excludes `-sources`) — anything else in
-/// `lib/` (the compiler jar, unrelated dependency jars) must not leak
-/// into the override.
-#[test]
-fn kotlin_stdlib_jars_finds_only_real_stdlib_jars_not_the_compiler_or_common() {
-    let dir = test_support::tempdir();
-    for name in [
-        "kotlin-stdlib-2.1.0.jar",
-        "kotlin-stdlib-jdk7-2.1.0.jar",
-        "kotlin-stdlib-jdk8-2.1.0.jar",
-        "kotlin-stdlib-common-2.1.0.jar",
-        "kotlin-stdlib-2.1.0-sources.jar",
-        "kotlin-compiler-2.1.0.jar",
-        "kotlin-reflect-2.1.0.jar",
-    ] {
-        std::fs::write(dir.path().join(name), b"").unwrap();
-    }
-
-    let jars = kotlin_stdlib_jars(dir.path()).expect("reads dir");
-    let names: Vec<&str> = jars.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
-    assert_eq!(
-        names,
-        vec![
-            "kotlin-stdlib-2.1.0.jar",
-            "kotlin-stdlib-jdk7-2.1.0.jar",
-            "kotlin-stdlib-jdk8-2.1.0.jar"
-        ]
-    );
-}
-
-#[test]
-fn kotlin_stdlib_jars_on_a_missing_dir_is_an_error_not_a_panic() {
-    let dir = test_support::tempdir();
-    assert!(kotlin_stdlib_jars(&dir.path().join("does-not-exist")).is_err());
-}
-
-#[test]
-fn kotlin_classpath_override_path_matches_the_servers_own_resolution() {
-    let root = Path::new("/home/dev/.config");
-    let expected = if cfg!(windows) { "classpath.bat" } else { "classpath" };
-    assert_eq!(
-        kotlin_classpath_override_path(root),
-        root.join("kotlin-language-server").join(expected)
-    );
-}
-
-/// The script's own separator must match `java.io.File.pathSeparator` on
-/// the platform `kotlin-language-server`'s `ShellClassPathResolver`
-/// actually splits on — `:` on Unix, `;` on Windows — or a correctly
-/// found jar still wouldn't parse back out on the server's side.
-#[test]
-fn kotlin_classpath_override_script_joins_with_the_platform_path_separator() {
-    let jars = vec![
-        PathBuf::from("/a/kotlin-stdlib.jar"),
-        PathBuf::from("/a/kotlin-stdlib-jdk8.jar"),
-    ];
-    let script = kotlin_classpath_override_script(&jars);
-    if cfg!(windows) {
-        assert!(
-            script.contains("/a/kotlin-stdlib.jar;/a/kotlin-stdlib-jdk8.jar"),
-            "{script}"
-        );
-    } else {
-        assert!(script.starts_with("#!/bin/sh\n"), "{script}");
-        assert!(
-            script.contains("/a/kotlin-stdlib.jar:/a/kotlin-stdlib-jdk8.jar"),
-            "{script}"
-        );
-    }
-}
-
-/// End-to-end against the real vendored `kotlin-language-server` archive
-/// (same as `bundled_archives_extract_with_the_launcher_at_its_documented_
-/// path`, but proving the stdlib-override side rather than the launcher
-/// path): extracts it into a temp "install dir", points a temp "config
-/// root" at it, and confirms the written script is both executable and
-/// lists the real jars that shipped in this build's own vendored
-/// archive — the actual regression scenario from #17, not a synthetic
-/// stand-in.
-#[test]
-fn ensure_kotlin_stdlib_override_writes_a_script_naming_the_real_vendored_stdlib_jars() {
-    if !vendored_archives_present() {
-        return;
-    }
-    let install_dir = test_support::tempdir();
-    extract_zip(Server::KotlinLanguageServer.bundled_archive(), install_dir.path()).expect("extracts");
-    let binary = install_dir.path().join(Server::KotlinLanguageServer.launcher_path());
-
-    let config_root = test_support::tempdir();
-    ensure_kotlin_stdlib_override(&binary, config_root.path()).expect("writes the override");
-
-    let script_path = kotlin_classpath_override_path(config_root.path());
-    let script = std::fs::read_to_string(&script_path).expect("script was written");
-    assert!(script.contains("kotlin-stdlib-2.1.0.jar"), "{script}");
-    assert!(!script.contains("kotlin-compiler"), "{script}");
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&script_path).unwrap().permissions().mode();
-        assert!(
-            mode & 0o111 != 0,
-            "the override script must be executable, got {mode:o}"
-        );
-    }
-}
-
-/// Regression: the whole point of the idempotency check is that a
-/// session-start call that finds nothing changed must not re-`chmod`/
-/// rewrite the file (relevant if a user's own tooling ever needs to
-/// tweak it) — verified here by writing once, mutating the file's
-/// content to something else, then calling again and confirming the
-/// *second* call still rewrites back to the expected content (proving
-/// the skip path is content-based, not "only ever runs once").
-#[test]
-fn ensure_kotlin_stdlib_override_is_idempotent_and_self_heals_if_the_script_changes() {
-    if !vendored_archives_present() {
-        return;
-    }
-    let install_dir = test_support::tempdir();
-    extract_zip(Server::KotlinLanguageServer.bundled_archive(), install_dir.path()).expect("extracts");
-    let binary = install_dir.path().join(Server::KotlinLanguageServer.launcher_path());
-    let config_root = test_support::tempdir();
-
-    ensure_kotlin_stdlib_override(&binary, config_root.path()).unwrap();
-    let script_path = kotlin_classpath_override_path(config_root.path());
-    let first = std::fs::read_to_string(&script_path).unwrap();
-
-    std::fs::write(&script_path, "echo tampered").unwrap();
-    ensure_kotlin_stdlib_override(&binary, config_root.path()).unwrap();
-    let second = std::fs::read_to_string(&script_path).unwrap();
-
-    assert_eq!(first, second);
-    assert_ne!(second, "echo tampered");
-}
-
-/// A `binary` that doesn't have the upstream `server/bin/…` shape (e.g.
-/// a typo'd manual override in Settings > Language Servers…) must fail
-/// the override cleanly rather than writing garbage or panicking on the
-/// `Path::parent` chain.
-#[test]
-fn ensure_kotlin_stdlib_override_on_a_binary_with_no_lib_dir_sibling_is_an_error() {
-    let config_root = test_support::tempdir();
-    let error = ensure_kotlin_stdlib_override(Path::new("/kotlin-language-server"), config_root.path())
-        .expect_err("no lib/ next to a root-level binary");
-    assert!(error.contains("lib"), "{error}");
-}
 
 /// A clone made without `git-lfs` leaves a text pointer where each
 /// vendored archive should be; the resulting install failure has to say

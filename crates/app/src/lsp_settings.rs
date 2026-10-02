@@ -59,6 +59,27 @@ impl LspSettings {
             ),
         }
     }
+
+    /// The user-configured binary path for a server looked up by its
+    /// registered id — the extension-model-facing counterpart of `fields_for`.
+    /// Returns `""` for unknown ids; the extension will reject an empty
+    /// binary rather than guessing.
+    pub fn binary_for(&self, server_id: &str) -> &str {
+        match server_id {
+            "jdtls" => &self.jdtls_binary,
+            "kotlin-language-server" => &self.kotlin_language_server_binary,
+            _ => "",
+        }
+    }
+
+    /// The `JAVA_HOME` override for servers that run on the JVM. Returns `""`
+    /// for servers that have no such setting (auto-detect applies).
+    pub fn java_home_for(&self, server_id: &str) -> &str {
+        match server_id {
+            "jdtls" => &self.jdtls_java_home,
+            _ => "",
+        }
+    }
 }
 
 #[cfg(test)]

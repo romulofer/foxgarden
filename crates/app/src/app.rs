@@ -1859,6 +1859,7 @@ impl eframe::App for FoxGardenApp {
             &self.lsp_settings,
             self.state.project.as_ref().map(|project| project.root.as_path()),
             &mut self.state.open_tabs,
+            &self.state.languages,
             wake,
         );
         if self.last_error.is_none() {

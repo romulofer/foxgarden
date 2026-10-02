@@ -787,7 +787,7 @@ fn show_rename_field(ui: &mut egui::Ui, name: &mut String, should_focus: bool, a
 /// own "Compact Middle Packages" convention. The source-root directory
 /// itself is never folded into a chain (see `collapse_chain`) — it's
 /// always its own row, exactly like the real screenshot this feature was
-/// built from: a "java" row, then "br.ufsc.bridge.pec.backend" as its own
+/// built from: a "java" row, then "com.example.app.backend" as its own
 /// single child row below it.
 const SOURCE_ROOT_DIR_NAMES: &[&str] = &["java", "kotlin"];
 
@@ -798,7 +798,7 @@ const SOURCE_ROOT_DIR_NAMES: &[&str] = &["java", "kotlin"];
 /// node) is what the row's actions — select/rename/delete/new-file/paste/
 /// expand — actually operate on/reveal; a rename, in particular,
 /// deliberately only ever renames `terminal` itself, not the whole
-/// collapsed chain (editing "br.ufsc.bridge.pec.backend" as one string and
+/// collapsed chain (editing "com.example.app.backend" as one string and
 /// restructuring several real directories from it is real IntelliJ
 /// behavior this doesn't attempt to replicate). `label` is purely the
 /// display text — just `start.name` if nothing collapsed.

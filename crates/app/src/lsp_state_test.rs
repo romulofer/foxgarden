@@ -1,4 +1,9 @@
 
+use fg_extension::{
+    Contributions, Extension, ExtensionManifest, LanguageContribution, LanguageServerContribution,
+    Registry, ResolvedServerStart, ServerStartContext, CURRENT_SCHEMA_VERSION,
+};
+
 use super::*;
 
 /// A `Waker` for tests that don't assert on wakeups — nothing here runs a
@@ -7,142 +12,159 @@ fn noop_waker() -> Waker {
     Arc::new(|| {})
 }
 
-/// A `SessionConfig` for tests that only care about the fields they set
-/// — the Java release/runtimes ones default to "nothing detected", which
-/// is exactly a machine with no JDK scan finished and a project that
-/// declares no release.
+/// A `SessionConfig` for tests that only care about which fields the test
+/// sets. `display_name` defaults to `"TestServer"` and `language_ids` to
+/// `["java"]` so the common cases need no boilerplate.
 fn test_config(root: &Path) -> SessionConfig {
     SessionConfig {
         root: root.to_path_buf(),
         binary: PathBuf::from("jdtls"),
-        java_home: String::new(),
-        java_release: None,
-        runtimes: Vec::new(),
+        args: Vec::new(),
+        initialization_options: None,
+        restart_key: String::new(),
+        display_name: "TestServer".to_string(),
+        language_ids: vec!["java".to_string()],
+    }
+}
+
+/// A minimal fake extension that always resolves its one server successfully,
+/// without requiring a real JDK on this machine — so opt-in and restart
+/// conditions are testable in isolation.
+struct AlwaysOkExtension {
+    server_id: String,
+    language_id: String,
+}
+
+impl Extension for AlwaysOkExtension {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: format!("{}-ext", self.server_id),
+            name: format!("{} extension", self.server_id),
+            version: "0.0.1".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            languages: vec![LanguageContribution {
+                id: self.language_id.clone(),
+                display_name: self.language_id.clone(),
+                file_extensions: vec![self.language_id.clone()],
+                filename_patterns: Vec::new(),
+            }],
+            language_servers: vec![LanguageServerContribution {
+                id: self.server_id.clone(),
+                display_name: format!("{} server", self.server_id),
+                language_ids: vec![self.language_id.clone()],
+                binary_name: String::new(),
+                args: Vec::new(),
+                initialization_options: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn resolve_server_start(&self, server_id: &str, ctx: &ServerStartContext) -> Option<Result<ResolvedServerStart, String>> {
+        if server_id != self.server_id {
+            return None;
+        }
+        Some(Ok(ResolvedServerStart {
+            binary: PathBuf::from(ctx.configured_binary.trim()),
+            args: Vec::new(),
+            initialization_options: ctx.configured_binary.trim().contains("debug")
+                .then(|| r#"{"bundles":["/cache/java-debug-plugin.jar"]}"#.to_string()),
+            restart_key: ctx.java_release.map(|r| r.to_string()).unwrap_or_default(),
+        }))
+    }
+}
+
+fn test_registry(server_id: &str, language_id: &str) -> Registry {
+    let mut r = Registry::new();
+    r.register(Box::new(AlwaysOkExtension {
+        server_id: server_id.to_string(),
+        language_id: language_id.to_string(),
+    }))
+    .unwrap();
+    r
+}
+
+fn test_server(server_id: &str, language_id: &str) -> LanguageServerContribution {
+    LanguageServerContribution {
+        id: server_id.to_string(),
+        display_name: server_id.to_uppercase(),
+        language_ids: vec![language_id.to_string()],
+        binary_name: String::new(),
+        args: Vec::new(),
+        initialization_options: None,
     }
 }
 
 #[test]
 fn desired_config_requires_opt_in_root_language_and_binary() {
+    let registry = test_registry("jdtls", "java");
     let settings = LspSettings {
         enabled: true,
         jdtls_binary: "jdtls".to_string(),
         ..Default::default()
     };
     let root = Path::new(".");
-    let cache = &mut JavaReleaseCache::default();
-    assert!(desired_config(ServerKind::Java, &settings, Some(root), true, cache).is_some());
-    assert!(desired_config(ServerKind::Java, &settings, Some(root), false, cache).is_none());
-    assert!(desired_config(ServerKind::Kotlin, &settings, Some(root), true, cache).is_none());
+    let ctx = ServerStartContext {
+        configured_binary: "jdtls".to_string(),
+        ..Default::default()
+    };
+
+    let server = test_server("jdtls", "java");
+    assert!(desired_config(&server, &settings, Some(root), true, &registry, ctx.clone()).is_some());
+    assert!(desired_config(&server, &settings, Some(root), false, &registry, ctx.clone()).is_none());
+
+    // No root → None.
+    assert!(desired_config(&server, &settings, None, true, &registry, ctx.clone()).is_none());
+
+    // Empty binary → None.
+    let ctx_empty = ServerStartContext {
+        configured_binary: String::new(),
+        ..Default::default()
+    };
+    assert!(desired_config(&server, &settings, Some(root), true, &registry, ctx_empty).is_none());
 }
 
-/// The project's declared release travels in the config, so a session
-/// started before a `pom.xml` said "Java 8" is replaced by one that
-/// knows — `slot_matches` compares whole configs.
+/// The project's declared release travels through `restart_key`, so a
+/// session started before a `pom.xml` said "Java 8" is replaced by one that
+/// knows — `configs_equivalent` compares `restart_key`.
 #[test]
-fn desired_config_carries_the_projects_declared_java_release() {
+fn desired_config_carries_the_projects_declared_java_release_in_restart_key() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("pom.xml"),
         "<project><properties><maven.compiler.source>1.8</maven.compiler.source></properties></project>",
     )
     .unwrap();
+    let registry = test_registry("jdtls", "java");
     let settings = LspSettings {
         enabled: true,
         jdtls_binary: "jdtls".to_string(),
         ..Default::default()
     };
 
-    let config = desired_config(
-        ServerKind::Java,
-        &settings,
-        Some(dir.path()),
-        true,
-        &mut JavaReleaseCache::default(),
-    )
-    .expect("a Java session is wanted");
-
-    assert_eq!(config.java_release, Some(8));
-}
-
-/// jdt.ls is handed every installed JDK, with the project's own release
-/// marked default — that pairing is what makes an old project's
-/// diagnostics match its real compiler instead of jdt.ls' own JVM.
-#[test]
-fn jdtls_runtimes_name_every_jdk_and_default_to_the_projects_release() {
-    let config = SessionConfig {
-        java_release: Some(8),
-        runtimes: vec![
-            lsp_manager::JavaRuntime {
-                major: 21,
-                name: "JavaSE-21".to_string(),
-                path: PathBuf::from("/jdk21"),
-            },
-            lsp_manager::JavaRuntime {
-                major: 8,
-                name: "JavaSE-1.8".to_string(),
-                path: PathBuf::from("/jdk8"),
-            },
-        ],
-        ..test_config(Path::new("."))
+    let mut cache = JavaReleaseCache::default();
+    let java_release = cache.release_for(dir.path());
+    let ctx = ServerStartContext {
+        configured_binary: "jdtls".to_string(),
+        java_release,
+        ..Default::default()
     };
+    let server = test_server("jdtls", "java");
+    let config = desired_config(&server, &settings, Some(dir.path()), true, &registry, ctx)
+        .expect("a Java session is wanted");
 
-    let runtimes = jdtls_runtimes(&config);
-
-    assert_eq!(runtimes.len(), 2);
-    assert_eq!(runtimes[0]["name"], "JavaSE-21");
-    assert_eq!(runtimes[0]["default"], false);
-    assert_eq!(runtimes[1]["name"], "JavaSE-1.8");
-    assert_eq!(runtimes[1]["path"], "/jdk8");
-    assert_eq!(runtimes[1]["default"], true);
-}
-
-/// A project whose declared release isn't installed anywhere must not
-/// have some *other* JDK declared its default — jdt.ls reporting the
-/// missing environment itself beats silently linting at the wrong one.
-#[test]
-fn no_runtime_is_default_when_the_projects_release_is_not_installed() {
-    let config = SessionConfig {
-        java_release: Some(8),
-        runtimes: vec![lsp_manager::JavaRuntime {
-            major: 21,
-            name: "JavaSE-21".to_string(),
-            path: PathBuf::from("/jdk21"),
-        }],
-        ..test_config(Path::new("."))
-    };
-
-    let runtimes = jdtls_runtimes(&config);
-
-    assert_eq!(runtimes.len(), 1);
-    assert_eq!(runtimes[0]["default"], false);
+    assert_eq!(config.restart_key, "8");
 }
 
 #[test]
-fn initialize_params_has_one_root_workspace_and_jdtls_capabilities() {
-    let params = initialize_params(ServerKind::Java, &test_config(Path::new(".")), &[]).unwrap();
+fn initialize_params_has_one_root_workspace() {
+    let params = initialize_params("TestServer", &test_config(Path::new("."))).unwrap();
     assert_eq!(params.workspace_folders.as_ref().unwrap().len(), 1);
-    assert_eq!(
-        params.initialization_options.unwrap()["extendedClientCapabilities"]["classFileContentsSupport"],
-        true
-    );
-}
-
-/// `debug_bundles` is a plain argument specifically so this stays a
-/// pure, no-I/O test of the plumbing (`PLAN.md` Track 23 Phase 1) rather
-/// than one that has to resolve `lsp_manager::ensure_debug_plugin_jar`
-/// for real against this machine's actual cache directory.
-#[test]
-fn initialize_params_carries_the_debug_bundle_path_through() {
-    let params = initialize_params(
-        ServerKind::Java,
-        &test_config(Path::new(".")),
-        &["/cache/java-debug-plugin.jar".to_string()],
-    )
-    .unwrap();
-    assert_eq!(
-        params.initialization_options.unwrap()["bundles"],
-        serde_json::json!(["/cache/java-debug-plugin.jar"])
-    );
 }
 
 /// A server picks its hover content format from what the client says
@@ -152,7 +174,7 @@ fn initialize_params_carries_the_debug_bundle_path_through() {
 /// renderer). PlainText must therefore be *first*, not merely present.
 #[test]
 fn initialize_params_prefers_plain_text_hover_content() {
-    let params = initialize_params(ServerKind::Java, &test_config(Path::new(".")), &[]).unwrap();
+    let params = initialize_params("TestServer", &test_config(Path::new("."))).unwrap();
     let hover = params.capabilities.text_document.unwrap().hover.unwrap();
     assert_eq!(
         hover.content_format,
@@ -440,17 +462,20 @@ sys.stdin.buffer.read()
     let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {}");
     let root = doc.path.parent().unwrap().to_path_buf();
     let mut state = LspState {
-        java: Slot::Ready {
-            config: SessionConfig {
-                binary: PathBuf::from("python3"),
-                ..test_config(&root)
+        servers: HashMap::from([(
+            "jdtls".to_string(),
+            Slot::Ready {
+                config: SessionConfig {
+                    binary: PathBuf::from("python3"),
+                    ..test_config(&root)
+                },
+                session,
+                open_documents: HashMap::new(),
+                sync_kind: lsp_types::TextDocumentSyncKind::INCREMENTAL,
+                status_message: None,
             },
-            session,
-            open_documents: HashMap::new(),
-            sync_kind: lsp_types::TextDocumentSyncKind::INCREMENTAL,
-            status_message: None,
-        },
-        kotlin: Slot::Empty,
+        )]),
+        lang_to_server: HashMap::from([("java".to_string(), "jdtls".to_string())]),
         retiring: Vec::new(),
         java_release: JavaReleaseCache::default(),
     };
@@ -497,20 +522,20 @@ fn ready_slot_around(session: LspSession) -> Slot {
 #[test]
 fn a_language_status_notification_becomes_the_slots_status_message() {
     let session = fake_server_sending(
-        r#"{"jsonrpc":"2.0","method":"language/status","params":{"type":"Starting","message":"Importing project br.ufsc.bridge.pec-backend"}}"#,
+        r#"{"jsonrpc":"2.0","method":"language/status","params":{"type":"Starting","message":"Importing project com.example.app"}}"#,
     );
     let mut slot = ready_slot_around(session);
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
         let Slot::Ready { status_message, .. } = &slot else {
             unreachable!()
         };
         if status_message.is_some() {
             assert_eq!(
                 status_message.as_deref(),
-                Some("Importing project br.ufsc.bridge.pec-backend")
+                Some("Importing project com.example.app")
             );
             assert!(
                 errors.is_empty(),
@@ -533,11 +558,11 @@ fn a_service_ready_status_clears_the_status_message() {
     let Slot::Ready { status_message, .. } = &mut slot else {
         unreachable!()
     };
-    *status_message = Some("Importing project br.ufsc.bridge.pec-backend".to_string());
+    *status_message = Some("Importing project com.example.app".to_string());
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
         let Slot::Ready { status_message, .. } = &slot else {
             unreachable!()
         };
@@ -564,7 +589,7 @@ fn an_error_status_is_reported_through_errors_too() {
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, ServerKind::Java, &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
         if !errors.is_empty() {
             assert_eq!(errors, vec!["JDTLS: Failed to import projects".to_string()]);
             let Slot::Ready { status_message, .. } = &slot else {
@@ -603,10 +628,10 @@ fn real_server_binary(env_var: &str, cache_relative: &str) -> PathBuf {
 /// frames. Any lifecycle error is a hard failure: a real-server test
 /// that quietly proceeds with no session would "pass" by asserting
 /// nothing.
-fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
+fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document, registry: &fg_extension::Registry) {
     let deadline = Instant::now() + Duration::from_secs(240);
-    while !matches!(state.kotlin, Slot::Ready { .. }) {
-        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), &noop_waker());
+    while !state.servers.get("kotlin-language-server").is_some_and(|s| matches!(s, Slot::Ready { .. })) {
+        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), registry, &noop_waker());
         assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
         assert!(
             Instant::now() < deadline,
@@ -618,10 +643,10 @@ fn sync_until_kotlin_ready(state: &mut LspState, settings: &LspSettings, root: &
 
 /// `sync_until_kotlin_ready`'s Java counterpart — same loop, same
 /// hard-failure stance, just the other slot.
-fn sync_until_java_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document) {
+fn sync_until_java_ready(state: &mut LspState, settings: &LspSettings, root: &Path, doc: &mut Document, registry: &fg_extension::Registry) {
     let deadline = Instant::now() + Duration::from_secs(240);
-    while !matches!(state.java, Slot::Ready { .. }) {
-        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), &noop_waker());
+    while !state.servers.get("jdtls").is_some_and(|s| matches!(s, Slot::Ready { .. })) {
+        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), registry, &noop_waker());
         assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
         assert!(Instant::now() < deadline, "jdtls never finished its handshake");
         std::thread::sleep(Duration::from_millis(100));
@@ -669,7 +694,7 @@ fn java_hover_against_a_real_server_documents_a_project_owned_symbol() {
     };
 
     let mut state = LspState::default();
-    sync_until_java_ready(&mut state, &settings, dir.path(), &mut doc);
+    sync_until_java_ready(&mut state, &settings, dir.path(), &mut doc, test_support::languages());
 
     // The `answer()` *call site*, not its declaration — the ordinary
     // "what is this thing I'm reading" hover, and the one that has to
@@ -772,7 +797,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
         ..Default::default()
     };
     let mut state = LspState::default();
-    sync_until_java_ready(&mut state, &settings, root, &mut doc);
+    sync_until_java_ready(&mut state, &settings, root, &mut doc, test_support::languages());
 
     let run_config = fg_core::RunConfig {
         name: "debug fixture".to_string(),
@@ -810,7 +835,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             debug.poll();
-            let _ = state.sync(&settings, Some(root), std::slice::from_mut(doc), &noop_waker());
+            let _ = state.sync(&settings, Some(root), std::slice::from_mut(doc), test_support::languages(), &noop_waker());
             if let Some((file, line)) = debug.paused_location() {
                 break (file.to_path_buf(), line);
             }
@@ -863,7 +888,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     let variables_deadline = Instant::now() + Duration::from_secs(30);
     loop {
         debug.poll();
-        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), &noop_waker());
+        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), test_support::languages(), &noop_waker());
         if !debug.variables().is_empty() {
             break;
         }
@@ -895,7 +920,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         debug.poll();
-        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), &noop_waker());
+        let _ = state.sync(&settings, Some(root), std::slice::from_mut(&mut doc), test_support::languages(), &noop_waker());
         match debug.status() {
             crate::debug_state::DebugStatus::Idle => break,
             crate::debug_state::DebugStatus::Failed(message) => panic!("debug session failed: {message}"),
@@ -946,7 +971,7 @@ fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
     // *before* the dot is typed — the GUI's own ordering, and the one
     // that makes the `didChange` below a real mid-session edit rather
     // than part of the document's very first `didOpen`.
-    sync_until_kotlin_ready(&mut state, &settings, dir.path(), &mut doc);
+    sync_until_kotlin_ready(&mut state, &settings, dir.path(), &mut doc, test_support::languages());
 
     let typed = before_dot.replace("    list\n", "    list.\n");
     // Exactly what `widgets::editor::widget::apply_edit` does for a
