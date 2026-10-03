@@ -89,6 +89,7 @@ pub fn editor_state() -> fg_core::EditorState {
 pub fn install_grammars() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
+        syntax::install_run_targets(languages());
         let errors = syntax::install_grammars(languages());
         assert!(errors.is_empty(), "this build's own grammars must install: {errors:?}");
     });

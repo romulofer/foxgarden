@@ -9,10 +9,14 @@ path = "src/lib.rs"
 
 # Deliberately minimal. This crate defines what an extension may contribute
 # and nothing about any particular language, so it must not depend on
-# `fg-core` (which still owns Maven/Gradle/JDK concepts) or on `syntax`.
-# `tree-sitter-language` is a single-type crate (`LanguageFn`) and is the
-# only honest way to describe a grammar that is compiled into the binary.
+# `fg-core` or on `syntax`. The two tree-sitter crates are the exception,
+# and they earn it: `tree-sitter-language` is the single type that describes
+# a compiled-in grammar, and `tree-sitter` itself is how an extension reads
+# the parse tree the editor already built for a file — the alternative is
+# handing extensions raw source and paying for a second parse of every file
+# on the keystroke path.
 [dependencies]
+tree-sitter = "0.26.11"
 tree-sitter-language = "0.1"
 
 [dev-dependencies]

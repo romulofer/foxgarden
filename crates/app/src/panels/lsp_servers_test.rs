@@ -5,7 +5,7 @@ use super::*;
 fn open_settings_opens_the_dialog() {
     let mut state = LspServersState::default();
     assert!(!state.settings_open);
-    state.open_settings(&LspSettings::default(), None);
+    state.open_settings(&LspSettings::default(), None, test_support::languages());
     assert!(state.settings_open);
 }
 
@@ -15,7 +15,7 @@ fn open_settings_opens_the_dialog() {
 #[test]
 fn opening_scans_for_a_jdk_only_when_java_home_is_blank() {
     let mut state = LspServersState::default();
-    state.open_settings(&LspSettings::default(), None);
+    state.open_settings(&LspSettings::default(), None, test_support::languages());
     assert!(state.manager.detecting_java_home());
 
     let mut state = LspServersState::default();
@@ -25,6 +25,7 @@ fn opening_scans_for_a_jdk_only_when_java_home_is_blank() {
             ..Default::default()
         },
         None,
+        test_support::languages(),
     );
     assert!(!state.manager.detecting_java_home());
 }

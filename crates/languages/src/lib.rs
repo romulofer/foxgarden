@@ -16,7 +16,7 @@
 
 use fg_extension::{
     Contributions, Extension, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
-    LanguageContribution, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
+    LanguageContribution, NodeKinds, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
 };
 
 pub use foxgarden_spring::SpringExtension;
@@ -30,11 +30,15 @@ fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContri
     }
 }
 
+/// These formats parse and highlight but declare no node-kind vocabulary:
+/// sticky scroll and folding are no-ops for them, exactly as they were when
+/// the core hardcoded entries for Java alone.
 fn grammar(language_id: &str, source: GrammarSource, highlight_query: &str) -> GrammarContribution {
     GrammarContribution {
         language_id: language_id.to_string(),
         source,
         highlight_query: Some(highlight_query.to_string()),
+        node_kinds: NodeKinds::default(),
     }
 }
 

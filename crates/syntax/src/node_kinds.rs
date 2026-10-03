@@ -1,82 +1,34 @@
 //! Per-language tree-sitter node-kind vocabularies shared by the
-//! sticky-scroll (`sticky.rs`) and code-folding (`folding.rs`) analyses, kept
-//! in one place so the two can't drift on what counts as a "scope" or a
-//! "foldable region" for a given grammar. Kotlin's kinds are deliberately
-//! absent for now: `tree-sitter-kotlin-ng`'s node names must be re-derived
-//! from its own `node-types.json` rather than assumed from the Java grammar
-//! (see `TECHNICAL_DEBT.md` #3), so Kotlin support is a separate follow-up in
-//! both features rather than a guessed-at entry here.
+//! sticky-scroll (`sticky.rs`) and code-folding (`folding.rs`) analyses.
+//!
+//! The vocabularies themselves are not here: a node kind is one grammar's
+//! own name for one of its node types, so it travels with the grammar as
+//! part of its contribution (`fg_extension::NodeKinds`) and is read back out
+//! of the installed-grammar store. What stays here is the one place both
+//! analyses ask through, so they cannot drift on what counts as a "scope" or
+//! a "foldable region" for a given language.
+//!
+//! An empty answer is normal, not a gap to fill with a guess: a language
+//! whose grammar declares no scopes simply has no sticky scroll, exactly as
+//! it did when these lists were hardcoded and most languages had no entry.
 
 use fg_core::Language;
 
+use crate::grammars;
+
 /// Declaration nodes whose header line sticky scroll pins to the top of the
-/// viewport while their body scrolls underneath. Declarations only — not
-/// control-flow blocks (`if`/`for`/`while`) — matching VSCode's default
-/// sticky scope; control flow can become an opt-in later without changing
-/// this contract.
+/// viewport while their body scrolls underneath.
 pub(crate) fn scope_kinds(language: Language) -> &'static [&'static str] {
-    match language {
-        Language::Java => &[
-            "class_declaration",
-            "interface_declaration",
-            "enum_declaration",
-            "record_declaration",
-            "annotation_type_declaration",
-            "method_declaration",
-            "constructor_declaration",
-        ],
-        // Kotlin/Properties/Yaml/Xml/Dockerfile have no scope vocabulary yet
-        // — the feature is a no-op for them, same as every other
-        // Java-first analysis in this crate.
-        _ => &[],
-    }
+    grammars::node_kinds(language).map_or(&[], |kinds| &kinds.scopes)
 }
 
-/// Brace/comment-delimited nodes whose body collapses when folded. These are
-/// the *bodies* (and block comments), not the declarations `scope_kinds`
-/// returns: folding hides the content between a `{` and its `}` (or a `/* */`
-/// comment's interior), leaving the opening line — where the fold marker
-/// sits — visible. A class body and the method bodies inside it are both
-/// foldable, which is exactly the nested-fold behavior wanted.
+/// Brace/comment-delimited nodes whose body collapses when folded.
 pub(crate) fn foldable_kinds(language: Language) -> &'static [&'static str] {
-    match language {
-        Language::Java => &[
-            "class_body",
-            "interface_body",
-            "enum_body",
-            "annotation_type_body",
-            "constructor_body",
-            "block", // method and control-flow bodies
-            "block_comment",
-        ],
-        // Verified against `tree-sitter-kotlin-ng` 1.1.0's real parse output
-        // (not assumed from the Java grammar, per `TECHNICAL_DEBT.md` #3):
-        // `class_body` covers class/interface/object bodies alike (Kotlin's
-        // grammar has no separate `interface_body`/`enum_body` node kinds —
-        // `interface`/`object` declarations reuse `class_declaration`/
-        // `class_body`, distinguished only by keyword), `enum_class_body` is
-        // the one exception with its own kind, `block` is method *and*
-        // control-flow bodies alike (a `function_body` node wraps a `block`
-        // at the exact same span, so folding `block` alone already covers
-        // both without a second, redundant entry), and `block_comment` is
-        // shared with regular comments and KDoc (`/** */`) alike.
-        Language::Kotlin => &["class_body", "enum_class_body", "block", "block_comment"],
-        _ => &[],
-    }
+    grammars::node_kinds(language).map_or(&[], |kinds| &kinds.foldable)
 }
 
-/// The node kind a single `import` statement is — unlike `scope_kinds`/
-/// `foldable_kinds` above, verified fresh for *both* languages (not just
-/// Java) against each grammar's real parse output, since import-block
-/// folding (`folding.rs`'s `collect_import_blocks`) is a fresh addition
-/// rather than an extension of Java-only work already in place:
-/// `import_declaration` for Java, `import` for Kotlin — both always direct
-/// children of the file's root node (`program`/`source_file`), never
-/// nested. `None` for a language with no import-block folding.
+/// The node kind a single `import` statement is, for folding a whole import
+/// block as a unit. `None` disables import-block folding for the language.
 pub(crate) fn import_kind(language: Language) -> Option<&'static str> {
-    match language {
-        Language::Java => Some("import_declaration"),
-        Language::Kotlin => Some("import"),
-        _ => None,
-    }
+    grammars::node_kinds(language).and_then(|kinds| kinds.import)
 }

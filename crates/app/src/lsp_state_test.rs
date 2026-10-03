@@ -148,7 +148,9 @@ fn desired_config_carries_the_projects_declared_java_release_in_restart_key() {
     };
 
     let mut cache = JavaReleaseCache::default();
-    let java_release = cache.release_for(dir.path());
+    // The real registry, not this test's fake one: reading a release out of
+    // a `pom.xml` is the spring extension's own job now.
+    let java_release = cache.release_for(dir.path(), test_support::languages());
     let ctx = ServerStartContext {
         configured_binary: "jdtls".to_string(),
         java_release,

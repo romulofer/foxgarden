@@ -1,8 +1,8 @@
 
 use super::*;
 
-fn prop(name: &str) -> SpringConfigProperty {
-    SpringConfigProperty {
+fn prop(name: &str) -> ConfigProperty {
+    ConfigProperty {
         name: name.to_string(),
         type_name: None,
         description: None,
@@ -10,8 +10,8 @@ fn prop(name: &str) -> SpringConfigProperty {
     }
 }
 
-fn prop_typed(name: &str, type_name: &str, default_value: &str) -> SpringConfigProperty {
-    SpringConfigProperty {
+fn prop_typed(name: &str, type_name: &str, default_value: &str) -> ConfigProperty {
+    ConfigProperty {
         name: name.to_string(),
         type_name: Some(type_name.to_string()),
         description: None,

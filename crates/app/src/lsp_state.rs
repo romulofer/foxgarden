@@ -164,7 +164,7 @@ impl LspState {
 
         for server in registry.language_servers() {
             let needed = server.language_ids.iter().any(|id| open_language_ids.contains(id.as_str()));
-            let java_release = project_root.and_then(|root| self.java_release.release_for(root));
+            let java_release = project_root.and_then(|root| self.java_release.release_for(root, registry));
             let ctx = ServerStartContext {
                 configured_binary: settings.binary_for(&server.id).to_string(),
                 java_home: settings.java_home_for(&server.id).to_string(),
@@ -559,7 +559,7 @@ impl Drop for LspState {
     }
 }
 
-/// The project's declared Java release, remembered between frames.
+/// The project's declared runtime release, remembered between frames.
 /// `LspState::sync` runs every frame and a config is rebuilt each time, but
 /// the answer only changes when a build file does — so it's re-read on a
 /// new project root and otherwise at most once every `RECHECK_AFTER`,
@@ -574,12 +574,12 @@ struct JavaReleaseCache {
 impl JavaReleaseCache {
     const RECHECK_AFTER: Duration = Duration::from_secs(2);
 
-    fn release_for(&mut self, root: &Path) -> Option<u32> {
+    fn release_for(&mut self, root: &Path, registry: &Registry) -> Option<u32> {
         let stale =
             self.root.as_deref() != Some(root) || self.checked.is_none_or(|at| at.elapsed() >= Self::RECHECK_AFTER);
         if stale {
             self.root = Some(root.to_path_buf());
-            self.release = fg_core::detect_java_release(root).map(|found| found.major);
+            self.release = registry.project_release(root).map(|found| found.major);
             self.checked = Some(Instant::now());
         }
         self.release

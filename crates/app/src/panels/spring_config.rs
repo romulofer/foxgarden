@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::{BuildToolHandle, SpringConfigProperty};
+use fg_core::{ConfigProperty, ExtensionHandle};
 use fg_extension::Registry;
 
 /// One project's own scanned properties, plus whichever project root
@@ -24,16 +24,13 @@ use fg_extension::Registry;
 #[derive(Default)]
 pub struct SpringConfigState {
     scanned_root: Option<PathBuf>,
-    scan_rx: Option<Receiver<Vec<SpringConfigProperty>>>,
-    properties: Vec<SpringConfigProperty>,
-    /// The build tool that resolves this project's classpath, looked up once
-    /// per project rather than per scan: the completion trigger that starts a
-    /// scan runs deep inside the editor widget, which has no registry to ask.
-    build_tool: Option<BuildToolHandle>,
-    /// Which root `build_tool` was detected for, so `observe_project` can be
-    /// called every frame and still only touch the filesystem when the open
-    /// project actually changes.
-    build_tool_root: Option<PathBuf>,
+    scan_rx: Option<Receiver<Vec<ConfigProperty>>>,
+    properties: Vec<ConfigProperty>,
+    /// The extensions a scan asks for properties, held as handles rather
+    /// than looked up per scan: the completion trigger that starts one runs
+    /// deep inside the editor widget, which has no registry to ask, and the
+    /// scan itself runs on a thread that could not borrow one anyway.
+    extensions: Vec<ExtensionHandle>,
 }
 
 impl SpringConfigState {
@@ -42,7 +39,7 @@ impl SpringConfigState {
     /// widget-side completion trigger tests need known candidates without
     /// depending on a real `mvn`/`gradle` process.
     #[cfg(test)]
-    pub(crate) fn with_properties(properties: Vec<SpringConfigProperty>) -> Self {
+    pub(crate) fn with_properties(properties: Vec<ConfigProperty>) -> Self {
         Self {
             properties,
             ..Self::default()
@@ -52,7 +49,7 @@ impl SpringConfigState {
     /// The currently cached candidates — empty until a scan for
     /// `project_root` has actually completed (`poll`), including while one
     /// is still running.
-    pub fn properties(&self) -> &[SpringConfigProperty] {
+    pub fn properties(&self) -> &[ConfigProperty] {
         &self.properties
     }
 
@@ -65,15 +62,13 @@ impl SpringConfigState {
         self.scan_rx.is_some()
     }
 
-    /// Keeps the cached build tool in step with whichever project is open —
-    /// called once per frame from `FoxGardenApp::ui`, where the registry is
-    /// in reach. A no-op unless the project root changed since the last call.
-    pub fn observe_project(&mut self, project_root: Option<&Path>, languages: &Registry) {
-        if self.build_tool_root.as_deref() == project_root {
-            return;
+    /// Picks up the registry's extension handles once — called from
+    /// `FoxGardenApp::ui`, where the registry is in reach. Cheap and
+    /// idempotent: nothing is registered after startup.
+    pub fn observe_extensions(&mut self, languages: &Registry) {
+        if self.extensions.len() != languages.extensions().len() {
+            self.extensions = languages.handles();
         }
-        self.build_tool_root = project_root.map(Path::to_path_buf);
-        self.build_tool = project_root.and_then(|root| languages.detect_build_tool(root));
     }
 
     /// Kicks off a background scan for `project_root` if none has run (or
@@ -93,13 +88,11 @@ impl SpringConfigState {
         self.properties.clear();
         self.scanned_root = Some(project_root.to_path_buf());
 
-        let Some(tool) = self.build_tool.clone() else {
-            return;
-        };
+        let extensions = self.extensions.clone();
         let root = project_root.to_path_buf();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let _ = tx.send(scan_project(&tool, &root));
+            let _ = tx.send(scan_project(&extensions, &root));
         });
         self.scan_rx = Some(rx);
     }
@@ -121,13 +114,16 @@ impl SpringConfigState {
     }
 }
 
-/// Scans whatever classpath the project's own build tool resolves to.
-/// Resolution failing outright (no `mvn`/`gradle` on `PATH`, a real build
-/// error, ...) yields an empty result rather than an error — the same
-/// "silently show nothing" degrade `fg_core::diff`/`blame` already
-/// established for "not a git repository", since a failed background
-/// classpath scan is exactly as unsurprising to a user who never asked for
-/// it directly.
-fn scan_project(tool: &BuildToolHandle, project_root: &Path) -> Vec<SpringConfigProperty> {
-    fg_core::scan_classpath_for_metadata(&tool.analysis_classpath(project_root))
+/// Asks every extension what configuration keys this project has. An
+/// extension that recognizes nothing about the project (or whose own
+/// classpath resolution fails — no `mvn`/`gradle` on `PATH`, a real build
+/// error) contributes nothing rather than an error: the same "silently show
+/// nothing" degrade `fg_core::diff`/`blame` uses for "not a git repository",
+/// since a failed background scan is exactly as unsurprising to a user who
+/// never asked for it directly.
+fn scan_project(extensions: &[ExtensionHandle], project_root: &Path) -> Vec<ConfigProperty> {
+    extensions
+        .iter()
+        .flat_map(|extension| extension.config_properties(project_root))
+        .collect()
 }

@@ -33,7 +33,8 @@ mod tooling;
 
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
-    BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, CoverageReport,
+    BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
+    CoverageReport, ExtensionHandle, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -132,6 +133,33 @@ pub struct GrammarContribution {
     /// but paints unhighlighted, which is already how this codebase treats
     /// a file with no grammar at all.
     pub highlight_query: Option<String>,
+    /// Which of this grammar's node kinds mean what to the editor. Travels
+    /// with the grammar for the same reason the query does: a node name is
+    /// one grammar's vocabulary and means nothing against another's.
+    pub node_kinds: NodeKinds,
+}
+
+/// The node kinds an editor feature needs to name, per grammar.
+///
+/// Every field defaults to empty, and empty means "this feature is a no-op
+/// for this language" — which is exactly how the core treated a language it
+/// had no entry for when these lists were hardcoded. A new grammar is
+/// therefore never *wrong* here, only quiet, until its author fills it in
+/// against the grammar's own `node-types.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeKinds {
+    /// Declarations whose header line sticky scroll pins while their body
+    /// scrolls underneath. Declarations only, not control flow — matching
+    /// what mainstream editors pin by default.
+    pub scopes: Vec<String>,
+    /// Nodes whose body collapses when folded: the *bodies* and block
+    /// comments, not the declarations in `scopes`, since folding hides what
+    /// sits between the delimiters and leaves the opening line (where the
+    /// fold marker is) visible.
+    pub foldable: Vec<String>,
+    /// The node kind one import statement is, for folding an import block
+    /// as a unit. `None` disables that.
+    pub import: Option<String>,
 }
 
 /// Where a grammar's parser comes from.
@@ -258,6 +286,7 @@ pub struct Contributions {
     pub grammars: Vec<GrammarContribution>,
     pub language_servers: Vec<LanguageServerContribution>,
     pub build_tools: Vec<BuildToolContribution>,
+    pub scaffolds: Vec<ScaffoldContribution>,
 }
 
 /// One extension.
@@ -367,6 +396,51 @@ pub trait Extension: Send + Sync {
     /// — "the test task never ran" and "it ran and reported nothing" are
     /// both ordinary, and neither is an error worth a separate arm.
     fn test_results(&self, _tool_id: &str, _project_root: &Path) -> Vec<TestCase> {
+        Vec::new()
+    }
+
+    /// The files a new project of `spec`'s own kind needs, as `(path
+    /// relative to the project root, contents)` pairs. Pure generation —
+    /// writing them to disk is the core's job (`fg_core::write_scaffold`),
+    /// which keeps "refuse to scaffold into a non-empty directory" one rule
+    /// in one place rather than a promise every extension has to keep.
+    ///
+    /// `None` when this extension does not scaffold that build tool/language
+    /// pair.
+    fn scaffold_files(&self, _spec: &ScaffoldSpec) -> Option<Vec<(PathBuf, String)>> {
+        None
+    }
+
+    /// Which runtime release `project_root` declares, read from whatever
+    /// build files this extension understands. `None` means "nothing I
+    /// recognize says", which is a normal answer and leaves the decision to
+    /// whoever asked.
+    fn project_release(&self, _project_root: &Path) -> Option<ProjectRelease> {
+        None
+    }
+
+    /// Every runnable entry point in `source`, whose parse `tree` the editor
+    /// already built — in source order.
+    ///
+    /// Takes the tree rather than only the text on purpose: this is asked
+    /// again on every edit to a file, and re-parsing it here would put a
+    /// second full parse on the keystroke path. `file_stem` is the file's
+    /// name without its extension, which some toolchains need (a JVM
+    /// top-level function compiles into a class named after the *file*).
+    fn run_targets(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _file_stem: &str,
+    ) -> Vec<RunTarget> {
+        Vec::new()
+    }
+
+    /// Configuration keys this extension can offer for completion in
+    /// `project_root`'s own configuration files. Called off the UI thread —
+    /// resolving these may shell out to a build tool.
+    fn config_properties(&self, _project_root: &Path) -> Vec<ConfigProperty> {
         Vec::new()
     }
 

@@ -1211,6 +1211,7 @@ name = "fg-extension"
 version = "0.2.0"
 dependencies = [
  "tempfile",
+ "tree-sitter",
  "tree-sitter-language",
 ]
 
@@ -1377,8 +1378,10 @@ dependencies = [
  "quick-xml",
  "serde",
  "serde_json",
+ "tree-sitter",
  "tree-sitter-java",
  "tree-sitter-kotlin-ng",
+ "zip",
 ]
 
 [[package]]

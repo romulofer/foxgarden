@@ -36,7 +36,7 @@ pub struct LspServersState {
     /// opens. Display only — `lsp_state` detects this itself for the session
     /// it configures; showing it here is what makes "why is this linted as
     /// Java 8?" answerable without guessing.
-    project_release: Option<fg_core::JavaRelease>,
+    project_release: Option<fg_core::ProjectRelease>,
 }
 
 impl LspServersState {
@@ -44,12 +44,17 @@ impl LspServersState {
     /// the background JDK scan that fills that field in, so it's already
     /// populated by the time the user reads down to it instead of sitting
     /// empty with jdt.ls' Java 21 requirement stated above it.
-    pub fn open_settings(&mut self, settings: &LspSettings, project_root: Option<&std::path::Path>) {
+    pub fn open_settings(
+        &mut self,
+        settings: &LspSettings,
+        project_root: Option<&std::path::Path>,
+        languages: &fg_extension::Registry,
+    ) {
         self.settings_open = true;
         if settings.jdtls_java_home.trim().is_empty() {
             self.manager.detect_java_home();
         }
-        self.project_release = project_root.and_then(fg_core::detect_java_release);
+        self.project_release = project_root.and_then(|root| languages.project_release(root));
     }
 
     /// Records a finished update check — called from `FoxGardenApp::ui`'s

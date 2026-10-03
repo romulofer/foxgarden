@@ -10,7 +10,7 @@
 
 use egui::Sense;
 use fg_i18n::msg;
-use syntax::MainEntry;
+use syntax::RunTarget;
 
 use super::text_area::TextAreaOutput;
 use crate::style::theme;
@@ -29,11 +29,11 @@ pub(super) const RUN_GUTTER_WIDTH: f32 = 14.0;
 pub(super) fn show_run_gutter(
     ui: &egui::Ui,
     out: &TextAreaOutput,
-    entries: &[MainEntry],
+    entries: &[RunTarget],
     id_salt: &str,
     gutter_left: f32,
     dark_mode: bool,
-) -> Option<MainEntry> {
+) -> Option<RunTarget> {
     if entries.is_empty() {
         return None;
     }

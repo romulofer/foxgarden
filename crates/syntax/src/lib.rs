@@ -8,7 +8,7 @@ mod grammars;
 mod highlight;
 mod imports;
 mod kotlin_members;
-mod main_entry;
+mod run_targets;
 mod methods;
 mod node_kinds;
 mod selection;
@@ -21,6 +21,7 @@ pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use fields::{ClassFields, FieldInfo, fields_in_type, java_classes_with_fields};
 pub use folding::{FoldRange, foldable_ranges};
+pub use fg_extension::RunTarget;
 pub use grammars::{GrammarError, install as install_grammars};
 pub use highlight::{Scope, highlight_spans, highlight_spans_in};
 pub use imports::{ExistingImport, ImportInsertion, existing_imports, import_insertion};
@@ -28,8 +29,8 @@ pub use kotlin_members::{
     all_kotlin_functions_in_type, kotlin_enclosing_class, kotlin_functions_in_type, kotlin_properties_in_class_body,
     kotlin_properties_in_type, kotlin_superclass_name,
 };
-pub use main_entry::{MainEntry, main_entries};
 pub use methods::{MethodSignature, all_methods_in_type, enclosing_class, methods_in_type, superclass_name};
+pub use run_targets::{install as install_run_targets, main_entries};
 pub use selection::expand_selection;
 pub use spring_endpoints::{EndpointInfo, endpoints_in_file, java_endpoints_in_file, kotlin_endpoints_in_file};
 pub use sticky::enclosing_scope_starts;

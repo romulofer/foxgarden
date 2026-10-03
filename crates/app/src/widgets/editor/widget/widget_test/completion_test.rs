@@ -484,8 +484,8 @@ fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
     assert_eq!(visible_labels(&state, &text, cursor_byte), vec!["baz"]);
 }
 
-fn spring_prop(name: &str) -> fg_core::SpringConfigProperty {
-    fg_core::SpringConfigProperty {
+fn spring_prop(name: &str) -> fg_core::ConfigProperty {
+    fg_core::ConfigProperty {
         name: name.to_string(),
         type_name: None,
         description: None,

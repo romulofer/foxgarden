@@ -1287,6 +1287,9 @@ impl FoxGardenApp {
         for error in syntax::install_grammars(&state.languages) {
             crate::errors::report(&mut last_error, error.to_string());
         }
+        // Run markers come from the same extensions, through a separate
+        // install because they need no loading and so cannot fail.
+        syntax::install_run_targets(&state.languages);
         let mut editor_font = EditorFont::default();
         let mut font_size = DEFAULT_FONT_SIZE;
         let mut dark_mode = DEFAULT_DARK_MODE;
@@ -2432,13 +2435,14 @@ impl eframe::App for FoxGardenApp {
             self.lsp_servers.open_settings(
                 &self.lsp_settings,
                 self.state.project.as_ref().map(|p| p.root.as_path()),
+                &self.state.languages,
             );
         }
         if menu_outcome.open_jdk_registry_settings_request {
             self.jdk_registry_ui.open_settings();
         }
         if menu_outcome.open_new_project_wizard_request {
-            self.new_project_wizard.open();
+            self.new_project_wizard.open(&self.state.languages);
         }
         if menu_outcome.run_checkstyle_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
@@ -2510,8 +2514,7 @@ impl eframe::App for FoxGardenApp {
                 Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
-        self.spring_config
-            .observe_project(self.state.project.as_ref().map(|p| p.root.as_path()), &self.state.languages);
+        self.spring_config.observe_extensions(&self.state.languages);
         self.spring_config.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
@@ -2617,7 +2620,7 @@ impl eframe::App for FoxGardenApp {
         // Set when the run gutter's ▶ is clicked; acted on below, after the
         // central panel closes, so starting a run borrows `self` freely
         // rather than from inside the editor's own closure.
-        let mut run_request: Option<syntax::MainEntry> = None;
+        let mut run_request: Option<syntax::RunTarget> = None;
         let mut welcome = crate::panels::welcome::WelcomeOutcome::default();
         // Everything but the project already open — reopening that one is
         // not a thing anyone needs offered.
@@ -2686,7 +2689,7 @@ impl eframe::App for FoxGardenApp {
                     .open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
             }
             if welcome.new_project {
-                self.new_project_wizard.open();
+                self.new_project_wizard.open(&self.state.languages);
             }
             if let Some(path) = welcome.open_recent.take()
                 && let Err(err) = self.state.open_project(path)
@@ -2727,7 +2730,7 @@ impl eframe::App for FoxGardenApp {
                         );
                         let config = fg_core::RunConfig {
                             name: entry.label.clone(),
-                            main_class: entry.main_class.clone(),
+                            main_class: entry.entry_point.clone(),
                             ..fg_core::RunConfig::default()
                         };
                         match self.build_state.start_run(&root, &tool, config) {

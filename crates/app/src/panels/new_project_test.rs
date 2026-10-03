@@ -8,21 +8,23 @@ fn open_resets_every_field_and_opens_the_dialog() {
         group_id: "stale".to_string(),
         artifact_id: "stale".to_string(),
         location: "/stale".to_string(),
-        java_release: 8,
-        build_tool: BuildTool::Gradle,
-        language: ProjectLanguage::Kotlin,
+        runtime_version: 8,
+        build_tool_id: "gradle".to_string(),
+        language_id: "kotlin".to_string(),
         last_error: Some("stale error".to_string()),
         picker: crate::folder_picker::FolderPicker::default(),
     };
-    state.open();
+    state.open(test_support::languages());
 
     assert!(state.open);
     assert_eq!(state.group_id, "");
     assert_eq!(state.artifact_id, "");
     assert_eq!(state.location, "");
-    assert_eq!(state.java_release, 21);
-    assert_eq!(state.build_tool, BuildTool::Maven);
-    assert_eq!(state.language, ProjectLanguage::Java);
+    // The defaults are the registry's first contributed target and its
+    // newest offered release, not anything this panel names itself.
+    assert_eq!(state.runtime_version, 21);
+    assert_eq!(state.build_tool_id, "maven");
+    assert_eq!(state.language_id, "java");
     assert!(state.last_error.is_none());
 }
 
@@ -41,6 +43,10 @@ fn form_is_valid_requires_every_field_non_empty() {
     let mut state = NewProjectWizardState::default();
     assert!(!form_is_valid(&state));
 
+    state.build_tool_id = "maven".to_string();
+    state.language_id = "java".to_string();
+    assert!(!form_is_valid(&state));
+
     state.group_id = "com.example".to_string();
     assert!(!form_is_valid(&state));
 
@@ -57,6 +63,8 @@ fn form_is_valid_rejects_whitespace_only_fields() {
         group_id: "  ".to_string(),
         artifact_id: "app".to_string(),
         location: "/home/dev".to_string(),
+        build_tool_id: "maven".to_string(),
+        language_id: "java".to_string(),
         ..Default::default()
     };
     assert!(!form_is_valid(&state));
@@ -69,7 +77,9 @@ fn create_and_open_scaffolds_saves_config_and_opens_the_project() {
         group_id: "com.example".to_string(),
         artifact_id: "my-app".to_string(),
         location: dir.path().display().to_string(),
-        java_release: 17,
+        runtime_version: 17,
+        build_tool_id: "maven".to_string(),
+        language_id: "java".to_string(),
         ..Default::default()
     };
     let mut editor_state = test_support::editor_state();
@@ -93,8 +103,9 @@ fn create_and_open_with_gradle_scaffolds_gradle_files() {
         group_id: "com.example".to_string(),
         artifact_id: "my-app".to_string(),
         location: dir.path().display().to_string(),
-        java_release: 17,
-        build_tool: BuildTool::Gradle,
+        runtime_version: 17,
+        build_tool_id: "gradle".to_string(),
+        language_id: "java".to_string(),
         ..Default::default()
     };
     let mut editor_state = test_support::editor_state();
@@ -118,9 +129,9 @@ fn create_and_open_with_kotlin_scaffolds_kotlin_sources() {
         group_id: "com.example".to_string(),
         artifact_id: "my-app".to_string(),
         location: dir.path().display().to_string(),
-        java_release: 17,
-        build_tool: BuildTool::Gradle,
-        language: ProjectLanguage::Kotlin,
+        runtime_version: 17,
+        build_tool_id: "gradle".to_string(),
+        language_id: "kotlin".to_string(),
         ..Default::default()
     };
     let mut editor_state = test_support::editor_state();
@@ -145,12 +156,37 @@ fn create_and_open_reports_a_scaffold_failure_without_touching_editor_state() {
         group_id: "com.example".to_string(),
         artifact_id: "my-app".to_string(),
         location: dir.path().display().to_string(),
-        java_release: 17,
+        runtime_version: 17,
+        build_tool_id: "maven".to_string(),
+        language_id: "java".to_string(),
         ..Default::default()
     };
     let mut editor_state = test_support::editor_state();
 
     let error = create_and_open(&state, &mut editor_state).unwrap_err();
     assert!(!error.is_empty());
+    assert!(editor_state.project.is_none());
+}
+
+/// A pair no extension scaffolds is a real possibility now that the targets
+/// come from the registry — it has to fail with a message rather than
+/// writing a half-made project.
+#[test]
+fn create_and_open_refuses_a_target_no_extension_scaffolds() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = NewProjectWizardState {
+        group_id: "com.example".to_string(),
+        artifact_id: "my-app".to_string(),
+        location: dir.path().display().to_string(),
+        runtime_version: 17,
+        build_tool_id: "maven".to_string(),
+        language_id: "yaml".to_string(),
+        ..Default::default()
+    };
+    let mut editor_state = test_support::editor_state();
+
+    let error = create_and_open(&state, &mut editor_state).unwrap_err();
+    assert!(!error.is_empty());
+    assert!(!dir.path().join("my-app").exists());
     assert!(editor_state.project.is_none());
 }

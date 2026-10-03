@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::{BuildTask, CommandSpec, FilenamePattern, GrammarSource, LanguageContribution};
+use crate::{BuildTask, CommandSpec, FilenamePattern, GrammarSource, LanguageContribution, NodeKinds};
 
 /// A stand-in extension built entirely from its contribution set —
 /// Checkpoint 1's "fake extension that registers a fake language". It is
@@ -119,6 +119,7 @@ fn a_grammar_attaches_to_its_language() {
                     symbol: "tree_sitter_elvish".to_string(),
                 },
                 highlight_query: Some("(identifier) @variable".to_string()),
+                node_kinds: NodeKinds::default(),
             }],
             ..Default::default()
         })))
@@ -209,6 +210,7 @@ fn a_grammar_for_an_unregistered_language_is_refused() {
                     symbol: "tree_sitter_westron".to_string(),
                 },
                 highlight_query: None,
+                node_kinds: NodeKinds::default(),
             }],
             ..Default::default()
         }))),
@@ -232,6 +234,7 @@ fn a_second_grammar_for_one_language_is_refused() {
                     symbol: "tree_sitter_elvish".to_string(),
                 },
                 highlight_query: None,
+                node_kinds: NodeKinds::default(),
             },
             GrammarContribution {
                 language_id: "elvish".to_string(),
@@ -240,6 +243,7 @@ fn a_second_grammar_for_one_language_is_refused() {
                     symbol: "tree_sitter_elvish".to_string(),
                 },
                 highlight_query: None,
+                node_kinds: NodeKinds::default(),
             },
         ],
         ..Default::default()
@@ -269,6 +273,7 @@ fn a_refused_extension_leaves_nothing_registered() {
                 symbol: "tree_sitter_westron".to_string(),
             },
             highlight_query: None,
+            node_kinds: NodeKinds::default(),
         }],
         ..Default::default()
     };
@@ -432,4 +437,166 @@ fn two_extensions_cannot_claim_the_same_build_tool_id() {
     // Rejected whole: the impostor left nothing behind, not even its name.
     assert_eq!(registry.extensions().len(), 1);
     assert_eq!(registry.build_tool("delve").unwrap().display_name, "Delve");
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Scaffolds, project release and config properties
+
+/// An extension that scaffolds one invented kind of project and recognizes
+/// one invented project marker — again nothing JVM, so what is being tested
+/// is the registry's dispatch rather than Java.
+struct FakeForge;
+
+impl Extension for FakeForge {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: "forge".to_string(),
+            name: "forge".to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            languages: vec![lang("khuzdul", &["khz"])],
+            build_tools: vec![BuildToolContribution {
+                id: "anvil".to_string(),
+                display_name: "Anvil".to_string(),
+                marker_files: vec!["anvil.toml".to_string()],
+            }],
+            scaffolds: vec![crate::ScaffoldContribution {
+                build_tool_id: "anvil".to_string(),
+                language_id: "khuzdul".to_string(),
+                runtime_versions: vec![2, 7],
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn scaffold_files(&self, spec: &crate::ScaffoldSpec) -> Option<Vec<(PathBuf, String)>> {
+        Some(vec![(
+            PathBuf::from("anvil.toml"),
+            format!("name = \"{}\"\nversion = {}\n", spec.name, spec.runtime_version?),
+        )])
+    }
+
+    fn project_release(&self, project_root: &Path) -> Option<crate::ProjectRelease> {
+        std::fs::read_to_string(project_root.join("anvil.toml"))
+            .ok()?
+            .trim()
+            .strip_prefix("version = ")?
+            .parse()
+            .ok()
+            .map(|major| crate::ProjectRelease {
+                major,
+                file: "anvil.toml".to_string(),
+                setting: "version".to_string(),
+            })
+    }
+
+    fn config_properties(&self, _project_root: &Path) -> Vec<crate::ConfigProperty> {
+        vec![crate::ConfigProperty {
+            name: "anvil.heat".to_string(),
+            type_name: Some("int".to_string()),
+            description: None,
+            default_value: Some("900".to_string()),
+        }]
+    }
+}
+
+#[test]
+fn a_contributed_scaffold_is_listed_and_generates_through_its_own_extension() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeForge)).unwrap();
+
+    let scaffolds = registry.scaffolds();
+    assert_eq!(scaffolds.len(), 1);
+    assert_eq!(scaffolds[0].runtime_versions, vec![2, 7]);
+
+    let spec = crate::ScaffoldSpec {
+        build_tool_id: "anvil".to_string(),
+        language_id: "khuzdul".to_string(),
+        namespace: "under.the.mountain".to_string(),
+        name: "forge-app".to_string(),
+        runtime_version: Some(7),
+    };
+    let files = registry.scaffold_files(&spec).unwrap();
+    assert_eq!(files[0].0, PathBuf::from("anvil.toml"));
+    assert!(files[0].1.contains("name = \"forge-app\""), "{}", files[0].1);
+
+    // A pair nobody declared is `None` rather than a wrong guess at which
+    // extension might handle it.
+    let unknown = crate::ScaffoldSpec {
+        language_id: "elvish".to_string(),
+        ..spec
+    };
+    assert!(registry.scaffold_files(&unknown).is_none());
+}
+
+#[test]
+fn a_scaffold_for_an_unregistered_build_tool_is_refused() {
+    struct Dwarfless;
+    impl Extension for Dwarfless {
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "dwarfless".to_string(),
+                name: "dwarfless".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            Contributions {
+                languages: vec![lang("khuzdul", &["khz"])],
+                scaffolds: vec![crate::ScaffoldContribution {
+                    build_tool_id: "anvil".to_string(),
+                    language_id: "khuzdul".to_string(),
+                    runtime_versions: Vec::new(),
+                }],
+                ..Default::default()
+            }
+        }
+    }
+
+    let mut registry = Registry::new();
+    assert_eq!(
+        registry.register(Box::new(Dwarfless)),
+        Err(RegisterError::UnknownBuildTool {
+            tool_id: "anvil".to_string(),
+            extension_id: "dwarfless".to_string(),
+        })
+    );
+    assert!(registry.scaffolds().is_empty());
+    // Rejected whole: the language it also declared is not registered either.
+    assert!(registry.language("khuzdul").is_none());
+}
+
+#[test]
+fn the_project_release_is_whichever_extension_recognizes_the_project() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeForge)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    assert!(registry.project_release(dir.path()).is_none());
+
+    std::fs::write(dir.path().join("anvil.toml"), "version = 7\n").unwrap();
+    let release = registry.project_release(dir.path()).unwrap();
+    assert_eq!(release.major, 7);
+    assert_eq!(release.file, "anvil.toml");
+}
+
+#[test]
+fn an_extension_handle_answers_project_questions_away_from_the_registry() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeForge)).unwrap();
+    let handle = registry.handles().into_iter().next().unwrap();
+    assert_eq!(handle.id, "forge");
+
+    // The point of the handle: it is owned, so a background scan can hold it
+    // while the registry stays where it is.
+    let scanned = std::thread::spawn(move || handle.config_properties(Path::new("/project")))
+        .join()
+        .unwrap();
+    assert_eq!(scanned[0].name, "anvil.heat");
 }

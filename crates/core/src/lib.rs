@@ -8,14 +8,12 @@ mod document;
 mod drafts;
 mod editor_state;
 mod file_history;
-mod java_release;
 mod language;
 mod profiler;
 mod project;
 mod project_config;
 mod run_config;
 mod scaffold;
-mod spring_config_metadata;
 mod static_analysis;
 mod status;
 mod text_buffer;
@@ -29,8 +27,9 @@ pub use boilerplate::generate as generate_boilerplate;
 // extension gives through `fg_extension::BuildToolHandle`. Re-exported here
 // so the app keeps one import path for editor-facing types.
 pub use fg_extension::{
-    BuildProblem, BuildTask, BuildToolHandle, CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase,
-    TestFailureLocation, TestOutcome, TestSummary, summarize,
+    BuildProblem, BuildTask, BuildToolHandle, ConfigProperty, CoverageStatus, ExtensionHandle, LineCoverage,
+    ProblemSeverity, ProjectRelease, RunSpec, ScaffoldSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
+    summarize,
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use diff::{
@@ -45,10 +44,6 @@ pub use document::{Document, OpenDocumentError};
 pub use drafts::{Draft, discard_draft, pending_drafts, write_draft};
 pub use editor_state::{EditorState, TerminalTab};
 pub use file_history::{Snapshot, list_snapshots};
-pub use java_release::{
-    JavaRelease, build_files as java_release_build_files, detect as detect_java_release, parse_release_token,
-    release_from_gradle, release_from_pom, release_from_version_file,
-};
 pub use language::Language;
 pub use profiler::{FlameNode, ProfileEvent, parse_collapsed, profiler_command};
 pub use project::{FileKind, FileNode, Project};
@@ -56,10 +51,7 @@ pub use project_config::{
     ProjectConfig, load_project_config, parse_project_config, save_project_config, serialize_project_config,
 };
 pub use run_config::{RunConfig, load_run_configs, parse_run_configs, save_run_configs, serialize_run_configs};
-pub use scaffold::{BuildTool, ProjectLanguage, ScaffoldSpec, scaffold_files, write_scaffold};
-pub use spring_config_metadata::{
-    SpringConfigProperty, parse_metadata_json, scan_classpath_for_metadata, scan_jar_for_metadata,
-};
+pub use scaffold::write_scaffold;
 pub use static_analysis::{
     StaticAnalysisError, checkstyle_diagnostics, line_col_to_byte, pmd_diagnostics, spotbugs_diagnostics,
 };

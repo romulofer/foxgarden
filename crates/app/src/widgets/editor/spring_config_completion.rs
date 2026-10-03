@@ -1,6 +1,6 @@
 //! Spring config property autocomplete (`PLAN.md` Track 12 Phase 1) — pure
 //! candidate-generation logic for `application.properties`/`.yml`, fed by
-//! `fg_core::SpringConfigProperty` (the resolved-classpath jar scan;
+//! `fg_core::ConfigProperty` (the resolved-classpath jar scan;
 //! `crate::panels::spring_config` owns the background scan that produces
 //! it). Two shapes, matching the two real file formats: `.properties` is
 //! flat (`server.port=8080`, the whole dotted key on one line), `.yml` is
@@ -10,7 +10,7 @@
 
 use std::ops::Range;
 
-use fg_core::SpringConfigProperty;
+use fg_core::ConfigProperty;
 
 use super::completion::{CompletionItem, CompletionKind};
 
@@ -37,7 +37,7 @@ pub(super) fn key_segment_before_cursor(text: &str, cursor_char: usize) -> Range
 /// visible`'s own prefix filter (anchored at the current line's start, by
 /// this feature's caller) does the narrowing against whatever's typed so
 /// far, the same as every other candidate source in this codebase.
-pub(super) fn properties_completion_candidates(properties: &[SpringConfigProperty]) -> Vec<CompletionItem> {
+pub(super) fn properties_completion_candidates(properties: &[ConfigProperty]) -> Vec<CompletionItem> {
     properties
         .iter()
         .map(|p| CompletionItem {
@@ -63,7 +63,7 @@ pub(super) fn properties_completion_candidates(properties: &[SpringConfigPropert
 /// detail text; a segment that's only ever a prefix of something deeper
 /// gets none.
 pub(super) fn yaml_completion_candidates(
-    properties: &[SpringConfigProperty],
+    properties: &[ConfigProperty],
     ancestor_prefix: &str,
 ) -> Vec<CompletionItem> {
     let mut candidates: Vec<CompletionItem> = Vec::new();
@@ -92,7 +92,7 @@ pub(super) fn yaml_completion_candidates(
     candidates
 }
 
-fn property_detail(p: &SpringConfigProperty) -> Option<String> {
+fn property_detail(p: &ConfigProperty) -> Option<String> {
     match (&p.type_name, &p.default_value) {
         (Some(t), Some(d)) => Some(format!("{t} = {d}")),
         (Some(t), None) => Some(t.clone()),

@@ -35,7 +35,7 @@ use std::path::Path;
 use std::sync::{OnceLock, RwLock};
 
 use fg_core::Language;
-use fg_extension::{GrammarSource, Registry};
+use fg_extension::{GrammarSource, NodeKinds, Registry};
 
 /// Why one contributed grammar could not be installed.
 ///
@@ -112,6 +112,31 @@ fn supported_abi() -> RangeInclusive<usize> {
 struct Installed {
     ts: tree_sitter::Language,
     highlight_query: Option<&'static str>,
+    /// Leaked for the same reason the query source is, and bounded the same
+    /// way: the editor reads these as `&'static [&'static str]` on hot
+    /// paths (sticky scroll and folding run per frame), and what is
+    /// installed lives for the process regardless.
+    node_kinds: &'static InstalledNodeKinds,
+}
+
+/// A contributed [`NodeKinds`] flattened into the borrowed form the
+/// per-frame analyses want, so neither of them allocates to ask what a
+/// scope is.
+pub(crate) struct InstalledNodeKinds {
+    pub(crate) scopes: Vec<&'static str>,
+    pub(crate) foldable: Vec<&'static str>,
+    pub(crate) import: Option<&'static str>,
+}
+
+fn leak_kinds(kinds: &NodeKinds) -> &'static InstalledNodeKinds {
+    let leak_all = |names: &[String]| -> Vec<&'static str> {
+        names.iter().map(|n| &*Box::leak(n.clone().into_boxed_str())).collect()
+    };
+    Box::leak(Box::new(InstalledNodeKinds {
+        scopes: leak_all(&kinds.scopes),
+        foldable: leak_all(&kinds.foldable),
+        import: kinds.import.clone().map(|n| &*Box::leak(n.into_boxed_str())),
+    }))
 }
 
 type Store = RwLock<HashMap<Language, Installed>>;
@@ -171,6 +196,7 @@ fn install_into(installed: &mut HashMap<Language, Installed>, registry: &Registr
                             .highlight_query
                             .clone()
                             .map(|q| &*Box::leak(q.into_boxed_str())),
+                        node_kinds: leak_kinds(&grammar.node_kinds),
                     },
                 );
             }
@@ -255,6 +281,14 @@ pub fn ts_language(language: Language) -> Option<tree_sitter::Language> {
 pub fn highlights_query_source(language: Language) -> Option<&'static str> {
     let installed = store().read().expect("grammar store lock");
     installed.get(&language)?.highlight_query
+}
+
+/// Which node kinds mean what for `language`, as its grammar declared.
+/// `None` when nothing is installed for it — the same "feature is a no-op
+/// here" answer an empty vocabulary gives.
+pub(crate) fn node_kinds(language: Language) -> Option<&'static InstalledNodeKinds> {
+    let installed = store().read().expect("grammar store lock");
+    installed.get(&language).map(|g| g.node_kinds)
 }
 
 #[cfg(test)]

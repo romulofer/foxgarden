@@ -3,9 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::{
-    BuildToolContribution, BuildToolHandle, Contributions, Extension, ExtensionManifest, GrammarContribution,
-    JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, RegisteredLanguage, ResolvedServerStart,
-    ServerStartContext, CURRENT_SCHEMA_VERSION,
+    BuildToolContribution, BuildToolHandle, Contributions, Extension, ExtensionHandle, ExtensionManifest,
+    GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
+    RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerStartContext,
+    CURRENT_SCHEMA_VERSION,
 };
 
 /// Why a registration was refused.
@@ -52,6 +53,13 @@ pub enum RegisterError {
     },
     /// Two extensions claim the same build tool id.
     DuplicateBuildTool {
+        tool_id: String,
+        extension_id: String,
+    },
+    /// A scaffold names a build tool nobody registered. Like
+    /// `UnknownLanguage`, not necessarily the contributor's fault — the tool
+    /// may live in an extension that is absent — so both sides are named.
+    UnknownBuildTool {
         tool_id: String,
         extension_id: String,
     },
@@ -104,6 +112,10 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} declares build tool {tool_id}, which is already registered"
             ),
+            Self::UnknownBuildTool { tool_id, extension_id } => write!(
+                f,
+                "extension {extension_id} scaffolds for build tool {tool_id}, which no registered extension contributes"
+            ),
         }
     }
 }
@@ -131,6 +143,10 @@ pub struct Registry {
     /// Manifests in the same order as `extensions`, kept separately so
     /// `extensions()` can return a slice without borrowing from temporaries.
     manifests: Vec<ExtensionManifest>,
+    /// Each extension's id, leaked once at registration so a handle can
+    /// carry it by `&'static str`. Leaking per handle instead would leak
+    /// without bound, since handles are built per frame.
+    extension_ids: Vec<&'static str>,
     /// Maps each registered server id to the index of the extension that
     /// owns it in `extensions`, for fast dynamic dispatch.
     server_extension: HashMap<String, usize>,
@@ -141,6 +157,8 @@ pub struct Registry {
     /// map because order is the semantics here, not an implementation
     /// detail. The `usize` indexes `extensions`.
     build_tools: Vec<(BuildToolContribution, &'static str, usize)>,
+    /// Scaffold targets with the index of the extension that generates them.
+    scaffolds: Vec<(ScaffoldContribution, usize)>,
     index: LanguageIndex,
 }
 
@@ -171,6 +189,7 @@ impl Registry {
         for server in &contributions.language_servers {
             self.server_extension.insert(server.id.clone(), idx);
         }
+        self.extension_ids.push(Box::leak(manifest.id.clone().into_boxed_str()));
         self.commit(manifest, contributions, idx);
         self.extensions.push(Arc::from(extension));
         Ok(())
@@ -274,6 +293,23 @@ impl Registry {
             tools_seen.push(&tool.id);
         }
 
+        for scaffold in &contributions.scaffolds {
+            if !known(&scaffold.language_id) {
+                return Err(RegisterError::UnknownLanguage {
+                    language_id: scaffold.language_id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            let tool_known = self.build_tools.iter().any(|(t, ..)| t.id == scaffold.build_tool_id)
+                || contributions.build_tools.iter().any(|t| t.id == scaffold.build_tool_id);
+            if !tool_known {
+                return Err(RegisterError::UnknownBuildTool {
+                    tool_id: scaffold.build_tool_id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -304,6 +340,9 @@ impl Registry {
         for tool in contributions.build_tools {
             let static_id: &'static str = Box::leak(tool.id.clone().into_boxed_str());
             self.build_tools.push((tool, static_id, extension_index));
+        }
+        for scaffold in contributions.scaffolds {
+            self.scaffolds.push((scaffold, extension_index));
         }
     }
 
@@ -385,6 +424,39 @@ impl Registry {
 
     pub fn language_servers(&self) -> &[LanguageServerContribution] {
         &self.language_servers
+    }
+
+    /// Every registered extension as a standalone handle — what a caller
+    /// needs to ask a project-wide question from a background thread, where
+    /// borrowing the registry is not an option.
+    pub fn handles(&self) -> Vec<ExtensionHandle> {
+        self.extension_ids
+            .iter()
+            .zip(&self.extensions)
+            .map(|(id, extension)| ExtensionHandle::new(id, extension.clone()))
+            .collect()
+    }
+
+    /// Every kind of project that can be scaffolded, in registration order —
+    /// what the new-project wizard lists.
+    pub fn scaffolds(&self) -> Vec<&ScaffoldContribution> {
+        self.scaffolds.iter().map(|(scaffold, _)| scaffold).collect()
+    }
+
+    /// The files a new project of `spec`'s kind needs, from whichever
+    /// extension declared that target. `None` when nothing scaffolds it.
+    pub fn scaffold_files(&self, spec: &ScaffoldSpec) -> Option<Vec<(std::path::PathBuf, String)>> {
+        let (_, idx) = self
+            .scaffolds
+            .iter()
+            .find(|(s, _)| s.build_tool_id == spec.build_tool_id && s.language_id == spec.language_id)?;
+        self.extensions[*idx].scaffold_files(spec)
+    }
+
+    /// The runtime release the open project declares, as the first extension
+    /// that recognizes the project reports it.
+    pub fn project_release(&self, project_root: &Path) -> Option<ProjectRelease> {
+        self.extensions.iter().find_map(|e| e.project_release(project_root))
     }
 
     /// Every registered build tool, in registration order — what a UI that

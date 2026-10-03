@@ -257,6 +257,134 @@ pub struct TestFailureLocation {
     pub line: usize,
 }
 
+/// One kind of project an extension can scaffold: a build tool and a
+/// language, together, because a scaffold is written for the pair (a Maven
+/// Kotlin project and a Gradle Kotlin one share neither their build file nor
+/// their plugin configuration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScaffoldContribution {
+    pub build_tool_id: BuildToolId,
+    pub language_id: crate::LanguageId,
+    /// Runtime versions a wizard offers for this target, in the order they
+    /// should be listed. Empty means the target has no version to pick.
+    pub runtime_versions: Vec<u32>,
+}
+
+/// What a new project is being asked for. Deliberately not Maven's
+/// vocabulary: `namespace`/`name` are what every toolchain has some form of
+/// (a group id and an artifact id on the JVM), and the extension maps them
+/// onto its own build file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScaffoldSpec {
+    pub build_tool_id: BuildToolId,
+    pub language_id: crate::LanguageId,
+    /// Reverse-DNS-ish grouping — `com.example`. May be empty.
+    pub namespace: String,
+    pub name: String,
+    /// The runtime release the project should target, when its target
+    /// offers a choice.
+    pub runtime_version: Option<u32>,
+}
+
+/// One runnable entry point an extension found in a file — what puts the ▶
+/// in the gutter beside a `main`.
+///
+/// Found syntactically, from the tree the editor already parsed, rather than
+/// asked of a language server: a run marker has to be there the instant a
+/// file opens, before any server has initialized and in a file that belongs
+/// to no project at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunTarget {
+    /// 0-based line the declaration starts on — where the marker goes.
+    pub line: usize,
+    /// What a launch actually runs, in the toolchain's own notation — the
+    /// same string a [`RunSpec::entry_point`] carries.
+    pub entry_point: String,
+    /// The short name to show the user; a tooltip reading `Run Main` beats
+    /// one repeating `com.example.deep.package.Main`.
+    pub label: String,
+}
+
+/// Which language-runtime release a project targets, plus where that was
+/// read from — so the answer can be explained in the UI rather than only
+/// applied. The JVM's `maven.compiler.release` is the motivating case, but
+/// nothing here is JVM-specific: a project declaring the runtime version it
+/// is written against is a general idea, and the editor only ever displays
+/// this or passes it to the language server that asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRelease {
+    /// The major version, normalized (the JVM's legacy `1.8` reads as `8`).
+    pub major: u32,
+    /// The file it came from, relative to the project root.
+    pub file: String,
+    /// The specific setting inside that file, e.g. `maven.compiler.release`.
+    pub setting: String,
+}
+
+/// One configuration key an extension knows a project can set, for
+/// completion in a configuration file. Spring's `spring-configuration-
+/// metadata.json` is what this is modelled on; the shape (a dotted key, an
+/// optional type, documentation and a default) is what any framework's
+/// settings catalogue looks like.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigProperty {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub description: Option<String>,
+    /// Display-ready rather than typed: nothing downstream distinguishes a
+    /// numeric default from a string one, it only shows it.
+    pub default_value: Option<String>,
+}
+
+/// One extension, reachable without naming a particular build tool — for the
+/// project-wide questions (what release does this project target, which
+/// configuration keys does it have) that are not a build tool's own.
+///
+/// Clonable and `Send` for the same reason [`BuildToolHandle`] is: these
+/// answers come from scans that belong on a background thread, which cannot
+/// borrow the registry.
+#[derive(Clone)]
+pub struct ExtensionHandle {
+    pub id: &'static str,
+    extension: Arc<dyn Extension>,
+}
+
+impl std::fmt::Debug for ExtensionHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtensionHandle").field("id", &self.id).finish_non_exhaustive()
+    }
+}
+
+impl ExtensionHandle {
+    pub(crate) fn new(id: &'static str, extension: Arc<dyn Extension>) -> Self {
+        Self { id, extension }
+    }
+
+    /// The release this project declares, or `None` when this extension
+    /// recognizes nothing about the project.
+    pub fn project_release(&self, project_root: &Path) -> Option<ProjectRelease> {
+        self.extension.project_release(project_root)
+    }
+
+    /// Every runnable entry point in an already-parsed file.
+    pub fn run_targets(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        file_stem: &str,
+    ) -> Vec<RunTarget> {
+        self.extension.run_targets(language_id, tree, source, file_stem)
+    }
+
+    /// Every configuration key this extension can offer for `project_root`.
+    /// Resolving these can be slow (it may resolve a classpath), so callers
+    /// run it off the UI thread.
+    pub fn config_properties(&self, project_root: &Path) -> Vec<ConfigProperty> {
+        self.extension.config_properties(project_root)
+    }
+}
+
 /// A detected build tool, bundled with the extension that owns it.
 ///
 /// This is what the core passes around in place of the `BuildTool` enum it

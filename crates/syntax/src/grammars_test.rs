@@ -15,6 +15,7 @@ struct FakeExtension {
     id: &'static str,
     language_id: &'static str,
     source: GrammarSource,
+    node_kinds: fg_extension::NodeKinds,
 }
 
 impl Extension for FakeExtension {
@@ -39,6 +40,7 @@ impl Extension for FakeExtension {
                 language_id: self.language_id.to_string(),
                 source: self.source.clone(),
                 highlight_query: None,
+                node_kinds: self.node_kinds.clone(),
             }],
             ..Default::default()
         }
@@ -59,6 +61,7 @@ fn install_fake(id: &'static str, language_id: &'static str, source: GrammarSour
         id,
         language_id,
         source,
+        node_kinds: fg_extension::NodeKinds::default(),
     }))
 }
 
@@ -172,4 +175,54 @@ fn every_shipped_grammar_is_within_this_builds_abi_range() {
         let abi = ts_language(language).expect("installed").abi_version();
         assert!(supported.contains(&abi), "{language} is ABI {abi}, supported {supported:?}");
     }
+}
+
+/// Sticky scroll and folding ask what a scope or a foldable body is through
+/// `node_kinds`; the answer is the grammar's own, not a table in this crate.
+#[test]
+fn a_grammars_node_vocabulary_is_whatever_its_extension_declared() {
+    let kinds = fg_extension::NodeKinds {
+        scopes: vec!["forge_declaration".to_string()],
+        foldable: vec!["forge_body".to_string()],
+        import: Some("summon".to_string()),
+    };
+    install(&registry_with(FakeExtension {
+        id: "vocabulary-ext",
+        language_id: "vocabulary-lang",
+        // A grammar that fails to load installs nothing, so this needs a
+        // real one — any shipped grammar will do, since what is under test
+        // is the vocabulary that travels beside it, not the parser.
+        source: fg_languages::builtin_registry()
+            .grammar("yaml")
+            .expect("the shipped yaml grammar")
+            .source
+            .clone(),
+        node_kinds: kinds,
+    }));
+
+    let language = Language::new("vocabulary-lang");
+    assert_eq!(crate::node_kinds::scope_kinds(language), ["forge_declaration"]);
+    assert_eq!(crate::node_kinds::foldable_kinds(language), ["forge_body"]);
+    assert_eq!(crate::node_kinds::import_kind(language), Some("summon"));
+}
+
+/// The shipped vocabularies still say what the hardcoded tables used to, so
+/// moving them out of this crate changed no behavior.
+#[test]
+fn the_shipped_grammars_carry_the_vocabularies_the_core_used_to_hardcode() {
+    install(&fg_languages::builtin_registry());
+
+    assert!(crate::node_kinds::scope_kinds(Language::Java).contains(&"method_declaration"));
+    assert!(crate::node_kinds::foldable_kinds(Language::Java).contains(&"class_body"));
+    assert_eq!(crate::node_kinds::import_kind(Language::Java), Some("import_declaration"));
+
+    assert!(crate::node_kinds::foldable_kinds(Language::Kotlin).contains(&"enum_class_body"));
+    assert_eq!(crate::node_kinds::import_kind(Language::Kotlin), Some("import"));
+    // Kotlin's sticky-scroll vocabulary is still underived, and an empty
+    // list is how that is said — not a guess copied from Java.
+    assert!(crate::node_kinds::scope_kinds(Language::Kotlin).is_empty());
+
+    // A format with no vocabulary at all: both features are no-ops for it.
+    assert!(crate::node_kinds::scope_kinds(Language::Yaml).is_empty());
+    assert!(crate::node_kinds::foldable_kinds(Language::Yaml).is_empty());
 }
