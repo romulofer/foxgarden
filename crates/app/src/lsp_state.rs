@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use fg_core::{Diagnostic, Document, Language, Severity};
+use fg_core::{Diagnostic, Document, Severity};
 use fg_extension::{Registry, ServerStartContext};
 use serde_json::{self, json};
 use lsp_types::notification::Notification as _;

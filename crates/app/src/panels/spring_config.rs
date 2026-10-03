@@ -1,7 +1,8 @@
 //! Background classpath scan feeding Spring config property autocomplete
-//! (`PLAN.md` Track 12 Phase 1) — the app-side counterpart to `fg_core`'s
-//! `maven_classpath`/`gradle_classpaths`/`scan_classpath_for_metadata`
-//! (Track 21). Lazily triggered (`ensure_scanning`, called from the
+//! (`PLAN.md` Track 12 Phase 1) — the app-side counterpart to the project's
+//! own build tool resolving a classpath (`BuildToolHandle::
+//! analysis_classpath`) and `fg_core::scan_classpath_for_metadata` reading
+//! Spring's metadata out of it. Lazily triggered (`ensure_scanning`, called from the
 //! completion trigger the first time a `.properties`/`.yml` file actually
 //! needs candidates) rather than eagerly on every project open — real
 //! classpath resolution shells out to `mvn`/`gradle` and can be genuinely
@@ -13,7 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::SpringConfigProperty;
+use fg_core::{BuildToolHandle, SpringConfigProperty};
+use fg_extension::Registry;
 
 /// One project's own scanned properties, plus whichever project root
 /// they're for — a fresh `open_project` (a different root) must invalidate
@@ -24,6 +26,14 @@ pub struct SpringConfigState {
     scanned_root: Option<PathBuf>,
     scan_rx: Option<Receiver<Vec<SpringConfigProperty>>>,
     properties: Vec<SpringConfigProperty>,
+    /// The build tool that resolves this project's classpath, looked up once
+    /// per project rather than per scan: the completion trigger that starts a
+    /// scan runs deep inside the editor widget, which has no registry to ask.
+    build_tool: Option<BuildToolHandle>,
+    /// Which root `build_tool` was detected for, so `observe_project` can be
+    /// called every frame and still only touch the filesystem when the open
+    /// project actually changes.
+    build_tool_root: Option<PathBuf>,
 }
 
 impl SpringConfigState {
@@ -55,6 +65,17 @@ impl SpringConfigState {
         self.scan_rx.is_some()
     }
 
+    /// Keeps the cached build tool in step with whichever project is open —
+    /// called once per frame from `FoxGardenApp::ui`, where the registry is
+    /// in reach. A no-op unless the project root changed since the last call.
+    pub fn observe_project(&mut self, project_root: Option<&Path>, languages: &Registry) {
+        if self.build_tool_root.as_deref() == project_root {
+            return;
+        }
+        self.build_tool_root = project_root.map(Path::to_path_buf);
+        self.build_tool = project_root.and_then(|root| languages.detect_build_tool(root));
+    }
+
     /// Kicks off a background scan for `project_root` if none has run (or
     /// is running) for it yet — a no-op otherwise, so a completion trigger
     /// can call this unconditionally on every keystroke without piling up
@@ -72,10 +93,13 @@ impl SpringConfigState {
         self.properties.clear();
         self.scanned_root = Some(project_root.to_path_buf());
 
+        let Some(tool) = self.build_tool.clone() else {
+            return;
+        };
         let root = project_root.to_path_buf();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let _ = tx.send(scan_project(&root));
+            let _ = tx.send(scan_project(&tool, &root));
         });
         self.scan_rx = Some(rx);
     }
@@ -97,62 +121,13 @@ impl SpringConfigState {
     }
 }
 
-/// Detects the build tool at `project_root` (a plain file-presence check —
-/// this app has no other project-type signal yet) and scans whatever
-/// classpath it resolves to. Neither tool detected, or resolution failing
-/// outright (no `mvn`/`gradle` on `PATH`, a real build error, ...), yields
-/// an empty result rather than an error — the same "silently show nothing"
-/// degrade `fg_core::diff`/`blame` already established for "not a git
-/// repository," since a failed background classpath scan is exactly as
-/// unsurprising to a user who never asked for it directly.
-fn scan_project(project_root: &Path) -> Vec<SpringConfigProperty> {
-    let classpath = if project_root.join("pom.xml").exists() {
-        maven_module_tree_classpath(project_root)
-    } else if project_root.join("build.gradle.kts").exists() || project_root.join("build.gradle").exists() {
-        gradle_project_classpath(project_root)
-    } else {
-        Vec::new()
-    };
-    fg_core::scan_classpath_for_metadata(&classpath)
-}
-
-/// A Maven project's own classpath, module-aware: a plain single-module
-/// `pom.xml` resolves directly, but a multi-module *aggregator* `pom.xml`
-/// (`<packaging>pom</packaging>`, real `<modules>`) has no dependencies of
-/// its own to resolve at all — `mvn dependency:build-classpath` there would
-/// resolve nothing useful, so this reads the aggregator's own `<modules>`
-/// (`fg_core::parse_pom`, Track 21 Phase 1) and resolves each real module
-/// directory's own classpath instead, unioning the results. A module whose
-/// own classpath fails to resolve is skipped rather than failing the whole
-/// scan, same as `scan_classpath_for_metadata`'s own per-jar tolerance.
-fn maven_module_tree_classpath(project_root: &Path) -> Vec<PathBuf> {
-    let module_dirs = match std::fs::read_to_string(project_root.join("pom.xml"))
-        .ok()
-        .and_then(|xml| fg_core::parse_pom(&xml).ok())
-    {
-        Some(project) if !project.modules.is_empty() => project.modules.iter().map(|m| project_root.join(m)).collect(),
-        _ => vec![project_root.to_path_buf()],
-    };
-
-    module_dirs
-        .iter()
-        .filter_map(|dir| fg_core::maven_classpath(dir).ok())
-        .flatten()
-        .collect()
-}
-
-/// A Gradle project's own classpath, every subproject's `compile`/`runtime`
-/// jars unioned in one pass — unlike Maven, `gradle_classpaths` already
-/// walks the whole multi-module tree from a single invocation at the root
-/// (Track 21 Phase 3), so there's no separate aggregator-vs-module case to
-/// handle here.
-fn gradle_project_classpath(project_root: &Path) -> Vec<PathBuf> {
-    fg_core::gradle_classpaths(project_root)
-        .map(|classpaths| {
-            classpaths
-                .into_iter()
-                .flat_map(|c| c.compile.into_iter().chain(c.runtime))
-                .collect()
-        })
-        .unwrap_or_default()
+/// Scans whatever classpath the project's own build tool resolves to.
+/// Resolution failing outright (no `mvn`/`gradle` on `PATH`, a real build
+/// error, ...) yields an empty result rather than an error — the same
+/// "silently show nothing" degrade `fg_core::diff`/`blame` already
+/// established for "not a git repository", since a failed background
+/// classpath scan is exactly as unsurprising to a user who never asked for
+/// it directly.
+fn scan_project(tool: &BuildToolHandle, project_root: &Path) -> Vec<SpringConfigProperty> {
+    fg_core::scan_classpath_for_metadata(&tool.analysis_classpath(project_root))
 }

@@ -2223,8 +2223,8 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.build_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(tool) => match self.build_state.start_build(&root, tool) {
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start_build(&root, &tool) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                     Err(err) => {
                         crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
@@ -2244,9 +2244,9 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_project_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
+            match self.state.languages.detect_build_tool(&root) {
                 Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
-                    Some(config) => match self.build_state.start_run(&root, tool, config) {
+                    Some(config) => match self.build_state.start_run(&root, &tool, config) {
                         Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                         Err(err) => {
                             crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
@@ -2261,8 +2261,8 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_tests_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(tool) => match self.build_state.start_test(&root, tool) {
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start_test(&root, &tool) {
                     Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                     Err(err) => {
                         crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
@@ -2275,14 +2275,16 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_with_coverage_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(fg_core::BuildTool::Maven) => match self.build_state.start_coverage(&root) {
-                    Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
-                    Err(err) => {
-                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) if tool.command(&root, fg_core::BuildTask::Coverage).is_some() => {
+                    match self.build_state.start_coverage(&root, &tool) {
+                        Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                        Err(err) => {
+                            crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                        }
                     }
-                },
-                Some(fg_core::BuildTool::Gradle) => {
+                }
+                Some(_) => {
                     crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string())
                 }
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
@@ -2330,7 +2332,7 @@ impl eframe::App for FoxGardenApp {
             if self.debug_state.is_running() {
                 self.debug_state.stop();
             } else {
-                match fg_core::detect_build_tool(&root) {
+                match self.state.languages.detect_build_tool(&root) {
                     Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
                         Some(config) => {
                             let initial_breakpoints = self
@@ -2342,7 +2344,7 @@ impl eframe::App for FoxGardenApp {
                                 .collect();
                             if let Err(err) =
                                 self.debug_state
-                                    .start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
+                                    .start(&mut self.lsp, &root, &tool, &config, initial_breakpoints)
                             {
                                 crate::errors::report(&mut self.last_error, err);
                             }
@@ -2469,9 +2471,13 @@ impl eframe::App for FoxGardenApp {
             if binary.is_empty() {
                 crate::errors::report(&mut self.last_error, t().errors.spotbugs_not_configured.to_string());
             } else {
-                match fg_core::detect_build_tool(&root) {
-                    Some(tool) => {
-                        let classes_dir = fg_core::default_classes_dir(&root, tool);
+                match self
+                    .state
+                    .languages
+                    .detect_build_tool(&root)
+                    .and_then(|tool| tool.classes_dir(&root))
+                {
+                    Some(classes_dir) => {
                         if classes_dir.is_dir() {
                             self.static_analysis
                                 .run_spotbugs(PathBuf::from(binary), classes_dir, root);
@@ -2504,6 +2510,8 @@ impl eframe::App for FoxGardenApp {
                 Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
+        self.spring_config
+            .observe_project(self.state.project.as_ref().map(|p| p.root.as_path()), &self.state.languages);
         self.spring_config.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
@@ -2708,7 +2716,7 @@ impl eframe::App for FoxGardenApp {
         // IntelliJ has.
         if let Some(entry) = run_request.take() {
             match self.state.project.as_ref().map(|p| p.root.clone()) {
-                Some(root) => match fg_core::detect_build_tool(&root) {
+                Some(root) => match self.state.languages.detect_build_tool(&root) {
                     Some(tool) => {
                         tabs::save_all_dirty_tabs(
                             &mut self.state,
@@ -2722,7 +2730,7 @@ impl eframe::App for FoxGardenApp {
                             main_class: entry.main_class.clone(),
                             ..fg_core::RunConfig::default()
                         };
-                        match self.build_state.start_run(&root, tool, config) {
+                        match self.build_state.start_run(&root, &tool, config) {
                             Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                             Err(err) => crate::errors::report(
                                 &mut self.last_error,

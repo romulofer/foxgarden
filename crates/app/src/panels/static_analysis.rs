@@ -172,11 +172,11 @@ impl StaticAnalysisState {
     }
 
     /// Kicks off a SpotBugs run against `classes_dir` (the project's own
-    /// build tool's default compiled-classes output directory — the
-    /// caller's job to compute and confirm exists, via `fg_core::
-    /// default_classes_dir`, since "no compiled classes yet" is a distinct,
-    /// more actionable error — "run Build first" — than anything this scan
-    /// itself can express) on a background thread.
+    /// build tool's compiled-classes output directory — the caller's job to
+    /// ask the tool for and confirm exists, via `BuildToolHandle::
+    /// classes_dir`, since "no compiled classes yet" is a distinct, more
+    /// actionable error — "run Build first" — than anything this scan itself
+    /// can express) on a background thread.
     pub fn run_spotbugs(&mut self, binary: PathBuf, classes_dir: PathBuf, project_root: PathBuf) {
         self.spotbugs_scan_rx = Some(spawn_scan(move || {
             fg_core::spotbugs_diagnostics(&binary, &classes_dir, &project_root).map_err(|e| e.to_string())

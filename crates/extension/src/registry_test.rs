@@ -1,5 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use super::*;
-use crate::{FilenamePattern, GrammarSource, LanguageContribution};
+use crate::{BuildTask, CommandSpec, FilenamePattern, GrammarSource, LanguageContribution};
 
 /// A stand-in extension built entirely from its contribution set —
 /// Checkpoint 1's "fake extension that registers a fake language". It is
@@ -290,4 +292,144 @@ fn one_extension_declaring_a_language_twice_is_refused() {
         }))),
         Err(RegisterError::DuplicateLanguage { .. })
     ));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Build tools (`PLAN.md` Track 24 Phase 5)
+
+/// An extension contributing two invented build tools, with real behavior
+/// behind them — invented for the same reason the fake languages above are:
+/// the claim is that the registry carries tooling the core knows nothing
+/// about, and Maven would prove the opposite.
+struct FakeToolchain;
+
+impl Extension for FakeToolchain {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: "khazad".to_string(),
+            name: "Khazad toolchain".to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            build_tools: vec![
+                BuildToolContribution {
+                    id: "delve".to_string(),
+                    display_name: "Delve".to_string(),
+                    marker_files: vec!["delve.toml".to_string()],
+                },
+                BuildToolContribution {
+                    id: "mine".to_string(),
+                    display_name: "Mine".to_string(),
+                    marker_files: vec!["mine.toml".to_string(), "mine.yaml".to_string()],
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn build_command(
+        &self,
+        tool_id: &str,
+        project_root: &Path,
+        task: BuildTask,
+    ) -> Option<CommandSpec> {
+        // Only `delve` digs; `mine` deliberately supports nothing, which is
+        // what a tool without a coverage story looks like from here.
+        (tool_id == "delve").then(|| CommandSpec::new("dig", project_root).arg(format!("{task:?}")))
+    }
+
+    fn classes_dir(&self, tool_id: &str, project_root: &Path) -> Option<PathBuf> {
+        (tool_id == "delve").then(|| project_root.join("deep"))
+    }
+}
+
+#[test]
+fn a_contributed_build_tool_is_findable_by_id_and_dispatches_to_its_extension() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeToolchain)).unwrap();
+
+    let delve = registry.build_tool("delve").unwrap();
+    assert_eq!(delve.display_name, "Delve");
+    let command = delve.command(Path::new("/project"), BuildTask::Compile).unwrap();
+    assert_eq!(command.program, PathBuf::from("dig"));
+    assert_eq!(command.args, vec!["Compile"]);
+    assert_eq!(delve.classes_dir(Path::new("/project")).unwrap(), PathBuf::from("/project/deep"));
+
+    // A tool that contributes nothing for a capability is a normal state,
+    // not an error — the editor reports it and carries on.
+    let mine = registry.build_tool("mine").unwrap();
+    assert!(mine.command(Path::new("/project"), BuildTask::Compile).is_none());
+    assert!(mine.classes_dir(Path::new("/project")).is_none());
+
+    assert!(registry.build_tool("cartography").is_none());
+    assert_eq!(registry.build_tools().len(), 2);
+}
+
+#[test]
+fn a_build_tool_is_detected_by_any_of_its_own_marker_files() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeToolchain)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    assert!(registry.detect_build_tool(dir.path()).is_none());
+
+    std::fs::write(dir.path().join("mine.yaml"), "").unwrap();
+    assert_eq!(registry.detect_build_tool(dir.path()).unwrap().id, "mine");
+
+    // Registration order decides ties, so a project carrying both markers
+    // resolves to the first-registered tool rather than to whichever
+    // directory entry happened to be read first.
+    std::fs::write(dir.path().join("delve.toml"), "").unwrap();
+    assert_eq!(registry.detect_build_tool(dir.path()).unwrap().id, "delve");
+}
+
+#[test]
+fn a_directory_whose_marker_name_is_a_directory_is_not_a_project() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeToolchain)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("delve.toml")).unwrap();
+    assert!(registry.detect_build_tool(dir.path()).is_none());
+}
+
+#[test]
+fn two_extensions_cannot_claim_the_same_build_tool_id() {
+    struct Impostor;
+    impl Extension for Impostor {
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "moria".to_string(),
+                name: "moria".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            Contributions {
+                build_tools: vec![BuildToolContribution {
+                    id: "delve".to_string(),
+                    display_name: "Delve (also)".to_string(),
+                    marker_files: vec!["delve.toml".to_string()],
+                }],
+                ..Default::default()
+            }
+        }
+    }
+
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeToolchain)).unwrap();
+    assert_eq!(
+        registry.register(Box::new(Impostor)),
+        Err(RegisterError::DuplicateBuildTool {
+            tool_id: "delve".to_string(),
+            extension_id: "moria".to_string(),
+        })
+    );
+    // Rejected whole: the impostor left nothing behind, not even its name.
+    assert_eq!(registry.extensions().len(), 1);
+    assert_eq!(registry.build_tool("delve").unwrap().display_name, "Delve");
 }

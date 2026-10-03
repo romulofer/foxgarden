@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::{
-    Contributions, Extension, ExtensionManifest, GrammarContribution, JdkRuntime, LanguageId,
-    LanguageIndex, LanguageServerContribution, RegisteredLanguage, ResolvedServerStart,
+    BuildToolContribution, BuildToolHandle, Contributions, Extension, ExtensionManifest, GrammarContribution,
+    JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, RegisteredLanguage, ResolvedServerStart,
     ServerStartContext, CURRENT_SCHEMA_VERSION,
 };
 
@@ -46,6 +48,11 @@ pub enum RegisterError {
     /// Two language servers claim the same server id.
     DuplicateLanguageServer {
         server_id: String,
+        extension_id: String,
+    },
+    /// Two extensions claim the same build tool id.
+    DuplicateBuildTool {
+        tool_id: String,
         extension_id: String,
     },
 }
@@ -93,6 +100,10 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} declares language server {server_id}, which is already registered"
             ),
+            Self::DuplicateBuildTool { tool_id, extension_id } => write!(
+                f,
+                "extension {extension_id} declares build tool {tool_id}, which is already registered"
+            ),
         }
     }
 }
@@ -113,7 +124,10 @@ impl std::error::Error for RegisterError {}
 pub struct Registry {
     /// Stored in registration order so index lookups for `server_extension`
     /// remain valid after further registrations.
-    extensions: Vec<Box<dyn Extension>>,
+    /// `Arc`, not `Box`: a [`BuildToolHandle`] handed to a build that
+    /// streams output for minutes has to keep the owning extension alive
+    /// without borrowing the registry for that whole time.
+    extensions: Vec<Arc<dyn Extension>>,
     /// Manifests in the same order as `extensions`, kept separately so
     /// `extensions()` can return a slice without borrowing from temporaries.
     manifests: Vec<ExtensionManifest>,
@@ -122,6 +136,11 @@ pub struct Registry {
     server_extension: HashMap<String, usize>,
     languages: HashMap<LanguageId, RegisteredLanguage>,
     language_servers: Vec<LanguageServerContribution>,
+    /// Registration order, which is also detection order: the first
+    /// registered tool whose marker file exists wins. A `Vec` rather than a
+    /// map because order is the semantics here, not an implementation
+    /// detail. The `usize` indexes `extensions`.
+    build_tools: Vec<(BuildToolContribution, &'static str, usize)>,
     index: LanguageIndex,
 }
 
@@ -131,6 +150,7 @@ impl std::fmt::Debug for Registry {
             .field("extensions", &self.manifests.iter().map(|m| &m.id).collect::<Vec<_>>())
             .field("languages", &self.languages.keys().collect::<Vec<_>>())
             .field("language_servers", &self.language_servers.iter().map(|s| &s.id).collect::<Vec<_>>())
+            .field("build_tools", &self.build_tools.iter().map(|(t, ..)| &t.id).collect::<Vec<_>>())
             .finish()
     }
 }
@@ -151,8 +171,8 @@ impl Registry {
         for server in &contributions.language_servers {
             self.server_extension.insert(server.id.clone(), idx);
         }
-        self.commit(manifest, contributions);
-        self.extensions.push(extension);
+        self.commit(manifest, contributions, idx);
+        self.extensions.push(Arc::from(extension));
         Ok(())
     }
 
@@ -243,12 +263,23 @@ impl Registry {
             servers_seen.push(&server.id);
         }
 
+        let mut tools_seen: Vec<&str> = Vec::new();
+        for tool in &contributions.build_tools {
+            if self.build_tools.iter().any(|(t, ..)| t.id == tool.id) || tools_seen.contains(&tool.id.as_str()) {
+                return Err(RegisterError::DuplicateBuildTool {
+                    tool_id: tool.id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            tools_seen.push(&tool.id);
+        }
+
         Ok(())
     }
 
     /// Infallible by construction — `validate` has already rejected every
     /// case this could otherwise have to handle.
-    fn commit(&mut self, manifest: ExtensionManifest, contributions: Contributions) {
+    fn commit(&mut self, manifest: ExtensionManifest, contributions: Contributions, extension_index: usize) {
         let extension_id = manifest.id.clone();
         self.manifests.push(manifest);
         for language in contributions.languages {
@@ -270,6 +301,10 @@ impl Registry {
             }
         }
         self.language_servers.extend(contributions.language_servers);
+        for tool in contributions.build_tools {
+            let static_id: &'static str = Box::leak(tool.id.clone().into_boxed_str());
+            self.build_tools.push((tool, static_id, extension_index));
+        }
     }
 
     /// The manifests of all registered extensions, in registration order.
@@ -350,6 +385,38 @@ impl Registry {
 
     pub fn language_servers(&self) -> &[LanguageServerContribution] {
         &self.language_servers
+    }
+
+    /// Every registered build tool, in registration order — what a UI that
+    /// asks the user to pick one (the new-project wizard) lists.
+    pub fn build_tools(&self) -> Vec<BuildToolHandle> {
+        self.build_tools
+            .iter()
+            .map(|(tool, static_id, idx)| {
+                BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())
+            })
+            .collect()
+    }
+
+    pub fn build_tool(&self, tool_id: &str) -> Option<BuildToolHandle> {
+        self.build_tools.iter().find(|(tool, ..)| tool.id == tool_id).map(
+            |(tool, static_id, idx)| {
+                BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())
+            },
+        )
+    }
+
+    /// Which registered tool builds the project at `project_root`, by marker
+    /// file presence. Replaces the core's own hardcoded `pom.xml`/
+    /// `build.gradle` check; `None` (no tool claims this directory) stays a
+    /// normal answer, exactly as it was before.
+    pub fn detect_build_tool(&self, project_root: &Path) -> Option<BuildToolHandle> {
+        self.build_tools
+            .iter()
+            .find(|(tool, ..)| tool.marker_files.iter().any(|name| project_root.join(name).is_file()))
+            .map(|(tool, static_id, idx)| {
+                BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())
+            })
     }
 }
 

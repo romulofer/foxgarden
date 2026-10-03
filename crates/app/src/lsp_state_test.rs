@@ -820,7 +820,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
         .start(
             &mut state,
             root,
-            fg_core::BuildTool::Maven,
+            &test_support::languages().build_tool("maven").expect("the spring extension contributes maven"),
             &run_config,
             vec![(main_java.clone(), HashSet::from([3]))],
         )

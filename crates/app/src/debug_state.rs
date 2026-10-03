@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use fg_core::{BuildTool, Document, RunConfig};
+use fg_core::{BuildToolHandle, Document, RunConfig};
 use serde_json::{Value, json};
 
 use crate::dap_client::{DapResult, DapSession};
@@ -186,7 +186,7 @@ enum VarFetch {
 /// extension's own `Configuration.md`; `classPaths`/`modulePaths`/`args`/
 /// `env`/`cwd`/`console` confirmed against its `dist/extension.js`, which
 /// resolves and forwards each verbatim. `classPaths` is handed real
-/// already-resolved absolute paths (`fg_core::resolve_classpath`, the same
+/// already-resolved absolute paths (`BuildToolHandle::runtime_classpath`, the same
 /// Track 21 resolution `Run`/`Track 22` already use) rather than the
 /// `"$Auto"` sentinel the real extension supports for its own jdt.ls-side
 /// resolution — this app resolves it client-side already, no reason to ask
@@ -297,14 +297,16 @@ impl DebugState {
         &mut self,
         lsp: &mut LspState,
         project_root: &Path,
-        tool: BuildTool,
+        tool: &BuildToolHandle,
         run_config: &RunConfig,
         initial_breakpoints: Vec<(PathBuf, HashSet<usize>)>,
     ) -> Result<(), String> {
         if !self.can_start() {
             return Err("a debug session is already starting or running".to_string());
         }
-        let classpath = fg_core::resolve_classpath(project_root, tool).map_err(|error| error.to_string())?;
+        let classpath = tool
+            .runtime_classpath(project_root)
+            .unwrap_or_else(|| Err(format!("{} cannot resolve a classpath", tool.display_name)))?;
         let launch_args = build_launch_args(project_root, run_config, &classpath);
         let rx = lsp
             .request_start_debug_session()

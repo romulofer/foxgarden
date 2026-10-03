@@ -24,13 +24,19 @@
 //! loaded from outside the binary.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tree_sitter_language::LanguageFn;
 
 mod registry;
+mod tooling;
 
 pub use registry::{RegisterError, Registry};
+pub use tooling::{
+    BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, CoverageReport,
+    CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
+    summarize,
+};
 
 /// A registered language's stable identifier — `"java"`, `"kotlin"`,
 /// `"yaml"`. Lowercase by convention and used as the key everywhere a
@@ -251,6 +257,7 @@ pub struct Contributions {
     pub languages: Vec<LanguageContribution>,
     pub grammars: Vec<GrammarContribution>,
     pub language_servers: Vec<LanguageServerContribution>,
+    pub build_tools: Vec<BuildToolContribution>,
 }
 
 /// One extension.
@@ -299,6 +306,78 @@ pub trait Extension: Send + Sync {
             initialization_options: server.initialization_options,
             restart_key: String::new(),
         }))
+    }
+
+    /// The process that performs `task` for build tool `tool_id`, or `None`
+    /// when this extension does not own that tool, or owns it but has no
+    /// support for that particular task (coverage being the realistic case).
+    ///
+    /// Every build-tool method below is defaulted to "nothing", so an
+    /// extension that contributes no build tool implements none of them.
+    fn build_command(&self, _tool_id: &str, _project_root: &Path, _task: BuildTask) -> Option<CommandSpec> {
+        None
+    }
+
+    /// The process that launches the project's own program for `run`.
+    /// `Some(Err(..))` when the tool owns this but could not assemble the
+    /// launch (classpath resolution failed, no runnable module).
+    fn run_command(&self, _tool_id: &str, _project_root: &Path, _run: &RunSpec) -> Option<Result<CommandSpec, String>> {
+        None
+    }
+
+    /// Where `tool_id`'s own build drops compiled output under
+    /// `project_root`. Not verified to exist — a project that has not been
+    /// built yet simply has nothing there, which callers interpret
+    /// themselves.
+    fn classes_dir(&self, _tool_id: &str, _project_root: &Path) -> Option<PathBuf> {
+        None
+    }
+
+    /// The project's full runtime path, compiled output included, most
+    /// specific first.
+    fn runtime_classpath(&self, _tool_id: &str, _project_root: &Path) -> Option<Result<Vec<PathBuf>, String>> {
+        None
+    }
+
+    /// A tolerant classpath for metadata scanning — see
+    /// [`BuildToolHandle::analysis_classpath`]. Defaults to nothing found
+    /// rather than to `runtime_classpath`, since "strict resolution, errors
+    /// surfaced" and "best effort, silence on failure" are genuinely
+    /// different jobs and quietly conflating them would make a background
+    /// scan able to fail a user-initiated Run.
+    fn analysis_classpath(&self, _tool_id: &str, _project_root: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// The diagnostic `line` of `tool_id`'s own build output names, if any.
+    /// Called once per output line as it arrives, so it must stay cheap and
+    /// must never touch the filesystem.
+    fn parse_build_output_line(&self, _tool_id: &str, _line: &str) -> Option<BuildProblem> {
+        None
+    }
+
+    /// The coverage report the last coverage run wrote, read and resolved to
+    /// real source files. `None` when the tool has no coverage support at
+    /// all; `Err` when a report was expected but could not be read.
+    fn coverage_results(&self, _tool_id: &str, _project_root: &Path) -> Option<Result<CoverageReport, String>> {
+        None
+    }
+
+    /// Every test case the last test run reported. Empty rather than `None`
+    /// — "the test task never ran" and "it ran and reported nothing" are
+    /// both ordinary, and neither is an error worth a separate arm.
+    fn test_results(&self, _tool_id: &str, _project_root: &Path) -> Vec<TestCase> {
+        Vec::new()
+    }
+
+    /// Where a failing `case` lives, for click-to-jump.
+    fn test_failure_location(
+        &self,
+        _tool_id: &str,
+        _project_root: &Path,
+        _case: &TestCase,
+    ) -> Option<TestFailureLocation> {
+        None
     }
 }
 

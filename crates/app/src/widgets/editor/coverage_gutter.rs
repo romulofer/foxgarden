@@ -1,7 +1,7 @@
 //! Coverage gutter (`PLAN.md` Track 13 Phase 1, Maven-only): paints a thin
 //! colored bar per line JaCoCo reported coverage data for, from
 //! `fg_core::Document::coverage_lines` (parsed from the last "Run with
-//! Coverage" run — see `fg_core::coverage::parse_jacoco_xml`). This is the
+//! Coverage" run — see `BuildToolHandle::coverage_results`). This is the
 //! visual half; the background run/parse itself is `panels::build_panel`.
 //! Mirrors `diff_gutter.rs` exactly — same const-width/paint-fn/row-lookup
 //! shape, one more independent gutter column.

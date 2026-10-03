@@ -7,7 +7,7 @@ use fg_extension::Registry;
 use ropey::Rope;
 
 use crate::blame::BlameLine;
-use crate::coverage::LineCoverage;
+use fg_extension::LineCoverage;
 use crate::diagnostic::Diagnostic;
 use crate::diff::DiffHunk;
 use crate::language::Language;

@@ -31,6 +31,20 @@ pub struct RunConfig {
     pub working_dir: Option<PathBuf>,
 }
 
+impl RunConfig {
+    /// The subset a build tool's extension needs to assemble a real launch —
+    /// everything but this config's own name, which is editor bookkeeping.
+    pub fn to_run_spec(&self) -> fg_extension::RunSpec {
+        fg_extension::RunSpec {
+            entry_point: self.main_class.clone(),
+            vm_args: self.vm_args.clone(),
+            program_args: self.program_args.clone(),
+            env: self.env.clone(),
+            working_dir: self.working_dir.clone(),
+        }
+    }
+}
+
 /// `PathBuf`'s own `serde` impl rejects a non-UTF-8 path (real, if rare, on
 /// Unix) rather than losing information — the wrong tradeoff here, since it
 /// would turn one odd `working_dir` into a hard failure that loses every

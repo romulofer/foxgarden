@@ -10,7 +10,7 @@ use std::process::Command;
 
 /// A `Dockerfile` at the project root (`docker build`'s own default build
 /// context) — no support for a Dockerfile named or located elsewhere,
-/// matching `detect_build_tool`'s own "root-only" scope for `pom.xml`/
+/// matching build-tool detection's own "root-only" scope for `pom.xml`/
 /// `build.gradle`.
 pub fn has_dockerfile(project_root: &Path) -> bool {
     project_root.join("Dockerfile").is_file()
