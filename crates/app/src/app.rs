@@ -11,10 +11,10 @@ use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::debug_state;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
-use crate::rename::RenameState;
 use crate::jdk_registry::JdkRegistry;
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
+use crate::panels::bottom_dock::{self, BottomDock, BottomTab};
 use crate::panels::build_panel;
 use crate::panels::debug_panel;
 use crate::panels::debug_toolbar;
@@ -35,15 +35,16 @@ use crate::panels::status_bar;
 use crate::panels::tabs;
 use crate::panels::terminal_panel;
 use crate::pty_session::PtySession;
+use crate::rename::RenameState;
 use crate::style::fonts::EditorFont;
 use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
-use crate::widgets::modal::show_modal;
 use crate::widgets::editor::{
     CodeActionGutter, CompletionState, FindReferencesState, GenerateAccessorsDialog, GenerateMethodDialog, HoverState,
     OverrideMethodDialog, PeekState, RenameBox, UserTemplates, jump_to,
 };
+use crate::widgets::modal::show_modal;
 
 const LAST_PROJECT_KEY: &str = "last_project";
 /// Newline-joined roots of previously opened projects, most recent first —
@@ -77,9 +78,15 @@ const SHOW_STICKY_SCROLL_KEY: &str = "show_sticky_scroll";
 const CURSOR_BLINK_KEY: &str = "cursor_blink";
 const SHOW_EDITOR_OUTLINE_KEY: &str = "show_editor_outline";
 const SHOW_INLINE_BLAME_KEY: &str = "show_inline_blame";
+/// Pre-dock keys, still *read* so an existing install's open terminal/build
+/// panel survives the upgrade to the tabbed dock (`panels::bottom_dock`);
+/// nothing writes them any more — see `restore_settings`/`persist_settings`.
 const TERMINAL_PANEL_VISIBLE_KEY: &str = "terminal_panel_visible";
-const SOURCE_CONTROL_PANEL_VISIBLE_KEY: &str = "source_control_panel_visible";
 const BUILD_PANEL_VISIBLE_KEY: &str = "build_panel_visible";
+const UI_SCALE_KEY: &str = "ui_scale";
+const BOTTOM_DOCK_OPEN_KEY: &str = "bottom_dock_open";
+const BOTTOM_DOCK_TAB_KEY: &str = "bottom_dock_tab";
+const SOURCE_CONTROL_PANEL_VISIBLE_KEY: &str = "source_control_panel_visible";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
@@ -140,6 +147,11 @@ const DRAFT_INTERVAL_SECONDS: f64 = 5.0;
 
 pub struct FoxGardenApp {
     state: EditorState,
+    /// Built once, on the first frame that has an `egui::Context` to clone,
+    /// and handed to every language server spawned after it — a per-frame
+    /// `Arc::new` for something only a session spawn ever consumes would be
+    /// pure allocation on the paint path.
+    lsp_wake: Option<crate::lsp_client::Waker>,
     /// Kept index-aligned with `state.open_tabs`: one incremental parser per
     /// open document.
     parsers: Vec<Option<IncrementalParser>>,
@@ -263,17 +275,33 @@ pub struct FoxGardenApp {
     /// bar together; this hides only the project panel, leaving the menu bar
     /// (and so a way back via the View menu) in place.
     side_panel_visible: bool,
-    /// Whether the terminal panel is docked open at the bottom — toggled by
-    /// the View menu's "Terminal Panel" checkbox or `Ctrl+\``, same
-    /// "one flag, two triggers" shape as `side_panel_visible`. Persisted
-    /// across restarts just like `side_panel_visible` — a dead shell
-    /// process has no scrollback/state worth resuming (`SPEC.md` §8's own
-    /// non-goal), but the *panel being open* is itself a preference worth
-    /// remembering; `FoxGardenApp::new` spawns a fresh session for it right
-    /// after restoring this flag, the same "opening the terminal starts a
-    /// shell" convention `Ctrl+\``'s own handler already established, so a
-    /// relaunch resumes to a working terminal rather than an empty panel.
-    terminal_panel_visible: bool,
+    /// Whether the bottom dock is open and, if so, which of its tabs
+    /// (Terminal / Build Output / Profiler) it's showing — see
+    /// `panels::bottom_dock`, which replaced the three independent
+    /// `*_panel_visible` booleans those panels used to carry. Both halves
+    /// are persisted across restarts, just like `side_panel_visible`: a
+    /// dead shell process has no scrollback/state worth resuming
+    /// (`SPEC.md` §8's own non-goal), but *which panel was open* is itself
+    /// a preference worth remembering. `FoxGardenApp::new` spawns a fresh
+    /// terminal session when the restored dock lands on the Terminal tab,
+    /// the same "opening the terminal starts a shell" convention
+    /// `Ctrl+\``'s own handler established, so a relaunch resumes to a
+    /// Whole-interface zoom for low vision (Settings > Accessibility…), as
+    /// a multiplier handed to `egui::Context::set_zoom_factor` — 1.0 is the
+    /// default size. Distinct from `font_size`, which only scales code
+    /// inside the editor: this scales the menu bar, the project tree, tab
+    /// labels, dialogs and the status bar along with it, which is the whole
+    /// reason it exists as its own setting. Persisted, like every other
+    /// Settings choice.
+    ui_scale: f32,
+    /// working terminal rather than an empty panel.
+    bottom_dock: BottomDock,
+    /// Whether the dock showed its Terminal tab at the end of the previous
+    /// frame, so `ui` can spot the closed -> showing transition that starts
+    /// a shell — see its own comment there for why that check can't be a
+    /// within-frame one. Runtime-only; a fresh launch starts it `false` and
+    /// `FoxGardenApp::new`'s own spawn covers a restored-open dock.
+    terminal_tab_showing_last_frame: bool,
     /// Kept index-aligned with `state.terminal_tabs`, same shape as
     /// `parsers`/`open_tabs`: each session's real pty child process/writer/
     /// output can't live on `EditorState` (`crates/core` stays headless,
@@ -436,18 +464,19 @@ pub struct FoxGardenApp {
     /// relaunch, a snapshot list is cheap to re-scan the next time it's
     /// opened.
     file_history: crate::panels::file_history::FileHistoryState,
-    /// Whether the Build Output panel is docked open at the bottom —
-    /// toggled by the View menu's "Build Output" checkbox, or automatically
-    /// whenever Run > Build starts a new build (`PLAN.md` Track 22 Phase
-    /// 1), same "one flag, several triggers" shape `terminal_panel_visible`
-    /// already established. Persisted across restarts the same way — like
-    /// the Source Control panel, there's no running process worth resuming
-    /// on relaunch, just the panel being open at all.
-    build_panel_visible: bool,
     /// The Build Output panel's own accumulated log lines plus any
     /// in-flight `mvn`/`gradle` build — see `panels::build_panel::
     /// BuildState`. Runtime-only: a fresh launch has no build to resume.
     build_state: build_panel::BuildState,
+    /// async-profiler installer plus at most one in-flight capture against a
+    /// launched Run's JVM (`PLAN.md` Track 26 Phase 1) — see
+    /// `profiler_state::ProfilerState`. Runtime-only, same as `build_state`.
+    profiler_state: crate::profiler_state::ProfilerState,
+    /// The Profiler panel's zoom/focus state (`PLAN.md` Track 26 Phase 2).
+    /// Runtime-only: it has nothing worth persisting across a relaunch, the
+    /// same as `build_state`. Whether the panel is *shown* lives on
+    /// `bottom_dock` with its two sibling panels'.
+    flame_graph: crate::widgets::flame_graph::FlameGraphState,
     /// One in-flight or attached Java debug session (`PLAN.md` Track 23
     /// Phase 1) — see `debug_state::DebugState`. Runtime-only, same as
     /// `build_state`: no real process is ever worth trying to resume across
@@ -608,7 +637,13 @@ fn close_tabs_under(state: &mut EditorState, parsers: &mut Vec<Option<Incrementa
 /// empty-suffix case is handled separately, without going through `join` at
 /// all.
 fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParser>], old: &Path, new: &Path) {
-    for (index, doc) in state.open_tabs.iter_mut().enumerate() {
+    // Split-borrowed so the loop below can read the language registry
+    // while holding `open_tabs` mutably — they are separate fields, but
+    // only an explicit destructure tells the borrow checker that.
+    let EditorState {
+        languages, open_tabs, ..
+    } = state;
+    for (index, doc) in open_tabs.iter_mut().enumerate() {
         let Ok(suffix) = doc.path().strip_prefix(old) else {
             continue;
         };
@@ -619,10 +654,9 @@ fn handle_rename(state: &mut EditorState, parsers: &mut [Option<IncrementalParse
         };
         doc.path = new_path.clone();
 
-        let new_language = new_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension);
+        let new_language = languages
+            .language_for_path(&new_path)
+            .map(|registered| Language::new(registered.static_id));
         if new_language != doc.language {
             doc.language = new_language;
             parsers[index] = tabs::open_parser_for(doc);
@@ -879,7 +913,11 @@ fn restore_session(
 fn persist_session(storage: &mut dyn eframe::Storage, state: &EditorState, recent_projects: &[PathBuf]) {
     storage.set_string(
         RECENT_PROJECTS_KEY,
-        recent_projects.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n"),
+        recent_projects
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
     if let Some(project) = &state.project {
         storage.set_string(LAST_PROJECT_KEY, project.root.to_string_lossy().into_owned());
@@ -925,6 +963,48 @@ fn stored_language(storage: Option<&dyn eframe::Storage>) -> Option<fg_i18n::Lan
         .and_then(|tag| fg_i18n::Lang::from_tag(&tag))
 }
 
+/// Keeps an interface scale inside what Settings > Accessibility… itself
+/// offers — a hand-edited settings file, or a `Ctrl+=` held down past the
+/// top of the range, can otherwise produce a zoom nothing on screen is
+/// usable at (and which the user would then have to edit the settings file
+/// to escape from, the menu being unreadable).
+fn clamp_ui_scale(scale: f32) -> f32 {
+    scale.clamp(*menu_bar::UI_SCALE_RANGE.start(), *menu_bar::UI_SCALE_RANGE.end())
+}
+
+/// Restores the bottom dock (`panels::bottom_dock`), including the
+/// one-way migration off the three separate `*_panel_visible` flags that
+/// preceded it.
+///
+/// An install upgrading into the dock has no `BOTTOM_DOCK_*` keys but may
+/// well have a terminal or build panel saved as open, and silently
+/// swallowing that would read as "the upgrade closed my terminal". So the
+/// legacy keys decide both halves when the new ones are absent: open if
+/// *either* old panel was, on the Terminal tab if that one was open (it
+/// owned the shortcut, so it's the likelier of the two to have been the one
+/// in use) and the Build tab otherwise. The profiler had no persisted flag
+/// of its own to migrate — it only ever opened itself when a capture
+/// landed.
+fn restore_bottom_dock(storage: &dyn eframe::Storage) -> BottomDock {
+    if let Some(open) = storage.get_string(BOTTOM_DOCK_OPEN_KEY) {
+        let active = storage
+            .get_string(BOTTOM_DOCK_TAB_KEY)
+            .and_then(|tab| BottomTab::from_key(&tab))
+            .unwrap_or_default();
+        return BottomDock::restored(open == "true", active);
+    }
+    let terminal_was_open = storage
+        .get_string(TERMINAL_PANEL_VISIBLE_KEY)
+        .is_some_and(|v| v == "true");
+    let build_was_open = storage.get_string(BUILD_PANEL_VISIBLE_KEY).is_some_and(|v| v == "true");
+    let active = if terminal_was_open {
+        BottomTab::Terminal
+    } else {
+        BottomTab::Build
+    };
+    BottomDock::restored(terminal_was_open || build_was_open, active)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is an independently-owned Settings value restored from its own storage key, not a bundle waiting to be a struct — same shape and reasoning as menu_bar::show's own allowance"
@@ -938,9 +1018,9 @@ fn restore_settings(
     view_settings: &mut ViewSettings,
     side_panel_width: &mut f32,
     side_panel_visible: &mut bool,
-    terminal_panel_visible: &mut bool,
+    ui_scale: &mut f32,
+    bottom_dock: &mut BottomDock,
     source_control_visible: &mut bool,
-    build_panel_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
     auto_save_settings: &mut AutoSaveSettings,
@@ -998,14 +1078,12 @@ fn restore_settings(
     if let Some(visible) = storage.get_string(SIDE_PANEL_VISIBLE_KEY) {
         *side_panel_visible = visible == "true";
     }
-    if let Some(visible) = storage.get_string(TERMINAL_PANEL_VISIBLE_KEY) {
-        *terminal_panel_visible = visible == "true";
+    if let Some(scale) = storage.get_string(UI_SCALE_KEY).and_then(|s| s.parse::<f32>().ok()) {
+        *ui_scale = clamp_ui_scale(scale);
     }
+    *bottom_dock = restore_bottom_dock(storage);
     if let Some(visible) = storage.get_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY) {
         *source_control_visible = visible == "true";
-    }
-    if let Some(visible) = storage.get_string(BUILD_PANEL_VISIBLE_KEY) {
-        *build_panel_visible = visible == "true";
     }
     if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
         custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
@@ -1095,9 +1173,9 @@ fn persist_settings(
     view_settings: ViewSettings,
     side_panel_width: f32,
     side_panel_visible: bool,
-    terminal_panel_visible: bool,
+    ui_scale: f32,
+    bottom_dock: BottomDock,
     source_control_visible: bool,
-    build_panel_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
     auto_save_settings: AutoSaveSettings,
@@ -1124,9 +1202,10 @@ fn persist_settings(
     storage.set_string(SHOW_INLINE_BLAME_KEY, view_settings.show_inline_blame.to_string());
     storage.set_string(SIDE_PANEL_WIDTH_KEY, side_panel_width.to_string());
     storage.set_string(SIDE_PANEL_VISIBLE_KEY, side_panel_visible.to_string());
-    storage.set_string(TERMINAL_PANEL_VISIBLE_KEY, terminal_panel_visible.to_string());
+    storage.set_string(UI_SCALE_KEY, ui_scale.to_string());
+    storage.set_string(BOTTOM_DOCK_OPEN_KEY, bottom_dock.is_open().to_string());
+    storage.set_string(BOTTOM_DOCK_TAB_KEY, bottom_dock.active().key().to_string());
     storage.set_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY, source_control_visible.to_string());
-    storage.set_string(BUILD_PANEL_VISIBLE_KEY, build_panel_visible.to_string());
     storage.set_string(
         CUSTOM_JAVA_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.java),
@@ -1166,7 +1245,10 @@ fn persist_settings(
         .to_string(),
     );
     storage.set_string(AUTO_SAVE_IDLE_SECONDS_KEY, auto_save_settings.idle_seconds.to_string());
-    storage.set_string(TRIM_TRAILING_WHITESPACE_KEY, trim_trailing_whitespace_on_save.to_string());
+    storage.set_string(
+        TRIM_TRAILING_WHITESPACE_KEY,
+        trim_trailing_whitespace_on_save.to_string(),
+    );
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
     storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
     storage.set_string(
@@ -1187,9 +1269,24 @@ fn persist_settings(
 
 impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut state = EditorState::new();
+        // Registering the shipped extensions is what gives this editor any
+        // languages at all — an `EditorState` with an empty registry opens
+        // every file as plain text. The registrations go in before
+        // anything restores a session below, since a restored tab's
+        // language is resolved as it is opened.
+        let mut state = EditorState::with_languages(fg_languages::builtin_registry());
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
+        // Declaring a language and being able to parse it are two separate
+        // things since Track 24 Phase 3: an extension contributes a
+        // grammar, and this is where the editor actually loads the ones it
+        // was given. One grammar failing is not a reason to refuse to
+        // start — that language degrades to "opens, edits, paints plain" —
+        // so the failures are surfaced and the rest of the session
+        // proceeds.
+        for error in syntax::install_grammars(&state.languages) {
+            crate::errors::report(&mut last_error, error.to_string());
+        }
         let mut editor_font = EditorFont::default();
         let mut font_size = DEFAULT_FONT_SIZE;
         let mut dark_mode = DEFAULT_DARK_MODE;
@@ -1197,9 +1294,9 @@ impl FoxGardenApp {
         let mut view_settings = ViewSettings::default();
         let mut side_panel_width = DEFAULT_SIDE_PANEL_WIDTH;
         let mut side_panel_visible = true;
-        let mut terminal_panel_visible = false;
+        let mut ui_scale = 1.0;
+        let mut bottom_dock = BottomDock::default();
         let mut source_control_visible = false;
-        let mut build_panel_visible = false;
         let mut custom_templates = UserTemplates::default();
         let mut external_tool_paths = ExternalToolPaths::default();
         let mut auto_save_settings = AutoSaveSettings::default();
@@ -1238,9 +1335,9 @@ impl FoxGardenApp {
                 &mut view_settings,
                 &mut side_panel_width,
                 &mut side_panel_visible,
-                &mut terminal_panel_visible,
+                &mut ui_scale,
+                &mut bottom_dock,
                 &mut source_control_visible,
-                &mut build_panel_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
                 &mut auto_save_settings,
@@ -1250,12 +1347,19 @@ impl FoxGardenApp {
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
+        // The restored accessibility zoom has to reach egui before the
+        // first frame renders — `ui`'s own sync reads *from* the context,
+        // so without this the persisted value would be adopted away on
+        // frame one and the user's setting would silently reset on every
+        // launch.
+        cc.egui_ctx.set_zoom_factor(ui_scale);
 
         let (file_event_tx, file_event_rx) = std::sync::mpsc::channel();
         let file_watcher = notify::recommended_watcher(file_event_tx).ok();
 
         let mut app = Self {
             state,
+            lsp_wake: None,
             parsers,
             pending_close: Vec::new(),
             toasts: crate::toasts::Toasts::default(),
@@ -1280,12 +1384,15 @@ impl FoxGardenApp {
             side_panel: SidePanelState::default(),
             side_panel_width,
             side_panel_visible,
-            terminal_panel_visible,
+            ui_scale,
+            bottom_dock,
+            terminal_tab_showing_last_frame: false,
             source_control_visible,
             git_stage: GitStageState::default(),
             file_history: crate::panels::file_history::FileHistoryState::default(),
-            build_panel_visible,
             build_state: build_panel::BuildState::default(),
+            profiler_state: crate::profiler_state::ProfilerState::default(),
+            flame_graph: crate::widgets::flame_graph::FlameGraphState::default(),
             debug_state: debug_state::DebugState::default(),
             terminal_sessions: Vec::new(),
             menu_bar: MenuBarState::default(),
@@ -1328,7 +1435,7 @@ impl FoxGardenApp {
         // away, the same "opening the terminal starts a shell" convention
         // `Ctrl+\``'s own handler already uses, so the panel resumes to a
         // working terminal instead of the empty "No terminal session" state.
-        if app.terminal_panel_visible {
+        if app.bottom_dock.shows(BottomTab::Terminal) {
             new_terminal_session(
                 &mut app.state,
                 &mut app.terminal_sessions,
@@ -1412,8 +1519,13 @@ impl FoxGardenApp {
         let outcome = show_modal(ui, "restore_drafts", Some(names.len()), |ui, _| {
             ui.label(msg::unsaved_work_found(names.len()));
             ui.weak(names.join("\n"));
-            ui.horizontal(|ui| (ui.button(t().common.restore).clicked(), ui.button(t().tabs.discard).clicked()))
-                .inner
+            ui.horizontal(|ui| {
+                (
+                    ui.button(t().common.restore).clicked(),
+                    ui.button(t().tabs.discard).clicked(),
+                )
+            })
+            .inner
         });
 
         let Some(((restore, discard), escaped)) = outcome else {
@@ -1485,19 +1597,17 @@ impl FoxGardenApp {
             Command::RecentFiles => self.quick_switcher.toggle(),
             // The editor owns diagnostic navigation (it needs the caret),
             // so this arrives as the same key event pressing F8 does.
-            Command::NextDiagnostic => self
-                .pending_editor_input
-                .push(egui::Event::Key {
-                    key: egui::Key::F8,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }),
+            Command::NextDiagnostic => self.pending_editor_input.push(egui::Event::Key {
+                key: egui::Key::F8,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }),
             Command::ToggleSidePanel => self.side_panel_visible = !self.side_panel_visible,
-            Command::ToggleTerminal => self.terminal_panel_visible = !self.terminal_panel_visible,
+            Command::ToggleTerminal => self.bottom_dock.toggle(BottomTab::Terminal),
             Command::ToggleSourceControl => self.source_control_visible = !self.source_control_visible,
-            Command::ToggleBuildPanel => self.build_panel_visible = !self.build_panel_visible,
+            Command::ToggleBuildPanel => self.bottom_dock.toggle(BottomTab::Build),
             Command::ToggleTheme => {
                 self.dark_mode = !self.dark_mode;
                 theme::apply(ctx, self.dark_mode);
@@ -1541,7 +1651,10 @@ impl FoxGardenApp {
         Some(status_bar::DocumentStatus {
             line: line + 1,
             column: column + 1,
-            language: doc.language,
+            language_name: doc
+                .language
+                .and_then(|language| self.state.languages.language(language.id()))
+                .map(|registered| registered.language.display_name.clone()),
             indent: self.indent_settings,
             errors,
             warnings,
@@ -1570,6 +1683,26 @@ fn drain_errors_into_toasts(last_error: &mut Option<String>, toasts: &mut crate:
 
 impl eframe::App for FoxGardenApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Settings > Accessibility…'s interface zoom is *read back* from
+        // egui here rather than pushed into it: egui owns the conventional
+        // Ctrl+=/Ctrl+-/Ctrl+0 shortcuts itself (`Options::
+        // zoom_with_keyboard`, applied at the end of each frame), so an
+        // app-side push every frame silently undoes every keyboard zoom —
+        // found live, where the shortcuts appeared to do nothing at all.
+        // This field is therefore the *persisted mirror* of
+        // `Context::zoom_factor`, written back only when the dialog's own
+        // slider moves it (just after `menu_bar::show` below).
+        //
+        // The clamp is ours, not egui's: egui allows 0.2–5.0, well past
+        // either end of what Settings > Accessibility… offers, and a 20%
+        // interface is one nobody can find the menu in to undo.
+        let zoom = ui.ctx().zoom_factor();
+        if (zoom - self.ui_scale).abs() > f32::EPSILON {
+            self.ui_scale = clamp_ui_scale(zoom);
+            if (self.ui_scale - zoom).abs() > f32::EPSILON {
+                ui.ctx().set_zoom_factor(self.ui_scale);
+            }
+        }
         if ui.input(|i| i.key_pressed(egui::Key::F11)) {
             self.zen_mode = !self.zen_mode;
         }
@@ -1584,9 +1717,7 @@ impl eframe::App for FoxGardenApp {
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && !i.modifiers.shift) {
             self.quick_switcher.toggle();
         }
-        if !terminal_focused
-            && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && !i.modifiers.shift)
-        {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && !i.modifiers.shift) {
             self.go_to_file.toggle();
         }
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::P) && i.modifiers.command && i.modifiers.shift) {
@@ -1617,20 +1748,11 @@ impl eframe::App for FoxGardenApp {
                 self.state.split_editor();
             }
         }
+        // The session this may need is spawned by the one shared
+        // `terminal_tab_was_showing` transition check further down, which
+        // covers every other way of reaching the tab too.
         if ui.input(|i| i.key_pressed(egui::Key::Backtick) && i.modifiers.command) {
-            self.terminal_panel_visible = !self.terminal_panel_visible;
-            // Matches VSCode's own "opening the terminal for the first
-            // time starts a shell" behavior, rather than toggling open to
-            // an empty panel with nothing in it and a second click needed
-            // just to get a session going.
-            if self.terminal_panel_visible && self.state.terminal_tabs.is_empty() {
-                new_terminal_session(
-                    &mut self.state,
-                    &mut self.terminal_sessions,
-                    ui.ctx(),
-                    &mut self.last_error,
-                );
-            }
+            self.bottom_dock.toggle(BottomTab::Terminal);
         }
 
         // `i.time`/`i.focused`/`i.events` are read up front (frame-stable),
@@ -1723,10 +1845,22 @@ impl eframe::App for FoxGardenApp {
         // The process owner only polls channels/child state here; it never
         // waits. This keeps an unavailable or slow external language server
         // completely off the editor's keystroke-to-pixels path.
+        //
+        // The waker below is handed to every session spawned here, so its
+        // reader thread wakes the UI the moment a reply or an unprompted
+        // `publishDiagnostics` lands — the alternative is polling a
+        // live-but-idle server forever on a timer, which is what
+        // `LspState::wants_repaint` used to do.
+        let wake = self.lsp_wake.get_or_insert_with(|| {
+            let ctx = ui.ctx().clone();
+            std::sync::Arc::new(move || ctx.request_repaint())
+        });
         let lsp_errors = self.lsp.sync(
             &self.lsp_settings,
             self.state.project.as_ref().map(|project| project.root.as_path()),
             &mut self.state.open_tabs,
+            &self.state.languages,
+            wake,
         );
         if self.last_error.is_none() {
             self.last_error = lsp_errors.into_iter().next();
@@ -1798,6 +1932,11 @@ impl eframe::App for FoxGardenApp {
             self.run_command(ui.ctx(), command, &mut menu_outcome);
         }
 
+        // Compared against `self.ui_scale` right after `menu_bar::show`
+        // returns, to tell "the Accessibility dialog's slider moved" (which
+        // has to be pushed into egui) apart from "egui's own Ctrl+= moved
+        // it" (already applied, and adopted at the top of this function).
+        let ui_scale_before_menu = self.ui_scale;
         if !self.zen_mode {
             menu_outcome = egui::Panel::top("menu_bar")
                 .show(ui, |ui| {
@@ -1811,15 +1950,15 @@ impl eframe::App for FoxGardenApp {
                         &mut self.editor_font,
                         &mut self.font_size,
                         &mut self.dark_mode,
+                        &mut self.ui_scale,
                         &mut self.indent_settings,
                         &mut self.view_settings,
                         &mut self.auto_save_settings,
                         &mut self.trim_trailing_whitespace_on_save,
                         &mut self.zen_mode,
                         &mut self.side_panel_visible,
-                        &mut self.terminal_panel_visible,
+                        &mut self.bottom_dock,
                         &mut self.source_control_visible,
-                        &mut self.build_panel_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
                         self.static_analysis.checkstyle_running(),
@@ -1832,19 +1971,24 @@ impl eframe::App for FoxGardenApp {
                         self.build_state.is_docker_build_run_running(),
                         self.build_state.is_docker_compose_running(),
                         self.debug_state.is_running(),
+                        self.build_state.run_pid().is_some(),
+                        self.profiler_state.is_capturing(),
                     )
                 })
                 .inner;
+
+            if (self.ui_scale - ui_scale_before_menu).abs() > f32::EPSILON {
+                ui.ctx().set_zoom_factor(self.ui_scale);
+            }
 
             // Shown exactly while a debug session is live (`PLAN.md` Track
             // 23 Phase 2) — not a `View`-menu-toggled dock like the build/
             // terminal panels below, since its whole purpose is 1:1 tied to
             // `self.debug_state` actually running.
             if self.debug_state.is_running() {
-                egui::Panel::top("debug_toolbar")
-                    .show(ui, |ui| {
-                        debug_toolbar_outcome = debug_toolbar::show(ui, self.debug_state.is_paused());
-                    });
+                egui::Panel::top("debug_toolbar").show(ui, |ui| {
+                    debug_toolbar_outcome = debug_toolbar::show(ui, self.debug_state.is_paused());
+                });
             }
 
             // Same "tied 1:1 to a live session" visibility rule as the
@@ -1898,36 +2042,36 @@ impl eframe::App for FoxGardenApp {
                 outcome = panel_response.inner;
             }
 
-            if self.terminal_panel_visible {
-                egui::Panel::bottom("terminal_panel")
+            // One dock, one tab strip, one panel height — the three panels
+            // below used to be three stacked `egui::Panel::bottom`s with a
+            // visibility flag each (see `panels::bottom_dock`'s own header
+            // for why that went). The strip is drawn first inside the panel
+            // and can change `self.bottom_dock` in the same frame, so the
+            // content below it renders whatever tab this frame's own click
+            // selected rather than lagging a frame behind.
+            if self.bottom_dock.is_open() {
+                egui::Panel::bottom("bottom_dock")
                     .resizable(true)
-                    .default_size(220.0)
-                    .show(ui, |ui| {
-                        terminal_outcome = terminal_panel::show(
-                            ui,
-                            &mut self.state,
-                            &mut self.terminal_sessions,
-                            self.editor_font,
-                            self.font_size,
-                            self.dark_mode,
-                            self.view_settings.cursor_blink,
-                        );
+                    .default_size(240.0)
+                    .show(ui, |ui| match bottom_dock::show_tabs(ui, &mut self.bottom_dock) {
+                        BottomTab::Terminal => {
+                            terminal_outcome = terminal_panel::show(
+                                ui,
+                                &mut self.state,
+                                &mut self.terminal_sessions,
+                                self.editor_font,
+                                self.font_size,
+                                self.dark_mode,
+                                self.view_settings.cursor_blink,
+                            );
+                        }
+                        BottomTab::Build => {
+                            build_click = build_panel::show(ui, &mut self.build_state);
+                        }
+                        BottomTab::Profiler => {
+                            crate::panels::profiler_panel::show(ui, &self.profiler_state, &mut self.flame_graph);
+                        }
                     });
-            }
-
-            if self.build_panel_visible {
-                egui::Panel::bottom("build_output_panel")
-                    .resizable(true)
-                    .default_size(220.0)
-                    .show(ui, |ui| {
-                        build_click = build_panel::show(ui, &mut self.build_state);
-                    });
-                if let Some(result) = self.build_state.take_coverage_result() {
-                    match result {
-                        Ok(files) => build_panel::apply_coverage_results(&mut self.state, &files),
-                        Err(err) => crate::errors::report(&mut self.last_error, msg::coverage_report_failed(&err.to_string())),
-                    }
-                }
             }
 
             if self.source_control_visible
@@ -1953,6 +2097,42 @@ impl eframe::App for FoxGardenApp {
             }
         }
 
+        // Outside the `!zen_mode` chrome block on purpose: a coverage run
+        // finishes whether or not its own tab happens to be the one on
+        // screen (or the chrome is hidden at all), and what it produces is
+        // gutter marks in the editor, not panel content. The pre-dock code
+        // read this inside `if self.build_panel_visible`, which with a
+        // tabbed dock would silently drop a finished run the moment the
+        // user switched to the Terminal tab while it was still going.
+        if let Some(result) = self.build_state.take_coverage_result() {
+            match result {
+                Ok(files) => build_panel::apply_coverage_results(&mut self.state, &files),
+                Err(err) => crate::errors::report(&mut self.last_error, msg::coverage_report_failed(&err.to_string())),
+            }
+        }
+
+        // Reaching the Terminal tab starts a shell, the same way a
+        // restored-open dock does in `FoxGardenApp::new` — otherwise the
+        // tab opens to an empty "No terminal session" panel and needs a
+        // second click just to get a session going (VSCode's own
+        // terminal-toggle behavior, which `Ctrl+\`` has always followed
+        // here). One check, at the one place every trigger has already
+        // funneled through by now: the shortcut, the View menu, the command
+        // palette, and the dock's own tab strip.
+        //
+        // Deliberately a *cross-frame* transition (`terminal_tab_showing_
+        // last_frame`, updated just below) rather than a snapshot taken
+        // earlier in this same frame — several of those triggers are
+        // handled before this function ever reads the dock, so a
+        // within-frame "was it showing?" would already be `true` by here
+        // and never fire. The transition also keeps a shell that fails to
+        // spawn from being retried on every single frame for as long as the
+        // tab stays open.
+        let terminal_tab_showing = self.bottom_dock.shows(BottomTab::Terminal);
+        if terminal_tab_showing && !self.terminal_tab_showing_last_frame && self.state.terminal_tabs.is_empty() {
+            terminal_outcome.new_session_requested = true;
+        }
+        self.terminal_tab_showing_last_frame = terminal_tab_showing;
         if terminal_outcome.new_session_requested {
             new_terminal_session(
                 &mut self.state,
@@ -2043,10 +2223,12 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.build_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(tool) => match self.build_state.start_build(&root, tool) {
-                    Ok(()) => self.build_panel_visible = true,
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start_build(&root, &tool) {
+                    Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
@@ -2062,11 +2244,13 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_project_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
+            match self.state.languages.detect_build_tool(&root) {
                 Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
-                    Some(config) => match self.build_state.start_run(&root, tool, config) {
-                        Ok(()) => self.build_panel_visible = true,
-                        Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+                    Some(config) => match self.build_state.start_run(&root, &tool, config) {
+                        Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                        Err(err) => {
+                            crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                        }
                     },
                     None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                 },
@@ -2077,10 +2261,12 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_tests_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(tool) => match self.build_state.start_test(&root, tool) {
-                    Ok(()) => self.build_panel_visible = true,
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) => match self.build_state.start_test(&root, &tool) {
+                    Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
@@ -2089,12 +2275,18 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.run_with_coverage_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            match fg_core::detect_build_tool(&root) {
-                Some(fg_core::BuildTool::Maven) => match self.build_state.start_coverage(&root) {
-                    Ok(()) => self.build_panel_visible = true,
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
-                },
-                Some(fg_core::BuildTool::Gradle) => crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string()),
+            match self.state.languages.detect_build_tool(&root) {
+                Some(tool) if tool.command(&root, fg_core::BuildTask::Coverage).is_some() => {
+                    match self.build_state.start_coverage(&root, &tool) {
+                        Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                        Err(err) => {
+                            crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
+                        }
+                    }
+                }
+                Some(_) => {
+                    crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string())
+                }
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
         }
@@ -2104,8 +2296,10 @@ impl eframe::App for FoxGardenApp {
         {
             if fg_core::has_dockerfile(&root) {
                 match self.build_state.start_docker_build_and_run(&root) {
-                    Ok(()) => self.build_panel_visible = true,
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
+                    Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string()))
+                    }
                 }
             } else {
                 crate::errors::report(&mut self.last_error, t().errors.no_dockerfile_detected.to_string());
@@ -2117,8 +2311,10 @@ impl eframe::App for FoxGardenApp {
         {
             match fg_core::compose_file(&root) {
                 Some(compose_file) => match self.build_state.start_docker_compose_up(&compose_file) {
-                    Ok(()) => self.build_panel_visible = true,
-                    Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string())),
+                    Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                    Err(err) => {
+                        crate::errors::report(&mut self.last_error, msg::failed_to_start_docker(&err.to_string()))
+                    }
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_compose_file_detected.to_string()),
             }
@@ -2136,7 +2332,7 @@ impl eframe::App for FoxGardenApp {
             if self.debug_state.is_running() {
                 self.debug_state.stop();
             } else {
-                match fg_core::detect_build_tool(&root) {
+                match self.state.languages.detect_build_tool(&root) {
                     Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
                         Some(config) => {
                             let initial_breakpoints = self
@@ -2147,7 +2343,8 @@ impl eframe::App for FoxGardenApp {
                                 .map(|doc| (doc.path.clone(), doc.breakpoints.clone()))
                                 .collect();
                             if let Err(err) =
-                                self.debug_state.start(&mut self.lsp, &root, tool, &config, initial_breakpoints)
+                                self.debug_state
+                                    .start(&mut self.lsp, &root, &tool, &config, initial_breakpoints)
                             {
                                 crate::errors::report(&mut self.last_error, err);
                             }
@@ -2156,6 +2353,55 @@ impl eframe::App for FoxGardenApp {
                     },
                     None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
                 }
+            }
+        }
+
+        // Profile Running Process (`PLAN.md` Track 26 Phase 1): attach
+        // async-profiler to the launched `java` run's PID and capture a CPU
+        // profile. The menu entry is only enabled when a run has reached its
+        // launched stage, so `run_pid()` is expected to be `Some` here; if
+        // async-profiler isn't cached yet, kick off its download and tell the
+        // user to retry rather than blocking the UI on the fetch.
+        if menu_outcome.profile_request
+            && let Some(pid) = self.build_state.run_pid()
+        {
+            match crate::profiler_manager::installed_asprof() {
+                Some(asprof) => {
+                    let secs = crate::profiler_state::DEFAULT_DURATION_SECS;
+                    self.profiler_state
+                        .start_capture(asprof, pid, fg_core::ProfileEvent::Cpu, secs);
+                    self.toasts.push(msg::profiling_pid(pid, secs));
+                }
+                None => {
+                    if !self.profiler_state.manager.installing() {
+                        self.profiler_state.manager.install();
+                    }
+                    self.toasts.push(msg::profiler_installing());
+                }
+            }
+        }
+
+        // async-profiler's background install finishing (Track 26 Phase 1).
+        if let Some(result) = self.profiler_state.manager.poll_install() {
+            match result {
+                Ok(installed) => self.toasts.push(msg::profiler_installed(&installed.version)),
+                Err(err) => crate::errors::report(&mut self.last_error, err),
+            }
+        }
+
+        // A capture finishing: surface a one-line summary (Track 26 Phase 1);
+        // the parsed tree is retained in `profiler_state.last_profile` for
+        // Phase 2's flame-graph widget.
+        if let Some(result) = self.profiler_state.poll_capture() {
+            match result {
+                Ok(tree) => {
+                    self.toasts.push(msg::profile_captured(tree.total));
+                    // A fresh capture replaces the tree the old zoom pointed
+                    // into, so drop any stale focus and dock the panel open.
+                    self.flame_graph.reset();
+                    self.bottom_dock.open_tab(BottomTab::Profiler);
+                }
+                Err(err) => crate::errors::report(&mut self.last_error, err),
             }
         }
 
@@ -2225,13 +2471,21 @@ impl eframe::App for FoxGardenApp {
             if binary.is_empty() {
                 crate::errors::report(&mut self.last_error, t().errors.spotbugs_not_configured.to_string());
             } else {
-                match fg_core::detect_build_tool(&root) {
-                    Some(tool) => {
-                        let classes_dir = fg_core::default_classes_dir(&root, tool);
+                match self
+                    .state
+                    .languages
+                    .detect_build_tool(&root)
+                    .and_then(|tool| tool.classes_dir(&root))
+                {
+                    Some(classes_dir) => {
                         if classes_dir.is_dir() {
-                            self.static_analysis.run_spotbugs(PathBuf::from(binary), classes_dir, root);
+                            self.static_analysis
+                                .run_spotbugs(PathBuf::from(binary), classes_dir, root);
                         } else {
-                            crate::errors::report(&mut self.last_error, t().errors.spotbugs_no_compiled_classes.to_string());
+                            crate::errors::report(
+                                &mut self.last_error,
+                                t().errors.spotbugs_no_compiled_classes.to_string(),
+                            );
                         }
                     }
                     None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
@@ -2256,6 +2510,8 @@ impl eframe::App for FoxGardenApp {
                 Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
+        self.spring_config
+            .observe_project(self.state.project.as_ref().map(|p| p.root.as_path()), &self.state.languages);
         self.spring_config.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
@@ -2309,6 +2565,13 @@ impl eframe::App for FoxGardenApp {
         if self.lsp_servers.manager.busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
+        // Keep polling while an async-profiler download or capture runs on a
+        // background thread (`PLAN.md` Track 26 Phase 1), the same "no input
+        // event will wake us, so ask for a timed repaint" shape the language-
+        // server installer above uses.
+        if self.profiler_state.manager.installing() || self.profiler_state.is_capturing() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
         self.diff.poll(&mut self.state);
 
         if let Some(result) = self.git_stage.poll_status()
@@ -2351,6 +2614,10 @@ impl eframe::App for FoxGardenApp {
         // before the tab bar, so this frame's own tree is already laid out
         // by the time the request exists).
         let mut reveal_in_tree: Option<PathBuf> = None;
+        // Set when the run gutter's ▶ is clicked; acted on below, after the
+        // central panel closes, so starting a run borrows `self` freely
+        // rather than from inside the editor's own closure.
+        let mut run_request: Option<syntax::MainEntry> = None;
         let mut welcome = crate::panels::welcome::WelcomeOutcome::default();
         // Everything but the project already open — reopening that one is
         // not a thing anyone needs offered.
@@ -2411,10 +2678,12 @@ impl eframe::App for FoxGardenApp {
                 self.trim_trailing_whitespace_on_save,
                 &mut reveal_in_tree,
                 &mut welcome,
+                &mut run_request,
                 &recent_to_offer,
             );
             if welcome.open_folder {
-                self.side_panel.open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
+                self.side_panel
+                    .open_folder_picker(self.state.project.as_ref().map(|p| p.root.clone()));
             }
             if welcome.new_project {
                 self.new_project_wizard.open();
@@ -2433,6 +2702,48 @@ impl eframe::App for FoxGardenApp {
             }
         });
 
+        // The run gutter's ▶ (`widgets::editor::run_gutter`): launches the
+        // clicked entry point through exactly the same compile-then-`java`
+        // machinery Run > Run Project uses, just with a `RunConfig`
+        // synthesized from the marker instead of the project's first saved
+        // one — that's the whole difference between the two, and the reason
+        // this doesn't need a saved config to exist first.
+        //
+        // Every dirty tab is saved first, not just the one being run: the
+        // build compiles what's on disk, and a `main` that calls a class
+        // edited in another tab would otherwise silently run against the
+        // last-saved version of it. Same "Run saves your work" behavior
+        // IntelliJ has.
+        if let Some(entry) = run_request.take() {
+            match self.state.project.as_ref().map(|p| p.root.clone()) {
+                Some(root) => match self.state.languages.detect_build_tool(&root) {
+                    Some(tool) => {
+                        tabs::save_all_dirty_tabs(
+                            &mut self.state,
+                            &mut self.parsers,
+                            &mut self.last_error,
+                            &HashSet::new(),
+                            self.trim_trailing_whitespace_on_save,
+                        );
+                        let config = fg_core::RunConfig {
+                            name: entry.label.clone(),
+                            main_class: entry.main_class.clone(),
+                            ..fg_core::RunConfig::default()
+                        };
+                        match self.build_state.start_run(&root, &tool, config) {
+                            Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+                            Err(err) => crate::errors::report(
+                                &mut self.last_error,
+                                msg::failed_to_start_build(&err.to_string()),
+                            ),
+                        }
+                    }
+                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                },
+                None => crate::errors::report(&mut self.last_error, t().errors.no_project_open.to_string()),
+            }
+        }
+
         // Find references (`PLAN.md` Track 20 Phase 6): a row clicked in
         // `find_references`'s own results popup inside `tabs::show` just
         // above hands its target straight back here, rather than owning
@@ -2443,7 +2754,14 @@ impl eframe::App for FoxGardenApp {
         // conversion is needed the way `goto_definition`'s own `Target::
         // File` still requires below.
         if let Some((path, byte)) = self.find_references.take_navigation() {
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
             self.pending_navigation = Some((path, byte));
         }
 
@@ -2455,7 +2773,8 @@ impl eframe::App for FoxGardenApp {
         if let Some((char_offset, new_name)) = self.rename_box.take_confirmed()
             && let Some(index) = self.state.active_tab
         {
-            self.rename.request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
+            self.rename
+                .request(&mut self.state.open_tabs[index], char_offset, &new_name, &mut self.lsp);
         }
         if let Some(Err(err)) = self.rename.poll(&mut self.state, &mut self.parsers) {
             crate::errors::report(&mut self.last_error, msg::failed_to_rename(&err));
@@ -2498,12 +2817,18 @@ impl eframe::App for FoxGardenApp {
                     (path, byte)
                 }
             };
-            open_path(&mut self.state, &mut self.parsers, &mut self.last_error, &mut self.diff, diff_root.clone(), path.clone());
+            open_path(
+                &mut self.state,
+                &mut self.parsers,
+                &mut self.last_error,
+                &mut self.diff,
+                diff_root.clone(),
+                path.clone(),
+            );
             if let Some(byte) = byte {
                 self.pending_navigation = Some((path.clone(), byte));
             }
-            if is_decompiled
-                && let Some(doc) = self.state.open_tabs.iter_mut().find(|doc| doc.path() == path.as_path())
+            if is_decompiled && let Some(doc) = self.state.open_tabs.iter_mut().find(|doc| doc.path() == path.as_path())
             {
                 doc.read_only = true;
             }
@@ -2573,9 +2898,9 @@ impl eframe::App for FoxGardenApp {
             self.view_settings,
             self.side_panel_width,
             self.side_panel_visible,
-            self.terminal_panel_visible,
+            self.ui_scale,
+            self.bottom_dock,
             self.source_control_visible,
-            self.build_panel_visible,
             &self.custom_templates,
             &self.external_tool_paths,
             self.auto_save_settings,
@@ -2599,6 +2924,6 @@ impl eframe::App for FoxGardenApp {
 }
 
 #[cfg(test)]
-mod e2e_test;
-#[cfg(test)]
 mod app_test;
+#[cfg(test)]
+mod e2e_test;

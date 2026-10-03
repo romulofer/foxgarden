@@ -158,16 +158,22 @@ impl GitStageState {
     }
 
     pub fn stage(&mut self, root: PathBuf, path: PathBuf) {
-        self.op_rx = Some(spawn(move || fg_core::git_add(&root, &[path]).map_err(|e| e.to_string())));
+        self.op_rx = Some(spawn(move || {
+            fg_core::git_add(&root, &[path]).map_err(|e| e.to_string())
+        }));
     }
 
     pub fn unstage(&mut self, root: PathBuf, path: PathBuf) {
-        self.op_rx = Some(spawn(move || fg_core::git_reset_paths(&root, &[path]).map_err(|e| e.to_string())));
+        self.op_rx = Some(spawn(move || {
+            fg_core::git_reset_paths(&root, &[path]).map_err(|e| e.to_string())
+        }));
     }
 
     pub fn commit(&mut self, root: PathBuf, message: String) {
         self.committing = true;
-        self.op_rx = Some(spawn(move || fg_core::git_commit(&root, &message).map_err(|e| e.to_string())));
+        self.op_rx = Some(spawn(move || {
+            fg_core::git_commit(&root, &message).map_err(|e| e.to_string())
+        }));
     }
 
     /// `git push` — same shared `op_rx` slot as stage/unstage/commit (a
@@ -248,17 +254,29 @@ impl GitStageState {
     /// concurrent external change raced this click), rather than sending a
     /// malformed patch to `git apply`.
     pub fn stage_hunk(&mut self, root: PathBuf, hunk_index: usize) {
-        let Some((unstaged, _)) = &self.expanded_diffs else { return };
-        let Some(patch) = fg_core::hunk_patch(unstaged, hunk_index) else { return };
-        self.op_rx = Some(spawn(move || fg_core::git_apply_cached(&root, &patch, false).map_err(|e| e.to_string())));
+        let Some((unstaged, _)) = &self.expanded_diffs else {
+            return;
+        };
+        let Some(patch) = fg_core::hunk_patch(unstaged, hunk_index) else {
+            return;
+        };
+        self.op_rx = Some(spawn(move || {
+            fg_core::git_apply_cached(&root, &patch, false).map_err(|e| e.to_string())
+        }));
     }
 
     /// Unstages hunk `hunk_index` of `path`'s own *staged* diff (`git apply
     /// --cached --reverse`). Same staleness guard as `stage_hunk`.
     pub fn unstage_hunk(&mut self, root: PathBuf, hunk_index: usize) {
-        let Some((_, staged)) = &self.expanded_diffs else { return };
-        let Some(patch) = fg_core::hunk_patch(staged, hunk_index) else { return };
-        self.op_rx = Some(spawn(move || fg_core::git_apply_cached(&root, &patch, true).map_err(|e| e.to_string())));
+        let Some((_, staged)) = &self.expanded_diffs else {
+            return;
+        };
+        let Some(patch) = fg_core::hunk_patch(staged, hunk_index) else {
+            return;
+        };
+        self.op_rx = Some(spawn(move || {
+            fg_core::git_apply_cached(&root, &patch, true).map_err(|e| e.to_string())
+        }));
     }
 
     /// Opens `path`'s own "Full Diff" window (`PLAN.md` Track 18): fetches
@@ -331,7 +349,11 @@ pub fn show(
     font_size: f32,
     dark_mode: bool,
 ) {
-    if git_stage.status_running() || git_stage.op_running() || git_stage.expanded_running() || git_stage.full_diff_running() {
+    if git_stage.status_running()
+        || git_stage.op_running()
+        || git_stage.expanded_running()
+        || git_stage.full_diff_running()
+    {
         // Nothing else drives a repaint while a background `git status`/
         // add/reset/commit/push/hunk-fetch/full-diff-fetch is in flight —
         // this app runs in egui's reactive (not continuous) repaint mode,
@@ -348,38 +370,53 @@ pub fn show(
         if let Some(name) = &git_stage.committer_first_name {
             ui.label(egui::RichText::new(name).weak());
         }
-        if ui.add_enabled(!git_stage.status_running(), egui::Button::new(t().git.refresh)).clicked() {
+        if ui
+            .add_enabled(!git_stage.status_running(), egui::Button::new(t().git.refresh))
+            .clicked()
+        {
             git_stage.refresh(root.to_path_buf());
         }
-        if ui.add_enabled(!git_stage.op_running(), egui::Button::new(t().git.push)).clicked() {
+        if ui
+            .add_enabled(!git_stage.op_running(), egui::Button::new(t().git.push))
+            .clicked()
+        {
             git_stage.push(root.to_path_buf());
         }
     });
     ui.separator();
 
     if git_stage.entries.is_empty() {
-        ui.label(egui::RichText::new(if git_stage.status_running() { t().git.loading } else { t().git.no_changes }).weak());
+        ui.label(
+            egui::RichText::new(if git_stage.status_running() {
+                t().git.loading
+            } else {
+                t().git.no_changes
+            })
+            .weak(),
+        );
     }
 
     let mut action: Option<RowAction> = None;
     ui.add_enabled_ui(!git_stage.op_running(), |ui| {
-        egui::ScrollArea::vertical().max_height(ui.available_height() * 0.6).show(ui, |ui| {
-            let (staged, unstaged): (Vec<&StatusEntry>, Vec<&StatusEntry>) =
-                git_stage.entries.iter().partition(|e| e.is_staged());
-            if !staged.is_empty() {
-                ui.strong(format!("Staged Changes ({})", staged.len()));
-                for entry in &staged {
-                    show_entry_row(ui, git_stage, entry, &mut action);
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height() * 0.6)
+            .show(ui, |ui| {
+                let (staged, unstaged): (Vec<&StatusEntry>, Vec<&StatusEntry>) =
+                    git_stage.entries.iter().partition(|e| e.is_staged());
+                if !staged.is_empty() {
+                    ui.strong(format!("Staged Changes ({})", staged.len()));
+                    for entry in &staged {
+                        show_entry_row(ui, git_stage, entry, &mut action);
+                    }
+                    ui.add_space(6.0);
                 }
-                ui.add_space(6.0);
-            }
-            if !unstaged.is_empty() {
-                ui.strong(format!("Changes ({})", unstaged.len()));
-                for entry in &unstaged {
-                    show_entry_row(ui, git_stage, entry, &mut action);
+                if !unstaged.is_empty() {
+                    ui.strong(format!("Changes ({})", unstaged.len()));
+                    for entry in &unstaged {
+                        show_entry_row(ui, git_stage, entry, &mut action);
+                    }
                 }
-            }
-        });
+            });
     });
 
     match action {
@@ -450,7 +487,9 @@ fn show_full_diff_window(
     font_size: f32,
     dark_mode: bool,
 ) {
-    let Some((path, mut mode)) = git_stage.full_diff.clone() else { return };
+    let Some((path, mut mode)) = git_stage.full_diff.clone() else {
+        return;
+    };
     let loading = git_stage.full_diff_running() && git_stage.full_diff_content.is_none();
     let content = git_stage.full_diff_content.clone();
     let mut open = true;
@@ -570,7 +609,11 @@ fn status_badge(entry: &StatusEntry) -> &'static str {
     if entry.is_untracked() {
         return "[U]";
     }
-    let code = if entry.is_staged() { entry.index_status } else { entry.worktree_status };
+    let code = if entry.is_staged() {
+        entry.index_status
+    } else {
+        entry.worktree_status
+    };
     match code {
         'A' => "[A]",
         'D' => "[D]",
@@ -581,205 +624,5 @@ fn status_badge(entry: &StatusEntry) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn entry(path: &str, index: char, worktree: char) -> StatusEntry {
-        StatusEntry { path: PathBuf::from(path), index_status: index, worktree_status: worktree }
-    }
-
-    #[test]
-    fn poll_status_applies_a_successful_result_to_entries() {
-        let mut state = GitStageState {
-            status_rx: Some(spawn(|| Ok(vec![entry("f.txt", '?', '?')]))),
-            ..GitStageState::default()
-        };
-        let result = loop {
-            if let Some(result) = state.poll_status() {
-                break result;
-            }
-        };
-        assert!(result.is_ok());
-        assert_eq!(&state.entries, &[entry("f.txt", '?', '?')]);
-    }
-
-    #[test]
-    fn poll_status_returns_the_error_without_touching_entries() {
-        let mut state = GitStageState {
-            entries: vec![entry("stale.txt", '?', '?')],
-            status_rx: Some(spawn(|| Err("boom".to_string()))),
-            ..GitStageState::default()
-        };
-        let result = loop {
-            if let Some(result) = state.poll_status() {
-                break result;
-            }
-        };
-        assert_eq!(result, Err("boom".to_string()));
-        assert_eq!(&state.entries, &[entry("stale.txt", '?', '?')]);
-    }
-
-    #[test]
-    fn commit_marks_running_and_clears_the_message_only_on_success() {
-        let mut state = GitStageState {
-            commit_message: "wip".to_string(),
-            op_rx: Some(spawn(|| Ok(()))),
-            committing: true,
-            ..GitStageState::default()
-        };
-        assert!(state.op_running());
-
-        let result = loop {
-            if let Some(result) = state.poll_op() {
-                break result;
-            }
-        };
-        assert!(result.is_ok());
-        assert!(!state.op_running());
-        assert_eq!(state.commit_message, "");
-    }
-
-    #[test]
-    fn a_failed_commit_leaves_the_message_untouched() {
-        let mut state = GitStageState {
-            commit_message: "wip".to_string(),
-            op_rx: Some(spawn(|| Err("nothing to commit".to_string()))),
-            committing: true,
-            ..GitStageState::default()
-        };
-
-        let result = loop {
-            if let Some(result) = state.poll_op() {
-                break result;
-            }
-        };
-        assert!(result.is_err());
-        assert_eq!(state.commit_message, "wip");
-    }
-
-    #[test]
-    fn stage_and_unstage_are_not_marked_as_committing() {
-        let mut state = GitStageState {
-            commit_message: "keep me".to_string(),
-            op_rx: Some(spawn(|| Ok(()))),
-            ..GitStageState::default()
-        };
-        // Not going through `stage`/`unstage` themselves (no real repo
-        // needed for this assertion) — `committing` simply starts `false`
-        // and only `commit` ever sets it, so a stage/unstage completing
-        // must never clear the message.
-        assert!(!state.committing);
-
-        let result = loop {
-            if let Some(result) = state.poll_op() {
-                break result;
-            }
-        };
-        assert!(result.is_ok());
-        assert_eq!(state.commit_message, "keep me");
-    }
-
-    fn file_diff(headers: &[&str]) -> FileDiff {
-        FileDiff {
-            preamble: "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n".to_string(),
-            hunks: headers
-                .iter()
-                .map(|h| fg_core::RawHunk { header: h.to_string(), lines: vec![" ctx".to_string()] })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn poll_expanded_applies_a_successful_result() {
-        let mut state = GitStageState {
-            expanded_rx: Some(spawn(|| Ok((file_diff(&["@@ -1 +1 @@"]), file_diff(&[]))))),
-            ..GitStageState::default()
-        };
-        let result = loop {
-            if let Some(result) = state.poll_expanded() {
-                break result;
-            }
-        };
-        assert!(result.is_ok());
-        assert_eq!(state.expanded_diffs.unwrap().0.hunks.len(), 1);
-    }
-
-    #[test]
-    fn toggle_expand_on_the_same_path_twice_collapses_it() {
-        let mut state = GitStageState::default();
-        let path = PathBuf::from("f.txt");
-        state.toggle_expand(PathBuf::from("/nonexistent"), path.clone());
-        assert_eq!(state.expanded, Some(path.clone()));
-
-        state.toggle_expand(PathBuf::from("/nonexistent"), path);
-        assert_eq!(state.expanded, None);
-        assert!(state.expanded_rx.is_none());
-        assert!(state.expanded_diffs.is_none());
-    }
-
-    #[test]
-    fn stage_hunk_and_unstage_hunk_are_no_ops_with_nothing_expanded() {
-        let mut state = GitStageState::default();
-        state.stage_hunk(PathBuf::from("/nonexistent"), 0);
-        assert!(!state.op_running(), "no expanded_diffs means no patch to apply");
-
-        state.unstage_hunk(PathBuf::from("/nonexistent"), 0);
-        assert!(!state.op_running());
-    }
-
-    #[test]
-    fn refresh_expanded_is_a_no_op_with_nothing_expanded() {
-        let mut state = GitStageState::default();
-        state.refresh_expanded(PathBuf::from("/nonexistent"));
-        assert!(state.expanded_rx.is_none());
-    }
-
-    /// End-to-end: expanding a real two-hunk file, staging just its second
-    /// hunk, and confirming the *real* `git diff --cached` afterward shows
-    /// exactly that one hunk — not just that `git_apply_cached` itself
-    /// works (already covered in `fg_core::status`'s own tests), but that
-    /// this state's own `expanded_diffs`/`hunk_patch` wiring picks the
-    /// right hunk out of the right (unstaged) half.
-    #[test]
-    fn expand_then_stage_hunk_round_trips_through_a_real_repo() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        let file = root.join("f.txt");
-        let lines: Vec<String> = (1..=20).map(|n| format!("l{n}")).collect();
-        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
-        let run = |args: &[&str]| std::process::Command::new("git").current_dir(&root).args(args).output().unwrap();
-        run(&["init", "-q"]);
-        run(&["config", "user.email", "a@b.com"]);
-        run(&["config", "user.name", "test"]);
-        run(&["add", "."]);
-        run(&["commit", "-q", "-m", "init"]);
-
-        let mut edited = lines.clone();
-        edited[1] = "CHANGED2".to_string();
-        edited[17] = "CHANGED18".to_string();
-        std::fs::write(&file, edited.join("\n") + "\n").unwrap();
-
-        let mut state = GitStageState::default();
-        let path = PathBuf::from("f.txt");
-        state.toggle_expand(root.clone(), path);
-        loop {
-            if let Some(result) = state.poll_expanded() {
-                result.expect("diff fetch succeeds");
-                break;
-            }
-        }
-        assert_eq!(state.expanded_diffs.as_ref().unwrap().0.hunks.len(), 2);
-
-        state.stage_hunk(root.clone(), 1); // the CHANGED18 hunk
-        loop {
-            if let Some(result) = state.poll_op() {
-                result.expect("apply --cached succeeds");
-                break;
-            }
-        }
-
-        let cached = fg_core::git_file_diff_cached(&file, &root).unwrap();
-        assert_eq!(cached.hunks.len(), 1);
-        assert!(fg_core::hunk_patch(&cached, 0).unwrap().contains("+CHANGED18"));
-    }
-}
+#[path = "git_stage_test.rs"]
+mod git_stage_test;

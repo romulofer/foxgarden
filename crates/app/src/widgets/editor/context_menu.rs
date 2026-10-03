@@ -100,10 +100,7 @@ pub(super) fn show_context_menu(
         ui.separator();
 
         if ui
-            .add_enabled(
-                has_selection,
-                egui::Button::new(t().common.cut).shortcut_text("Ctrl+X"),
-            )
+            .add_enabled(has_selection, egui::Button::new(t().common.cut).shortcut_text("Ctrl+X"))
             .clicked()
         {
             if let Some(range) = primary_caret.map(|c| c.range()) {

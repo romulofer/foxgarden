@@ -62,7 +62,10 @@ fn file_new_project_dialog_opens_and_cancel_closes_it() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
     app.menu(t().menu.file, t().menu.new_project);
-    assert!(app.shows(t().new_project.heading), "the wizard must open, with its heading translated");
+    assert!(
+        app.shows(t().new_project.heading),
+        "the wizard must open, with its heading translated"
+    );
 
     app.click(t().common.cancel);
     assert!(!app.shows(t().new_project.heading), "Cancel must dismiss the dialog");
@@ -241,12 +244,18 @@ fn tools_read_only_marks_the_tab_and_blocks_typing() {
     app.click_tree("Main.java");
 
     app.menu(t().menu.tools, t().menu.read_only);
-    assert!(app.shows(&E2e::read_only_row("Main.java")), "a read-only tab is marked with a lock");
+    assert!(
+        app.shows(&E2e::read_only_row("Main.java")),
+        "a read-only tab is marked with a lock"
+    );
 
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// nope");
 
     assert_eq!(app.active_tab_text(), MAIN_JAVA, "a read-only tab must ignore typing");
-    assert!(!app.shows(&E2e::dirty_read_only_row("Main.java")), "and so must stay clean");
+    assert!(
+        !app.shows(&E2e::dirty_read_only_row("Main.java")),
+        "and so must stay clean"
+    );
 }
 
 #[test]
@@ -327,5 +336,8 @@ fn the_command_palette_runs_an_action_by_name() {
     app.press(egui::Modifiers::NONE, egui::Key::Enter);
 
     assert_eq!(app.on_disk("Main.java"), format!("{MAIN_JAVA}// via the palette"));
-    assert!(!app.shows(t().palettes.run_a_command), "picking a command closes the palette");
+    assert!(
+        !app.shows(t().palettes.run_a_command),
+        "picking a command closes the palette"
+    );
 }

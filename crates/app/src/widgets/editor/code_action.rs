@@ -104,7 +104,9 @@ impl CodeActionGutter {
     /// approximation `folding`/`diff_gutter`'s own reserved columns already
     /// accept implicitly (their own inputs can change frame to frame too).
     pub(super) fn has_offer(&self, doc_path: &Path, line: usize) -> bool {
-        self.tracked.as_ref().is_some_and(|t| t.doc_path == doc_path && t.line == line && !t.offers.is_empty())
+        self.tracked
+            .as_ref()
+            .is_some_and(|t| t.doc_path == doc_path && t.line == line && !t.offers.is_empty())
     }
 
     /// Drops whatever's tracked — used on a tab switch, same "a different
@@ -146,8 +148,14 @@ impl CodeActionGutter {
             .is_some_and(|t| t.doc_path == doc.path && t.line == caret_line && t.version == doc.lsp_version);
         if !stays {
             let pending = lsp.request_code_action(doc, &diagnostic);
-            self.tracked =
-                Some(Tracked { doc_path: doc.path.clone(), line: caret_line, version: doc.lsp_version, pending, offers: Vec::new(), open: false });
+            self.tracked = Some(Tracked {
+                doc_path: doc.path.clone(),
+                line: caret_line,
+                version: doc.lsp_version,
+                pending,
+                offers: Vec::new(),
+                open: false,
+            });
         }
         let Some(tracked) = self.tracked.as_mut() else { return };
         if let Some(rx) = &tracked.pending {
@@ -172,12 +180,22 @@ impl CodeActionGutter {
     /// Clicking it opens the picker popup; clicking a title in it records
     /// that offer's edit into `confirmed`; Escape or a click outside
     /// closes the popup without picking.
-    pub(super) fn paint(&mut self, ui: &egui::Ui, id: egui::Id, out: &TextAreaOutput, gutter_left: f32, pane_rect: egui::Rect, dark_mode: bool) {
+    pub(super) fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        id: egui::Id,
+        out: &TextAreaOutput,
+        gutter_left: f32,
+        pane_rect: egui::Rect,
+        dark_mode: bool,
+    ) {
         let Some(tracked) = &mut self.tracked else { return };
         if tracked.offers.is_empty() {
             return;
         }
-        let Some(row_index) = out.row_galleys.iter().position(|(logical, _)| *logical == tracked.line) else { return };
+        let Some(row_index) = out.row_galleys.iter().position(|(logical, _)| *logical == tracked.line) else {
+            return;
+        };
         let y = out.content_origin.y + out.row_offsets[row_index] as f32 * out.row_height;
         let rect = egui::Rect::from_min_size(egui::pos2(gutter_left, y), egui::vec2(GUTTER_WIDTH, out.row_height));
 
@@ -193,22 +211,26 @@ impl CodeActionGutter {
             if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                 tracked.open = false;
             } else {
-                let popup_size = ui.ctx().memory(|mem| mem.area_rect(id)).map_or(egui::vec2(1.0, 1.0), |r| r.size());
+                let popup_size = ui
+                    .ctx()
+                    .memory(|mem| mem.area_rect(id))
+                    .map_or(egui::vec2(1.0, 1.0), |r| r.size());
                 let pos = popup_position(rect, popup_size, pane_rect);
                 let mut picked_index = None;
-                let area_response = egui::Area::new(id)
-                    .fixed_pos(pos)
-                    .order(egui::Order::Foreground)
-                    .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.set_min_width(220.0);
-                            for (i, offer) in tracked.offers.iter().enumerate() {
-                                if ui.selectable_label(false, &offer.title).clicked() {
-                                    picked_index = Some(i);
+                let area_response =
+                    egui::Area::new(id)
+                        .fixed_pos(pos)
+                        .order(egui::Order::Foreground)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                ui.set_min_width(220.0);
+                                for (i, offer) in tracked.offers.iter().enumerate() {
+                                    if ui.selectable_label(false, &offer.title).clicked() {
+                                        picked_index = Some(i);
+                                    }
                                 }
-                            }
+                            });
                         });
-                    });
                 let clicked_outside = ui.ctx().input(|i| i.pointer.any_click())
                     && ui
                         .ctx()
@@ -235,7 +257,10 @@ impl CodeActionGutter {
 /// exact span under the cursor.
 fn diagnostic_on_line(doc: &Document, line: usize) -> Option<fg_core::Diagnostic> {
     let len = doc.buffer.len_bytes();
-    doc.lsp_diagnostics.iter().find(|d| doc.buffer.byte_to_line(d.range.start.min(len)) == line).cloned()
+    doc.lsp_diagnostics
+        .iter()
+        .find(|d| doc.buffer.byte_to_line(d.range.start.min(len)) == line)
+        .cloned()
 }
 
 /// Decodes a raw `textDocument/codeAction` reply into the `Offer`s worth
@@ -267,10 +292,20 @@ fn offers_from_response(value: serde_json::Value) -> Vec<Offer> {
 /// left out.
 fn offer_from_item(item: lsp_types::CodeActionOrCommand) -> Option<Offer> {
     match item {
-        lsp_types::CodeActionOrCommand::CodeAction(action) => action.edit.map(|edit| Offer { title: action.title, edit }),
+        lsp_types::CodeActionOrCommand::CodeAction(action) => action.edit.map(|edit| Offer {
+            title: action.title,
+            edit,
+        }),
         lsp_types::CodeActionOrCommand::Command(command) if command.command == "java.apply.workspaceEdit" => {
-            let edit = command.arguments?.into_iter().next().and_then(|arg| serde_json::from_value(arg).ok())?;
-            Some(Offer { title: command.title, edit })
+            let edit = command
+                .arguments?
+                .into_iter()
+                .next()
+                .and_then(|arg| serde_json::from_value(arg).ok())?;
+            Some(Offer {
+                title: command.title,
+                edit,
+            })
         }
         lsp_types::CodeActionOrCommand::Command(_) => None,
     }
@@ -287,112 +322,5 @@ fn paint_lightbulb(painter: &egui::Painter, center: egui::Pos2, radius: f32, col
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_on_line_finds_a_diagnostic_starting_on_that_line() {
-        let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {\n  int x;\n}");
-        doc.lsp_diagnostics = vec![fg_core::Diagnostic {
-            range: 14..19, // "int x" on line 1
-            severity: fg_core::Severity::Warning,
-            message: "unused variable".to_string(),
-        }];
-        let found = diagnostic_on_line(&doc, 1).expect("a diagnostic starts on line 1");
-        assert_eq!(found.message, "unused variable");
-    }
-
-    #[test]
-    fn diagnostic_on_line_is_none_when_no_diagnostic_starts_there() {
-        let (_dir, mut doc) = test_support::temp_document("Foo.java", "class Foo {\n  int x;\n}");
-        doc.lsp_diagnostics = vec![fg_core::Diagnostic {
-            range: 14..19,
-            severity: fg_core::Severity::Warning,
-            message: "unused variable".to_string(),
-        }];
-        assert!(diagnostic_on_line(&doc, 0).is_none());
-    }
-
-    #[test]
-    fn offers_from_response_keeps_only_actions_with_a_real_edit() {
-        let value = serde_json::json!([
-            { "title": "Organize imports", "kind": "source.organizeImports" },
-            {
-                "title": "Remove unused import",
-                "kind": "quickfix",
-                "edit": {
-                    "changes": {
-                        "file:///a/Foo.java": [
-                            { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "" }
-                        ]
-                    }
-                }
-            }
-        ]);
-        let offers = offers_from_response(value);
-        assert_eq!(offers.len(), 1);
-        assert_eq!(offers[0].title, "Remove unused import");
-    }
-
-    #[test]
-    fn offers_from_response_a_null_result_is_empty() {
-        assert!(offers_from_response(serde_json::Value::Null).is_empty());
-    }
-
-    fn tracked_with_offers(offers: Vec<Offer>) -> CodeActionGutter {
-        CodeActionGutter {
-            tracked: Some(Tracked { doc_path: PathBuf::from("/a/Main.java"), line: 0, version: 0, pending: None, offers, open: false }),
-            confirmed: None,
-        }
-    }
-
-    fn dummy_offer() -> Offer {
-        Offer { title: "Organize imports".to_string(), edit: lsp_types::WorkspaceEdit::default() }
-    }
-
-    #[test]
-    fn open_picker_opens_the_popup_when_the_caret_line_has_an_offer() {
-        let mut gutter = tracked_with_offers(vec![dummy_offer()]);
-        gutter.open_picker();
-        assert!(gutter.tracked.as_ref().unwrap().open);
-    }
-
-    #[test]
-    fn open_picker_is_a_no_op_with_no_offer_to_show() {
-        let mut gutter = tracked_with_offers(Vec::new());
-        gutter.open_picker();
-        assert!(!gutter.tracked.as_ref().unwrap().open);
-
-        let mut empty = CodeActionGutter::default();
-        empty.open_picker();
-        assert!(empty.tracked.is_none());
-    }
-
-    /// Real captured jdtls 1.60.0 reply (trimmed), live-verifying this
-    /// checkpoint's own example (an unused import): every offer it sent —
-    /// "Organize imports" among them — came back as a bare `Command`
-    /// named `java.apply.workspaceEdit` whose single argument *is* the
-    /// edit, not a `CodeAction` literal with its own `edit` field. Without
-    /// `offer_from_item`'s special case for this exact shape, this whole
-    /// reply parsed to zero offers — a real gap this test pins down.
-    #[test]
-    fn offers_from_response_reads_jdtls_own_java_apply_workspace_edit_command() {
-        let value = serde_json::json!([
-            {
-                "title": "Organize imports",
-                "command": "java.apply.workspaceEdit",
-                "arguments": [{
-                    "changes": {
-                        "file:///a/Main.java": [
-                            { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 1, "character": 0 } }, "newText": "" }
-                        ]
-                    }
-                }]
-            },
-            { "title": "Some other server-side command", "command": "java.some.other.command" }
-        ]);
-        let offers = offers_from_response(value);
-        assert_eq!(offers.len(), 1);
-        assert_eq!(offers[0].title, "Organize imports");
-    }
-}
+#[path = "code_action_test.rs"]
+mod code_action_test;

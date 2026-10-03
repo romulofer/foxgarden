@@ -29,41 +29,113 @@ struct SpringAnnotation {
 
 const SPRING_ANNOTATIONS: &[SpringAnnotation] = &[
     // org.springframework.stereotype
-    SpringAnnotation { name: "Component", import_path: "org.springframework.stereotype.Component" },
-    SpringAnnotation { name: "Controller", import_path: "org.springframework.stereotype.Controller" },
-    SpringAnnotation { name: "Indexed", import_path: "org.springframework.stereotype.Indexed" },
-    SpringAnnotation { name: "Repository", import_path: "org.springframework.stereotype.Repository" },
-    SpringAnnotation { name: "Service", import_path: "org.springframework.stereotype.Service" },
+    SpringAnnotation {
+        name: "Component",
+        import_path: "org.springframework.stereotype.Component",
+    },
+    SpringAnnotation {
+        name: "Controller",
+        import_path: "org.springframework.stereotype.Controller",
+    },
+    SpringAnnotation {
+        name: "Indexed",
+        import_path: "org.springframework.stereotype.Indexed",
+    },
+    SpringAnnotation {
+        name: "Repository",
+        import_path: "org.springframework.stereotype.Repository",
+    },
+    SpringAnnotation {
+        name: "Service",
+        import_path: "org.springframework.stereotype.Service",
+    },
     // org.springframework.beans.factory.annotation
-    SpringAnnotation { name: "Autowired", import_path: "org.springframework.beans.factory.annotation.Autowired" },
-    SpringAnnotation { name: "Configurable", import_path: "org.springframework.beans.factory.annotation.Configurable" },
-    SpringAnnotation { name: "Lookup", import_path: "org.springframework.beans.factory.annotation.Lookup" },
-    SpringAnnotation { name: "Qualifier", import_path: "org.springframework.beans.factory.annotation.Qualifier" },
-    SpringAnnotation { name: "Required", import_path: "org.springframework.beans.factory.annotation.Required" },
-    SpringAnnotation { name: "Value", import_path: "org.springframework.beans.factory.annotation.Value" },
+    SpringAnnotation {
+        name: "Autowired",
+        import_path: "org.springframework.beans.factory.annotation.Autowired",
+    },
+    SpringAnnotation {
+        name: "Configurable",
+        import_path: "org.springframework.beans.factory.annotation.Configurable",
+    },
+    SpringAnnotation {
+        name: "Lookup",
+        import_path: "org.springframework.beans.factory.annotation.Lookup",
+    },
+    SpringAnnotation {
+        name: "Qualifier",
+        import_path: "org.springframework.beans.factory.annotation.Qualifier",
+    },
+    SpringAnnotation {
+        name: "Required",
+        import_path: "org.springframework.beans.factory.annotation.Required",
+    },
+    SpringAnnotation {
+        name: "Value",
+        import_path: "org.springframework.beans.factory.annotation.Value",
+    },
     // org.springframework.context.annotation
-    SpringAnnotation { name: "Bean", import_path: "org.springframework.context.annotation.Bean" },
-    SpringAnnotation { name: "ComponentScan", import_path: "org.springframework.context.annotation.ComponentScan" },
-    SpringAnnotation { name: "ComponentScans", import_path: "org.springframework.context.annotation.ComponentScans" },
-    SpringAnnotation { name: "Conditional", import_path: "org.springframework.context.annotation.Conditional" },
-    SpringAnnotation { name: "Configuration", import_path: "org.springframework.context.annotation.Configuration" },
-    SpringAnnotation { name: "Description", import_path: "org.springframework.context.annotation.Description" },
+    SpringAnnotation {
+        name: "Bean",
+        import_path: "org.springframework.context.annotation.Bean",
+    },
+    SpringAnnotation {
+        name: "ComponentScan",
+        import_path: "org.springframework.context.annotation.ComponentScan",
+    },
+    SpringAnnotation {
+        name: "ComponentScans",
+        import_path: "org.springframework.context.annotation.ComponentScans",
+    },
+    SpringAnnotation {
+        name: "Conditional",
+        import_path: "org.springframework.context.annotation.Conditional",
+    },
+    SpringAnnotation {
+        name: "Configuration",
+        import_path: "org.springframework.context.annotation.Configuration",
+    },
+    SpringAnnotation {
+        name: "Description",
+        import_path: "org.springframework.context.annotation.Description",
+    },
     SpringAnnotation {
         name: "EnableAspectJAutoProxy",
         import_path: "org.springframework.context.annotation.EnableAspectJAutoProxy",
     },
-    SpringAnnotation { name: "Import", import_path: "org.springframework.context.annotation.Import" },
-    SpringAnnotation { name: "ImportResource", import_path: "org.springframework.context.annotation.ImportResource" },
-    SpringAnnotation { name: "Lazy", import_path: "org.springframework.context.annotation.Lazy" },
-    SpringAnnotation { name: "Primary", import_path: "org.springframework.context.annotation.Primary" },
-    SpringAnnotation { name: "Profile", import_path: "org.springframework.context.annotation.Profile" },
-    SpringAnnotation { name: "PropertySource", import_path: "org.springframework.context.annotation.PropertySource" },
+    SpringAnnotation {
+        name: "Import",
+        import_path: "org.springframework.context.annotation.Import",
+    },
+    SpringAnnotation {
+        name: "ImportResource",
+        import_path: "org.springframework.context.annotation.ImportResource",
+    },
+    SpringAnnotation {
+        name: "Lazy",
+        import_path: "org.springframework.context.annotation.Lazy",
+    },
+    SpringAnnotation {
+        name: "Primary",
+        import_path: "org.springframework.context.annotation.Primary",
+    },
+    SpringAnnotation {
+        name: "Profile",
+        import_path: "org.springframework.context.annotation.Profile",
+    },
+    SpringAnnotation {
+        name: "PropertySource",
+        import_path: "org.springframework.context.annotation.PropertySource",
+    },
     // org.springframework.transaction.annotation
     SpringAnnotation {
         name: "EnableTransactionManagement",
         import_path: "org.springframework.transaction.annotation.EnableTransactionManagement",
     },
-    SpringAnnotation { name: "Transactional", import_path: "org.springframework.transaction.annotation.Transactional" },
+    SpringAnnotation {
+        name: "Transactional",
+        import_path: "org.springframework.transaction.annotation.Transactional",
+    },
     // org.springframework.boot.autoconfigure
     SpringAnnotation {
         name: "EnableAutoConfiguration",
@@ -74,34 +146,106 @@ const SPRING_ANNOTATIONS: &[SpringAnnotation] = &[
         import_path: "org.springframework.boot.autoconfigure.SpringBootApplication",
     },
     // org.springframework.web.bind.annotation
-    SpringAnnotation { name: "ControllerAdvice", import_path: "org.springframework.web.bind.annotation.ControllerAdvice" },
-    SpringAnnotation { name: "CookieValue", import_path: "org.springframework.web.bind.annotation.CookieValue" },
-    SpringAnnotation { name: "CrossOrigin", import_path: "org.springframework.web.bind.annotation.CrossOrigin" },
-    SpringAnnotation { name: "DeleteMapping", import_path: "org.springframework.web.bind.annotation.DeleteMapping" },
-    SpringAnnotation { name: "ExceptionHandler", import_path: "org.springframework.web.bind.annotation.ExceptionHandler" },
-    SpringAnnotation { name: "GetMapping", import_path: "org.springframework.web.bind.annotation.GetMapping" },
-    SpringAnnotation { name: "InitBinder", import_path: "org.springframework.web.bind.annotation.InitBinder" },
-    SpringAnnotation { name: "MatrixVariable", import_path: "org.springframework.web.bind.annotation.MatrixVariable" },
-    SpringAnnotation { name: "ModelAttribute", import_path: "org.springframework.web.bind.annotation.ModelAttribute" },
-    SpringAnnotation { name: "PatchMapping", import_path: "org.springframework.web.bind.annotation.PatchMapping" },
-    SpringAnnotation { name: "PathVariable", import_path: "org.springframework.web.bind.annotation.PathVariable" },
-    SpringAnnotation { name: "PostMapping", import_path: "org.springframework.web.bind.annotation.PostMapping" },
-    SpringAnnotation { name: "PutMapping", import_path: "org.springframework.web.bind.annotation.PutMapping" },
-    SpringAnnotation { name: "RequestAttribute", import_path: "org.springframework.web.bind.annotation.RequestAttribute" },
-    SpringAnnotation { name: "RequestBody", import_path: "org.springframework.web.bind.annotation.RequestBody" },
-    SpringAnnotation { name: "RequestHeader", import_path: "org.springframework.web.bind.annotation.RequestHeader" },
-    SpringAnnotation { name: "RequestMapping", import_path: "org.springframework.web.bind.annotation.RequestMapping" },
-    SpringAnnotation { name: "RequestParam", import_path: "org.springframework.web.bind.annotation.RequestParam" },
-    SpringAnnotation { name: "RequestPart", import_path: "org.springframework.web.bind.annotation.RequestPart" },
-    SpringAnnotation { name: "ResponseBody", import_path: "org.springframework.web.bind.annotation.ResponseBody" },
-    SpringAnnotation { name: "ResponseStatus", import_path: "org.springframework.web.bind.annotation.ResponseStatus" },
-    SpringAnnotation { name: "RestController", import_path: "org.springframework.web.bind.annotation.RestController" },
+    SpringAnnotation {
+        name: "ControllerAdvice",
+        import_path: "org.springframework.web.bind.annotation.ControllerAdvice",
+    },
+    SpringAnnotation {
+        name: "CookieValue",
+        import_path: "org.springframework.web.bind.annotation.CookieValue",
+    },
+    SpringAnnotation {
+        name: "CrossOrigin",
+        import_path: "org.springframework.web.bind.annotation.CrossOrigin",
+    },
+    SpringAnnotation {
+        name: "DeleteMapping",
+        import_path: "org.springframework.web.bind.annotation.DeleteMapping",
+    },
+    SpringAnnotation {
+        name: "ExceptionHandler",
+        import_path: "org.springframework.web.bind.annotation.ExceptionHandler",
+    },
+    SpringAnnotation {
+        name: "GetMapping",
+        import_path: "org.springframework.web.bind.annotation.GetMapping",
+    },
+    SpringAnnotation {
+        name: "InitBinder",
+        import_path: "org.springframework.web.bind.annotation.InitBinder",
+    },
+    SpringAnnotation {
+        name: "MatrixVariable",
+        import_path: "org.springframework.web.bind.annotation.MatrixVariable",
+    },
+    SpringAnnotation {
+        name: "ModelAttribute",
+        import_path: "org.springframework.web.bind.annotation.ModelAttribute",
+    },
+    SpringAnnotation {
+        name: "PatchMapping",
+        import_path: "org.springframework.web.bind.annotation.PatchMapping",
+    },
+    SpringAnnotation {
+        name: "PathVariable",
+        import_path: "org.springframework.web.bind.annotation.PathVariable",
+    },
+    SpringAnnotation {
+        name: "PostMapping",
+        import_path: "org.springframework.web.bind.annotation.PostMapping",
+    },
+    SpringAnnotation {
+        name: "PutMapping",
+        import_path: "org.springframework.web.bind.annotation.PutMapping",
+    },
+    SpringAnnotation {
+        name: "RequestAttribute",
+        import_path: "org.springframework.web.bind.annotation.RequestAttribute",
+    },
+    SpringAnnotation {
+        name: "RequestBody",
+        import_path: "org.springframework.web.bind.annotation.RequestBody",
+    },
+    SpringAnnotation {
+        name: "RequestHeader",
+        import_path: "org.springframework.web.bind.annotation.RequestHeader",
+    },
+    SpringAnnotation {
+        name: "RequestMapping",
+        import_path: "org.springframework.web.bind.annotation.RequestMapping",
+    },
+    SpringAnnotation {
+        name: "RequestParam",
+        import_path: "org.springframework.web.bind.annotation.RequestParam",
+    },
+    SpringAnnotation {
+        name: "RequestPart",
+        import_path: "org.springframework.web.bind.annotation.RequestPart",
+    },
+    SpringAnnotation {
+        name: "ResponseBody",
+        import_path: "org.springframework.web.bind.annotation.ResponseBody",
+    },
+    SpringAnnotation {
+        name: "ResponseStatus",
+        import_path: "org.springframework.web.bind.annotation.ResponseStatus",
+    },
+    SpringAnnotation {
+        name: "RestController",
+        import_path: "org.springframework.web.bind.annotation.RestController",
+    },
     SpringAnnotation {
         name: "RestControllerAdvice",
         import_path: "org.springframework.web.bind.annotation.RestControllerAdvice",
     },
-    SpringAnnotation { name: "SessionAttribute", import_path: "org.springframework.web.bind.annotation.SessionAttribute" },
-    SpringAnnotation { name: "SessionAttributes", import_path: "org.springframework.web.bind.annotation.SessionAttributes" },
+    SpringAnnotation {
+        name: "SessionAttribute",
+        import_path: "org.springframework.web.bind.annotation.SessionAttribute",
+    },
+    SpringAnnotation {
+        name: "SessionAttributes",
+        import_path: "org.springframework.web.bind.annotation.SessionAttributes",
+    },
 ];
 
 /// Every known Spring annotation as a completion candidate — unfiltered,
@@ -122,7 +266,10 @@ pub(super) fn spring_annotation_candidates() -> Vec<CompletionItem> {
 }
 
 fn import_path_for(annotation_name: &str) -> Option<&'static str> {
-    SPRING_ANNOTATIONS.iter().find(|a| a.name == annotation_name).map(|a| a.import_path)
+    SPRING_ANNOTATIONS
+        .iter()
+        .find(|a| a.name == annotation_name)
+        .map(|a| a.import_path)
 }
 
 /// If `annotation_name` is a known Spring annotation not already imported
@@ -131,7 +278,12 @@ fn import_path_for(annotation_name: &str) -> Option<&'static str> {
 /// style) and the byte offset to splice it at. `None` either when the
 /// name isn't a recognized Spring annotation at all, or when it's already
 /// imported (nothing to do).
-pub(super) fn spring_import_insertion(tree: &Tree, text: &str, language: Language, annotation_name: &str) -> Option<(usize, String)> {
+pub(super) fn spring_import_insertion(
+    tree: &Tree,
+    text: &str,
+    language: Language,
+    annotation_name: &str,
+) -> Option<(usize, String)> {
     let import_path = import_path_for(annotation_name)?;
     let existing = existing_imports(tree, text, language);
 
@@ -203,98 +355,5 @@ fn first_import_insertion_point(tree: &Tree, statement: &str) -> (usize, String)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use syntax::IncrementalParser;
-
-    fn parsed(language: Language, source: &str) -> Tree {
-        let mut parser = IncrementalParser::new(language);
-        parser.parse(source).clone()
-    }
-
-    #[test]
-    fn spring_annotation_candidates_are_labeled_and_carry_their_own_import_path_as_detail() {
-        let candidates = spring_annotation_candidates();
-        let component = candidates.iter().find(|c| c.label == "Component").unwrap();
-        assert_eq!(component.kind, CompletionKind::Annotation);
-        assert_eq!(component.detail.as_deref(), Some("org.springframework.stereotype.Component"));
-    }
-
-    #[test]
-    fn an_unrecognized_name_yields_no_insertion() {
-        let source = "class Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        assert!(spring_import_insertion(&tree, source, Language::Java, "NotASpringAnnotation").is_none());
-    }
-
-    #[test]
-    fn already_imported_yields_no_insertion() {
-        let source = "import org.springframework.stereotype.Component;\n\nclass Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        assert!(spring_import_insertion(&tree, source, Language::Java, "Component").is_none());
-    }
-
-    #[test]
-    fn java_with_no_imports_at_all_inserts_after_the_package_declaration() {
-        let source = "package com.example;\n\nclass Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        let (byte, insertion) = spring_import_insertion(&tree, source, Language::Java, "Component").unwrap();
-        assert_eq!(byte, "package com.example;".len());
-        assert_eq!(insertion, "\n\nimport org.springframework.stereotype.Component;");
-
-        let mut result = source.to_string();
-        result.insert_str(byte, &insertion);
-        assert_eq!(result, "package com.example;\n\nimport org.springframework.stereotype.Component;\n\nclass Foo {}\n");
-    }
-
-    #[test]
-    fn java_with_no_package_and_no_imports_inserts_at_the_very_start() {
-        let source = "class Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        let (byte, insertion) = spring_import_insertion(&tree, source, Language::Java, "Component").unwrap();
-        assert_eq!(byte, 0);
-        assert_eq!(insertion, "import org.springframework.stereotype.Component;\n\n");
-    }
-
-    #[test]
-    fn java_inserts_at_the_correct_alphabetical_slot_among_existing_imports() {
-        // "org.springframework.stereotype.Component" sorts after
-        // "java.util.List" (`j` < `o`) but before "org.springframework.
-        // web.bind.annotation.RestController" (`stereotype` < `web`) —
-        // genuinely bracketing the insertion point, unlike two plain
-        // `java.util.*` imports (which both sort *before* any
-        // `org.springframework.*` one).
-        let source = "import java.util.List;\nimport org.springframework.web.bind.annotation.RestController;\n\nclass Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        let (byte, insertion) = spring_import_insertion(&tree, source, Language::Java, "Component").unwrap();
-
-        let mut result = source.to_string();
-        result.insert_str(byte, &insertion);
-        assert_eq!(
-            result,
-            "import java.util.List;\nimport org.springframework.stereotype.Component;\nimport org.springframework.web.bind.annotation.RestController;\n\nclass Foo {}\n"
-        );
-    }
-
-    #[test]
-    fn java_appends_after_the_last_import_when_the_new_one_sorts_last() {
-        let source = "import java.util.List;\nimport java.util.Map;\n\nclass Foo {}\n";
-        let tree = parsed(Language::Java, source);
-        let (byte, insertion) = spring_import_insertion(&tree, source, Language::Java, "Value").unwrap();
-
-        let mut result = source.to_string();
-        result.insert_str(byte, &insertion);
-        assert_eq!(
-            result,
-            "import java.util.List;\nimport java.util.Map;\nimport org.springframework.beans.factory.annotation.Value;\n\nclass Foo {}\n"
-        );
-    }
-
-    #[test]
-    fn kotlin_import_has_no_semicolon() {
-        let source = "package com.example\n\nclass Foo\n";
-        let tree = parsed(Language::Kotlin, source);
-        let (_byte, insertion) = spring_import_insertion(&tree, source, Language::Kotlin, "Component").unwrap();
-        assert_eq!(insertion, "\n\nimport org.springframework.stereotype.Component");
-    }
-}
+#[path = "spring_annotation_completion_test.rs"]
+mod spring_annotation_completion_test;

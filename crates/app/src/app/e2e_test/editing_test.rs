@@ -11,7 +11,10 @@ fn typing_marks_the_tab_dirty_and_saving_clears_it() {
 
     app.type_into_active_tab(MAIN_JAVA.chars().count(), "// tail");
 
-    assert!(app.shows(&E2e::dirty_row("Main.java")), "an edited tab must show the dirty asterisk");
+    assert!(
+        app.shows(&E2e::dirty_row("Main.java")),
+        "an edited tab must show the dirty asterisk"
+    );
     assert_eq!(
         app.on_disk("Main.java"),
         MAIN_JAVA,
@@ -20,7 +23,10 @@ fn typing_marks_the_tab_dirty_and_saving_clears_it() {
 
     app.press(egui::Modifiers::COMMAND, egui::Key::S);
 
-    assert!(!app.shows(&E2e::dirty_row("Main.java")), "saving must clear the dirty asterisk");
+    assert!(
+        !app.shows(&E2e::dirty_row("Main.java")),
+        "saving must clear the dirty asterisk"
+    );
     assert!(app.shows(&E2e::row("Main.java")));
     assert_eq!(app.on_disk("Main.java"), format!("{MAIN_JAVA}// tail"));
 }
@@ -75,7 +81,10 @@ fn cancelling_the_close_prompt_keeps_the_dirty_tab_open() {
     app.click(t().common.cancel);
 
     assert_eq!(app.open_tab_names(), ["Main.java"]);
-    assert!(app.shows(&E2e::dirty_row("Main.java")), "the tab is still open and still dirty");
+    assert!(
+        app.shows(&E2e::dirty_row("Main.java")),
+        "the tab is still open and still dirty"
+    );
     assert!(
         !app.shows(&msg::save_changes_before_closing("Main.java")),
         "the prompt must be gone"

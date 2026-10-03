@@ -364,6 +364,29 @@ fn auto_pair_still_works_for_a_plain_text_file_with_no_parser() {
 }
 
 #[test]
+fn zzz_repro_enter_hang() {
+    let source = "import java.util.LinkedList;\n\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello\");\n        LinkedList<Integer\n        deck = new LinkedList<>();\n    }\n}\n";
+    let (_dir, mut doc) = open_fixture(source, "Main.java");
+    let mut parser = parsed(Language::Java, source);
+    let caret = source.find("LinkedList<Integer").unwrap() + "LinkedList<Integer".len();
+    let frames: Vec<Vec<egui::Event>> = vec![(0..100).map(|_| key_event(egui::Key::Enter)).collect()];
+    typing_session(
+        &mut doc,
+        &mut parser,
+        None,
+        &mut None,
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        caret,
+        frames,
+    );
+    eprintln!("REPRO OK: {}", doc.buffer.len_chars());
+}
+
+#[test]
 fn sort_lines_request_sorts_the_selected_lines() {
     let (_dir, mut doc) = open_fixture("banana\napple\ncherry", "notes.txt");
     let mut parser: Option<IncrementalParser> = None;

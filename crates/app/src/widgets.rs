@@ -3,6 +3,7 @@
 
 pub mod diff_view;
 pub mod editor;
+pub mod flame_graph;
 pub mod modal;
 pub mod terminal_input;
 pub mod terminal_widget;

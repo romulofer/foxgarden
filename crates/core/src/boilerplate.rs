@@ -30,9 +30,13 @@ pub fn generate(language: Language, project_root: &Path, file_path: &Path) -> St
             out
         }
         // Class/package scaffolding doesn't mean anything for a config or
-        // markup file — a new one just starts empty, same as any file with
-        // no recognized language at all.
-        Language::Properties | Language::Yaml | Language::Xml | Language::Dockerfile => String::new(),
+        // markup file, and this build cannot know what it would mean for a
+        // language contributed by an extension it has never seen — either
+        // way a new file just starts empty, same as one with no recognized
+        // language at all. Generating *something* for an unknown language
+        // would be strictly worse than generating nothing: a Java class
+        // body in a file of some other language is not a helpful guess.
+        _ => String::new(),
     }
 }
 
@@ -54,47 +58,5 @@ fn infer_package(project_root: &Path, file_path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn java_with_maven_layout_gets_package_and_class() {
-        let root = PathBuf::from("/repo");
-        let file = PathBuf::from("/repo/src/main/java/com/example/foo/Bar.java");
-        let out = generate(Language::Java, &root, &file);
-        assert_eq!(out, "package com.example.foo;\n\npublic class Bar {\n\n}\n");
-    }
-
-    #[test]
-    fn kotlin_with_gradle_layout_gets_package_and_class() {
-        let root = PathBuf::from("/repo");
-        let file = PathBuf::from("/repo/src/main/kotlin/com/example/Bar.kt");
-        let out = generate(Language::Kotlin, &root, &file);
-        assert_eq!(out, "package com.example\n\nclass Bar {\n\n}\n");
-    }
-
-    #[test]
-    fn test_source_root_is_also_recognized() {
-        let root = PathBuf::from("/repo");
-        let file = PathBuf::from("/repo/src/test/java/com/example/BarTest.java");
-        let out = generate(Language::Java, &root, &file);
-        assert_eq!(out, "package com.example;\n\npublic class BarTest {\n\n}\n");
-    }
-
-    #[test]
-    fn file_directly_under_source_root_has_no_package() {
-        let root = PathBuf::from("/repo");
-        let file = PathBuf::from("/repo/src/main/java/Bar.java");
-        let out = generate(Language::Java, &root, &file);
-        assert_eq!(out, "public class Bar {\n\n}\n");
-    }
-
-    #[test]
-    fn file_outside_maven_layout_has_no_package() {
-        let root = PathBuf::from("/repo");
-        let file = PathBuf::from("/repo/Bar.java");
-        let out = generate(Language::Java, &root, &file);
-        assert_eq!(out, "public class Bar {\n\n}\n");
-    }
-}
+#[path = "boilerplate_test.rs"]
+mod boilerplate_test;

@@ -26,6 +26,7 @@ mod painting;
 mod peek;
 mod references;
 mod rename;
+mod run_gutter;
 mod spring_annotation_completion;
 mod spring_config_completion;
 mod spring_scan;
@@ -49,7 +50,7 @@ pub use templates::{
     GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,
     serialize_user_templates,
 };
-pub use widget::{EditorRequests, jump_to, show};
 /// Where the caret sits in a given editor widget — read by the status bar,
 /// which reports a position the widget (not the document) owns.
 pub use text_area::peek_caret;
+pub use widget::{EditorRequests, jump_to, show};

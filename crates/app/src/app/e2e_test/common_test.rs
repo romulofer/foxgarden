@@ -152,7 +152,11 @@ impl E2e {
         let shortest = self
             .harness
             .query_all_by_label_contains(item)
-            .filter_map(|node| egui_kittest::kittest::NodeT::accesskit_node(&node).label().map(|l| l.to_owned()))
+            .filter_map(|node| {
+                egui_kittest::kittest::NodeT::accesskit_node(&node)
+                    .label()
+                    .map(|l| l.to_owned())
+            })
             .min_by_key(|label| label.len());
         match shortest {
             Some(label) => self.click(&label),
@@ -178,7 +182,10 @@ impl E2e {
     /// a row the way a user sees it without hard-coding a glyph that would
     /// have to be updated here every time the icon set changes.
     pub(super) fn row(file_name: &str) -> String {
-        format!("{} {file_name}", crate::style::icons::for_file(std::path::Path::new(file_name)))
+        format!(
+            "{} {file_name}",
+            crate::style::icons::for_file(std::path::Path::new(file_name))
+        )
     }
 
     /// The tab label for `file_name` with unsaved changes — the same row,
@@ -224,7 +231,11 @@ impl E2e {
             if !showing {
                 return;
             }
-            self.harness.get_all_by_label(&close).next().expect("a toast to dismiss").click();
+            self.harness
+                .get_all_by_label(&close)
+                .next()
+                .expect("a toast to dismiss")
+                .click();
             self.settle();
         }
     }
@@ -252,7 +263,11 @@ impl E2e {
     /// or the other while both are on screen with the same label.
     pub(super) fn click_tree(&mut self, file_name: &str) {
         let label = Self::row(file_name);
-        self.harness.get_all_by_label(&label).next().expect("a tree row for this file").click();
+        self.harness
+            .get_all_by_label(&label)
+            .next()
+            .expect("a tree row for this file")
+            .click();
         self.settle();
     }
 

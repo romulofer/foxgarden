@@ -44,7 +44,10 @@ pub(super) fn show_breakpoint_gutter(
 
     for (i, (logical, _)) in out.row_galleys.iter().enumerate() {
         let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
-        let rect = egui::Rect::from_min_size(egui::pos2(gutter_left, y), egui::vec2(BREAKPOINT_GUTTER_WIDTH, out.row_height));
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(gutter_left, y),
+            egui::vec2(BREAKPOINT_GUTTER_WIDTH, out.row_height),
+        );
 
         let id = egui::Id::new(("breakpoint", id_salt, *logical));
         let response = ui.interact(rect, id, Sense::click());

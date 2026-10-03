@@ -278,6 +278,16 @@ msg! {
 }
 
 msg! {
+    /// The run gutter's ▶ tooltip (`widgets::editor::run_gutter`) —
+    /// `class` is the entry point's own simple class name, not its
+    /// package-qualified one, which is too long to read in a tooltip.
+    run_main_class(class: &str) {
+        pt: "Executar {class}",
+        en: "Run {class}",
+    }
+}
+
+msg! {
     /// A Docker action's own `Command::spawn` failing (`docker` missing
     /// from `PATH`, e.g.) — not the build/run itself failing, which
     /// instead shows up as ordinary lines in the build output panel
@@ -292,6 +302,41 @@ msg! {
     pmd_failed(err: &str) {
         pt: "o PMD falhou: {err}",
         en: "PMD failed: {err}",
+    }
+}
+
+// --- Profiler (async-profiler, PLAN.md Track 26) ------------------------
+
+msg! {
+    /// Shown when Profile is triggered but async-profiler isn't cached yet:
+    /// its download was kicked off, and the user should retry once it lands.
+    profiler_installing() {
+        pt: "baixando o async-profiler… tente Analisar de novo quando terminar",
+        en: "downloading async-profiler… try Profile again once it finishes",
+    }
+}
+
+msg! {
+    /// async-profiler's background install finished.
+    profiler_installed(version: &str) {
+        pt: "async-profiler {version} instalado",
+        en: "async-profiler {version} installed",
+    }
+}
+
+msg! {
+    /// A capture has begun against the launched run's JVM.
+    profiling_pid(pid: u32, secs: u32) {
+        pt: "analisando o processo {pid} por {secs}s…",
+        en: "profiling process {pid} for {secs}s…",
+    }
+}
+
+msg! {
+    /// A capture finished — `samples` is the profile's total sample count.
+    profile_captured(samples: u64) {
+        pt: "perfil capturado: {samples} amostras",
+        en: "profile captured: {samples} samples",
     }
 }
 
@@ -465,6 +510,18 @@ msg! {
     }
 }
 
+msg! {
+    // Reachable since languages became extension-contributed (`PLAN.md`
+    // Track 24 Phase 2): a language can be registered without this build
+    // having a grammar for it, and anything that reads code structure
+    // needs one. Names the language so the message says which support is
+    // missing rather than just that something failed.
+    no_grammar_for_language(language: &str) {
+        pt: "Sem gramática instalada para {language}; este recurso precisa dela.",
+        en: "No grammar installed for {language}; this feature needs one.",
+    }
+}
+
 // --- File > New Project… -------------------------------------------------
 
 msg! {
@@ -523,43 +580,5 @@ msg! {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Lang, with_lang};
-
-    #[test]
-    fn interpolates_in_both_languages() {
-        with_lang(Lang::PtBr, || {
-            assert_eq!(failed_to_save("disco cheio"), "falha ao salvar: disco cheio");
-        });
-        with_lang(Lang::EnUs, || {
-            assert_eq!(failed_to_save("disk full"), "failed to save: disk full");
-        });
-    }
-
-    #[test]
-    fn a_message_with_two_holes_fills_both() {
-        with_lang(Lang::EnUs, || {
-            assert_eq!(
-                failed_to_read("/tmp/a.java", "no such file"),
-                "failed to read /tmp/a.java: no such file"
-            );
-        });
-    }
-
-    /// `install_pin_explanation` names the pinned version twice in both
-    /// languages — a rewording that drops one of them would leave a
-    /// dangling "will still install" with nothing after it.
-    #[test]
-    fn a_repeated_hole_is_filled_every_time() {
-        for lang in Lang::ALL {
-            with_lang(lang, || {
-                assert_eq!(
-                    install_pin_explanation("10.20.1").matches("10.20.1").count(),
-                    2,
-                    "{lang:?}"
-                );
-            });
-        }
-    }
-}
+#[path = "msg_test.rs"]
+mod msg_test;

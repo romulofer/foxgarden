@@ -66,13 +66,14 @@ fn sticky_scroll_enabled_renders_without_panicking() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -118,13 +119,14 @@ fn renders_highlighted_valid_file_without_panicking() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -176,13 +178,14 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
                 &mut Vec::new(),
                 &mut None,
                 &UserTemplates::default(),
-            &mut crate::panels::spring_config::SpringConfigState::default(),
-            &mut crate::lsp_state::LspState::default(),
-            &mut FindReferencesState::default(),
-            &mut RenameBox::default(),
-            &mut CodeActionGutter::default(),
-            &crate::debug_state::DebugState::default(),
-        true,
+                &mut crate::panels::spring_config::SpringConfigState::default(),
+                &mut crate::lsp_state::LspState::default(),
+                &mut FindReferencesState::default(),
+                &mut RenameBox::default(),
+                &mut CodeActionGutter::default(),
+                &crate::debug_state::DebugState::default(),
+                true,
+                &mut None,
             );
         });
     };
@@ -266,13 +269,14 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -311,13 +315,14 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -364,13 +369,14 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
                 &mut Vec::new(),
                 &mut None,
                 &UserTemplates::default(),
-            &mut crate::panels::spring_config::SpringConfigState::default(),
-            &mut crate::lsp_state::LspState::default(),
-            &mut FindReferencesState::default(),
-            &mut RenameBox::default(),
-            &mut CodeActionGutter::default(),
-            &crate::debug_state::DebugState::default(),
-        true,
+                &mut crate::panels::spring_config::SpringConfigState::default(),
+                &mut crate::lsp_state::LspState::default(),
+                &mut FindReferencesState::default(),
+                &mut RenameBox::default(),
+                &mut CodeActionGutter::default(),
+                &crate::debug_state::DebugState::default(),
+                true,
+                &mut None,
             );
         });
     };
@@ -422,13 +428,14 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -483,13 +490,14 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -532,13 +540,14 @@ fn whitespace_and_indent_guides_render_without_panicking() {
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -553,7 +562,11 @@ fn realistic_paste_reparses_and_highlights_correctly() {
     let mut new_text = old_text.to_string();
     new_text.insert_str(insert_at, pasted);
 
-    let mut parser = IncrementalParser::new(Language::Java);
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(Language::Java).expect("an installed grammar must load");
     parser.parse(old_text);
     let edit = syntax::diff_edit(old_text, &new_text);
     parser.reparse(&new_text, edit);
@@ -576,7 +589,11 @@ fn realistic_paste_reparses_and_highlights_correctly() {
     // Cross-check against a from-scratch full parse of the same final
     // text: if incremental reparse after this paste produced the same
     // tree a fresh parse would, the highlighting can't be stale.
-    let mut full_parser = IncrementalParser::new(Language::Java);
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut full_parser = IncrementalParser::new(Language::Java).expect("an installed grammar must load");
     full_parser.parse(&new_text);
     let full_spans = syntax::highlight_spans(full_parser.tree().unwrap(), &new_text, Language::Java);
     assert_eq!(spans, full_spans);

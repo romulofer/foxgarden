@@ -5,4 +5,7 @@ edition.workspace = true
 
 [dependencies]
 fg-core = { path = "../core" }
+fg-extension = { path = "../extension" }
+fg-languages = { path = "../languages" }
+syntax = { path = "../syntax" }
 tempfile = "3.27.0"

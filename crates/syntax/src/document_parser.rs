@@ -1,7 +1,7 @@
 use fg_core::Language;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
-use crate::language::ts_language;
+use crate::grammars::ts_language;
 
 /// Owns an incremental tree-sitter parse for a single document.
 pub struct IncrementalParser {
@@ -11,16 +11,30 @@ pub struct IncrementalParser {
 }
 
 impl IncrementalParser {
-    pub fn new(language: Language) -> Self {
+    /// A parser for `language`, or `None` if this build has no grammar for
+    /// it.
+    ///
+    /// Fallible since `Language` stopped being a closed enum (`PLAN.md`
+    /// Track 24 Phase 2): an extension can contribute a language this
+    /// build has no grammar for, and that is a normal state rather than an
+    /// error. Every caller already had to handle a parser-less document —
+    /// `Option<IncrementalParser>` is how the editor has always
+    /// represented a file it cannot parse — so `None` here lands on paths
+    /// that already exist.
+    pub fn new(language: Language) -> Option<Self> {
         let mut parser = Parser::new();
-        parser
-            .set_language(&ts_language(language))
-            .expect("bundled grammar must load");
-        Self {
+        // `None` rather than a panic on a grammar that refuses to load:
+        // since Track 24 Phase 3 the grammar comes from an extension, and
+        // an extension's mistake must not be able to take the editor down.
+        // `grammars::install` has already ABI-checked whatever is in the
+        // store, so this is the residue — a grammar that passed that check
+        // and still failed here degrades to an unparsed document.
+        parser.set_language(&ts_language(language)?).ok()?;
+        Some(Self {
             parser,
             language,
             tree: None,
-        }
+        })
     }
 
     pub fn language(&self) -> Language {
@@ -120,58 +134,5 @@ pub fn diff_edit(old: &str, new: &str) -> InputEdit {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn byte_to_point_tracks_rows_and_columns() {
-        let text = "abc\ndef\nghi";
-        assert_eq!(byte_to_point(text, 0), Point { row: 0, column: 0 });
-        assert_eq!(byte_to_point(text, 3), Point { row: 0, column: 3 });
-        assert_eq!(byte_to_point(text, 4), Point { row: 1, column: 0 });
-        assert_eq!(byte_to_point(text, 9), Point { row: 2, column: 1 });
-    }
-
-    #[test]
-    fn diff_edit_detects_pure_insertion() {
-        let old = "class Hello {}";
-        let new = "class Hello { int x; }";
-        let edit = diff_edit(old, new);
-        assert_eq!(edit.start_byte, 13);
-        assert_eq!(edit.old_end_byte, 13);
-        assert_eq!(edit.new_end_byte, 21);
-        assert_eq!(&new[edit.start_byte..edit.new_end_byte], " int x; ");
-    }
-
-    #[test]
-    fn diff_edit_detects_pure_deletion() {
-        let old = "class Hello { int x; }";
-        let new = "class Hello {}";
-        let edit = diff_edit(old, new);
-        assert_eq!(edit.start_byte, 13);
-        assert_eq!(edit.old_end_byte, 21);
-        assert_eq!(edit.new_end_byte, 13);
-        assert_eq!(&old[edit.start_byte..edit.old_end_byte], " int x; ");
-    }
-
-    #[test]
-    fn diff_edit_detects_replacement() {
-        let old = "let x = 1;";
-        let new = "let x = 999;";
-        let edit = diff_edit(old, new);
-        assert_eq!(&old[edit.start_byte..edit.old_end_byte], "1");
-        assert_eq!(&new[edit.start_byte..edit.new_end_byte], "999");
-    }
-
-    #[test]
-    fn diff_edit_handles_multibyte_boundary() {
-        let old = "// caf\u{e9} shop\nlet x = 1;";
-        let new = "// caf\u{e9} shop\nlet x = 42;";
-        let edit = diff_edit(old, new);
-        assert!(old.is_char_boundary(edit.start_byte));
-        assert!(old.is_char_boundary(edit.old_end_byte));
-        assert!(new.is_char_boundary(edit.new_end_byte));
-        assert_eq!(&old[edit.start_byte..edit.old_end_byte], "1");
-        assert_eq!(&new[edit.start_byte..edit.new_end_byte], "42");
-    }
-}
+#[path = "document_parser_test.rs"]
+mod document_parser_test;

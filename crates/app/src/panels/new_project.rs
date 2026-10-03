@@ -108,52 +108,74 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
         ui.label(egui::RichText::new(t().new_project.description).weak());
         ui.separator();
 
-        egui::Grid::new("new_project_form").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label(t().new_project.group_id);
-            ui.add(egui::TextEdit::singleline(&mut state.group_id).hint_text(t().new_project.group_id_hint));
-            ui.end_row();
+        egui::Grid::new("new_project_form")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(t().new_project.group_id);
+                ui.add(egui::TextEdit::singleline(&mut state.group_id).hint_text(t().new_project.group_id_hint));
+                ui.end_row();
 
-            ui.label(t().new_project.artifact_id);
-            ui.add(egui::TextEdit::singleline(&mut state.artifact_id).hint_text(t().new_project.artifact_id_hint));
-            ui.end_row();
+                ui.label(t().new_project.artifact_id);
+                ui.add(egui::TextEdit::singleline(&mut state.artifact_id).hint_text(t().new_project.artifact_id_hint));
+                ui.end_row();
 
-            ui.label(t().new_project.location);
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut state.location).hint_text(t().new_project.location_hint));
-                if ui.add_enabled(!state.picker_running(), egui::Button::new(t().new_project.browse)).clicked() {
-                    state.picker.open(None);
-                }
-            });
-            ui.end_row();
-
-            ui.label(t().new_project.java_release);
-            egui::ComboBox::new("new_project_java_release", "")
-                .selected_text(state.java_release.to_string())
-                .show_ui(ui, |ui| {
-                    for release in JAVA_RELEASES {
-                        ui.selectable_value(&mut state.java_release, release, release.to_string());
+                ui.label(t().new_project.location);
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut state.location).hint_text(t().new_project.location_hint));
+                    if ui
+                        .add_enabled(!state.picker_running(), egui::Button::new(t().new_project.browse))
+                        .clicked()
+                    {
+                        state.picker.open(None);
                     }
                 });
-            ui.end_row();
+                ui.end_row();
 
-            ui.label(t().new_project.build_tool);
-            egui::ComboBox::new("new_project_build_tool", "")
-                .selected_text(build_tool_label(state.build_tool))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.build_tool, BuildTool::Maven, t().new_project.build_tool_maven);
-                    ui.selectable_value(&mut state.build_tool, BuildTool::Gradle, t().new_project.build_tool_gradle);
-                });
-            ui.end_row();
+                ui.label(t().new_project.java_release);
+                egui::ComboBox::new("new_project_java_release", "")
+                    .selected_text(state.java_release.to_string())
+                    .show_ui(ui, |ui| {
+                        for release in JAVA_RELEASES {
+                            ui.selectable_value(&mut state.java_release, release, release.to_string());
+                        }
+                    });
+                ui.end_row();
 
-            ui.label(t().new_project.language);
-            egui::ComboBox::new("new_project_language", "")
-                .selected_text(language_label(state.language))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.language, ProjectLanguage::Java, t().new_project.language_java);
-                    ui.selectable_value(&mut state.language, ProjectLanguage::Kotlin, t().new_project.language_kotlin);
-                });
-            ui.end_row();
-        });
+                ui.label(t().new_project.build_tool);
+                egui::ComboBox::new("new_project_build_tool", "")
+                    .selected_text(build_tool_label(state.build_tool))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.build_tool,
+                            BuildTool::Maven,
+                            t().new_project.build_tool_maven,
+                        );
+                        ui.selectable_value(
+                            &mut state.build_tool,
+                            BuildTool::Gradle,
+                            t().new_project.build_tool_gradle,
+                        );
+                    });
+                ui.end_row();
+
+                ui.label(t().new_project.language);
+                egui::ComboBox::new("new_project_language", "")
+                    .selected_text(language_label(state.language))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.language,
+                            ProjectLanguage::Java,
+                            t().new_project.language_java,
+                        );
+                        ui.selectable_value(
+                            &mut state.language,
+                            ProjectLanguage::Kotlin,
+                            t().new_project.language_kotlin,
+                        );
+                    });
+                ui.end_row();
+            });
 
         if state.build_tool == BuildTool::Gradle {
             ui.label(egui::RichText::new(t().new_project.gradle_no_wrapper_hint).weak());
@@ -170,7 +192,10 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
 
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.add_enabled(form_is_valid(state), egui::Button::new(t().new_project.create)).clicked() {
+            if ui
+                .add_enabled(form_is_valid(state), egui::Button::new(t().new_project.create))
+                .clicked()
+            {
                 created = true;
             }
             ui.button(t().common.cancel).clicked()
@@ -217,7 +242,10 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
     };
     fg_core::write_scaffold(&root, &fg_core::scaffold_files(&spec)).map_err(|e| msg::scaffold_failed(&e))?;
 
-    let config = ProjectConfig { java_release: Some(state.java_release), jdk_home: None };
+    let config = ProjectConfig {
+        java_release: Some(state.java_release),
+        jdk_home: None,
+    };
     fg_core::save_project_config(&root, &config)
         .map_err(|e| msg::scaffolded_but_config_save_failed(&root.display().to_string(), &e.to_string()))?;
 
@@ -237,151 +265,5 @@ pub fn registered_jdks_for(java_release: u32, registry: &JdkRegistry) -> Option<
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn open_resets_every_field_and_opens_the_dialog() {
-        let mut state = NewProjectWizardState {
-            open: false,
-            group_id: "stale".to_string(),
-            artifact_id: "stale".to_string(),
-            location: "/stale".to_string(),
-            java_release: 8,
-            build_tool: BuildTool::Gradle,
-            language: ProjectLanguage::Kotlin,
-            last_error: Some("stale error".to_string()),
-            picker: crate::folder_picker::FolderPicker::default(),
-        };
-        state.open();
-
-        assert!(state.open);
-        assert_eq!(state.group_id, "");
-        assert_eq!(state.artifact_id, "");
-        assert_eq!(state.location, "");
-        assert_eq!(state.java_release, 21);
-        assert_eq!(state.build_tool, BuildTool::Maven);
-        assert_eq!(state.language, ProjectLanguage::Java);
-        assert!(state.last_error.is_none());
-    }
-
-    #[test]
-    fn project_root_joins_location_and_artifact_id() {
-        let state = NewProjectWizardState {
-            location: "/home/dev/code".to_string(),
-            artifact_id: "my-app".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(project_root(&state), Path::new("/home/dev/code/my-app"));
-    }
-
-    #[test]
-    fn form_is_valid_requires_every_field_non_empty() {
-        let mut state = NewProjectWizardState::default();
-        assert!(!form_is_valid(&state));
-
-        state.group_id = "com.example".to_string();
-        assert!(!form_is_valid(&state));
-
-        state.artifact_id = "app".to_string();
-        assert!(!form_is_valid(&state));
-
-        state.location = "/home/dev".to_string();
-        assert!(form_is_valid(&state));
-    }
-
-    #[test]
-    fn form_is_valid_rejects_whitespace_only_fields() {
-        let state = NewProjectWizardState {
-            group_id: "  ".to_string(),
-            artifact_id: "app".to_string(),
-            location: "/home/dev".to_string(),
-            ..Default::default()
-        };
-        assert!(!form_is_valid(&state));
-    }
-
-    #[test]
-    fn create_and_open_scaffolds_saves_config_and_opens_the_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = NewProjectWizardState {
-            group_id: "com.example".to_string(),
-            artifact_id: "my-app".to_string(),
-            location: dir.path().display().to_string(),
-            java_release: 17,
-            ..Default::default()
-        };
-        let mut editor_state = EditorState::default();
-
-        create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
-
-        let root = dir.path().join("my-app");
-        assert!(root.join("pom.xml").exists());
-        assert!(root.join("src/main/java/com/example/Main.java").exists());
-        assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
-        assert_eq!(fg_core::load_project_config(&root).java_release, Some(17));
-    }
-
-    #[test]
-    fn create_and_open_with_gradle_scaffolds_gradle_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = NewProjectWizardState {
-            group_id: "com.example".to_string(),
-            artifact_id: "my-app".to_string(),
-            location: dir.path().display().to_string(),
-            java_release: 17,
-            build_tool: BuildTool::Gradle,
-            ..Default::default()
-        };
-        let mut editor_state = EditorState::default();
-
-        create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
-
-        let root = dir.path().join("my-app");
-        assert!(root.join("settings.gradle.kts").exists());
-        assert!(root.join("build.gradle.kts").exists());
-        assert!(root.join("src/main/java/com/example/Main.java").exists());
-        assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
-    }
-
-    #[test]
-    fn create_and_open_with_kotlin_scaffolds_kotlin_sources() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = NewProjectWizardState {
-            group_id: "com.example".to_string(),
-            artifact_id: "my-app".to_string(),
-            location: dir.path().display().to_string(),
-            java_release: 17,
-            build_tool: BuildTool::Gradle,
-            language: ProjectLanguage::Kotlin,
-            ..Default::default()
-        };
-        let mut editor_state = EditorState::default();
-
-        create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
-
-        let root = dir.path().join("my-app");
-        assert!(root.join("build.gradle.kts").exists());
-        assert!(root.join("src/main/kotlin/com/example/Main.kt").exists());
-        assert!(!root.join("src/main/java/com/example/Main.java").exists());
-        assert_eq!(editor_state.project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
-    }
-
-    #[test]
-    fn create_and_open_reports_a_scaffold_failure_without_touching_editor_state() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("my-app"), "a file, not a directory").unwrap();
-        let state = NewProjectWizardState {
-            group_id: "com.example".to_string(),
-            artifact_id: "my-app".to_string(),
-            location: dir.path().display().to_string(),
-            java_release: 17,
-            ..Default::default()
-        };
-        let mut editor_state = EditorState::default();
-
-        let error = create_and_open(&state, &mut editor_state).unwrap_err();
-        assert!(!error.is_empty());
-        assert!(editor_state.project.is_none());
-    }
-}
+#[path = "new_project_test.rs"]
+mod new_project_test;

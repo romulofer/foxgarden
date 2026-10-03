@@ -12,6 +12,7 @@
 //! `Document`) it produced — callers must keep it alive (`let (_dir, ...)`,
 //! not `let (_, ...)`) for as long as the path is used.
 
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 
 use fg_core::Document;
@@ -52,9 +53,57 @@ pub fn temp_file(name: &str, contents: &str) -> (TempDir, PathBuf) {
 /// widget/editor tests that need a ready-to-edit document, not just a path
 /// on disk.
 pub fn temp_document(name: &str, contents: &str) -> (TempDir, Document) {
+    install_grammars();
     let (dir, path) = temp_file(name, contents);
-    let doc = Document::open(path).expect("open just-written fixture file");
+    let doc = Document::open(path, languages()).expect("open just-written fixture file");
     (dir, doc)
+}
+
+/// An `EditorState` that recognizes this build's languages.
+///
+/// The right default for essentially every test, and the reason this
+/// exists rather than letting tests call `EditorState::new()`: that
+/// constructor now yields an editor with *no* languages registered, so a
+/// test using it would still open files and still pass, while quietly no
+/// longer exercising any language-dependent behavior at all. A test that
+/// genuinely wants an editor that recognizes nothing should say so by
+/// calling `EditorState::new()` deliberately.
+pub fn editor_state() -> fg_core::EditorState {
+    install_grammars();
+    fg_core::EditorState::with_languages(fg_languages::builtin_registry())
+}
+
+/// Makes this build's grammars parseable, once per test binary.
+///
+/// Separate from `languages()` because they answer different questions:
+/// the registry says *which* languages exist, `syntax`'s grammar store says
+/// what can actually be parsed (`PLAN.md` Track 24 Phase 3). A test binary
+/// that skips this still opens Java files and still resolves them as Java —
+/// it just gets no parse tree, so anything about highlighting, folding,
+/// completion or diagnostics quietly tests nothing. Every fixture here
+/// installs for that reason; a test building a parser by hand should call
+/// this itself.
+///
+/// Idempotent: the store keeps the grammar a language already has, so
+/// several fixtures (and several tests) calling this is fine.
+pub fn install_grammars() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let errors = syntax::install_grammars(languages());
+        assert!(errors.is_empty(), "this build's own grammars must install: {errors:?}");
+    });
+}
+
+/// The languages this build ships with, for tests that open real files and
+/// expect them to be recognized.
+///
+/// Built once per test binary rather than per call: registering leaks each
+/// language's id for the process (that is what keeps `Language` `Copy` —
+/// see `PLAN.md` Track 24 Checkpoint 1), so a fresh registry per fixture
+/// would leak a little more on every one of several hundred tests.
+pub fn languages() -> &'static fg_extension::Registry {
+    static LANGUAGES: OnceLock<fg_extension::Registry> = OnceLock::new();
+    LANGUAGES.get_or_init(fg_languages::builtin_registry)
 }
 
 /// A fresh temp directory containing `name`, written with placeholder
@@ -69,36 +118,5 @@ pub fn placeholder_java_file(dir: &Path, name: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn write_file_creates_missing_parent_directories() {
-        let dir = tempdir();
-        let path = write_file(
-            dir.path(),
-            "controllers/api/UserController.java",
-            "class UserController {}",
-        );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class UserController {}");
-    }
-
-    #[test]
-    fn temp_file_returns_a_path_with_the_given_contents() {
-        let (_dir, path) = temp_file("Hello.java", "class Hello {}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class Hello {}");
-    }
-
-    #[test]
-    fn temp_document_opens_the_file_it_just_wrote() {
-        let (_dir, doc) = temp_document("Hello.java", "class Hello {}");
-        assert_eq!(doc.buffer.to_string(), "class Hello {}");
-    }
-
-    #[test]
-    fn placeholder_java_file_names_the_class_after_the_file() {
-        let dir = tempdir();
-        let path = placeholder_java_file(dir.path(), "A.java");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "class A.java {}");
-    }
-}
+#[path = "lib_test.rs"]
+mod lib_test;

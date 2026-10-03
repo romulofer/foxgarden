@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use fg_core::Language;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
-use crate::language::{highlights_query_source, ts_language};
+use crate::grammars::{highlights_query_source, ts_language};
 
 /// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with
 /// `Property` and `Tag` for the markup/config languages added afterward:
@@ -83,32 +84,53 @@ fn scope_for_capture(name: &str) -> Option<Scope> {
     }
 }
 
-/// The compiled query is a pure function of `language` (one of two possible
-/// values), but compiling it — parsing the query DSL and validating every
-/// pattern against the grammar — is real work, not a cheap lookup. Cache it
-/// per language instead of recompiling it on every call: `highlight_spans`
-/// is invoked from the editor's layouter closure, which egui runs every
-/// frame the editor is shown (not just on edits), so an uncached call here
-/// would redo this work dozens of times a second even while idle.
-fn cached_query(language: Language) -> &'static Query {
-    static JAVA: OnceLock<Query> = OnceLock::new();
-    static KOTLIN: OnceLock<Query> = OnceLock::new();
-    static PROPERTIES: OnceLock<Query> = OnceLock::new();
-    static YAML: OnceLock<Query> = OnceLock::new();
-    static XML: OnceLock<Query> = OnceLock::new();
-    static DOCKERFILE: OnceLock<Query> = OnceLock::new();
-    let cell = match language {
-        Language::Java => &JAVA,
-        Language::Kotlin => &KOTLIN,
-        Language::Properties => &PROPERTIES,
-        Language::Yaml => &YAML,
-        Language::Xml => &XML,
-        Language::Dockerfile => &DOCKERFILE,
-    };
-    cell.get_or_init(|| {
-        Query::new(&ts_language(language), highlights_query_source(language))
-            .expect("bundled highlight query must compile")
-    })
+/// The compiled query is a pure function of `language`, but compiling it —
+/// parsing the query DSL and validating every pattern against the grammar
+/// — is real work, not a cheap lookup. Cache it per language instead of
+/// recompiling it on every call: `highlight_spans` is invoked from the
+/// editor's layouter closure, which egui runs every frame the editor is
+/// shown (not just on edits), so an uncached call here would redo this
+/// work dozens of times a second even while idle.
+///
+/// This used to be one `OnceLock` per enum variant, which stopped being
+/// possible when the set of languages opened up (`PLAN.md` Track 24 Phase
+/// 2) — there is no longer a known set to declare statics for. A map
+/// behind a lock replaces them, with the same "compile once per language,
+/// ever" guarantee. Entries are never evicted, so the returned reference
+/// can be `&'static`: a compiled query is small, bounded by the number of
+/// registered languages, and lives as long as the grammar it was built
+/// against, which is the whole process (Track 24 Checkpoint 0).
+///
+/// `None` if no grammar or no query was installed for the language, or if
+/// the query it contributed does not compile against the grammar it was
+/// paired with — none of which is an error here: that file paints
+/// unhighlighted, exactly as an unrecognized file always has. A query that
+/// fails to compile used to be impossible (every query was `include_str!`'d
+/// from this repository and checked by its own tests); since Track 24 Phase
+/// 3 it arrives from an extension, so it is a runtime outcome rather than a
+/// build-time guarantee, and a bad query from a third party must not be
+/// able to panic the editor.
+///
+/// A compile *failure* is cached like a success, since retrying it on every
+/// frame of a file the editor has already established it cannot highlight
+/// would be the expensive half of this function running forever. What is
+/// deliberately never cached is "nothing installed for this language yet":
+/// that answer depends on whether `grammars::install` has run, so caching
+/// it would let a lookup made before installation permanently blind a
+/// language that is installed a moment later.
+fn cached_query(language: Language) -> Option<&'static Query> {
+    static CACHE: OnceLock<Mutex<HashMap<Language, Option<&'static Query>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let mut cache = cache.lock().expect("highlight query cache lock");
+    if let Some(query) = cache.get(&language) {
+        return *query;
+    }
+    let ts = ts_language(language)?;
+    let source = highlights_query_source(language)?;
+    let query = Query::new(&ts, source).ok().map(|q| &*Box::leak(Box::new(q)));
+    cache.insert(language, query);
+    query
 }
 
 /// Runs the language's highlight query over `tree`, returning byte ranges
@@ -146,7 +168,12 @@ pub fn highlight_spans_in(
     language: Language,
     byte_range: Range<usize>,
 ) -> Vec<(Range<usize>, Scope)> {
-    let query = cached_query(language);
+    // No grammar or no query for this language means nothing to highlight
+    // — the file still opens and edits, it just paints plain, exactly as
+    // an unrecognized file always has.
+    let Some(query) = cached_query(language) else {
+        return Vec::new();
+    };
     let capture_names = query.capture_names();
 
     let mut cursor = QueryCursor::new();

@@ -1,14 +1,14 @@
 //! The dockable Build Output panel (`PLAN.md` Track 22 — Build/Run, one
 //! shared panel per Phase 1's own "Shared dockable output panel" text):
-//! runs `mvn compile`/`gradle compileJava` (`fg_core::build_command`) on a
-//! background thread, streaming its stdout+stderr live into a scrollable
-//! log; a row whose text `fg_core::parse_build_output_line` recognized as a
-//! compiler diagnostic is also a click-to-jump entry (`pending_navigation`,
+//! runs whatever compile command the project's own build tool contributes
+//! (`BuildToolHandle::command`) on a background thread, streaming its
+//! stdout+stderr live into a scrollable log; a row the same tool recognized
+//! as a compiler diagnostic is also a click-to-jump entry (`pending_navigation`,
 //! the same mechanism the Spring endpoint map already established — see
 //! `app.rs`'s own `jump_to`/`resolve_pending_navigation`).
 //!
-//! Streaming, not spawn-wait-collect: `fg_core`'s existing background-job
-//! helpers (`static_analysis`, `gradle_classpaths`, ...) all call
+//! Streaming, not spawn-wait-collect: this codebase's other background-job
+//! helpers (`static_analysis`, classpath resolution, ...) all call
 //! `Command::output()` and hand back one finished `Result` — fine for a
 //! scan with no user-facing progress, wrong for a build/run a user is
 //! actively watching. This instead mirrors `pty_session::PtySession`'s own
@@ -23,8 +23,8 @@
 //! `PLAN.md` Track 22 Phase 2 ("Run") reuses this exact same streaming
 //! plumbing rather than growing its own copy: `start_run` spawns the same
 //! compile command `start_build` does, and `poll`'s own `Finished` handling
-//! chains straight into a second, `fg_core::run_command`-assembled `java`
-//! launch once that compile succeeds — both stages append to the same
+//! chains straight into the launch the same tool assembles
+//! (`BuildToolHandle::run_command`) once that compile succeeds — both stages append to the same
 //! `rows`, so a Run's own compiler-error and program-output lines share one
 //! continuous, scrollable log. `Stop` (Phase 2's own checkpoint) needs a
 //! live handle to whichever child is *currently* running to kill it, which
@@ -41,14 +41,14 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use fg_core::{BuildProblem, BuildTool, EditorState, LineCoverage, RunConfig, Severity};
+use fg_core::{BuildProblem, BuildToolHandle, EditorState, LineCoverage, ProblemSeverity, RunConfig};
 use fg_i18n::t;
 
 /// One line of accumulated output, with the `BuildProblem` it parsed to (if
 /// any) already computed once, when the line arrived, rather than
 /// re-parsed every frame the panel repaints. Always `None` for a Run
-/// stage's own program-output lines (`parse_build_output_line` only ever
-/// matches a compiler diagnostic's own line shape).
+/// stage's own program-output lines — a tool only ever recognizes a
+/// compiler diagnostic's own line shape.
 struct BuildRow {
     text: String,
     problem: Option<BuildProblem>,
@@ -63,38 +63,41 @@ enum BuildEvent {
 /// after that one command; `RunCompiling` chains a second `java` launch
 /// once the compile it's currently streaming succeeds, transitioning to
 /// `RunLaunched` for that second process. `Test` also stops after one
-/// command (`mvn test`/`gradle test` already compile everything they need
-/// on their own, unlike Run's separate `java` launch) but its own
-/// `Finished` handling additionally scans and summarizes the tool's own
-/// JUnit-XML report once the process exits, appending that summary (and a
+/// command (a test task already compiles everything it needs on its own,
+/// unlike Run's separate launch) but its own `Finished` handling
+/// additionally summarizes the tool's own test report once the process exits, appending that summary (and a
 /// clickable row per failing test) to the same log.
 enum Stage {
     Build,
     RunCompiling {
         project_root: PathBuf,
-        tool: BuildTool,
+        tool: BuildToolHandle,
         config: RunConfig,
     },
     RunLaunched,
     Test {
         project_root: PathBuf,
-        tool: BuildTool,
+        tool: BuildToolHandle,
     },
     /// Run with Coverage (`PLAN.md` Track 13 Phase 1, Maven-only): one
     /// `mvn` process running `prepare-agent`+`test`+`report` back to back
-    /// (`fg_core::coverage_command` — see its own doc comment for why this
-    /// is one process, not a chained pair the way `RunCompiling` chains
-    /// into a second launch). `poll`'s own `Finished` handling reads and
-    /// parses `fg_core::coverage_report_path`'s own file once this exits
-    /// successfully.
-    Coverage { project_root: PathBuf },
+    /// (`BuildTask::Coverage` — one process, not a chained pair the way
+    /// `RunCompiling` chains into a second launch). `poll`'s own `Finished`
+    /// handling asks the tool for the resulting report
+    /// (`BuildToolHandle::coverage_results`) once this exits successfully.
+    Coverage {
+        project_root: PathBuf,
+        tool: BuildToolHandle,
+    },
     /// Docker "Build & Run" (`PLAN.md` Track 14 Phase 1): `docker build`
     /// running against `project_root`'s `Dockerfile`; `poll`'s own
     /// `Finished` handling chains straight into `docker run --rm` of the
     /// image it just built once that succeeds, the same "compile, then
     /// launch" chain `RunCompiling`/`RunLaunched` already establish for
     /// `mvn`/`gradle` + `java`.
-    DockerBuild { project_root: PathBuf },
+    DockerBuild {
+        project_root: PathBuf,
+    },
     /// The `docker run --rm` launched once `DockerBuild` finishes — no
     /// further chaining, so this needs no fields of its own, same as
     /// `RunLaunched`. The container's own name (for `docker stop`) lives in
@@ -157,6 +160,12 @@ pub struct BuildState {
     /// is live. Read by `stop` (fire-and-forget teardown) and `shutdown`
     /// (blocking teardown on app close).
     docker_teardown: Option<DockerTeardown>,
+    /// Whichever build tool produced the output currently streaming in — the
+    /// only thing that can say whether a line names a compiler diagnostic.
+    /// Kept beside `stage` rather than inside it because a Docker task has
+    /// output but no build tool, and `Stage` would then need the field on
+    /// every arm.
+    output_tool: Option<BuildToolHandle>,
 }
 
 impl BuildState {
@@ -180,6 +189,20 @@ impl BuildState {
         self.running() && matches!(self.stage, Some(Stage::Test { .. }))
     }
 
+    /// The PID of the launched `java` program, once a Run has reached its
+    /// `RunLaunched` stage — the profiler (`PLAN.md` Track 26) attaches to
+    /// this. `None` during the `RunCompiling` stage (the child is then the
+    /// `mvn`/`gradle` compiler, not the user's own JVM worth profiling) and
+    /// whenever nothing is running. Reads the shared `child` handle
+    /// `spawn_process`/`stop` also hold, so it reflects the process actually
+    /// alive right now.
+    pub fn run_pid(&self) -> Option<u32> {
+        if !matches!(self.stage, Some(Stage::RunLaunched)) {
+            return None;
+        }
+        self.child.lock().ok()?.as_ref().map(|child| child.id())
+    }
+
     pub fn is_coverage_running(&self) -> bool {
         self.running() && matches!(self.stage, Some(Stage::Coverage { .. }))
     }
@@ -197,57 +220,58 @@ impl BuildState {
 
     /// Starts a plain Build: the project's own compile command, stopping
     /// once it finishes either way.
-    pub fn start_build(&mut self, project_root: &Path, tool: BuildTool) -> std::io::Result<()> {
+    pub fn start_build(&mut self, project_root: &Path, tool: &BuildToolHandle) -> std::io::Result<()> {
         self.reset();
-        self.spawn_process(fg_core::build_command(project_root, tool))?;
+        self.spawn_task(project_root, tool, fg_core::BuildTask::Compile)?;
         self.stage = Some(Stage::Build);
         Ok(())
     }
 
     /// Starts a Run: the same compile command `start_build` uses, but
     /// `poll`'s own `Finished` handling chains into launching `config` via
-    /// `fg_core::run_command` once (and only if) that compile succeeds —
+    /// the tool's own launch command once (and only if) that compile succeeds —
     /// matching every mainstream IDE's own "Run always builds first"
     /// behavior, and matching Track 22's own inter-phase framing (Run
     /// "reusing `RunConfig`" on top of the same Build this phase already
     /// established).
-    pub fn start_run(&mut self, project_root: &Path, tool: BuildTool, config: RunConfig) -> std::io::Result<()> {
+    pub fn start_run(&mut self, project_root: &Path, tool: &BuildToolHandle, config: RunConfig) -> std::io::Result<()> {
         self.reset();
-        self.spawn_process(fg_core::build_command(project_root, tool))?;
+        self.spawn_task(project_root, tool, fg_core::BuildTask::Compile)?;
         self.stage = Some(Stage::RunCompiling {
             project_root: project_root.to_path_buf(),
-            tool,
+            tool: tool.clone(),
             config,
         });
         Ok(())
     }
 
-    /// Starts a Test: `mvn test`/`gradle test` (already compile everything
-    /// they need themselves, unlike Run — no chained second process here).
-    /// `poll`'s own `Finished` handling scans and summarizes the tool's own
-    /// JUnit-XML report once this exits, regardless of exit status (a test
+    /// Starts a Test: the tool's own test task (which already compiles
+    /// everything it needs, unlike Run — no chained second process here).
+    /// `poll`'s own `Finished` handling summarizes the tool's own test
+    /// report once this exits, regardless of exit status (a test
     /// failure makes the process itself exit non-zero, but the report is
     /// still written and is what actually answers "which tests failed",
     /// not the exit code).
-    pub fn start_test(&mut self, project_root: &Path, tool: BuildTool) -> std::io::Result<()> {
+    pub fn start_test(&mut self, project_root: &Path, tool: &BuildToolHandle) -> std::io::Result<()> {
         self.reset();
-        self.spawn_process(fg_core::test_command(project_root, tool))?;
+        self.spawn_task(project_root, tool, fg_core::BuildTask::Test)?;
         self.stage = Some(Stage::Test {
             project_root: project_root.to_path_buf(),
-            tool,
+            tool: tool.clone(),
         });
         Ok(())
     }
 
     /// Starts "Run with Coverage" (`PLAN.md` Track 13 Phase 1, Maven-only):
-    /// one `mvn` process (`fg_core::coverage_command`) covering agent-
-    /// attach, test run, and XML conversion together — no chained second
-    /// process, unlike Run's compile-then-launch.
-    pub fn start_coverage(&mut self, project_root: &Path) -> std::io::Result<()> {
+    /// one process covering instrumentation, test run and report conversion
+    /// together — no chained second process, unlike Run's compile-then-launch.
+    /// Only tools that contribute a `Coverage` task can start this.
+    pub fn start_coverage(&mut self, project_root: &Path, tool: &BuildToolHandle) -> std::io::Result<()> {
         self.reset();
-        self.spawn_process(fg_core::coverage_command(project_root))?;
+        self.spawn_task(project_root, tool, fg_core::BuildTask::Coverage)?;
         self.stage = Some(Stage::Coverage {
             project_root: project_root.to_path_buf(),
+            tool: tool.clone(),
         });
         Ok(())
     }
@@ -258,7 +282,9 @@ impl BuildState {
     pub fn start_docker_build_and_run(&mut self, project_root: &Path) -> std::io::Result<()> {
         self.reset();
         self.spawn_process(fg_core::docker_build_command(project_root))?;
-        self.stage = Some(Stage::DockerBuild { project_root: project_root.to_path_buf() });
+        self.stage = Some(Stage::DockerBuild {
+            project_root: project_root.to_path_buf(),
+        });
         Ok(())
     }
 
@@ -335,6 +361,7 @@ impl BuildState {
         self.stage = None;
         self.last_success = None;
         self.coverage_result = None;
+        self.output_tool = None;
     }
 
     /// Spawns `command` with both stdout and stderr piped, one reader
@@ -347,6 +374,23 @@ impl BuildState {
     /// the process itself exited) and then waits on the child, through the
     /// shared `Arc<Mutex<..>>` `stop()` also reaches into, for the real
     /// exit status.
+    /// Spawns `task` as `tool` describes it, remembering the tool so every
+    /// output line can be parsed by whoever produced it. A task the tool
+    /// doesn't support surfaces as an ordinary `io::Error`, the same way a
+    /// missing binary already does.
+    fn spawn_task(
+        &mut self,
+        project_root: &Path,
+        tool: &BuildToolHandle,
+        task: fg_core::BuildTask,
+    ) -> std::io::Result<()> {
+        let spec = tool.command(project_root, task).ok_or_else(|| {
+            std::io::Error::other(format!("{} does not support this task", tool.display_name))
+        })?;
+        self.output_tool = Some(tool.clone());
+        self.spawn_process(spec.to_command())
+    }
+
     fn spawn_process(&mut self, mut command: std::process::Command) -> std::io::Result<()> {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn()?;
@@ -376,15 +420,15 @@ impl BuildState {
         Ok(())
     }
 
-    /// Scans `tool`'s own JUnit-XML report (`fg_core::scan_test_reports`)
-    /// and appends a pass/fail summary line plus one clickable row per
+    /// Asks `tool` for its last test run's results and appends a pass/fail
+    /// summary line plus one clickable row per
     /// failing/errored test to the log — reusing `BuildRow`'s own
     /// `BuildProblem` shape (`column: 1`, since a test failure's own
     /// "where" is a line, the same as Gradle's own column-less compiler
     /// errors already use) rather than growing a second, parallel
     /// click-to-jump row type just for this.
-    fn append_test_summary(&mut self, project_root: &Path, tool: BuildTool) {
-        let cases = fg_core::scan_test_reports(project_root, tool);
+    fn append_test_summary(&mut self, project_root: &Path, tool: &BuildToolHandle) {
+        let cases = tool.test_results(project_root);
         let summary = fg_core::summarize(&cases);
         self.rows.push(BuildRow {
             text: String::new(),
@@ -406,16 +450,11 @@ impl BuildState {
             .filter(|c| matches!(c.outcome, fg_core::TestOutcome::Failed | fg_core::TestOutcome::Errored))
         {
             let label = format!("{}.{}", case.classname, case.name);
-            let line = case
-                .detail
-                .as_deref()
-                .and_then(|detail| fg_core::failure_line(detail, &case.classname))
-                .unwrap_or(1);
-            let problem = fg_core::test_source_file(project_root, &case.classname).map(|path| BuildProblem {
-                path,
-                line,
+            let problem = tool.test_failure_location(project_root, case).map(|at| BuildProblem {
+                path: at.path,
+                line: at.line,
                 column: 1,
-                severity: Severity::Error,
+                severity: ProblemSeverity::Error,
                 message: label.clone(),
             });
             self.rows.push(BuildRow {
@@ -425,18 +464,14 @@ impl BuildState {
         }
     }
 
-    /// Reads and parses `fg_core::coverage_report_path`'s own file,
-    /// resolving each entry to a real path via `fg_core::
-    /// resolve_coverage_paths`, and appends a one-line summary to the log
-    /// either way — same "summarize the batch result into the log"
+    /// Asks `tool` for the coverage its last run recorded, already resolved
+    /// to real files, and appends a one-line summary to the log either way — same "summarize the batch result into the log"
     /// pattern `append_test_summary` already established for `Stage::
     /// Test`.
-    fn finish_coverage(&mut self, project_root: &Path) {
-        let report_path = fg_core::coverage_report_path(project_root);
-        let result = std::fs::read_to_string(&report_path)
-            .map_err(|e| e.to_string())
-            .and_then(|xml| fg_core::parse_jacoco_xml(&xml))
-            .map(|parsed| fg_core::resolve_coverage_paths(project_root, parsed));
+    fn finish_coverage(&mut self, project_root: &Path, tool: &BuildToolHandle) {
+        let result = tool
+            .coverage_results(project_root)
+            .unwrap_or_else(|| Err(format!("{} reports no coverage data", tool.display_name)));
         self.rows.push(BuildRow {
             text: String::new(),
             problem: None,
@@ -460,7 +495,7 @@ impl BuildState {
         loop {
             match rx.try_recv() {
                 Ok(BuildEvent::Line(text)) => {
-                    let problem = fg_core::parse_build_output_line(&text);
+                    let problem = self.output_tool.as_ref().and_then(|tool| tool.parse_output_line(&text));
                     self.rows.push(BuildRow { text, problem });
                 }
                 Ok(BuildEvent::Finished { success }) => {
@@ -470,8 +505,11 @@ impl BuildState {
                             project_root,
                             tool,
                             config,
-                        }) if success => match fg_core::run_command(&project_root, tool, &config) {
-                            Ok(command) => match self.spawn_process(command) {
+                        }) if success => match tool
+                            .run_command(&project_root, &config.to_run_spec())
+                            .unwrap_or_else(|| Err(format!("{} cannot launch a program", tool.display_name)))
+                        {
+                            Ok(spec) => match self.spawn_process(spec.to_command()) {
                                 Ok(()) => self.stage = Some(Stage::RunLaunched),
                                 Err(err) => {
                                     self.rows.push(BuildRow {
@@ -491,12 +529,12 @@ impl BuildState {
                         },
                         Some(Stage::Test { project_root, tool }) => {
                             self.last_success = Some(success);
-                            self.append_test_summary(&project_root, tool);
+                            self.append_test_summary(&project_root, &tool);
                         }
-                        Some(Stage::Coverage { project_root }) => {
+                        Some(Stage::Coverage { project_root, tool }) => {
                             self.last_success = Some(success);
                             if success {
-                                self.finish_coverage(&project_root);
+                                self.finish_coverage(&project_root, &tool);
                             } else {
                                 self.rows.push(BuildRow {
                                     text: "Coverage run failed to complete — see log above.".into(),
@@ -595,8 +633,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut BuildState) -> Option<(PathBuf, usize
                 continue;
             };
             let color = match problem.severity {
-                Severity::Error => ui.visuals().error_fg_color,
-                Severity::Warning => ui.visuals().warn_fg_color,
+                ProblemSeverity::Error => ui.visuals().error_fg_color,
+                ProblemSeverity::Warning => ui.visuals().warn_fg_color,
             };
             let response = ui.add(
                 egui::Label::new(egui::RichText::new(&row.text).monospace().color(color)).sense(egui::Sense::click()),
@@ -630,51 +668,5 @@ pub fn apply_coverage_results(state: &mut EditorState, results: &[(PathBuf, Vec<
 }
 
 #[cfg(test)]
-mod tests {
-    use fg_core::CoverageStatus;
-
-    use super::*;
-
-    fn line(n: usize, status: CoverageStatus) -> LineCoverage {
-        LineCoverage { line: n, status }
-    }
-
-    #[test]
-    fn apply_coverage_results_sets_matching_docs_and_clears_the_rest() {
-        let (_dir_a, doc_a) = test_support::temp_document("A.java", "class A {}");
-        let (_dir_b, doc_b) = test_support::temp_document("B.java", "class B {}");
-        let path_a = doc_a.path.clone();
-        let mut state = EditorState { open_tabs: vec![doc_a, doc_b], ..Default::default() };
-
-        let results = vec![(path_a, vec![line(0, CoverageStatus::Covered)])];
-        apply_coverage_results(&mut state, &results);
-
-        assert_eq!(state.open_tabs[0].coverage_lines.len(), 1);
-        assert_eq!(state.open_tabs[0].coverage_lines[0].status, CoverageStatus::Covered);
-        assert!(state.open_tabs[1].coverage_lines.is_empty());
-    }
-
-    #[test]
-    fn apply_coverage_results_replaces_rather_than_accumulates() {
-        let (_dir, mut doc) = test_support::temp_document("A.java", "class A {}");
-        doc.coverage_lines = vec![line(9, CoverageStatus::Missed)];
-        let path = doc.path.clone();
-        let mut state = EditorState { open_tabs: vec![doc], ..Default::default() };
-
-        apply_coverage_results(&mut state, &[(path, vec![line(0, CoverageStatus::Covered)])]);
-
-        assert_eq!(state.open_tabs[0].coverage_lines.len(), 1);
-        assert_eq!(state.open_tabs[0].coverage_lines[0].line, 0);
-    }
-
-    #[test]
-    fn a_run_with_no_results_for_a_doc_clears_its_stale_marks() {
-        let (_dir, mut doc) = test_support::temp_document("A.java", "class A {}");
-        doc.coverage_lines = vec![line(0, CoverageStatus::Covered)];
-        let mut state = EditorState { open_tabs: vec![doc], ..Default::default() };
-
-        apply_coverage_results(&mut state, &[]);
-
-        assert!(state.open_tabs[0].coverage_lines.is_empty());
-    }
-}
+#[path = "build_panel_test.rs"]
+mod build_panel_test;

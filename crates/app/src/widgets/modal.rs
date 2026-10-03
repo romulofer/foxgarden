@@ -24,7 +24,23 @@ pub fn show_modal<T, R>(
 ) -> Option<(R, bool)> {
     let data = guard?;
     let ctx = ui.ctx().clone();
-    let response = egui::Modal::new(egui::Id::new(id)).show(&ctx, |ui| body(ui, &data));
+    // Capped to the window and scrollable inside that cap. A modal sizes
+    // itself to its content, which is fine at 100% and stops being fine
+    // under Settings > Accessibility…'s interface zoom: at 300% this
+    // dialog's own buttons rendered past the right and bottom edges of the
+    // window, including the "Back to 100%" that undoes the zoom — found
+    // live, and a trap rather than a cosmetic problem, since the setting
+    // that caused it was then unreachable. Every modal gets the same
+    // treatment because every modal has the same failure mode.
+    let screen = ctx.content_rect();
+    let max_size = egui::vec2(screen.width() * 0.9, screen.height() * 0.85);
+    let response = egui::Modal::new(egui::Id::new(id)).show(&ctx, |ui| {
+        ui.set_max_size(max_size);
+        egui::ScrollArea::both()
+            .id_salt((id, "modal_scroll"))
+            .show(ui, |ui| body(ui, &data))
+            .inner
+    });
     // Deliberately narrower than `ModalResponse::should_close` (which also
     // treats a backdrop click as a close) — only Escape was asked for, and
     // backdrop-click-to-close is a distinct UX decision this app hasn't
@@ -36,69 +52,5 @@ pub fn show_modal<T, R>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn escape_event() -> egui::Event {
-        egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }
-    }
-
-    /// Runs one frame with `events` queued and `show_modal` called exactly
-    /// as every real call site does, returning what it returned. `warm_up`
-    /// runs one prior, event-less frame first — egui's `Modal` only knows
-    /// it's the topmost modal (`ModalResponse::is_top_modal`, which
-    /// `escape_pressed` requires) from the *previous* frame's layer
-    /// bookkeeping, promoted at that frame's end; on a modal's first-ever
-    /// frame there is no previous frame yet, so it reads as not-topmost and
-    /// Escape wouldn't register. That's a non-issue for a real dialog
-    /// (it's already rendered at least once by the time a user reacts to
-    /// it), but a single-frame test needs the same warm-up to match.
-    fn run_modal(guard: Option<()>, warm_up: bool, events: Vec<egui::Event>) -> Option<((), bool)> {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty());
-        let show = |ui: &mut egui::Ui| {
-            show_modal(ui, "test_modal", guard, |ui, ()| {
-                ui.label("hello");
-            })
-        };
-
-        if warm_up {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                show(ui);
-            });
-        }
-
-        let raw_input = egui::RawInput {
-            events,
-            ..Default::default()
-        };
-        let mut outcome = None;
-        let _ = ctx.run_ui(raw_input, |ui| {
-            outcome = show(ui);
-        });
-        outcome
-    }
-
-    #[test]
-    fn escape_closes_an_already_open_modal() {
-        let (_, escape_pressed) = run_modal(Some(()), true, vec![escape_event()]).expect("modal was open");
-        assert!(escape_pressed);
-    }
-
-    #[test]
-    fn no_escape_event_leaves_the_modal_open() {
-        let (_, escape_pressed) = run_modal(Some(()), true, vec![]).expect("modal was open");
-        assert!(!escape_pressed);
-    }
-
-    #[test]
-    fn a_closed_modal_guard_short_circuits_to_none_even_with_escape_queued() {
-        assert_eq!(run_modal(None, false, vec![escape_event()]), None);
-    }
-}
+#[path = "modal_test.rs"]
+mod modal_test;

@@ -22,7 +22,11 @@ pub(super) fn open_fixture(contents: &str, filename: &str) -> (tempfile::TempDir
 /// recognized language — `show`'s tests always exercise the "has a
 /// language" path unless a test says otherwise.
 pub(super) fn parsed(language: Language, source: &str) -> Option<IncrementalParser> {
-    let mut parser = IncrementalParser::new(language);
+    // A parser needs the shipped grammars installed (Track 24
+    // Phase 3); this test builds one by hand rather than through a
+    // fixture that would have installed them already.
+    test_support::install_grammars();
+    let mut parser = IncrementalParser::new(language).expect("an installed grammar must load");
     parser.parse(source);
     Some(parser)
 }
@@ -91,13 +95,14 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -109,6 +114,10 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
 /// frame establishes focus and lets the caret be placed via
 /// `text_area::set_caret` (same shape `focused_frame_with_selection`
 /// above uses); each of `frames_events` then gets its own real frame.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors `show`'s own parameter list, which carries the same allowance for the same reason — a test driver that bundled them would stop matching the call it exists to exercise"
+)]
 pub(super) fn typing_session(
     doc: &mut Document,
     parser: &mut Option<IncrementalParser>,
@@ -160,7 +169,8 @@ pub(super) fn typing_session(
                 rename_box,
                 code_action_gutter,
                 &crate::debug_state::DebugState::default(),
-        true,
+                true,
+                &mut None,
             );
         });
     };
@@ -247,13 +257,14 @@ pub(super) fn focused_frame_with_selection(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -310,13 +321,14 @@ pub(super) fn focused_frame_with_selection(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -362,13 +374,14 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -420,13 +433,14 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -482,13 +496,14 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -533,13 +548,14 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -589,13 +605,14 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -638,13 +655,14 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -693,13 +711,14 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -751,13 +770,14 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -861,13 +881,14 @@ pub(super) fn run_frame_reading_selection(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
     text_area::peek_caret(ctx, id)
@@ -993,13 +1014,14 @@ pub(super) fn focused_frame_with_generate_request(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
     last_error
@@ -1049,13 +1071,14 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -1103,18 +1126,22 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut HoverState::default(),
             &mut GotoDefinitionState::default(),
             &mut PeekState::default(),
-            EditorRequests { case_conversion: case_conversion_request, ..EditorRequests::default() },
+            EditorRequests {
+                case_conversion: case_conversion_request,
+                ..EditorRequests::default()
+            },
             &mut last_error,
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
     last_error
@@ -1163,13 +1190,14 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 
@@ -1213,13 +1241,14 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
 }
@@ -1293,13 +1322,14 @@ pub(super) fn focused_frame_with_generate_method_request(
             &mut Vec::new(),
             &mut None,
             &UserTemplates::default(),
-        &mut crate::panels::spring_config::SpringConfigState::default(),
-        &mut crate::lsp_state::LspState::default(),
-        &mut FindReferencesState::default(),
-        &mut RenameBox::default(),
-        &mut CodeActionGutter::default(),
-        &crate::debug_state::DebugState::default(),
-        true,
+            &mut crate::panels::spring_config::SpringConfigState::default(),
+            &mut crate::lsp_state::LspState::default(),
+            &mut FindReferencesState::default(),
+            &mut RenameBox::default(),
+            &mut CodeActionGutter::default(),
+            &crate::debug_state::DebugState::default(),
+            true,
+            &mut None,
         );
     });
     last_error

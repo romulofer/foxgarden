@@ -319,7 +319,10 @@ pub fn show(
             state.block_selection = Some(if pre.response.drag_started() {
                 BlockSelection::at(line, col)
             } else {
-                state.block_selection.unwrap_or_else(|| BlockSelection::at(line, col)).moved_to(line, col)
+                state
+                    .block_selection
+                    .unwrap_or_else(|| BlockSelection::at(line, col))
+                    .moved_to(line, col)
             });
             state.history.break_run();
         } else {
@@ -772,7 +775,10 @@ fn process_events(
                 pressed: true,
                 modifiers,
                 ..
-            } if modifiers.command && ((modifiers.shift && *key == Key::Z) || (!modifiers.shift && *key == Key::Y)) && !read_only => {
+            } if modifiers.command
+                && ((modifiers.shift && *key == Key::Z) || (!modifiers.shift && *key == Key::Y))
+                && !read_only =>
+            {
                 if let Some(restored) = state.history.redo(Snapshot {
                     text: current.clone(),
                     caret: state.caret,

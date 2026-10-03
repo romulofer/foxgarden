@@ -25,27 +25,32 @@ pub fn show(ui: &mut egui::Ui, state: &DebugState) -> Option<(PathBuf, usize)> {
     }
 
     ui.strong(t().debug.call_stack);
-    egui::ScrollArea::vertical().id_salt("debug_call_stack").max_height(200.0).show(ui, |ui| {
-        for frame in state.call_stack() {
-            let label = match &frame.file {
-                Some(file) => format!("{}  ({}:{})", frame.name, file_label(file), frame.line + 1),
-                None => frame.name.clone(),
-            };
-            if frame.file.is_some() {
-                let response = ui
-                    .push_id(frame.id, |ui| ui.add(egui::Label::new(&label).sense(egui::Sense::click())))
-                    .inner;
-                if response.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    egui::ScrollArea::vertical()
+        .id_salt("debug_call_stack")
+        .max_height(200.0)
+        .show(ui, |ui| {
+            for frame in state.call_stack() {
+                let label = match &frame.file {
+                    Some(file) => format!("{}  ({}:{})", frame.name, file_label(file), frame.line + 1),
+                    None => frame.name.clone(),
+                };
+                if frame.file.is_some() {
+                    let response = ui
+                        .push_id(frame.id, |ui| {
+                            ui.add(egui::Label::new(&label).sense(egui::Sense::click()))
+                        })
+                        .inner;
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if response.clicked() {
+                        clicked = Some((frame.file.clone().unwrap(), frame.line));
+                    }
+                } else {
+                    ui.label(&label);
                 }
-                if response.clicked() {
-                    clicked = Some((frame.file.clone().unwrap(), frame.line));
-                }
-            } else {
-                ui.label(&label);
             }
-        }
-    });
+        });
 
     ui.separator();
     ui.strong(t().debug.variables);
@@ -55,21 +60,23 @@ pub fn show(ui: &mut egui::Ui, state: &DebugState) -> Option<(PathBuf, usize)> {
             ui.weak(t().debug.loading);
         }
         for group in groups {
-            egui::CollapsingHeader::new(&group.name).default_open(true).show(ui, |ui| {
-                if group.variables.is_empty() {
-                    ui.weak(t().debug.none);
-                }
-                for variable in &group.variables {
-                    ui.horizontal(|ui| {
-                        ui.monospace(&variable.name);
-                        ui.weak(":");
-                        ui.monospace(&variable.value);
-                        if !variable.kind.is_empty() {
-                            ui.weak(format!("({})", variable.kind));
-                        }
-                    });
-                }
-            });
+            egui::CollapsingHeader::new(&group.name)
+                .default_open(true)
+                .show(ui, |ui| {
+                    if group.variables.is_empty() {
+                        ui.weak(t().debug.none);
+                    }
+                    for variable in &group.variables {
+                        ui.horizontal(|ui| {
+                            ui.monospace(&variable.name);
+                            ui.weak(":");
+                            ui.monospace(&variable.value);
+                            if !variable.kind.is_empty() {
+                                ui.weak(format!("({})", variable.kind));
+                            }
+                        });
+                    }
+                });
         }
     });
 
@@ -77,5 +84,8 @@ pub fn show(ui: &mut egui::Ui, state: &DebugState) -> Option<(PathBuf, usize)> {
 }
 
 fn file_label(path: &Path) -> String {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_string()
 }

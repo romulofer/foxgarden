@@ -62,8 +62,10 @@ fn apply_tree_actions_rejects_a_traversal_rename_and_leaves_the_file_untouched()
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     let actions = TreeActions {
         confirm_rename: Some("../outside.txt".to_string()),
@@ -83,8 +85,10 @@ fn apply_tree_actions_rejects_a_rename_containing_a_path_separator_even_without_
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     // No `..`, but still names a different directory entirely — rename is
     // "give this exact node a new name," not "move it."
@@ -105,8 +109,10 @@ fn apply_tree_actions_still_allows_an_ordinary_rename() {
     let old_path = dir.path().join("File.java");
     std::fs::write(&old_path, "class File {}").unwrap();
 
-    let mut panel = SidePanelState::default();
-    panel.rename_draft = Some((old_path.clone(), "File.java".to_string()));
+    let mut panel = SidePanelState {
+        rename_draft: Some((old_path.clone(), "File.java".to_string())),
+        ..Default::default()
+    };
     let mut outcome = SidePanelOutcome::default();
     let actions = TreeActions {
         confirm_rename: Some("Renamed.java".to_string()),
@@ -429,11 +435,21 @@ fn action_targets_uses_the_whole_selection_even_if_a_different_node_was_right_cl
 }
 
 fn dir(name: &str, children: Vec<FileNode>) -> FileNode {
-    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::Dir, children }
+    FileNode {
+        path: PathBuf::from(name),
+        name: name.to_string(),
+        kind: FileKind::Dir,
+        children,
+    }
 }
 
 fn file(name: &str) -> FileNode {
-    FileNode { path: PathBuf::from(name), name: name.to_string(), kind: FileKind::File, children: Vec::new() }
+    FileNode {
+        path: PathBuf::from(name),
+        name: name.to_string(),
+        kind: FileKind::File,
+        children: Vec::new(),
+    }
 }
 
 #[test]
@@ -455,14 +471,17 @@ fn collapse_chain_stops_immediately_when_there_are_multiple_children() {
 #[test]
 fn collapse_chain_joins_a_run_of_single_child_directories() {
     let node = dir(
-        "br",
+        "com",
         vec![dir(
-            "ufsc",
-            vec![dir("bridge", vec![dir("pec", vec![dir("backend", vec![dir("app", vec![]), dir("async", vec![])])])])],
+            "example",
+            vec![dir(
+                "app",
+                vec![dir("backend", vec![dir("web", vec![]), dir("service", vec![])])],
+            )],
         )],
     );
     let collapsed = collapse_chain(&node, "/");
-    assert_eq!(collapsed.label, "br/ufsc/bridge/pec/backend");
+    assert_eq!(collapsed.label, "com/example/app/backend");
     assert_eq!(collapsed.terminal.name, "backend");
 }
 
@@ -479,7 +498,7 @@ fn collapse_chain_never_folds_a_source_root_into_its_parent_chain() {
     // "main" has exactly one child ("java"), which would otherwise extend
     // the chain — but since that one child is a recognized source root, the
     // chain must stop at "main" instead of swallowing "java" into it.
-    let node = dir("src", vec![dir("main", vec![dir("java", vec![dir("br", vec![])])])]);
+    let node = dir("src", vec![dir("main", vec![dir("java", vec![dir("com", vec![])])])]);
     let collapsed = collapse_chain(&node, "/");
     assert_eq!(collapsed.label, "src/main");
     assert_eq!(collapsed.terminal.name, "main");
@@ -487,7 +506,7 @@ fn collapse_chain_never_folds_a_source_root_into_its_parent_chain() {
 
 #[test]
 fn collapse_chain_never_folds_a_source_root_itself_even_with_one_child() {
-    let node = dir("java", vec![dir("br", vec![dir("ufsc", vec![])])]);
+    let node = dir("java", vec![dir("com", vec![dir("example", vec![])])]);
     let collapsed = collapse_chain(&node, ".");
     assert_eq!(collapsed.label, "java");
     assert_eq!(collapsed.terminal.name, "java");
@@ -495,7 +514,7 @@ fn collapse_chain_never_folds_a_source_root_itself_even_with_one_child() {
 
 #[test]
 fn collapse_chain_uses_the_given_separator() {
-    let node = dir("br", vec![dir("ufsc", vec![dir("x", vec![]), dir("y", vec![])])]);
-    assert_eq!(collapse_chain(&node, ".").label, "br.ufsc");
-    assert_eq!(collapse_chain(&node, "/").label, "br/ufsc");
+    let node = dir("com", vec![dir("example", vec![dir("x", vec![]), dir("y", vec![])])]);
+    assert_eq!(collapse_chain(&node, ".").label, "com.example");
+    assert_eq!(collapse_chain(&node, "/").label, "com/example");
 }

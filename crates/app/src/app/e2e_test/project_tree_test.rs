@@ -8,8 +8,14 @@ use fg_i18n::t;
 fn an_open_project_lists_its_files_in_the_side_panel() {
     let app = E2e::launch(&[("Main.java", MAIN_JAVA), ("Other.kt", "class Other\n")]);
 
-    assert!(app.shows(&E2e::row("Main.java")), "the project tree must show the Java file");
-    assert!(app.shows(&E2e::row("Other.kt")), "the project tree must show the Kotlin file");
+    assert!(
+        app.shows(&E2e::row("Main.java")),
+        "the project tree must show the Java file"
+    );
+    assert!(
+        app.shows(&E2e::row("Other.kt")),
+        "the project tree must show the Kotlin file"
+    );
 }
 
 #[test]

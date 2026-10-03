@@ -92,13 +92,19 @@ fn show_config_list(ui: &mut egui::Ui, state: &mut RunConfigsDialogState) {
                 state.selected = state.configs.len() - 1;
             }
             let has_selection = !state.configs.is_empty();
-            if ui.add_enabled(has_selection, egui::Button::new(t().run_configs.duplicate)).clicked() {
+            if ui
+                .add_enabled(has_selection, egui::Button::new(t().run_configs.duplicate))
+                .clicked()
+            {
                 let mut copy = state.configs[state.selected].clone();
                 copy.name = format!("{} (copy)", copy.name);
                 state.configs.insert(state.selected + 1, copy);
                 state.selected += 1;
             }
-            if ui.add_enabled(has_selection, egui::Button::new(t().common.delete)).clicked() {
+            if ui
+                .add_enabled(has_selection, egui::Button::new(t().common.delete))
+                .clicked()
+            {
                 state.configs.remove(state.selected);
                 state.selected = state.selected.min(state.configs.len().saturating_sub(1));
             }
@@ -137,11 +143,17 @@ fn show_selected_config_fields(ui: &mut egui::Ui, project_root: &Path, state: &m
                     .as_ref()
                     .map(|d| d.display().to_string())
                     .unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut dir_text).hint_text(t().run_configs.working_dir_hint)).changed() {
+                if ui
+                    .add(egui::TextEdit::singleline(&mut dir_text).hint_text(t().run_configs.working_dir_hint))
+                    .changed()
+                {
                     config.working_dir = (!dir_text.is_empty()).then(|| PathBuf::from(&dir_text));
                 }
                 if ui
-                    .add_enabled(!state.working_dir_picker.is_open(), egui::Button::new(t().run_configs.browse))
+                    .add_enabled(
+                        !state.working_dir_picker.is_open(),
+                        egui::Button::new(t().run_configs.browse),
+                    )
                     .clicked()
                 {
                     state.working_dir_picker.open(Some(project_root.to_path_buf()));

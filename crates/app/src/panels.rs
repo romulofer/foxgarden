@@ -2,6 +2,7 @@
 //! status bar, and the tab bar (which also owns tab/parser lifecycle — see
 //! `tabs::open_parser_for`).
 
+pub mod bottom_dock;
 pub mod build_panel;
 pub mod command_palette;
 pub mod debug_panel;
@@ -14,6 +15,7 @@ pub mod jdk_registry;
 pub mod lsp_servers;
 pub mod menu_bar;
 pub mod new_project;
+pub mod profiler_panel;
 pub mod quick_switcher;
 pub mod run_configs;
 pub mod side_panel;
@@ -22,5 +24,5 @@ pub mod spring_endpoints;
 pub mod static_analysis;
 pub mod status_bar;
 pub mod tabs;
-pub mod welcome;
 pub mod terminal_panel;
+pub mod welcome;

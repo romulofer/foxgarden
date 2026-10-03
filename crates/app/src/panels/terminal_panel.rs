@@ -192,7 +192,10 @@ pub fn show(
                             interacted = true;
                         }
                         egui::Event::Key {
-                            key, pressed: true, modifiers, ..
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
                         } => {
                             if let Some(bytes) = terminal_input::key_event_to_bytes(key, modifiers) {
                                 let _ = session.write(&bytes);

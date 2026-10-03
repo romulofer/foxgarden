@@ -57,7 +57,11 @@ impl RenameBox {
             return;
         }
         let original = doc.buffer.slice(span.clone()).to_string();
-        self.open = Some(Open { anchor_char: span.start, input: original.clone(), original });
+        self.open = Some(Open {
+            anchor_char: span.start,
+            input: original.clone(),
+            original,
+        });
     }
 
     /// Drops whatever's open — used on a tab switch, same "a different
@@ -80,7 +84,14 @@ impl RenameBox {
     /// Escape or a click outside the popup's own rect cancels; Enter
     /// with a real, actually-different, non-empty name confirms — either
     /// way the box closes.
-    pub(super) fn paint(&mut self, ui: &egui::Ui, id: egui::Id, out: &TextAreaOutput, buffer: &ropey::Rope, pane_rect: egui::Rect) {
+    pub(super) fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        id: egui::Id,
+        out: &TextAreaOutput,
+        buffer: &ropey::Rope,
+        pane_rect: egui::Rect,
+    ) {
         let Some(open) = &mut self.open else { return };
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.open = None;
@@ -90,7 +101,10 @@ impl RenameBox {
             self.open = None;
             return;
         };
-        let popup_size = ui.ctx().memory(|mem| mem.area_rect(id)).map_or(egui::vec2(1.0, 1.0), |r| r.size());
+        let popup_size = ui
+            .ctx()
+            .memory(|mem| mem.area_rect(id))
+            .map_or(egui::vec2(1.0, 1.0), |r| r.size());
         let pos = super::completion::popup_position(char_rect, popup_size, pane_rect);
 
         let mut confirm_requested = false;
@@ -111,10 +125,11 @@ impl RenameBox {
                 });
             });
 
-        let clicked_outside = ui
-            .ctx()
-            .input(|i| i.pointer.any_click())
-            && ui.ctx().pointer_interact_pos().is_some_and(|pos| !area_response.response.rect.contains(pos));
+        let clicked_outside = ui.ctx().input(|i| i.pointer.any_click())
+            && ui
+                .ctx()
+                .pointer_interact_pos()
+                .is_some_and(|pos| !area_response.response.rect.contains(pos));
 
         if confirm_requested {
             let trimmed = open.input.trim();
@@ -130,24 +145,5 @@ impl RenameBox {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn start_does_nothing_when_the_caret_touches_no_identifier() {
-        let (_dir, doc) = test_support::temp_document("Foo.java", "a . b");
-        let mut rename = RenameBox::default();
-        rename.start(&doc, 2); // the standalone "." — no identifier here
-        assert!(rename.open.is_none());
-    }
-
-    #[test]
-    fn start_prefills_the_identifier_under_the_caret() {
-        let (_dir, doc) = test_support::temp_document("Foo.java", "int myVariable = 1;");
-        let mut rename = RenameBox::default();
-        rename.start(&doc, 6); // inside "myVariable"
-        let open = rename.open.as_ref().expect("a real identifier was under the caret");
-        assert_eq!(open.input, "myVariable");
-        assert_eq!(open.original, "myVariable");
-    }
-}
+#[path = "rename_test.rs"]
+mod rename_test;

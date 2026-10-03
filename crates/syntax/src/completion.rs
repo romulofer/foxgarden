@@ -101,7 +101,9 @@ pub fn type_of_identifier_java(tree: &Tree, source: &str, cursor_byte: usize, na
     // `include_static: true` — a bare identifier referring to one of the
     // enclosing class's own static fields is legitimate, unlike
     // `fields_in_type`'s external-listing call sites which skip statics.
-    let field = fields_in_class_body(body, source, true).into_iter().find(|f| f.name == name)?;
+    let field = fields_in_class_body(body, source, true)
+        .into_iter()
+        .find(|f| f.name == name)?;
     Some(simple_name(&field.java_type))
 }
 
@@ -293,7 +295,13 @@ pub fn type_of_identifier_kotlin(tree: &Tree, source: &str, cursor_byte: usize, 
 /// the one function `widget.rs` actually calls; callers never need to
 /// branch on language themselves. `None` for every other language: no
 /// dot-completion resolution exists for them.
-pub fn type_of_identifier(language: fg_core::Language, tree: &Tree, source: &str, cursor_byte: usize, name: &str) -> Option<String> {
+pub fn type_of_identifier(
+    language: fg_core::Language,
+    tree: &Tree,
+    source: &str,
+    cursor_byte: usize,
+    name: &str,
+) -> Option<String> {
     match language {
         fg_core::Language::Java => type_of_identifier_java(tree, source, cursor_byte, name),
         fg_core::Language::Kotlin => type_of_identifier_kotlin(tree, source, cursor_byte, name),
@@ -302,171 +310,9 @@ pub fn type_of_identifier(language: fg_core::Language, tree: &Tree, source: &str
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::IncrementalParser;
-    use fg_core::Language;
-
-    fn parsed(source: &str) -> Tree {
-        let mut parser = IncrementalParser::new(Language::Java);
-        parser.parse(source).clone()
-    }
-
-    #[test]
-    fn resolves_a_parameter_type() {
-        let source = "class Foo {\n    void run(Bar param) {\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "param"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn resolves_a_local_variables_type() {
-        let source = "class Foo {\n    void run() {\n        Bar local = new Bar();\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "local"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn resolves_a_field_type_when_nothing_shadows_it() {
-        let source = "class Foo {\n    private Bar field;\n    void run() {\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "field"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn a_local_shadowing_a_field_resolves_to_the_local() {
-        let source =
-            "class Foo {\n    private Bar shared;\n    void run() {\n        Baz shared = new Baz();\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "shared"), Some("Baz".to_string()));
-    }
-
-    #[test]
-    fn an_undeclared_name_returns_none() {
-        let source = "class Foo {\n    void run() {\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "neverDeclared"), None);
-    }
-
-    #[test]
-    fn a_jdk_typed_local_resolves_syntactically_like_any_other_type() {
-        // No classpath awareness at this layer — filtering JDK types out
-        // is `SPEC.md` §4's job (the resolved name fails to find a
-        // matching project source file), not this function's.
-        let source = "class Foo {\n    void run() {\n        String s = \"hi\";\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "s"), Some("String".to_string()));
-    }
-
-    #[test]
-    fn strips_generics_and_package_qualification_same_as_superclass_name() {
-        let source =
-            "class Foo {\n    void run(java.util.List<String> items) {\n        int x = 0;\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("int x").unwrap();
-        assert_eq!(type_of_identifier_java(&tree, source, cursor, "items"), Some("List".to_string()));
-    }
-
-    #[test]
-    fn returns_none_outside_any_class() {
-        let source = "// just a comment\n";
-        let tree = parsed(source);
-        assert_eq!(type_of_identifier_java(&tree, source, 0, "x"), None);
-    }
-}
+#[path = "completion_test.rs"]
+mod completion_test;
 
 #[cfg(test)]
-mod kotlin_tests {
-    use super::*;
-    use crate::IncrementalParser;
-    use fg_core::Language;
-
-    fn parsed(source: &str) -> Tree {
-        let mut parser = IncrementalParser::new(Language::Kotlin);
-        parser.parse(source).clone()
-    }
-
-    #[test]
-    fn resolves_a_parameter_type() {
-        let source = "class Foo {\n    fun run(param: Bar) {\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "param"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn resolves_an_explicit_type_local_without_touching_the_initializer() {
-        // The initializer here (`someFunction()`) doesn't fit the
-        // constructor-call heuristic at all — proving the explicit-type
-        // branch never falls through to it.
-        let source = "class Foo {\n    fun run() {\n        val local: Bar = someFunction()\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "local"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn resolves_an_inferred_type_local_via_the_constructor_call_heuristic() {
-        let source = "class Foo {\n    fun run() {\n        val local = Bar()\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "local"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn an_inferred_type_local_via_a_non_constructor_call_resolves_to_none() {
-        let source = "class Foo {\n    fun run() {\n        val local = someFunction()\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "local"), None);
-    }
-
-    #[test]
-    fn resolves_a_field_type_when_nothing_shadows_it() {
-        let source = "class Foo {\n    val field: Bar = Bar()\n    fun run() {\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "field"), Some("Bar".to_string()));
-    }
-
-    #[test]
-    fn a_local_shadowing_a_field_resolves_to_the_local() {
-        let source = "class Foo {\n    val shared: Bar = Bar()\n    fun run() {\n        val shared: Baz = Baz()\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "shared"), Some("Baz".to_string()));
-    }
-
-    #[test]
-    fn resolves_a_primary_constructor_property_parameter() {
-        let source = "class Foo(val x: Int) {\n    fun run() {\n        val y = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val y").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "x"), Some("Int".to_string()));
-    }
-
-    #[test]
-    fn an_undeclared_name_returns_none() {
-        let source = "class Foo {\n    fun run() {\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "neverDeclared"), None);
-    }
-
-    #[test]
-    fn dispatcher_routes_kotlin_to_type_of_identifier_kotlin() {
-        let source = "class Foo {\n    fun run(param: Bar) {\n        val x = 0\n    }\n}\n";
-        let tree = parsed(source);
-        let cursor = source.find("val x").unwrap();
-        assert_eq!(
-            type_of_identifier(Language::Kotlin, &tree, source, cursor, "param"),
-            Some("Bar".to_string())
-        );
-    }
-}
+#[path = "kotlin_test.rs"]
+mod kotlin_test;

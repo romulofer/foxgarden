@@ -17,7 +17,6 @@
 //! actually says is then a pure function over a plain struct, and no test
 //! of it has to spawn a real child process to reach a given line.
 
-use fg_core::Language;
 use fg_i18n::{msg, t};
 
 use crate::style::icons;
@@ -44,13 +43,13 @@ const SPINNER_SIZE: f32 = 12.0;
 pub struct BackgroundWork {
     /// Display names of language servers still inside their `initialize`
     /// handshake (`"JDTLS"`).
-    pub starting_servers: Vec<&'static str>,
+    pub starting_servers: Vec<String>,
     /// Display name plus latest `language/status` message of every `Ready`
     /// server still importing its project in the background
     /// (`LspState::indexing_servers`) — the handshake above finishes in
     /// seconds regardless of project size; this is the (often much longer)
     /// import that follows it, with jdt.ls' own progress text.
-    pub indexing_servers: Vec<(&'static str, String)>,
+    pub indexing_servers: Vec<(String, String)>,
     /// Running installs: display name plus the job's own latest progress
     /// line, when it reports one. Language-server installs do (jdt.ls is
     /// built from source and takes minutes — see `lsp_manager`); external
@@ -98,7 +97,7 @@ impl BackgroundWork {
         let tools = &static_analysis.tool_manager;
         Self {
             starting_servers: lsp.starting_servers(),
-            indexing_servers: lsp.indexing_servers().into_iter().map(|(name, message)| (name, message.to_string())).collect(),
+            indexing_servers: lsp.indexing_servers(),
             installing: installing_servers(servers).chain(installing_tools(tools)).collect(),
             checking_versions: checking_servers(servers).chain(checking_tools(tools)).collect(),
             detecting_java_home: servers.detecting_java_home(),
@@ -138,7 +137,10 @@ fn checking_servers(servers: &LspManagerState) -> impl Iterator<Item = &'static 
 }
 
 fn checking_tools(tools: &ToolManagerState) -> impl Iterator<Item = &'static str> {
-    ALL_TOOLS.into_iter().filter(|&tool| tools.checking(tool)).map(|tool| tool.display_name())
+    ALL_TOOLS
+        .into_iter()
+        .filter(|&tool| tools.checking(tool))
+        .map(|tool| tool.display_name())
 }
 
 /// One job, as the bar words it.
@@ -179,10 +181,16 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
         activities.push(Activity::new(msg::starting_language_server(name)));
     }
     for (name, message) in &work.indexing_servers {
-        activities.push(Activity { label: msg::indexing_language_server(name), detail: Some(message.clone()) });
+        activities.push(Activity {
+            label: msg::indexing_language_server(name),
+            detail: Some(message.clone()),
+        });
     }
     for (name, detail) in &work.installing {
-        activities.push(Activity { label: msg::installing_named(name), detail: detail.clone() });
+        activities.push(Activity {
+            label: msg::installing_named(name),
+            detail: detail.clone(),
+        });
     }
     if work.running_checkstyle {
         activities.push(Activity::new(t().common.running_checkstyle.to_string()));
@@ -257,10 +265,15 @@ pub struct DocumentStatus {
     /// refers to them), not the 0-based indices the buffer uses.
     pub line: usize,
     pub column: usize,
-    /// `None` for a file whose extension maps to no supported language —
-    /// worth saying explicitly, since that's also why it has no
-    /// highlighting or completion.
-    pub language: Option<Language>,
+    /// The language's display name, already resolved. `None` for a file
+    /// no registered extension claims — worth saying explicitly, since
+    /// that's also why it has no highlighting or completion.
+    ///
+    /// Resolved by the caller rather than here because a display name now
+    /// comes from whichever extension contributed the language (`PLAN.md`
+    /// Track 24 Phase 2), and the status bar has no business holding a
+    /// registry just to render one word.
+    pub language_name: Option<String>,
     pub indent: IndentSettings,
     pub errors: usize,
     pub warnings: usize,
@@ -275,8 +288,8 @@ fn show_document_status(ui: &mut egui::Ui, document: &DocumentStatus) {
     };
     ui.weak(indent);
     ui.weak("·");
-    ui.weak(match document.language {
-        Some(language) => language.display_name().to_string(),
+    ui.weak(match &document.language_name {
+        Some(name) => name.clone(),
         None => t().status_bar.plain_text.to_string(),
     });
     ui.weak("·");

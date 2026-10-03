@@ -156,7 +156,12 @@ fn block_row_ranges(index: &LineIndex, block: BlockSelection) -> Vec<std::ops::R
 /// row-to-row on where "the new column" is; every real block-select editor
 /// keeps the block's target column fixed independent of any single row's
 /// clamped content, same as this does.
-pub fn replace_block_selection(text: &str, index: &LineIndex, block: BlockSelection, insert: &str) -> (String, BlockSelection) {
+pub fn replace_block_selection(
+    text: &str,
+    index: &LineIndex,
+    block: BlockSelection,
+    insert: &str,
+) -> (String, BlockSelection) {
     let cols = block.cols();
     let ranges = block_row_ranges(index, block);
     let (new_text, _) = apply_multi_edit(text, &ranges, &MultiEditOp::Insert(insert.to_string()));
@@ -183,7 +188,11 @@ pub fn block_backspace(text: &str, index: &LineIndex, block: BlockSelection) -> 
         return None;
     }
     let (new_text, _) = apply_multi_edit(text, &ranges, &MultiEditOp::Backspace);
-    let new_col = if cols.is_empty() { cols.start.saturating_sub(1) } else { cols.start };
+    let new_col = if cols.is_empty() {
+        cols.start.saturating_sub(1)
+    } else {
+        cols.start
+    };
     Some((new_text, block.collapsed_at_col(new_col)))
 }
 

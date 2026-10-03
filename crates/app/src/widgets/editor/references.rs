@@ -129,7 +129,14 @@ impl FindReferencesState {
     /// it; clicking a row instead sets `navigate_to` and also closes it,
     /// since a find-references popup that stayed open after jumping
     /// would just be in the way of whatever the user meant to look at.
-    pub(super) fn paint(&mut self, ui: &egui::Ui, id: egui::Id, out: &TextAreaOutput, buffer: &ropey::Rope, pane_rect: egui::Rect) {
+    pub(super) fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        id: egui::Id,
+        out: &TextAreaOutput,
+        buffer: &ropey::Rope,
+        pane_rect: egui::Rect,
+    ) {
         let Some(results) = &self.results else { return };
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.results = None;
@@ -139,7 +146,10 @@ impl FindReferencesState {
             self.results = None;
             return;
         };
-        let popup_size = ui.ctx().memory(|mem| mem.area_rect(id)).map_or(egui::vec2(1.0, 1.0), |r| r.size());
+        let popup_size = ui
+            .ctx()
+            .memory(|mem| mem.area_rect(id))
+            .map_or(egui::vec2(1.0, 1.0), |r| r.size());
         let pos = super::completion::popup_position(char_rect, popup_size, pane_rect);
 
         let mut close_requested = false;
@@ -167,10 +177,11 @@ impl FindReferencesState {
                 });
             });
 
-        let clicked_outside = ui
-            .ctx()
-            .input(|i| i.pointer.any_click())
-            && ui.ctx().pointer_interact_pos().is_some_and(|pos| !area_response.response.rect.contains(pos));
+        let clicked_outside = ui.ctx().input(|i| i.pointer.any_click())
+            && ui
+                .ctx()
+                .pointer_interact_pos()
+                .is_some_and(|pos| !area_response.response.rect.contains(pos));
 
         if let Some(target) = clicked_target {
             self.navigate_to = Some(target);
@@ -183,7 +194,11 @@ impl FindReferencesState {
 }
 
 fn msg_reference_count(count: usize) -> String {
-    if count == 1 { "1 reference".to_string() } else { format!("{count} references") }
+    if count == 1 {
+        "1 reference".to_string()
+    } else {
+        format!("{count} references")
+    }
 }
 
 /// Decodes a raw `textDocument/references` reply (`Location[] | null`)
@@ -197,7 +212,10 @@ fn msg_reference_count(count: usize) -> String {
 /// referenced back from) is dropped, same best-effort degrade every
 /// other LSP decode path in this app already has.
 fn decode_references(value: serde_json::Value, current_doc: &Document) -> Vec<ReferenceHit> {
-    let Some(locations) = serde_json::from_value::<Option<Vec<lsp_types::Location>>>(value).ok().flatten() else {
+    let Some(locations) = serde_json::from_value::<Option<Vec<lsp_types::Location>>>(value)
+        .ok()
+        .flatten()
+    else {
         return Vec::new();
     };
     locations
@@ -208,70 +226,22 @@ fn decode_references(value: serde_json::Value, current_doc: &Document) -> Vec<Re
 
 fn resolve_hit(location: lsp_types::Location, current_doc: &Document) -> Option<ReferenceHit> {
     let path = uri_to_path(&location.uri)?;
-    let text = if path == current_doc.path { current_doc.buffer.to_string() } else { std::fs::read_to_string(&path).ok()? };
+    let text = if path == current_doc.path {
+        current_doc.buffer.to_string()
+    } else {
+        std::fs::read_to_string(&path).ok()?
+    };
     let byte_offset = utf16_range_to_bytes(&text, location.range)?.start;
     let line = text[..byte_offset].matches('\n').count() + 1;
     let preview = text.lines().nth(line - 1).map(str::to_string);
-    Some(ReferenceHit { path, byte_offset, line, preview })
+    Some(ReferenceHit {
+        path,
+        byte_offset,
+        line,
+        preview,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn doc(path: &str, text: &str) -> Document {
-        let (_dir, doc) = test_support::temp_document(path, text);
-        doc
-    }
-
-    #[test]
-    fn decode_references_a_null_result_is_empty() {
-        let d = doc("Foo.java", "class Foo {}");
-        assert!(decode_references(serde_json::Value::Null, &d).is_empty());
-    }
-
-    #[test]
-    fn decode_references_reads_the_current_docs_own_live_buffer_for_a_same_file_hit() {
-        let d = doc("Foo.java", "class Foo {\n    int x;\n}\n");
-        let uri = format!("file://{}", d.path.display());
-        let value = serde_json::json!([{
-            "uri": uri,
-            "range": { "start": { "line": 1, "character": 4 }, "end": { "line": 1, "character": 5 } }
-        }]);
-        let hits = decode_references(value, &d);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].line, 2);
-        assert_eq!(hits[0].preview.as_deref(), Some("    int x;"));
-    }
-
-    #[test]
-    fn decode_references_drops_a_location_whose_file_cant_be_read() {
-        let d = doc("Foo.java", "class Foo {}");
-        let value = serde_json::json!([{
-            "uri": "file:///does/not/exist/Nowhere.java",
-            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }
-        }]);
-        assert!(decode_references(value, &d).is_empty());
-    }
-
-    #[test]
-    fn decode_references_reads_multiple_hits_in_source_order() {
-        let d = doc("Foo.java", "class Foo {\n    void a() {}\n    void b() {}\n}\n");
-        let uri = format!("file://{}", d.path.display());
-        let value = serde_json::json!([
-            { "uri": uri, "range": { "start": { "line": 1, "character": 9 }, "end": { "line": 1, "character": 10 } } },
-            { "uri": uri, "range": { "start": { "line": 2, "character": 9 }, "end": { "line": 2, "character": 10 } } },
-        ]);
-        let hits = decode_references(value, &d);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].line, 2);
-        assert_eq!(hits[1].line, 3);
-    }
-
-    #[test]
-    fn msg_reference_count_singular_vs_plural() {
-        assert_eq!(msg_reference_count(1), "1 reference");
-        assert_eq!(msg_reference_count(2), "2 references");
-        assert_eq!(msg_reference_count(0), "0 references");
-    }
-}
+#[path = "references_test.rs"]
+mod references_test;

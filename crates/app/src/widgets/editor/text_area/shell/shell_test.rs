@@ -688,7 +688,10 @@ fn drag_select_stays_anchored_when_its_anchor_scrolls_out_of_view() {
         far_line,
         "the moving end followed the pointer to the far line"
     );
-    assert!(!caret.is_collapsed(), "a real multi-line selection, not a collapsed caret");
+    assert!(
+        !caret.is_collapsed(),
+        "a real multi-line selection, not a collapsed caret"
+    );
 
     // The whole point: the anchor line is genuinely off-screen in the final
     // frame (only the visible slice was shaped), yet the selection above is
@@ -737,7 +740,11 @@ fn typing_over_an_active_block_selection_edits_every_spanned_row() {
         .data(|d| d.get_temp::<ShellState>(id))
         .and_then(|s| s.block_selection)
         .expect("the block selection stays active across the edit, so further typing keeps working");
-    assert_eq!(block.cols(), 3..3, "collapses right after the inserted char, same as every spanned row");
+    assert_eq!(
+        block.cols(),
+        3..3,
+        "collapses right after the inserted char, same as every spanned row"
+    );
 }
 
 /// The Track 7 Phase 3 checkpoint test: pasting a multi-line clipboard while
@@ -772,5 +779,9 @@ fn pasting_over_an_active_block_selection_replaces_each_spanned_row_with_its_mat
         .data(|d| d.get_temp::<ShellState>(id))
         .and_then(|s| s.block_selection)
         .expect("the block selection stays active across the paste");
-    assert_eq!(block.cols(), 3..3, "collapses right after the first row's own pasted text");
+    assert_eq!(
+        block.cols(),
+        3..3,
+        "collapses right after the first row's own pasted text"
+    );
 }

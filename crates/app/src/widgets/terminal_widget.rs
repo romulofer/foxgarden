@@ -63,8 +63,12 @@ impl Selection {
 /// cell rather than an out-of-range one callers would need to guard against
 /// separately.
 fn cell_at(rect: egui::Rect, col_width: f32, row_height: f32, rows: u16, cols: u16, pos: egui::Pos2) -> (u16, u16) {
-    let row = ((pos.y - rect.top()) / row_height).floor().clamp(0.0, f32::from(rows.max(1) - 1)) as u16;
-    let col = ((pos.x - rect.left()) / col_width).floor().clamp(0.0, f32::from(cols.max(1) - 1)) as u16;
+    let row = ((pos.y - rect.top()) / row_height)
+        .floor()
+        .clamp(0.0, f32::from(rows.max(1) - 1)) as u16;
+    let col = ((pos.x - rect.left()) / col_width)
+        .floor()
+        .clamp(0.0, f32::from(cols.max(1) - 1)) as u16;
     (row, col)
 }
 
@@ -148,7 +152,10 @@ pub fn show(
     if let Some(pos) = response.interact_pointer_pos() {
         let cell = cell_at(rect, col_width, row_height, rows, cols, pos);
         if response.drag_started() {
-            selection = Selection { anchor: Some(cell), current: Some(cell) };
+            selection = Selection {
+                anchor: Some(cell),
+                current: Some(cell),
+            };
         } else if response.dragged() {
             selection.current = Some(cell);
         } else if response.clicked() {
@@ -223,8 +230,17 @@ pub fn show(
 /// floors to at least 1 each, since a session can never legitimately have
 /// zero rows or columns.
 fn grid_size(available: egui::Vec2, row_height: f32, col_width: f32) -> (u16, u16) {
-    let rows = (available.y / row_height).floor().max(1.0) as u16;
-    let cols = (available.x / col_width).floor().max(1.0) as u16;
+    // Both floored at *two*, not one. `vt100`'s own `col_wrap` is what a
+    // 1×n grid breaks: it wraps, scrolls by one row, and then computes
+    // `prev_pos.row -= scrolled` — which underflows and panics when the
+    // only row there is is row 0. The column side has the same shape one
+    // line above it (`cols - width`, underflowing on a double-width glyph
+    // in a one-column grid). Neither size is usable as a terminal anyway,
+    // so this is the floor that keeps a squeezed-shut panel from taking
+    // the whole app down with it — a real crash, found live, not a
+    // hypothetical.
+    let rows = (available.y / row_height).floor().max(2.0) as u16;
+    let cols = (available.x / col_width).floor().max(2.0) as u16;
     (rows, cols)
 }
 
@@ -269,10 +285,18 @@ fn shape_row(
             color: fg,
             background: bg,
             italics: cell.italic(),
-            underline: if cell.underline() { Stroke::new(1.0, fg) } else { Stroke::NONE },
+            underline: if cell.underline() {
+                Stroke::new(1.0, fg)
+            } else {
+                Stroke::NONE
+            },
             ..Default::default()
         };
-        let text = if cell.has_contents() { cell.contents() } else { " ".to_string() };
+        let text = if cell.has_contents() {
+            cell.contents()
+        } else {
+            " ".to_string()
+        };
 
         match &run_format {
             Some(current) if *current == format => run_text.push_str(&text),
@@ -324,76 +348,9 @@ fn caret_visible(ui: &egui::Ui, last_interaction: f64, cursor_blink: bool) -> bo
 }
 
 #[cfg(test)]
-mod grid_size_tests {
-    use super::*;
-
-    #[test]
-    fn exact_multiple_fits_with_no_remainder() {
-        assert_eq!(grid_size(egui::vec2(800.0, 480.0), 20.0, 8.0), (24, 100));
-    }
-
-    #[test]
-    fn a_partial_trailing_row_or_column_is_floored_away() {
-        // 479px / 20px-tall rows only fully fits 23, not 24 — the 24th
-        // row would be clipped, so it shouldn't count as fitting.
-        assert_eq!(grid_size(egui::vec2(799.0, 479.0), 20.0, 8.0), (23, 99));
-    }
-
-    #[test]
-    fn a_rect_smaller_than_one_cell_still_floors_to_a_single_row_and_column() {
-        assert_eq!(grid_size(egui::vec2(2.0, 2.0), 20.0, 8.0), (1, 1));
-    }
-
-    #[test]
-    fn a_wider_font_yields_fewer_columns_for_the_same_width() {
-        assert_eq!(grid_size(egui::vec2(800.0, 480.0), 20.0, 16.0), (24, 50));
-    }
-}
+#[path = "grid_size_test.rs"]
+mod grid_size_test;
 
 #[cfg(test)]
-mod selection_tests {
-    use super::*;
-
-    fn screen(rows: u16, cols: u16, text: &str) -> vt100::Parser {
-        let mut parser = vt100::Parser::new(rows, cols, 0);
-        parser.process(text.replace('\n', "\r\n").as_bytes());
-        parser
-    }
-
-    #[test]
-    fn cell_at_resolves_a_point_inside_the_grid() {
-        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(80.0, 40.0));
-        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(34.0, 25.0)), (0, 3));
-        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(34.0, 35.0)), (1, 3));
-    }
-
-    #[test]
-    fn cell_at_clamps_a_point_outside_the_grid_to_its_nearest_edge_cell() {
-        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(80.0, 40.0));
-        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(-50.0, -50.0)), (0, 0));
-        assert_eq!(cell_at(rect, 8.0, 20.0, 2, 10, egui::pos2(500.0, 500.0)), (1, 9));
-    }
-
-    #[test]
-    fn ordered_normalizes_a_bottom_to_top_drag() {
-        let selection = Selection { anchor: Some((3, 5)), current: Some((1, 2)) };
-        assert_eq!(selection.ordered(), Some(((1, 2), (3, 5))));
-    }
-
-    #[test]
-    fn ordered_is_none_without_a_full_anchor_and_current_pair() {
-        assert_eq!(Selection::default().ordered(), None);
-    }
-
-    #[test]
-    fn selection_text_reads_a_single_row_span() {
-        let parser = screen(3, 10, "hello world");
-        assert_eq!(selection_text(parser.screen(), (0, 0), (0, 4), 10), "hello");
-    }
-
-    #[test]
-    fn selection_text_trims_each_rows_trailing_padding_before_its_own_newline() {
-        let parser = screen(3, 10, "hi\nbye");
-        assert_eq!(selection_text(parser.screen(), (0, 0), (1, 2), 10), "hi\nbye");
-    }
-}
+#[path = "selection_test.rs"]
+mod selection_test;
