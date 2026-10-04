@@ -85,7 +85,7 @@ pub fn save_project_config(project_root: &Path, config: &ProjectConfig) -> std::
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, serialize_project_config(config))
+    crate::write_atomically(&path, serialize_project_config(config).as_bytes())
 }
 
 #[cfg(test)]

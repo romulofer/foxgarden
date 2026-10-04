@@ -494,6 +494,12 @@ fn show_full_diff_window(
     let content = git_stage.full_diff_content.clone();
     let mut open = true;
     let mut hunk_action: Option<RowAction> = None;
+    // The hunks come from `expanded_diffs`, which follow whichever row is
+    // expanded in the panel. Once another row is expanded they belong to a
+    // different file than this window's, so they are not shown (and cannot
+    // be staged from here) until the user asks for this file's again.
+    let hunks_are_this_files = git_stage.expanded.as_deref() == Some(path.as_path());
+    let mut show_this_files_hunks = false;
 
     egui::Window::new(format!("Diff: {}", path.display()))
         .id(egui::Id::new("git_stage_full_diff_window"))
@@ -513,13 +519,25 @@ fn show_full_diff_window(
                 }
                 ui.separator();
                 ui.strong(t().git.hunks);
-                show_hunks(ui, git_stage, &mut hunk_action);
+                // Same guard as the panel's own controls: a hunk op started
+                // while another is in flight would replace the one `op_rx`
+                // slot and lose that op's result.
+                ui.add_enabled_ui(!git_stage.op_running(), |ui| {
+                    if hunks_are_this_files {
+                        show_hunks(ui, git_stage, &mut hunk_action);
+                    } else if ui.button(t().git.show_hunks).clicked() {
+                        show_this_files_hunks = true;
+                    }
+                });
             });
         });
 
     git_stage.set_full_diff_mode(mode);
     if !open {
         git_stage.close_full_diff();
+    }
+    if show_this_files_hunks {
+        git_stage.ensure_expanded(root.to_path_buf(), path.clone());
     }
     match hunk_action {
         Some(RowAction::StageHunk(index)) => git_stage.stage_hunk(root.to_path_buf(), index),

@@ -21,6 +21,12 @@ pub struct GoToFileState {
     open: bool,
     query: String,
     selected: usize,
+    /// The ranked matches for the query they were computed for. Walking the
+    /// tree and scoring every path is O(files), and the popup repaints on
+    /// every caret blink and hover — so the work is redone only when the
+    /// query changes, and on each open (which is when a tree changed since
+    /// the last one is picked up).
+    matches: Option<(String, Vec<PathBuf>)>,
 }
 
 impl GoToFileState {
@@ -28,6 +34,14 @@ impl GoToFileState {
         self.open = !self.open;
         self.query.clear();
         self.selected = 0;
+        self.matches = None;
+    }
+
+    fn matches_for(&mut self, tree: &FileNode, root: &Path) -> &[PathBuf] {
+        if self.matches.as_ref().is_none_or(|(query, _)| *query != self.query) {
+            self.matches = Some((self.query.clone(), matching_files(tree, root, &self.query)));
+        }
+        self.matches.as_ref().map_or(&[], |(_, matches)| matches)
     }
 }
 
@@ -115,7 +129,7 @@ pub fn show(ui: &egui::Ui, state: &EditorState, switcher: &mut GoToFileState) ->
         return None;
     };
 
-    let candidates = matching_files(&project.tree, &project.root, &switcher.query);
+    let candidates = switcher.matches_for(&project.tree, &project.root).to_vec();
     if !candidates.is_empty() {
         switcher.selected = switcher.selected.min(candidates.len() - 1);
     }

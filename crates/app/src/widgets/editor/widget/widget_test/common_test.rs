@@ -70,40 +70,7 @@ pub(super) fn focused_frame(doc: &mut Document, parser: &mut Option<IncrementalP
         // will target nothing.
         let id = egui::Id::new(doc.path.to_string_lossy().into_owned());
         ui.memory_mut(|mem| mem.request_focus(id));
-        show(
-            ui,
-            doc,
-            parser,
-            0, // pane (Track 11)
-            EditorFont::Default,
-            14.0,
-            IndentSettings::default(),
-            ViewSettings::default(),
-            None,
-            &mut None,
-            None,
-            &mut None,
-            None,
-            false,
-            &mut None,
-            &mut None,
-            &mut HoverState::default(),
-            &mut GotoDefinitionState::default(),
-            &mut PeekState::default(),
-            EditorRequests::default(),
-            &mut None,
-            &mut Vec::new(),
-            &mut None,
-            &UserTemplates::default(),
-            &mut crate::panels::spring_config::SpringConfigState::default(),
-            &mut crate::lsp_state::LspState::default(),
-            &mut FindReferencesState::default(),
-            &mut RenameBox::default(),
-            &mut CodeActionGutter::default(),
-            &crate::debug_state::DebugState::default(),
-            true,
-            &mut None,
-        );
+        show_with_defaults(ui, doc, parser);
     });
 }
 
@@ -1333,4 +1300,43 @@ pub(super) fn focused_frame_with_generate_method_request(
         );
     });
     last_error
+}
+
+/// `show` with every optional collaborator at its default — what a test
+/// that only cares about the document and its keyboard input passes.
+pub(super) fn show_with_defaults(ui: &mut egui::Ui, doc: &mut Document, parser: &mut Option<IncrementalParser>) {
+    show(
+        ui,
+        doc,
+        parser,
+        0, // pane (Track 11)
+        EditorFont::Default,
+        14.0,
+        IndentSettings::default(),
+        ViewSettings::default(),
+        None,
+        &mut None,
+        None,
+        &mut None,
+        None,
+        false,
+        &mut None,
+        &mut None,
+        &mut HoverState::default(),
+        &mut GotoDefinitionState::default(),
+        &mut PeekState::default(),
+        EditorRequests::default(),
+        &mut None,
+        &mut Vec::new(),
+        &mut None,
+        &UserTemplates::default(),
+        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::lsp_state::LspState::default(),
+        &mut FindReferencesState::default(),
+        &mut RenameBox::default(),
+        &mut CodeActionGutter::default(),
+        &crate::debug_state::DebugState::default(),
+        true,
+        &mut None,
+    );
 }

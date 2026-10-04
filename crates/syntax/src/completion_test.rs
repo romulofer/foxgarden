@@ -90,3 +90,13 @@ fn returns_none_outside_any_class() {
     let tree = parsed(source);
     assert_eq!(type_of_identifier_java(&tree, source, 0, "x"), None);
 }
+
+/// A local `val` shadows a constructor property of the same name.
+#[test]
+fn kotlin_local_val_shadows_a_constructor_property() {
+    let source = "class A(val repo: Repo) {\n    fun f() {\n        val repo = Other()\n        repo.\n    }\n}\n";
+    let mut parser = crate::IncrementalParser::new(fg_core::Language::Kotlin).expect("a bundled grammar must load");
+    let tree = parser.parse(source).clone();
+    let cursor = source.find("repo.").unwrap();
+    assert_eq!(type_of_identifier_kotlin(&tree, source, cursor, "repo").as_deref(), Some("Other"));
+}

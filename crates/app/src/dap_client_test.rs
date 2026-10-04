@@ -149,3 +149,26 @@ fn poll_events_receives_a_real_event_from_a_real_socket() {
         }
     }
 }
+
+/// What `debug_state::stop` does: queue `disconnect`, then drop the session
+/// at once. The adapter must still receive the request before the socket
+/// closes — closing it straight from `drop` raced the writer thread and
+/// usually lost it, leaving the debuggee running.
+#[test]
+fn a_request_queued_right_before_drop_still_reaches_the_adapter() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("binding a loopback port always succeeds");
+    let port = listener.local_addr().unwrap().port();
+    let adapter = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("the client connects");
+        let mut received = Vec::new();
+        let _ = socket.read_to_end(&mut received);
+        String::from_utf8_lossy(&received).into_owned()
+    });
+
+    let mut session = DapSession::connect(port).expect("connecting to the fake adapter");
+    let _ = session.send_request("disconnect", serde_json::json!({ "terminateDebuggee": true }));
+    drop(session);
+
+    let received = adapter.join().unwrap();
+    assert!(received.contains("\"disconnect\""), "{received:?}");
+}

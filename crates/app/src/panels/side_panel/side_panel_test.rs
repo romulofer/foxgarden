@@ -518,3 +518,32 @@ fn collapse_chain_uses_the_given_separator() {
     assert_eq!(collapse_chain(&node, ".").label, "com.example");
     assert_eq!(collapse_chain(&node, "/").label, "com/example");
 }
+
+/// After a delete the selection must not keep the deleted paths, or the
+/// next Delete asks about files that are already gone.
+#[test]
+fn deleting_and_renaming_update_the_selection() {
+    let mut panel = SidePanelState {
+        selected: [
+            PathBuf::from("a"),
+            PathBuf::from("dir/inner"),
+            PathBuf::from("old/x"),
+            PathBuf::from("keep"),
+        ]
+        .into_iter()
+        .collect(),
+        last_selected: Some(PathBuf::from("a")),
+        ..Default::default()
+    };
+
+    forget_moved_selection(
+        &mut panel,
+        &[PathBuf::from("a"), PathBuf::from("dir")],
+        &[(PathBuf::from("old"), PathBuf::from("new"))],
+    );
+
+    let mut selected: Vec<_> = panel.selected.iter().cloned().collect();
+    selected.sort();
+    assert_eq!(selected, [PathBuf::from("keep"), PathBuf::from("new/x")]);
+    assert_eq!(panel.last_selected, None);
+}

@@ -14,6 +14,7 @@ mod click_test;
 mod codegen_test;
 mod completion_test;
 mod context_menu_test;
+mod focus_test;
 mod line_comment_test;
 mod multi_cursor_test;
 mod painting_test;

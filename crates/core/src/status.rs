@@ -56,17 +56,38 @@ impl std::fmt::Display for GitStatusError {
 
 impl std::error::Error for GitStatusError {}
 
-/// Runs `git status --porcelain -uall` with `root` as the working
+/// Runs `git status --porcelain -uall -z` with `root` as the working
 /// directory (same "only needs to be inside the working tree" contract as
 /// `git_diff_hunks`/`git_blame`) and parses the result via
 /// `parse_porcelain_status`.
+///
+/// Every returned path is relative to `root`, which is what every command
+/// that later acts on one (`git_add`, `git_reset_paths`, the diff calls)
+/// resolves it against. Porcelain output is always relative to the
+/// *repository* root instead, so for a project that is a subdirectory of a
+/// larger repository (a Maven module) the status is limited to `root` with
+/// `-- .` and the subdirectory's own prefix is stripped from each path.
 pub fn git_status(root: &Path) -> Result<Vec<StatusEntry>, GitStatusError> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain", "-uall"])
+    let prefix = Command::new("git")
+        .args(["rev-parse", "--show-prefix"])
         .current_dir(root)
         .output()
         .map_err(GitStatusError::Spawn)?;
-    Ok(parse_porcelain_status(&String::from_utf8_lossy(&output.stdout)))
+    let prefix = String::from_utf8_lossy(&prefix.stdout).trim_end_matches('\n').to_string();
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "-uall", "-z", "--", "."])
+        .current_dir(root)
+        .output()
+        .map_err(GitStatusError::Spawn)?;
+    let mut entries = parse_porcelain_status(&String::from_utf8_lossy(&output.stdout));
+    if !prefix.is_empty() {
+        for entry in &mut entries {
+            if let Ok(relative) = entry.path.strip_prefix(&prefix) {
+                entry.path = relative.to_path_buf();
+            }
+        }
+    }
+    Ok(entries)
 }
 
 /// The Source Control panel's own committer-identity label: `git config
@@ -95,29 +116,39 @@ fn first_name(full: &str) -> Option<String> {
     full.split_whitespace().next().map(str::to_string)
 }
 
-/// Parses `git status --porcelain` output into one `StatusEntry` per line.
-/// Pure/no I/O, directly testable against a captured fixture. A line
-/// shorter than the `"XY "` prefix is skipped rather than panicking on the
-/// slice below — real `git` output never produces one, but this is cheap
-/// insurance against a malformed/truncated fixture.
+/// Parses `git status --porcelain -z` output into one `StatusEntry` per
+/// record. Pure/no I/O, directly testable against a captured fixture.
+///
+/// `-z` rather than the line format because the line format C-quotes any
+/// path with a space or a non-ASCII byte (`"caf\303\251.java"`), and a
+/// quoted path handed back to `git add` names a file that does not exist.
+/// With `-z` every path is verbatim and NUL-terminated, and a rename or
+/// copy is `XY new\0old\0` — the old name is its own record, skipped here,
+/// since the panel only ever cares about the path a file has *now*. A
+/// record shorter than the `"XY "` prefix is skipped rather than panicking
+/// on the slice below — real `git` output never produces one, but this is
+/// cheap insurance against a malformed/truncated fixture.
 pub fn parse_porcelain_status(output: &str) -> Vec<StatusEntry> {
-    output.lines().filter_map(parse_status_line).collect()
+    let mut records = output.split('\0');
+    let mut entries = Vec::new();
+    while let Some(record) = records.next() {
+        let Some(entry) = parse_status_record(record) else { continue };
+        if matches!(entry.index_status, 'R' | 'C') || matches!(entry.worktree_status, 'R' | 'C') {
+            records.next();
+        }
+        entries.push(entry);
+    }
+    entries
 }
 
-fn parse_status_line(line: &str) -> Option<StatusEntry> {
-    if line.len() < 3 {
-        return None;
-    }
-    let mut chars = line.chars();
+fn parse_status_record(record: &str) -> Option<StatusEntry> {
+    let mut chars = record.chars();
     let index_status = chars.next()?;
     let worktree_status = chars.next()?;
-    let rest = line[2..].strip_prefix(' ')?;
-    // A rename/copy reports `"old -> new"` — the panel only ever cares
-    // about the path a file has *now*.
-    let path = match rest.split_once(" -> ") {
-        Some((_old, new)) => new,
-        None => rest,
-    };
+    let path = chars.as_str().strip_prefix(' ')?;
+    if path.is_empty() {
+        return None;
+    }
     Some(StatusEntry {
         path: PathBuf::from(path),
         index_status,

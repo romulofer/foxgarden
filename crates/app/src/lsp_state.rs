@@ -1051,11 +1051,11 @@ pub(crate) fn utf16_range_to_bytes(text: &str, range: lsp_types::Range) -> Optio
             None if position.line as usize == lines.len() && position.character == 0 => "",
             None => return None,
         };
-        let line = line
-            .strip_suffix('\n')
-            .unwrap_or(line)
-            .strip_suffix('\r')
-            .unwrap_or(line);
+        // Each strip falls back to what the previous one left, not to the
+        // original: falling back to `line` itself put an LF-only line's
+        // `\n` back, so a position one past its end landed on the next line.
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let mut units = 0u32;
         for (byte, character) in line.char_indices() {
             if units == position.character {

@@ -702,3 +702,124 @@ fn build_tool_detection_can_be_limited_to_one_extension() {
     assert!(registry.detect_build_tool_of(dir.path(), "forge").is_none());
     assert!(registry.detect_build_tool_of(dir.path(), "nobody").is_none());
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// File extensions, language order, grammar attribution, server starts
+
+fn dwarvish() -> Contributions {
+    Contributions {
+        languages: vec![lang("dwarvish", &["ELV", "dw"])],
+        ..Default::default()
+    }
+}
+
+/// Which language a file is comes from its extension, so a second claim
+/// must be refused rather than silently take over `.elv` files.
+#[test]
+fn a_file_extension_another_language_claims_is_refused() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
+
+    assert_eq!(
+        registry.register(Box::new(FakeExtension::new("moria", dwarvish))),
+        Err(RegisterError::DuplicateFileExtension {
+            file_extension: "elv".to_string(),
+            language_id: "dwarvish".to_string(),
+            extension_id: "moria".to_string(),
+            already_claimed_by: "elvish".to_string(),
+        })
+    );
+    assert_eq!(registry.language_for_extension("elv").unwrap().language.id, "elvish");
+    assert!(registry.language("dwarvish").is_none());
+}
+
+#[test]
+fn languages_are_listed_in_registration_order() {
+    let many = || Contributions {
+        languages: ["quenya", "sindarin", "khuzdul", "adunaic", "westron"]
+            .iter()
+            .map(|id| lang(id, &[id]))
+            .collect(),
+        ..Default::default()
+    };
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("tongues", many))).unwrap();
+
+    let ids: Vec<&str> = registry.languages().map(|l| l.language.id.as_str()).collect();
+    assert_eq!(ids, ["quenya", "sindarin", "khuzdul", "adunaic", "westron"]);
+}
+
+/// A grammar one extension supplies for another's language is attributed
+/// to the extension that shipped the grammar.
+#[test]
+fn a_grammar_remembers_which_extension_contributed_it() {
+    let grammar_only = || Contributions {
+        grammars: vec![GrammarContribution {
+            language_id: "elvish".to_string(),
+            source: GrammarSource::SharedLibrary {
+                path: "/tmp/elvish.so".into(),
+                symbol: "tree_sitter_elvish".to_string(),
+            },
+            highlight_query: None,
+            node_kinds: NodeKinds::default(),
+        }],
+        ..Default::default()
+    };
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
+    registry.register(Box::new(FakeExtension::new("lorien", grammar_only))).unwrap();
+
+    let elvish = registry.language("elvish").unwrap();
+    assert_eq!(elvish.extension_id, "rivendell");
+    assert_eq!(elvish.grammar_extension_id.as_deref(), Some("lorien"));
+}
+
+/// Registering the same ids again (every test that builds the shipped
+/// registry does) hands back the very same leaked strings.
+#[test]
+fn static_ids_are_shared_between_registries() {
+    let first = {
+        let mut registry = Registry::new();
+        registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
+        registry.language("elvish").unwrap().static_id
+    };
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish))).unwrap();
+    assert!(std::ptr::eq(first, registry.language("elvish").unwrap().static_id));
+}
+
+/// A server whose extension does not override `resolve_server_start`
+/// starts exactly as declared, from the configured path or, with none,
+/// from its declared binary name on `PATH`.
+#[test]
+fn a_server_with_no_custom_start_starts_as_declared() {
+    let with_server = || Contributions {
+        languages: vec![lang("elvish", &["elv"])],
+        language_servers: vec![LanguageServerContribution {
+            id: "elvish-ls".to_string(),
+            display_name: "Elvish LS".to_string(),
+            language_ids: vec!["elvish".to_string()],
+            binary_name: "elvish-ls".to_string(),
+            args: vec!["--stdio".to_string()],
+            initialization_options: Some("{}".to_string()),
+        }],
+        ..Default::default()
+    };
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("rivendell", with_server))).unwrap();
+
+    let unconfigured = registry
+        .resolve_server_start("elvish-ls", &ServerStartContext::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!(unconfigured.binary, PathBuf::from("elvish-ls"));
+    assert_eq!(unconfigured.args, ["--stdio"]);
+
+    let context = ServerStartContext {
+        configured_binary: " /opt/elvish-ls ".to_string(),
+        ..Default::default()
+    };
+    let configured = registry.resolve_server_start("elvish-ls", &context).unwrap().unwrap();
+    assert_eq!(configured.binary, PathBuf::from("/opt/elvish-ls"));
+    assert!(registry.resolve_server_start("nobody", &context).is_none());
+}

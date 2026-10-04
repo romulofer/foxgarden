@@ -484,23 +484,40 @@ pub fn move_document_end(index: &LineIndex, caret: Caret, extend: bool) -> Caret
     caret.moved_to(index.char_len(), extend)
 }
 
-/// If `char_off`'s line falls inside any of `hidden`'s line ranges, returns
-/// the char offset at the end of the line just above that range (a folded
-/// region's marker line) instead — the pure half of PLAN.md 3d's "caret
-/// clamp-into-marker" rule: a hidden line is never a valid resting place, so
-/// motion or a click landing on one snaps to the nearest visible line, which
-/// is always the marker line above it (where the fold's own `⋯` affordance
-/// sits — landing there reads as "you're at the fold," not at some arbitrary
-/// point inside content you can't see). A no-op when the line isn't hidden.
+/// If `char_off`'s line falls inside any of `hidden`'s line ranges, moves it
+/// to the nearest visible line in the direction it was travelling from
+/// `from` — the pure half of PLAN.md 3d's "caret clamp-into-marker" rule: a
+/// hidden line is never a valid resting place. Moving up (or not at all)
+/// lands at the end of the marker line just above the range, where the
+/// fold's own `⋯` affordance sits. Moving down skips past the fold to the
+/// first line after it, keeping the column; snapping back to the marker
+/// there would make a fold impossible to arrow past. A fold that runs to
+/// the end of the text has nothing below it, so that case falls back to
+/// the marker. A no-op when the line isn't hidden.
 /// `hidden` is expected sorted and non-overlapping, the same invariant
 /// `text_area::FoldMap` requires of it.
-pub fn clamp_out_of_hidden(index: &LineIndex, char_off: usize, hidden: &[std::ops::Range<usize>]) -> usize {
-    let (line, _) = index.line_col(char_off);
+pub fn clamp_out_of_hidden(
+    index: &LineIndex,
+    char_off: usize,
+    from: usize,
+    hidden: &[std::ops::Range<usize>],
+) -> usize {
+    let (line, col) = index.line_col(char_off);
     let Some(range) = hidden.iter().find(|r| r.contains(&line)) else {
         return char_off;
     };
-    let marker_line = range.start.saturating_sub(1);
-    index.line_col_to_char(marker_line, usize::MAX)
+    if char_off > from {
+        // Adjacent folds can butt up against each other; keep skipping until
+        // a line no fold hides.
+        let mut below = range.end;
+        while let Some(next) = hidden.iter().find(|r| r.contains(&below)) {
+            below = next.end;
+        }
+        if below <= index.last_line() {
+            return index.line_col_to_char(below, col);
+        }
+    }
+    index.line_end_of(range.start.saturating_sub(1))
 }
 
 /// The column (for `preferred_col` bookkeeping) of a caret position.

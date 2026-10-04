@@ -297,3 +297,22 @@ fn initialize_sends_the_real_initialize_method_name() {
     let rx = session.initialize(params).unwrap();
     assert!(rx.recv().expect("the fake server's response arrives").is_ok());
 }
+
+/// A server whose stdout is gone will never answer. The waiting receiver
+/// must then report `Disconnected` (which `lsp_state` turns into "exited
+/// before initialization completed") rather than `Empty` forever.
+#[test]
+fn a_request_to_a_server_whose_output_closed_is_disconnected_not_pending_forever() {
+    // Closes its stdout at once but keeps reading stdin, so the request
+    // itself still writes fine.
+    let script = "exec 1>&-; cat > /dev/null".to_string();
+    let mut session = LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None, Arc::new(|| {}))
+        .expect("sh is always available");
+
+    let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
+
+    assert_eq!(
+        rx.recv_timeout(std::time::Duration::from_secs(5)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    );
+}

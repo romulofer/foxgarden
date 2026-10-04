@@ -324,9 +324,9 @@ impl DebugState {
     /// (`terminateDebuggee: true`, per the DAP spec — without it a real
     /// adapter is allowed to leave the debuggee running detached) is sent
     /// best-effort when a real session exists; dropping the `DapSession`
-    /// right after closes the socket outright either way (`DapSession`'s
-    /// own `Drop`), so this never leaves a stuck phase behind even if the
-    /// adapter never answers.
+    /// right after closes the socket once that request is written (see
+    /// `DapSession`'s own drop note), so this never leaves a stuck phase
+    /// behind even if the adapter never answers.
     pub fn stop(&mut self) {
         if let Phase::Attached { mut session, .. }
         | Phase::AwaitingConfigurationDone { mut session, .. }

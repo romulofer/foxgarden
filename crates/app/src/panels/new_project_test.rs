@@ -241,3 +241,30 @@ fn create_and_open_drops_a_runtime_version_the_target_does_not_offer() {
     let pom = std::fs::read_to_string(root.join("pom.xml")).unwrap();
     assert!(!pom.contains(">0<"), "{pom}");
 }
+
+/// The artifact id names the project's folder under Location; anything that
+/// would land the scaffold outside it keeps Create disabled.
+#[test]
+fn form_is_valid_rejects_an_artifact_id_that_escapes_the_location() {
+    for artifact_id in ["../other", "/etc/x", "a/b", "a\\b", "..", "."] {
+        let state = NewProjectWizardState {
+            group_id: "com.example".to_string(),
+            artifact_id: artifact_id.to_string(),
+            location: "/home/dev".to_string(),
+            build_tool_id: "maven".to_string(),
+            language_id: "java".to_string(),
+            ..Default::default()
+        };
+        assert!(!form_is_valid(&state), "{artifact_id:?} must be refused");
+    }
+}
+
+#[test]
+fn project_root_ignores_surrounding_whitespace_in_the_artifact_id() {
+    let state = NewProjectWizardState {
+        location: "/home/dev".to_string(),
+        artifact_id: " my-app ".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(project_root(&state), Path::new("/home/dev/my-app"));
+}

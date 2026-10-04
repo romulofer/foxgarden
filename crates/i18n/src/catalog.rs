@@ -247,6 +247,9 @@ pub struct Git {
     pub loading_hunks: &'static str,
     pub no_changes: &'static str,
     pub hunks: &'static str,
+    /// Full Diff window: brings its own file's hunks back after another
+    /// row was expanded in the panel.
+    pub show_hunks: &'static str,
     pub diff: &'static str,
     pub stage_hunk: &'static str,
     pub unstage_hunk: &'static str,
@@ -696,6 +699,7 @@ pub const PT_BR: Strings = Strings {
         loading_hunks: "Carregando hunks…",
         no_changes: "Nenhuma alteração",
         hunks: "Hunks",
+        show_hunks: "Mostrar hunks",
         diff: "Diff",
         stage_hunk: "Stage do Hunk",
         unstage_hunk: "Unstage do Hunk",
@@ -1068,6 +1072,7 @@ pub const EN_US: Strings = Strings {
         loading_hunks: "Loading hunks…",
         no_changes: "No changes",
         hunks: "Hunks",
+        show_hunks: "Show hunks",
         diff: "Diff",
         stage_hunk: "Stage Hunk",
         unstage_hunk: "Unstage Hunk",

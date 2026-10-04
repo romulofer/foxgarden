@@ -30,13 +30,16 @@ pub struct RunConfigsDialogState {
 
 impl RunConfigsDialogState {
     /// Loads whatever's already saved for `project_root` and opens the
-    /// dialog on it.
-    pub fn open(&mut self, project_root: &Path) {
-        self.configs = fg_core::load_run_configs(project_root);
+    /// dialog on it. A saved file that cannot be read leaves the dialog
+    /// closed and returns the error: opening on an empty list would save
+    /// that empty list over the file on close.
+    pub fn open(&mut self, project_root: &Path) -> Result<(), String> {
+        self.configs = fg_core::load_run_configs(project_root)?;
         self.selected = 0;
         self.new_env_key.clear();
         self.new_env_value.clear();
         self.open = true;
+        Ok(())
     }
 }
 

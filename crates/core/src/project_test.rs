@@ -126,3 +126,59 @@ fn skips_git_target_and_node_modules_without_descending_into_them() {
     let names: Vec<&str> = project.tree.children.iter().map(|n| n.name.as_str()).collect();
     assert_eq!(names, vec!["src"], "only src should remain in the tree");
 }
+
+/// `ln -s .. parent` inside a project used to recurse until the stack
+/// overflowed. The link is still shown, as a folder, but not walked again.
+#[cfg(unix)]
+#[test]
+fn a_symlink_back_up_the_tree_is_shown_but_not_walked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/Main.java"), "").unwrap();
+    std::os::unix::fs::symlink("..", dir.path().join("src/parent")).unwrap();
+
+    let project = Project::open(dir.path().to_path_buf()).unwrap();
+
+    let src = &project.tree.children[0];
+    let parent = src.children.iter().find(|c| c.name == "parent").unwrap();
+    assert_eq!(parent.kind, FileKind::Dir);
+    assert!(parent.children.is_empty());
+}
+
+/// A symlink to a directory outside the walk is followed like any folder.
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_an_unrelated_directory_is_followed() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("Shared.java"), "").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("shared")).unwrap();
+
+    let project = Project::open(dir.path().to_path_buf()).unwrap();
+
+    let shared = &project.tree.children[0];
+    assert_eq!(shared.kind, FileKind::Dir);
+    assert_eq!(shared.children[0].name, "Shared.java");
+}
+
+/// One unreadable folder (a root-owned docker volume) must not stop the
+/// whole project from opening.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_subdirectory_opens_as_an_empty_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("secret.txt"), "").unwrap();
+    std::fs::write(dir.path().join("Main.java"), "").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let opened = Project::open(dir.path().to_path_buf());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let project = opened.unwrap();
+    let names: Vec<&str> = project.tree.children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["locked", "Main.java"]);
+    assert!(project.tree.children[0].children.is_empty());
+}

@@ -132,10 +132,17 @@ pub fn t() -> &'static Strings {
 /// Used only when the user hasn't explicitly picked a language in Settings —
 /// an explicit choice is persisted and always wins.
 pub fn detect_from_env() -> Lang {
+    detect_from(|var| std::env::var(var).ok())
+}
+
+/// [`detect_from_env`] over any variable lookup. An empty variable counts as
+/// unset, so the search moves on to the next one — POSIX's rule, and the
+/// common case of an exported-but-empty `LC_ALL` in front of a real `LANG`.
+fn detect_from(lookup: impl Fn(&str) -> Option<String>) -> Lang {
     ["LC_ALL", "LC_MESSAGES", "LANG"]
         .into_iter()
-        .find_map(|var| std::env::var(var).ok())
-        .filter(|value| !value.is_empty())
+        .filter_map(lookup)
+        .find(|value| !value.is_empty())
         .map_or(Lang::EnUs, |value| Lang::from_locale(&value))
 }
 

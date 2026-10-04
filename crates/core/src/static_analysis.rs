@@ -105,7 +105,29 @@ fn run_checkstyle_process(binary: &Path, config: &Path, project_root: &Path) -> 
         .arg(project_root)
         .output()
         .map_err(|e| StaticAnalysisError::Spawn("Checkstyle", e))?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    report_or_error("Checkstyle", &output)
+}
+
+/// The XML report a run printed, or an error when it printed none.
+///
+/// The exit status cannot decide this alone: both Checkstyle and PMD exit
+/// non-zero when they *find* something, which is a successful run. What a
+/// run that failed to start (bad config path, invalid ruleset, no `java`
+/// for a `.jar`) has in common is an empty stdout — and an empty string
+/// parses as a valid report with no findings, which would clear every
+/// earlier finding and show a clean run instead of the failure.
+fn report_or_error(tool: &str, output: &std::process::Output) -> Result<String, StaticAnalysisError> {
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !stdout.trim().is_empty() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map_or_else(|| format!("exited with {} and printed no report", output.status), str::to_string);
+    Err(StaticAnalysisError::Report(format!("{tool}: {detail}")))
 }
 
 /// Builds the `Command` to run a configured tool binary at `path`. A bare
@@ -261,7 +283,7 @@ fn run_pmd_process(binary: &Path, ruleset: &str, project_root: &Path) -> Result<
         .arg("--no-cache")
         .output()
         .map_err(|e| StaticAnalysisError::Spawn("PMD", e))?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    report_or_error("PMD", &output)
 }
 
 /// Parses a PMD XML report (the `-f xml` format) into one `PmdFinding` per

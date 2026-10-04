@@ -37,52 +37,89 @@ pub struct FileNode {
 }
 
 impl FileNode {
-    fn build(path: &Path) -> std::io::Result<FileNode> {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    /// The tree under `root`. Only `root` itself has to be readable; see
+    /// `build_dir` for what happens below it.
+    fn build(root: &Path) -> std::io::Result<FileNode> {
+        if !root.is_dir() {
+            return Ok(FileNode::leaf(root, FileKind::File));
+        }
+        let canonical = std::fs::canonicalize(root)?;
+        let entries = std::fs::read_dir(root)?;
+        Ok(FileNode::build_dir(root, entries, &mut vec![canonical]))
+    }
 
-        if path.is_dir() {
-            // Sort key is (is_file, path): directories (false) sort before
-            // files (true), each group alphabetically by path. `file_type`
-            // comes straight off the `DirEntry` rather than a fresh
-            // `path.is_dir()` stat call.
-            let mut entries: Vec<(bool, PathBuf)> = Vec::new();
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                let is_dir = entry.file_type()?.is_dir();
-                let child_path = entry.path();
-                if is_dir
-                    && child_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|name| SKIPPED_DIR_NAMES.contains(&name))
-                {
-                    continue;
-                }
-                entries.push((!is_dir, child_path));
+    fn leaf(path: &Path, kind: FileKind) -> FileNode {
+        FileNode {
+            path: path.to_path_buf(),
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            kind,
+            children: Vec::new(),
+        }
+    }
+
+    /// One directory's subtree. `ancestors` holds the canonical path of
+    /// every directory from the root down to this one.
+    ///
+    /// Never fails: a subdirectory that cannot be read (a root-owned docker
+    /// volume, say) shows as an empty folder rather than refusing to open
+    /// the whole project. Symlinked directories are followed, but one that
+    /// leads back to a directory already being walked (`ln -s .. parent`)
+    /// is shown without its children instead of recursing until the stack
+    /// overflows.
+    fn build_dir(path: &Path, entries: std::fs::ReadDir, ancestors: &mut Vec<PathBuf>) -> FileNode {
+        // Sort key is (is_file, path): directories (false) sort before
+        // files (true), each group alphabetically by path. `file_type`
+        // comes straight off the `DirEntry` rather than a fresh stat call,
+        // except for a symlink, which has to be followed to know what it is.
+        let mut found: Vec<(bool, bool, PathBuf)> = Vec::new();
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else { continue };
+            let child_path = entry.path();
+            let is_symlink = file_type.is_symlink();
+            let is_dir = if is_symlink { child_path.is_dir() } else { file_type.is_dir() };
+            if is_dir
+                && child_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| SKIPPED_DIR_NAMES.contains(&name))
+            {
+                continue;
             }
-            entries.sort();
+            found.push((!is_dir, is_symlink, child_path));
+        }
+        found.sort();
 
-            let children = entries
-                .iter()
-                .map(|(_, child_path)| FileNode::build(child_path))
-                .collect::<std::io::Result<Vec<_>>>()?;
+        let parent_canonical = ancestors.last().cloned().unwrap_or_default();
+        let children = found
+            .into_iter()
+            .map(|(is_file, is_symlink, child_path)| {
+                if is_file {
+                    return FileNode::leaf(&child_path, FileKind::File);
+                }
+                let canonical = if is_symlink {
+                    std::fs::canonicalize(&child_path).ok()
+                } else {
+                    child_path.file_name().map(|name| parent_canonical.join(name))
+                };
+                let entries = std::fs::read_dir(&child_path).ok();
+                match (canonical, entries) {
+                    (Some(canonical), Some(entries)) if !ancestors.contains(&canonical) => {
+                        ancestors.push(canonical);
+                        let node = FileNode::build_dir(&child_path, entries, ancestors);
+                        ancestors.pop();
+                        node
+                    }
+                    _ => FileNode::leaf(&child_path, FileKind::Dir),
+                }
+            })
+            .collect();
 
-            Ok(FileNode {
-                path: path.to_path_buf(),
-                name,
-                kind: FileKind::Dir,
-                children,
-            })
-        } else {
-            Ok(FileNode {
-                path: path.to_path_buf(),
-                name,
-                kind: FileKind::File,
-                children: Vec::new(),
-            })
+        FileNode {
+            children,
+            ..FileNode::leaf(path, FileKind::Dir)
         }
     }
 }

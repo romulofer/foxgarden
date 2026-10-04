@@ -1012,3 +1012,20 @@ fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
         );
     }
 }
+
+/// One past the end of an LF-terminated line is not a column on that line;
+/// it used to resolve to the start of the next one.
+#[test]
+fn utf16_range_to_bytes_rejects_a_column_past_an_lf_lines_end() {
+    let text = "abc\ndef\n";
+    let past_end = lsp_types::Range {
+        start: lsp_types::Position { line: 0, character: 4 },
+        end: lsp_types::Position { line: 0, character: 4 },
+    };
+    assert_eq!(utf16_range_to_bytes(text, past_end), None);
+    let at_end = lsp_types::Range {
+        start: lsp_types::Position { line: 0, character: 3 },
+        end: lsp_types::Position { line: 0, character: 3 },
+    };
+    assert_eq!(utf16_range_to_bytes(text, at_end), Some(3..3));
+}

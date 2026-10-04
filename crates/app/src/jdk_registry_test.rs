@@ -13,7 +13,24 @@ fn fake_jdk(dir: &std::path::Path, banner: &str) -> PathBuf {
         perms.set_mode(perms.mode() | 0o755);
         std::fs::set_permissions(&script, perms).unwrap();
     }
+    wait_until_executable(&script);
     dir.to_path_buf()
+}
+
+/// Another test thread that forks while this one is writing `script`
+/// carries the write handle into its child until that child execs, and
+/// running the script meanwhile fails with "Text file busy" (ETXTBSY) — an
+/// occasional failure under parallel `cargo test` that has nothing to do
+/// with what the test checks. Runs it until that window has passed.
+fn wait_until_executable(script: &std::path::Path) {
+    for _ in 0..100 {
+        match std::process::Command::new(script).output() {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => return,
+        }
+    }
 }
 
 #[test]

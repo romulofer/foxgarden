@@ -18,7 +18,7 @@ fn sample() -> RunConfig {
 fn a_single_config_round_trips() {
     let configs = vec![sample()];
     let serialized = serialize_run_configs(&configs);
-    assert_eq!(parse_run_configs(&serialized), configs);
+    assert_eq!(parse_run_configs(&serialized).unwrap(), configs);
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn multiple_configs_round_trip() {
     let configs = vec![sample(), second];
 
     let serialized = serialize_run_configs(&configs);
-    assert_eq!(parse_run_configs(&serialized), configs);
+    assert_eq!(parse_run_configs(&serialized).unwrap(), configs);
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn an_env_value_containing_equals_signs_round_trips() {
     ));
 
     let serialized = serialize_run_configs(&[config.clone()]);
-    assert_eq!(parse_run_configs(&serialized), vec![config]);
+    assert_eq!(parse_run_configs(&serialized).unwrap(), vec![config]);
 }
 
 #[test]
@@ -51,19 +51,19 @@ fn no_working_dir_round_trips_as_none() {
     config.working_dir = None;
 
     let serialized = serialize_run_configs(&[config.clone()]);
-    assert_eq!(parse_run_configs(&serialized), vec![config]);
+    assert_eq!(parse_run_configs(&serialized).unwrap(), vec![config]);
 }
 
 #[test]
 fn empty_input_parses_to_no_configs() {
-    assert_eq!(parse_run_configs(""), vec![]);
-    assert_eq!(parse_run_configs("   \n\n  "), vec![]);
+    assert_eq!(parse_run_configs("").unwrap(), vec![]);
+    assert_eq!(parse_run_configs("   \n\n  ").unwrap(), vec![]);
 }
 
 #[test]
 fn unrecognized_keys_are_skipped_rather_than_erroring() {
     let input = r#"[{"name": "Foo", "future_field": "something new", "main_class": "Foo"}]"#;
-    let configs = parse_run_configs(input);
+    let configs = parse_run_configs(input).unwrap();
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "Foo");
     assert_eq!(configs[0].main_class, "Foo");
@@ -72,7 +72,7 @@ fn unrecognized_keys_are_skipped_rather_than_erroring() {
 #[test]
 fn a_missing_field_defaults_rather_than_failing_the_whole_parse() {
     let input = r#"[{"name": "Foo"}]"#;
-    let configs = parse_run_configs(input);
+    let configs = parse_run_configs(input).unwrap();
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "Foo");
     assert_eq!(configs[0].main_class, "");
@@ -83,15 +83,19 @@ fn a_missing_field_defaults_rather_than_failing_the_whole_parse() {
 #[test]
 fn load_run_configs_with_no_saved_file_returns_empty() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(load_run_configs(dir.path()), vec![]);
+    assert_eq!(load_run_configs(dir.path()).unwrap(), vec![]);
 }
 
 #[test]
-fn load_run_configs_with_malformed_json_returns_empty_rather_than_panicking() {
+/// A hand-edit gone wrong must surface as an error naming the file, never
+/// as "no configs" — the dialog would otherwise save over the file with an
+/// empty list and every config in it would be gone.
+fn load_run_configs_with_malformed_json_is_an_error_naming_the_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".foxgarden")).unwrap();
-    std::fs::write(dir.path().join(".foxgarden").join("run_configs.json"), "not json").unwrap();
-    assert_eq!(load_run_configs(dir.path()), vec![]);
+    std::fs::write(dir.path().join(".foxgarden").join("run_configs.json"), r#"[{"name": "Foo"},]"#).unwrap();
+    let error = load_run_configs(dir.path()).unwrap_err();
+    assert!(error.contains("run_configs.json"), "{error}");
 }
 
 #[test]
@@ -100,7 +104,7 @@ fn save_then_load_round_trips_through_the_filesystem() {
     let configs = vec![sample()];
 
     save_run_configs(dir.path(), &configs).unwrap();
-    let loaded = load_run_configs(dir.path());
+    let loaded = load_run_configs(dir.path()).unwrap();
 
     assert_eq!(loaded, configs);
     assert!(dir.path().join(".foxgarden").join("run_configs.json").exists());

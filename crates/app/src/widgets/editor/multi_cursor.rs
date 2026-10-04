@@ -137,23 +137,42 @@ pub(super) fn find_all_occurrences(text: &str, needle: &str, case_sensitive: boo
 }
 
 /// Applies `op` at every position in `selections` simultaneously, as if each
-/// were an independent cursor. Selections are assumed non-overlapping.
-/// Processes them in ascending order of `start`, tracking a running
-/// character-count delta so each selection's effective offset accounts for
-/// every edit already applied to its left — this is what makes the returned
-/// cursor positions correct for every selection, not just the last one
-/// processed. Returns the resulting text plus one cursor char-position per
-/// entry of `selections`, in the SAME order as the input slice.
+/// were an independent cursor. Processes them in ascending order of
+/// `start`, tracking a running character-count delta so each selection's
+/// effective offset accounts for every edit already applied to its left —
+/// this is what makes the returned cursor positions correct for every
+/// selection, not just the last one processed. Returns the resulting text
+/// plus one cursor char-position per entry of `selections`, in the SAME
+/// order as the input slice.
+///
+/// Nothing upstream guarantees the selections are disjoint and in range:
+/// Ctrl+A can grow the primary over every extra cursor, and an edit made
+/// outside this path (Ctrl+J, codegen) can leave an extra past the end of a
+/// shorter text. So each one is clamped to the text first, and one that
+/// overlaps an earlier selection is folded into it — edited once, sharing
+/// its cursor — rather than being edited at an offset that no longer exists.
 pub(super) fn apply_multi_edit(text: &str, selections: &[Range<usize>], op: &MultiEditOp) -> (String, Vec<usize>) {
     let mut order: Vec<usize> = (0..selections.len()).collect();
-    order.sort_by_key(|&i| selections[i].start);
+    order.sort_by_key(|&i| (selections[i].start, std::cmp::Reverse(selections[i].end)));
 
     let mut chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
     let mut cumulative_delta: isize = 0;
     let mut new_positions = vec![0usize; selections.len()];
+    // End (in `text`'s own offsets) and resulting cursor of the furthest
+    // selection edited so far.
+    let mut previous: Option<(usize, usize)> = None;
 
     for i in order {
-        let sel = &selections[i];
+        let start = selections[i].start.min(len);
+        let end = selections[i].end.clamp(start, len);
+        if let Some((previous_end, previous_cursor)) = previous
+            && start < previous_end
+        {
+            new_positions[i] = previous_cursor;
+            continue;
+        }
+        let sel = start..end;
         let eff_start = (sel.start as isize + cumulative_delta) as usize;
         let eff_end = (sel.end as isize + cumulative_delta) as usize;
 
@@ -191,6 +210,7 @@ pub(super) fn apply_multi_edit(text: &str, selections: &[Range<usize>], op: &Mul
 
         new_positions[i] = cursor;
         cumulative_delta += delta;
+        previous = Some((sel.end, cursor));
     }
 
     (chars.into_iter().collect(), new_positions)

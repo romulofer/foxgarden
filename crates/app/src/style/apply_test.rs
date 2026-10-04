@@ -26,3 +26,20 @@ fn apply_forces_a_floating_hover_grow_scrollbar_in_both_themes() {
         );
     }
 }
+
+/// A premultiplied color with a channel above its alpha is blended
+/// additively, which on the light theme's near-white background clamps to
+/// white and makes the cue vanish. Every translucent light-theme color must
+/// be a real tint.
+#[test]
+fn light_translucent_colors_tint_rather_than_brighten() {
+    for color in [
+        occurrence_highlight(false),
+        bracket_match(false),
+        structure(false),
+        debug_current_line(false),
+    ] {
+        let [r, g, b, a] = color.to_array();
+        assert!(r <= a && g <= a && b <= a, "{color:?} is not a valid premultiplied color");
+    }
+}

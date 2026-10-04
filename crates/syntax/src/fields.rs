@@ -40,17 +40,10 @@ pub(crate) fn fields_in_class_body(body: Node, source: &str, include_static: boo
         let Some(type_node) = field_decl.child_by_field_name("type") else {
             continue;
         };
-        // Modifiers ("public", "static", "final", ...) are anonymous
-        // tokens inside this node rather than distinct named child types
-        // (per tree-sitter-java's own node-types.json), so the simplest
-        // reliable way to detect them is a text search over the span
-        // between the declaration's start and its type — there's nothing
-        // else that could appear there.
-        let modifiers_text = &source[field_decl.start_byte()..type_node.start_byte()];
-        if modifiers_text.contains("static") && !include_static {
+        if has_modifier(field_decl, "static") && !include_static {
             continue;
         }
-        let is_final = modifiers_text.contains("final");
+        let is_final = has_modifier(field_decl, "final");
         let java_type = source[type_node.byte_range()].to_string();
 
         let mut declarator_cursor = field_decl.walk();
@@ -66,6 +59,21 @@ pub(crate) fn fields_in_class_body(body: Node, source: &str, include_static: boo
         }
     }
     fields
+}
+
+/// Whether `declaration`'s own `modifiers` child carries the `keyword`
+/// token. Modifiers are anonymous tokens inside that node, whose kind is
+/// the keyword itself, sitting next to annotations — so they are matched by
+/// token kind rather than by searching the text, which would also match
+/// `"static"` inside `@JsonProperty("staticUrl")` or `"final"` inside
+/// `@Value("${app.final.limit}")`.
+pub(crate) fn has_modifier(declaration: Node, keyword: &str) -> bool {
+    let mut cursor = declaration.walk();
+    let Some(modifiers) = declaration.children(&mut cursor).find(|c| c.kind() == "modifiers") else {
+        return false;
+    };
+    let mut cursor = modifiers.walk();
+    modifiers.children(&mut cursor).any(|token| token.kind() == keyword)
 }
 
 /// Every class in the file with at least one eligible field, in source

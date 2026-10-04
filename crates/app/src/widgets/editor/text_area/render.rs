@@ -393,6 +393,23 @@ pub(super) fn default_row_counts(total_lines: usize, hidden: &[Range<usize>]) ->
     counts
 }
 
+/// The row counts the layout last stored for `id`, without storing anything
+/// — for an estimate made before the layout runs (`visible_line_window`),
+/// which sees a wider `Ui` than the layout does (the gutter is not allocated
+/// yet). Going through `cached_row_counts` from there keyed the table on the
+/// wrong width, so the two calls reset each other's entry every frame and
+/// the corrections `record_shaped_rows` learns for wrapped lines never
+/// survived: lines after a wrapped one were painted over its later rows.
+/// Falls back to one row per line when nothing usable is stored.
+pub(super) fn peek_row_counts(ui: &egui::Ui, id: egui::Id, hidden: &[Range<usize>], total_lines: usize) -> Arc<Vec<usize>> {
+    let cache_id = egui::Id::new(("text_area_row_counts", id));
+    ui.ctx()
+        .data(|d| d.get_temp::<CachedRowCounts>(cache_id))
+        .map(|cached| cached.counts)
+        .filter(|counts| counts.len() == total_lines)
+        .unwrap_or_else(|| Arc::new(default_row_counts(total_lines, hidden)))
+}
+
 /// How many visual rows each logical line in `buffer` is currently believed
 /// to occupy at `wrap_width` (`0` for a line inside `hidden`) — needed up
 /// front to build `layout_visible_wrapped`'s prefix sum. Cached in `ctx.data`

@@ -409,10 +409,7 @@ impl BuildState {
             if let Some(t) = stderr_thread {
                 let _ = t.join();
             }
-            let success = match child_slot.lock() {
-                Ok(mut guard) => matches!(guard.as_mut().map(|c| c.wait()), Some(Ok(status)) if status.success()),
-                Err(_) => false,
-            };
+            let success = wait_without_holding_the_lock(&child_slot);
             let _ = tx.send(BuildEvent::Finished { success });
         });
 
@@ -582,6 +579,30 @@ impl BuildState {
         }
         if still_running {
             self.rx = Some(rx);
+        }
+    }
+}
+
+/// Waits for the child in `slot` to exit and reports whether it succeeded.
+///
+/// Polls `try_wait`, taking the lock only for each check. A blocking `wait`
+/// inside the lock kept it for the child's whole remaining life, and
+/// `stop`, `shutdown` and the per-frame `run_pid` all lock the same slot on
+/// the UI thread — so a program that closed its output but kept running
+/// (a daemonizing server) froze the editor, and Stop could never kill it.
+fn wait_without_holding_the_lock(slot: &Mutex<Option<Child>>) -> bool {
+    loop {
+        let status = match slot.lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(child) => child.try_wait(),
+                None => return false,
+            },
+            Err(_) => return false,
+        };
+        match status {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => return false,
         }
     }
 }

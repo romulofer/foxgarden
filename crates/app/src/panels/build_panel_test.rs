@@ -54,3 +54,27 @@ fn a_run_with_no_results_for_a_doc_clears_its_stale_marks() {
 
     assert!(state.open_tabs[0].coverage_lines.is_empty());
 }
+
+/// A launched program that closes its output but keeps running: once both
+/// readers finish, the waiter must not sit on the child lock, or Stop (and
+/// the per-frame `run_pid`) block the UI thread until the program exits.
+#[cfg(unix)]
+#[test]
+fn stop_is_immediate_for_a_program_that_closed_its_output_but_keeps_running() {
+    let mut state = BuildState::default();
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "exec >&- 2>&-; sleep 30"]);
+    state.spawn_process(command).expect("sh is always available");
+    state.stage = Some(Stage::RunLaunched);
+    // Long enough for both readers to hit EOF and the waiter to start.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let started = std::time::Instant::now();
+    assert!(state.run_pid().is_some());
+    state.stop();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "stop blocked for {:?}",
+        started.elapsed()
+    );
+}

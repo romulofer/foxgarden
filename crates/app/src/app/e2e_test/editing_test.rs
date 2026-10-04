@@ -58,6 +58,30 @@ fn closing_a_dirty_tab_asks_first_and_save_writes_the_file() {
     assert_eq!(app.on_disk("Main.java"), format!("{MAIN_JAVA}// edited"));
 }
 
+/// A save that fails must not close the tab: the edits would otherwise
+/// survive only in the capped closed-tab stack. The prompt stays up for the
+/// same file, so Discard or Cancel is still the user's choice.
+#[test]
+fn a_failed_save_from_the_close_prompt_keeps_the_tab_and_its_edits() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    app.click_tree("Main.java");
+    app.type_into_active_tab(MAIN_JAVA.chars().count(), "// edited");
+    app.close_tab(0);
+
+    // Something the save cannot write over, swapped in while the prompt is
+    // already up.
+    std::fs::remove_file(app.path("Main.java")).unwrap();
+    std::fs::create_dir(app.path("Main.java")).unwrap();
+    app.click(t().common.save);
+
+    assert_eq!(app.open_tab_names(), ["Main.java"], "the tab must survive a failed save");
+    assert!(app.shows(&E2e::dirty_row("Main.java")), "and keep its edits");
+    assert!(
+        app.shows(&msg::save_changes_before_closing("Main.java")),
+        "the question is still open"
+    );
+}
+
 #[test]
 fn discarding_a_dirty_tab_closes_it_and_leaves_the_file_alone() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
@@ -180,4 +204,24 @@ fn unsaved_work_is_kept_on_disk_and_offered_back() {
     app.press(egui::Modifiers::COMMAND, egui::Key::S);
     app.advance_time_past_the_draft_interval();
     assert!(!draft.exists(), "a saved file's draft is cleaned up");
+}
+
+/// The crash-recovery case drafts exist for: on relaunch the restored
+/// project is already first in the recent list and its tabs reopen clean.
+/// The prompt must still appear, and the draft must survive the first draft
+/// write until it is answered.
+#[test]
+fn drafts_are_offered_back_when_the_session_is_restored_after_a_crash() {
+    let draft_text = format!("{MAIN_JAVA}// lost in a crash");
+    let mut app = E2e::launch_restoring(&[("Main.java", MAIN_JAVA)], "Main.java", &[("Main.java", &draft_text)]);
+
+    assert!(app.shows(&msg::unsaved_work_found(1)), "the restore prompt must appear");
+    app.advance_time_past_the_draft_interval();
+    assert!(
+        app.path(".foxgarden/drafts/Main.java.draft").is_file(),
+        "an unanswered draft must not be discarded"
+    );
+
+    app.click(t().common.restore);
+    assert_eq!(app.active_tab_text(), draft_text);
 }

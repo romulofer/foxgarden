@@ -121,6 +121,7 @@ fn toggle_opens_and_resets_query_and_selection() {
         open: false,
         query: "leftover".to_string(),
         selected: 3,
+        matches: None,
     };
 
     switcher.toggle();
@@ -136,4 +137,22 @@ fn toggle_twice_closes_it_again() {
     switcher.toggle();
     switcher.toggle();
     assert!(!switcher.open);
+}
+
+/// Repaints with an unchanged query reuse the ranked list; a new query
+/// recomputes it.
+#[test]
+fn matches_are_recomputed_only_when_the_query_changes() {
+    let root = PathBuf::from("/root");
+    let tree = dir("/root", vec![file("/root/A.java"), file("/root/B.java")]);
+    let mut switcher = GoToFileState::default();
+    switcher.toggle();
+
+    assert_eq!(switcher.matches_for(&tree, &root).len(), 2);
+    // A tree that changed under an unchanged query is not re-walked …
+    let bigger = dir("/root", vec![file("/root/A.java"), file("/root/B.java"), file("/root/C.java")]);
+    assert_eq!(switcher.matches_for(&bigger, &root).len(), 2);
+    // … but a new query is scored against it.
+    switcher.query = "c".to_string();
+    assert_eq!(switcher.matches_for(&bigger, &root), [PathBuf::from("/root/C.java")]);
 }

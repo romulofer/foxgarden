@@ -258,10 +258,11 @@ fn class_body_property_type(class_body: Node, source: &str, name: &str) -> Optio
 
 /// Resolves a bare identifier `name`'s declared type at `cursor_byte` for
 /// Kotlin, same nearest-scope-wins order as `type_of_identifier_java`:
-/// the innermost enclosing function's parameters, then the enclosing
-/// class's primary-constructor `val`/`var` parameters, then local
-/// properties in the enclosing function, then the enclosing class's own
-/// properties.
+/// the innermost enclosing function's parameters, then local properties in
+/// that function, then the enclosing class's primary-constructor
+/// `val`/`var` parameters, then the enclosing class's own properties. Both
+/// function scopes come before both class scopes, so a local `val repo`
+/// shadows a constructor's `val repo`.
 pub fn type_of_identifier_kotlin(tree: &Tree, source: &str, cursor_byte: usize, name: &str) -> Option<String> {
     let start = tree
         .root_node()
@@ -269,18 +270,13 @@ pub fn type_of_identifier_kotlin(tree: &Tree, source: &str, cursor_byte: usize, 
 
     if let Some(function) = enclosing_function_kotlin(start)
         && let Some(raw_type) = parameter_type_kotlin(function, source, name)
+            .or_else(|| local_property_type(function, source, name))
     {
         return Some(simple_name(&raw_type));
     }
 
     if let Some(class_node) = enclosing_class_kotlin(start)
         && let Some(raw_type) = primary_constructor_class_parameter_type(class_node, source, name)
-    {
-        return Some(simple_name(&raw_type));
-    }
-
-    if let Some(function) = enclosing_function_kotlin(start)
-        && let Some(raw_type) = local_property_type(function, source, name)
     {
         return Some(simple_name(&raw_type));
     }

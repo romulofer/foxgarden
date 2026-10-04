@@ -136,7 +136,6 @@ type PendingResponses = Arc<Mutex<HashMap<i64, Sender<DapResult>>>>;
 /// `events_rx` (an `Event`) — the same split `lsp_client::LspSession`
 /// already uses for its own response/server-message routing.
 pub struct DapSession {
-    stream: TcpStream,
     writer_tx: Sender<Value>,
     next_seq: i64,
     pending: PendingResponses,
@@ -154,7 +153,10 @@ impl DapSession {
     pub fn connect(port: u16) -> std::io::Result<Self> {
         let stream = TcpStream::connect(("127.0.0.1", port))?;
         let read_stream = stream.try_clone()?;
-        let mut write_stream = stream.try_clone()?;
+        let mut write_stream = stream;
+        // Bounds how long the writer thread can sit in a write to an adapter
+        // that stopped reading, so the close below always happens.
+        write_stream.set_write_timeout(Some(std::time::Duration::from_secs(2)))?;
 
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let (events_tx, events_rx) = mpsc::channel();
@@ -203,10 +205,13 @@ impl DapSession {
                     break; // adapter closed the socket or the write failed
                 }
             }
+            // Reached once the session is dropped and every message queued
+            // before that has been written — so a `disconnect` sent just
+            // before dropping actually goes out before the socket closes.
+            let _ = write_stream.shutdown(std::net::Shutdown::Both);
         });
 
         Ok(Self {
-            stream,
             writer_tx,
             next_seq: 1,
             pending,
@@ -242,16 +247,12 @@ impl DapSession {
     }
 }
 
-impl Drop for DapSession {
-    /// Closing a session shuts the socket down outright — no orderly
-    /// `disconnect`/`terminate` DAP request here (`debug_state` owns that
-    /// sequence for a session it's deliberately ending before ever dropping
-    /// one, mirroring `lsp_state::LspState`'s own shutdown-before-drop
-    /// discipline for `LspSession`).
-    fn drop(&mut self) {
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
-    }
-}
+// Dropping a session closes its socket, but from the writer thread, after
+// it has written everything already queued — there is no `Drop` impl here.
+// Shutting the socket down directly in `drop` raced that thread, so the
+// `disconnect` (`terminateDebuggee: true`) that `debug_state::stop` queues
+// right before dropping was usually never sent and the debuggee JVM kept
+// running. Dropping `writer_tx` is what ends the writer's loop.
 
 #[cfg(test)]
 #[path = "dap_client_test.rs"]

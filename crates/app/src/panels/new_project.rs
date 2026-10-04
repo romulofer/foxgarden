@@ -8,7 +8,7 @@
 //! "Create" action, unlike a settings dialog that just edits fields in
 //! place.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use fg_core::{EditorState, ProjectConfig, ScaffoldSpec};
 use fg_extension::Registry;
@@ -136,7 +136,17 @@ fn sync_runtime_version(state: &mut NewProjectWizardState, offered: &[u32]) {
 }
 
 fn project_root(state: &NewProjectWizardState) -> PathBuf {
-    Path::new(&state.location).join(&state.artifact_id)
+    Path::new(&state.location).join(state.artifact_id.trim())
+}
+
+/// Whether `name` is one plain directory name. The artifact id becomes the
+/// new project's folder under Location, so `..`, a `/` or an absolute path
+/// would put the scaffold somewhere else entirely.
+fn is_single_folder_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
+        && !name.contains(['/', '\\'])
 }
 
 /// `true` once every field holds something the chosen extension's scaffold
@@ -145,7 +155,7 @@ fn project_root(state: &NewProjectWizardState) -> PathBuf {
 /// mid-air failure.
 fn form_is_valid(state: &NewProjectWizardState) -> bool {
     !state.group_id.trim().is_empty()
-        && !state.artifact_id.trim().is_empty()
+        && is_single_folder_name(state.artifact_id.trim())
         && !state.location.trim().is_empty()
         && !state.build_tool_id.is_empty()
         && !state.language_id.is_empty()

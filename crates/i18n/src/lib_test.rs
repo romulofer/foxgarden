@@ -34,3 +34,16 @@ fn t_follows_set_lang() {
 fn pt_br_is_the_default() {
     assert_eq!(Lang::default(), Lang::PtBr);
 }
+
+/// `LC_ALL=` exported empty in front of a real `LANG` is common; the empty
+/// one must be skipped, not end the search with English.
+#[test]
+fn an_empty_variable_falls_through_to_the_next_one() {
+    let env = |var: &str| match var {
+        "LC_ALL" => Some(String::new()),
+        "LANG" => Some("pt_BR.UTF-8".to_string()),
+        _ => None,
+    };
+    assert_eq!(detect_from(env), Lang::PtBr);
+    assert_eq!(detect_from(|_| None), Lang::EnUs);
+}

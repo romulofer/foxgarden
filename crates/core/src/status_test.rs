@@ -1,13 +1,14 @@
 use super::*;
 
-/// Captured verbatim from a real `git status --porcelain -uall` run
-/// (a throwaway repo: one modified-and-then-deleted tracked file, one
-/// staged-then-further-modified untracked file, a rename with an
-/// uncommitted follow-up edit, and two untracked files inside an
-/// otherwise-untracked directory) — grammar shape verified fresh, not
-/// assumed, per this project's own discipline for external tool output.
+/// The shape of a real `git status --porcelain -uall -z` run (a throwaway
+/// repo: one modified-and-then-deleted tracked file, one staged-then-
+/// further-modified file, a rename with an uncommitted follow-up edit —
+/// new name first, old name as its own record, as captured — and two
+/// untracked files inside an otherwise-untracked directory) — grammar shape
+/// verified fresh, not assumed, per this project's own discipline for
+/// external tool output.
 const FIXTURE: &str =
-    " D tracked.txt\nAM staged_then_edited.txt\nRM old_name.txt -> new_name.txt\n?? sub/one.txt\n?? sub/two.txt\n";
+    " D tracked.txt\0AM staged_then_edited.txt\0RM new_name.txt\0old_name.txt\0?? sub/one.txt\0?? sub/two.txt\0";
 
 #[test]
 fn parses_every_status_line_kind() {
@@ -41,6 +42,18 @@ fn parses_every_status_line_kind() {
                 worktree_status: '?'
             },
         ]
+    );
+}
+
+/// Paths with spaces or non-ASCII bytes arrive verbatim under `-z`, where
+/// the line format would have C-quoted them into names git cannot add.
+#[test]
+fn paths_with_spaces_and_accents_are_taken_verbatim() {
+    let entries = parse_porcelain_status("?? sub/a b.txt\0?? sub/café.txt\0?? x -> y.txt\0");
+    let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+    assert_eq!(
+        paths,
+        [PathBuf::from("sub/a b.txt"), PathBuf::from("sub/café.txt"), PathBuf::from("x -> y.txt")]
     );
 }
 
@@ -110,6 +123,33 @@ fn git_status_runs_a_real_git_status_against_a_real_repo() {
             worktree_status: '?'
         }]
     );
+}
+
+/// A project that is a subdirectory of a larger repository (a Maven
+/// module): paths come back relative to the project, not to the repository,
+/// so staging one resolves against the project root and succeeds.
+#[test]
+fn git_status_in_a_subdirectory_project_reports_paths_the_project_can_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    init_repo(repo);
+    std::fs::create_dir(repo.join("module")).unwrap();
+    std::fs::write(repo.join("module/A b.java"), "class A {}\n").unwrap();
+    std::fs::write(repo.join("outside.txt"), "not in the module\n").unwrap();
+    let root = repo.join("module");
+
+    let entries = git_status(&root).unwrap();
+    assert_eq!(
+        entries,
+        vec![StatusEntry {
+            path: PathBuf::from("A b.java"),
+            index_status: '?',
+            worktree_status: '?'
+        }]
+    );
+
+    git_add(&root, &[entries[0].path.clone()]).expect("the reported path stages");
+    assert!(git_status(&root).unwrap()[0].is_staged());
 }
 
 #[test]
@@ -243,6 +283,34 @@ fn git_apply_cached_stages_a_single_hunk_leaving_the_other_unstaged() {
     let remaining = crate::diff::git_file_diff(&file, root).expect("git ran");
     assert_eq!(remaining.hunks.len(), 1);
     assert!(crate::diff::hunk_patch(&remaining, 0).unwrap().contains("+CHANGED18"));
+}
+
+/// A CRLF file's context lines end in `\r`; a patch rebuilt without it
+/// matches nothing and `git apply` refuses it.
+#[test]
+fn git_apply_cached_stages_a_single_hunk_of_a_crlf_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root);
+    let file = root.join("f.txt");
+    let lines: Vec<String> = (1..=20).map(|n| format!("l{n}")).collect();
+    std::fs::write(&file, lines.join("\r\n") + "\r\n").unwrap();
+    let run = |args: &[&str]| Command::new("git").current_dir(root).args(args).output().unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "init"]);
+
+    let mut edited = lines.clone();
+    edited[1] = "CHANGED2".to_string();
+    edited[17] = "CHANGED18".to_string();
+    std::fs::write(&file, edited.join("\r\n") + "\r\n").unwrap();
+
+    let file_diff = crate::diff::git_file_diff(&file, root).expect("git ran");
+    let patch = crate::diff::hunk_patch(&file_diff, 0).unwrap();
+    git_apply_cached(root, &patch, false).expect("apply --cached succeeds on CRLF content");
+
+    let cached = crate::diff::git_file_diff_cached(&file, root).expect("git ran");
+    assert_eq!(cached.hunks.len(), 1);
+    assert!(!cached.hunks[0].header.ends_with('\r'));
 }
 
 #[test]

@@ -39,6 +39,16 @@ fn equality_is_by_text_not_by_edit_history() {
     edited.insert(0, "x");
     edited.remove(0..1);
 
-    assert_eq!(edited, TextBuffer::new(Rope::from_str("class A {}")));
-    assert_ne!(edited.revision(), 0);
+    let fresh = TextBuffer::new(Rope::from_str("class A {}"));
+    assert_eq!(edited, fresh);
+    assert_ne!(edited.revision(), fresh.revision());
+}
+
+/// A reopened file gets a new buffer; it must not share a revision with
+/// the one it replaces, or caches keyed on (path, revision) would match.
+#[test]
+fn two_new_buffers_never_share_a_revision() {
+    let first = TextBuffer::new(Rope::from_str("class A {}"));
+    let second = TextBuffer::new(Rope::from_str("class A {}"));
+    assert_ne!(first.revision(), second.revision());
 }

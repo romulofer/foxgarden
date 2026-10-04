@@ -81,12 +81,9 @@ pub fn superclass_name(tree: &Tree, source: &str, class_name: &str) -> Option<St
 
 /// One method's signature, if `node` is a `method_declaration` — filtered
 /// down to only what can actually be overridden (`static`/`private`/
-/// `final` methods excluded, detected the same way `fields.rs`'s
-/// `fields_in_class_body` detects `static`/`final` fields: modifiers are
-/// anonymous tokens in tree-sitter-java's grammar, not their own named
-/// child, so the reliable way to find them is a text search over the span
-/// between the declaration's start and its return type — there's nothing
-/// else that could appear there) unless `unfiltered` is set, in which case
+/// `final` methods excluded, detected by modifier token the same way
+/// `fields.rs`'s `fields_in_class_body` detects `static`/`final` fields)
+/// unless `unfiltered` is set, in which case
 /// every method is included regardless of modifiers — completion's
 /// `this.`/`super.` case, where code inside the same class can call any of
 /// its own members (`SPEC.md` §4).
@@ -96,30 +93,20 @@ fn method_signature(node: Node, source: &str, unfiltered: bool) -> Option<Method
     }
     let type_node = node.child_by_field_name("type")?;
     let name_node = node.child_by_field_name("name")?;
-    if !unfiltered {
-        let modifiers_text = &source[node.start_byte()..type_node.start_byte()];
-        if modifiers_text.contains("static") || modifiers_text.contains("private") || modifiers_text.contains("final") {
-            return None;
-        }
+    if !unfiltered && ["static", "private", "final"].iter().any(|m| crate::fields::has_modifier(node, m)) {
+        return None;
     }
 
     let params_node = node.child_by_field_name("parameters")?;
     let mut params = Vec::new();
     let mut param_cursor = params_node.walk();
     for param in params_node.children(&mut param_cursor) {
-        if param.kind() != "formal_parameter" {
-            continue;
-        }
-        let Some(ptype) = param.child_by_field_name("type") else {
-            continue;
+        let param = match param.kind() {
+            "formal_parameter" => formal_parameter(param, source),
+            "spread_parameter" => spread_parameter(param, source),
+            _ => None,
         };
-        let Some(pname) = param.child_by_field_name("name") else {
-            continue;
-        };
-        params.push((
-            source[ptype.byte_range()].to_string(),
-            source[pname.byte_range()].to_string(),
-        ));
+        params.extend(param);
     }
 
     Some(MethodSignature {
@@ -127,6 +114,27 @@ fn method_signature(node: Node, source: &str, unfiltered: bool) -> Option<Method
         return_type: source[type_node.byte_range()].to_string(),
         params,
     })
+}
+
+fn formal_parameter(param: Node, source: &str) -> Option<(String, String)> {
+    let ptype = param.child_by_field_name("type")?;
+    let pname = param.child_by_field_name("name")?;
+    Some((source[ptype.byte_range()].to_string(), source[pname.byte_range()].to_string()))
+}
+
+/// A varargs parameter (`Object... args`). tree-sitter-java gives it no
+/// field names: its type is the named child that is neither a modifier nor
+/// the declarator, and the `...` stays part of the type so a generated
+/// override still declares varargs.
+fn spread_parameter(param: Node, source: &str) -> Option<(String, String)> {
+    let mut cursor = param.walk();
+    let children: Vec<Node> = param.named_children(&mut cursor).collect();
+    let ptype = children.iter().find(|c| {
+        !matches!(c.kind(), "modifiers" | "annotation" | "marker_annotation" | "variable_declarator")
+    })?;
+    let declarator = children.iter().find(|c| c.kind() == "variable_declarator")?;
+    let pname = declarator.child_by_field_name("name")?;
+    Some((format!("{}...", &source[ptype.byte_range()]), source[pname.byte_range()].to_string()))
 }
 
 /// Every overridable method declared directly in `type_name`'s class or

@@ -256,19 +256,22 @@ pub fn show(ui: &mut egui::Ui, root: &FlameNode, state: &mut FlameGraphState) {
     });
 }
 
-/// Truncates `name` with a trailing ellipsis to roughly fit `width` points at
+/// Truncates `name` with a leading ellipsis to roughly fit `width` points at
 /// the 11pt monospace label size (~6.6 px/char), keeping the most specific
-/// tail of a long `pkg/Class.method` readable rather than cutting it blindly.
+/// tail of a long `pkg/Class.method` readable — the class and method, which
+/// is what tells sibling frames apart; frames from one package all share
+/// the prefix.
 fn elide(name: &str, width: f32) -> String {
     let max_chars = ((width - 8.0) / 6.6).floor().max(1.0) as usize;
-    if name.chars().count() <= max_chars {
+    let len = name.chars().count();
+    if len <= max_chars {
         return name.to_string();
     }
     if max_chars <= 1 {
         return "…".to_string();
     }
-    let kept: String = name.chars().take(max_chars - 1).collect();
-    format!("{kept}…")
+    let kept: String = name.chars().skip(len - (max_chars - 1)).collect();
+    format!("…{kept}")
 }
 
 #[cfg(test)]

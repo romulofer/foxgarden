@@ -46,8 +46,15 @@ const LIGHT_LINE_NUMBER: Color32 = Color32::from_rgb(160, 160, 160);
 /// Deliberately subtle — a passive, read-only "here's where else this word
 /// appears" cue, not a selection, so it must never compete visually with
 /// `egui::Visuals::selection`'s own background fill.
+///
+/// The dark values are premultiplied with channels above alpha, which egui
+/// blends additively: on a dark background that reads as a faint glow, and
+/// it is what they were tuned against. On the light background the same
+/// trick adds past 255 and clamps to white, so the light values are proper
+/// unmultiplied (tinting) colors — see `light_translucent_colors_tint_
+/// rather_than_brighten` in `apply_test`.
 const DARK_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(140, 140, 140, 55);
-const LIGHT_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_premultiplied(90, 90, 90, 35);
+const LIGHT_OCCURRENCE_HIGHLIGHT: Color32 = Color32::from_rgba_unmultiplied_const(90, 90, 90, 35);
 
 /// Diff gutter marks (`PLAN.md` Track 9 Phase 1) — the same green/red/blue
 /// vocabulary every real diff gutter (VS Code, IntelliJ) already uses, so
@@ -89,7 +96,7 @@ const LIGHT_RUN_MARKER: Color32 = Color32::from_rgb(56, 132, 60);
 const DARK_RUN_MARKER_HOVERED: Color32 = Color32::from_rgb(124, 214, 128);
 const LIGHT_RUN_MARKER_HOVERED: Color32 = Color32::from_rgb(30, 104, 34);
 const DARK_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(229, 192, 84, 40);
-const LIGHT_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_premultiplied(181, 137, 0, 30);
+const LIGHT_DEBUG_CURRENT_LINE: Color32 = Color32::from_rgba_unmultiplied_const(181, 137, 0, 30);
 
 /// A quick-fix lightbulb (`PLAN.md` Track 15 Phase 1) — amber, the same
 /// "actionable suggestion" hue real IDEs already use for this exact
@@ -101,16 +108,18 @@ const LIGHT_LIGHTBULB: Color32 = Color32::from_rgb(181, 137, 0);
 /// A matched bracket pair's outline — distinct from `occurrence_highlight`'s
 /// fill (a box outline reads as "these two characters pair up," not "this
 /// span is selected/repeated," so it shouldn't share that fill's visual
-/// vocabulary) and, unlike it, the same color in both themes: it's already
-/// deliberately muted via alpha rather than via a theme-specific hue pick.
-const BRACKET_MATCH: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 110);
+/// vocabulary). The same grey in both themes, but blended additively in
+/// the dark one and as a tint in the light one, for the reason given on
+/// `DARK_OCCURRENCE_HIGHLIGHT`.
+const DARK_BRACKET_MATCH: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 110);
+const LIGHT_BRACKET_MATCH: Color32 = Color32::from_rgba_unmultiplied_const(120, 120, 120, 110);
 
 /// Whitespace markers and indentation guides are both "structural, not
 /// content" cues — deliberately fainter than `line_number` (already the
 /// dimmest text-like color in the palette) so a line dense with spaces
 /// doesn't out-compete the code itself for attention.
 const DARK_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 60);
-const LIGHT_STRUCTURE: Color32 = Color32::from_rgba_premultiplied(120, 120, 120, 70);
+const LIGHT_STRUCTURE: Color32 = Color32::from_rgba_unmultiplied_const(120, 120, 120, 70);
 
 /// Background band behind sticky-scroll's pinned header lines. Deliberately
 /// **opaque** (unlike the alpha-blended structural cues above): its whole job
@@ -160,8 +169,8 @@ pub fn occurrence_highlight(dark_mode: bool) -> Color32 {
     }
 }
 
-pub fn bracket_match(_dark_mode: bool) -> Color32 {
-    BRACKET_MATCH
+pub fn bracket_match(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_BRACKET_MATCH } else { LIGHT_BRACKET_MATCH }
 }
 
 pub fn structure(dark_mode: bool) -> Color32 {

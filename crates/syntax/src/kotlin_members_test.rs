@@ -154,3 +154,22 @@ fn kotlin_functions_in_type_defaults_to_unit_with_no_explicit_return_type() {
     let functions = kotlin_functions_in_type(&tree, source, "Foo");
     assert_eq!(functions[0].return_type, "Unit");
 }
+
+/// The receiver of an extension function is a type too, but it comes before
+/// the name; the return type is the one after the parameter list.
+#[test]
+fn an_extension_functions_return_type_is_not_its_receiver() {
+    let source = "class Foo {\n    fun String.shout(): Int = 1\n    fun quiet() /* note */ { }\n}\n";
+    let tree = parsed(source);
+    let functions = kotlin_functions_in_type(&tree, source, "Foo");
+    let signatures: Vec<(&str, &str)> = functions.iter().map(|f| (f.name.as_str(), f.return_type.as_str())).collect();
+    assert_eq!(signatures, [("shout", "Int"), ("quiet", "Unit")]);
+}
+
+#[test]
+fn an_annotation_argument_mentioning_private_does_not_hide_a_function() {
+    let source = "class Foo {\n    @Suppress(\"privateApi\") fun open() {}\n    private fun hidden() {}\n}\n";
+    let tree = parsed(source);
+    let names: Vec<String> = kotlin_functions_in_type(&tree, source, "Foo").into_iter().map(|f| f.name).collect();
+    assert_eq!(names, ["open"]);
+}

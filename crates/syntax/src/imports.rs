@@ -60,9 +60,19 @@ pub fn existing_imports(tree: &Tree, source: &str, language: Language) -> Vec<Ex
 /// `;`/whitespace from a raw `import_declaration`/`import` node's text,
 /// leaving just the dotted path.
 fn import_path_text(text: &str) -> &str {
-    let text = text.strip_prefix("import").unwrap_or(text).trim_start();
-    let text = text.strip_prefix("static").unwrap_or(text).trim_start();
+    let text = strip_keyword(text, "import");
+    let text = strip_keyword(text, "static");
     text.trim_end_matches(';').trim()
+}
+
+/// `text` without a leading `keyword`, only when it is the whole word — a
+/// package that merely starts with the same letters (`staticfiles`,
+/// `statistics`) is part of the path, not a modifier.
+fn strip_keyword<'a>(text: &'a str, keyword: &str) -> &'a str {
+    match text.strip_prefix(keyword) {
+        Some(rest) if rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => text,
+    }
 }
 
 /// Where a new `path` belongs among `existing` (assumed already in

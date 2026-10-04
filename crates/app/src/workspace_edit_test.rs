@@ -76,3 +76,14 @@ fn edits_by_file_skips_a_document_change_operation() {
     };
     assert!(edits_by_file(&workspace_edit).is_empty());
 }
+
+/// Two inserts at one position appear in the order the server listed them.
+#[test]
+fn apply_text_edits_keeps_same_position_inserts_in_array_order() {
+    let text = "package a;\n\nclass A {}\n";
+    let edits = [edit(2, 0, 2, 0, "import a.A;\n"), edit(2, 0, 2, 0, "import b.B;\n")];
+    assert_eq!(
+        apply_text_edits(text, &edits).unwrap(),
+        "package a;\n\nimport a.A;\nimport b.B;\nclass A {}\n"
+    );
+}

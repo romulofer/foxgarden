@@ -28,7 +28,6 @@ mod shell;
 )]
 pub(super) use cache::hash_hidden;
 pub(super) use input::Caret;
-pub(super) use render::ContentKey;
 pub(super) use render::{HighlightSpan, TextAreaOutput};
 pub use shell::peek_caret;
 pub(super) use shell::{char_offset_for_pos, set_caret, show as show_interactive};
@@ -219,7 +218,6 @@ mod text_area_test;
 pub(super) fn visible_line_window(
     ui: &mut egui::Ui,
     id: egui::Id,
-    content: ContentKey,
     font_id: &egui::FontId,
     word_wrap: bool,
     hidden: &[Range<usize>],
@@ -233,7 +231,7 @@ pub(super) fn visible_line_window(
     let scroll_y = (clip.top() - ui.cursor().top()).max(0.0);
 
     if word_wrap {
-        let counts = render::cached_row_counts(ui, id, content, font_id, ui.available_width(), hidden, total_lines);
+        let counts = render::peek_row_counts(ui, id, hidden, total_lines);
         let prefix = prefix_rows(&counts);
         let lines = visible_lines(scroll_y, clip.height(), row_height, &prefix);
         (!lines.is_empty()).then_some(lines)

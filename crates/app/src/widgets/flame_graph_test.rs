@@ -102,6 +102,13 @@ fn frame_color_is_deterministic_per_name() {
 fn elide_keeps_short_names_and_truncates_long_ones() {
     assert_eq!(elide("main", 200.0), "main");
     let long = elide("com.example.very.long.ClassName.method", 40.0);
-    assert!(long.ends_with('…'));
+    assert!(long.starts_with('…'));
     assert!(long.chars().count() < "com.example.very.long.ClassName.method".chars().count());
+}
+
+/// Frames from one package share their prefix, so the tail is what tells
+/// them apart.
+#[test]
+fn elide_keeps_the_class_and_method_not_the_package() {
+    assert_eq!(elide("com/example/service/OrderService.placeOrder", 120.0), "…vice.placeOrder");
 }

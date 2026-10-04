@@ -35,26 +35,29 @@ pub fn compose_file(project_root: &Path) -> Option<PathBuf> {
 }
 
 /// A valid, stable `docker build -t` tag derived from the project
-/// directory's own name — Docker tags must start with an alphanumeric and
-/// contain only `[a-zA-Z0-9_.-]` afterward, which an arbitrary directory
-/// name (spaces, accents, a leading dot) isn't guaranteed to satisfy.
-/// `foxgarden-` prefixed so a build this app starts is visibly
-/// distinguishable in `docker images`/`docker ps` from one the user built
-/// by hand.
+/// directory's own name. A repository name is lowercase alphanumeric runs
+/// joined by single separators, never starting or ending with one, which an
+/// arbitrary directory name (spaces, accents, brackets, a leading dot)
+/// isn't guaranteed to satisfy — so every other character becomes `-`, runs
+/// of them collapse into one, and the ends are trimmed. `foxgarden-`
+/// prefixed so a build this app starts is visibly distinguishable in
+/// `docker images`/`docker ps` from one the user built by hand.
 fn docker_image_tag(project_root: &Path) -> String {
-    let name = project_root.file_name().and_then(|n| n.to_str()).unwrap_or("project");
-    let sanitized: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("foxgarden-{sanitized}")
+    let name = project_root.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let mut sanitized = String::new();
+    for c in name.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            sanitized.push(c);
+        } else if !sanitized.is_empty() && !sanitized.ends_with('-') {
+            sanitized.push('-');
+        }
+    }
+    let sanitized = sanitized.trim_end_matches('-');
+    if sanitized.is_empty() {
+        "foxgarden-project".to_string()
+    } else {
+        format!("foxgarden-{sanitized}")
+    }
 }
 
 /// Assembles (but does not spawn) `docker build` for the `Dockerfile` at

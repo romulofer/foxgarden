@@ -39,6 +39,16 @@ pub enum RegisterError {
         language_id: LanguageId,
         extension_id: String,
     },
+    /// A file extension another language already claims. Detection is by
+    /// extension, so only one language can answer for it; letting the second
+    /// claim silently replace the first made which language a `.xml` file is
+    /// depend on registration order.
+    DuplicateFileExtension {
+        file_extension: String,
+        language_id: LanguageId,
+        extension_id: String,
+        already_claimed_by: LanguageId,
+    },
     /// Two grammars for one language. Unlike language servers, of which a
     /// language may legitimately have several, a language parses with
     /// exactly one grammar.
@@ -101,6 +111,15 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} refers to language {language_id}, which no registered extension contributes"
             ),
+            Self::DuplicateFileExtension {
+                file_extension,
+                language_id,
+                extension_id,
+                already_claimed_by,
+            } => write!(
+                f,
+                "extension {extension_id} claims .{file_extension} for language {language_id}, already claimed by {already_claimed_by}"
+            ),
             Self::DuplicateGrammar {
                 language_id,
                 extension_id,
@@ -137,6 +156,23 @@ impl std::fmt::Display for RegisterError {
 
 impl std::error::Error for RegisterError {}
 
+/// `id` as a `&'static str`, leaked once per distinct id for the life of the
+/// process. Leaking is the bargain `RegisteredLanguage::static_id` and
+/// `BuildToolHandle::id` make (nothing registered is ever unregistered), but
+/// leaking per *registration* grew without bound wherever registries are
+/// built repeatedly — every test that builds the shipped registry.
+fn intern(id: &str) -> &'static str {
+    static INTERNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
+        std::sync::OnceLock::new();
+    let mut interned = INTERNED.get_or_init(Default::default).lock().expect("interned ids lock");
+    if let Some(existing) = interned.get(id) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(id.to_string().into_boxed_str());
+    interned.insert(leaked);
+    leaked
+}
+
 /// Everything every registered extension contributes, and the lookups the
 /// core does against it.
 ///
@@ -162,6 +198,9 @@ pub struct Registry {
     /// owns it in `extensions`, for fast dynamic dispatch.
     server_extension: HashMap<String, usize>,
     languages: HashMap<LanguageId, RegisteredLanguage>,
+    /// Language ids in registration order, so iterating every language is
+    /// the same order on every run (the map's own order is randomized).
+    language_order: Vec<LanguageId>,
     language_servers: Vec<LanguageServerContribution>,
     /// Registration order, which is also detection order: the first
     /// registered tool whose marker file exists wins. A `Vec` rather than a
@@ -246,6 +285,26 @@ impl Registry {
                 });
             }
             incoming.push(&language.id);
+        }
+
+        let mut extensions_seen: Vec<(String, &LanguageId)> = Vec::new();
+        for language in &contributions.languages {
+            for file_extension in &language.file_extensions {
+                let key = file_extension.to_lowercase();
+                let claimed = self
+                    .index
+                    .by_extension(&key)
+                    .or_else(|| extensions_seen.iter().find(|(seen, _)| *seen == key).map(|(_, id)| *id));
+                if let Some(owner) = claimed {
+                    return Err(RegisterError::DuplicateFileExtension {
+                        file_extension: key,
+                        language_id: language.id.clone(),
+                        extension_id: manifest.id.clone(),
+                        already_claimed_by: owner.clone(),
+                    });
+                }
+                extensions_seen.push((key, &language.id));
+            }
         }
 
         let known = |id: &LanguageId| self.languages.contains_key(id) || incoming.contains(&id);
@@ -344,7 +403,8 @@ impl Registry {
         self.manifests.push(manifest);
         for language in contributions.languages {
             self.index.insert(&language);
-            let static_id: &'static str = Box::leak(language.id.clone().into_boxed_str());
+            let static_id = intern(&language.id);
+            self.language_order.push(language.id.clone());
             self.languages.insert(
                 language.id.clone(),
                 RegisteredLanguage {
@@ -352,17 +412,19 @@ impl Registry {
                     static_id,
                     extension_id: extension_id.clone(),
                     grammar: None,
+                    grammar_extension_id: None,
                 },
             );
         }
         for grammar in contributions.grammars {
             if let Some(registered) = self.languages.get_mut(&grammar.language_id) {
                 registered.grammar = Some(grammar);
+                registered.grammar_extension_id = Some(extension_id.clone());
             }
         }
         self.language_servers.extend(contributions.language_servers);
         for tool in contributions.build_tools {
-            let static_id: &'static str = Box::leak(tool.id.clone().into_boxed_str());
+            let static_id = intern(&tool.id);
             self.build_tools.push((tool, static_id, extension_index));
         }
         for scaffold in contributions.scaffolds {
@@ -380,23 +442,36 @@ impl Registry {
         self.extensions.iter().flat_map(|e| e.jdk_runtimes()).collect()
     }
 
-    /// How to start `server_id`, as the owning extension sees fit. Returns
-    /// `None` when no registered extension owns that server id.
+    /// How to start `server_id`, as the owning extension sees fit — or, when
+    /// it has nothing to add (`None`), exactly as it declared the server.
+    /// Returns `None` only when no registered extension owns that server id.
     pub fn resolve_server_start(
         &self,
         server_id: &str,
         context: &ServerStartContext,
     ) -> Option<Result<ResolvedServerStart, String>> {
         let idx = self.server_extension.get(server_id)?;
-        self.extensions[*idx].resolve_server_start(server_id, context)
+        if let Some(resolved) = self.extensions[*idx].resolve_server_start(server_id, context) {
+            return Some(resolved);
+        }
+        let server = self.language_servers.iter().find(|s| s.id == server_id)?;
+        let configured = context.configured_binary.trim();
+        let binary = if configured.is_empty() { server.binary_name.as_str() } else { configured };
+        Some(Ok(ResolvedServerStart {
+            binary: std::path::PathBuf::from(binary),
+            args: server.args.clone(),
+            initialization_options: server.initialization_options.clone(),
+            restart_key: String::new(),
+        }))
     }
 
     pub fn language(&self, id: &str) -> Option<&RegisteredLanguage> {
         self.languages.get(id)
     }
 
+    /// Every registered language, in registration order.
     pub fn languages(&self) -> impl Iterator<Item = &RegisteredLanguage> {
-        self.languages.values()
+        self.language_order.iter().filter_map(|id| self.languages.get(id))
     }
 
     /// The language for a file extension (no leading dot). Replaces

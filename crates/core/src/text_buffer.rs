@@ -14,8 +14,15 @@
 //! That's deliberately conservative — taking a `&mut` and then not editing
 //! still counts as a change, which can only cost one redundant recompute,
 //! never a stale cache showing text that isn't there.
+//!
+//! Revisions come from one process-wide counter rather than starting at 0
+//! per buffer. The caches are keyed by a path-derived widget id plus the
+//! revision, so a file closed and reopened after changing on disk would
+//! otherwise get a fresh buffer at revision 0 that matches the old one's
+//! cache entries and paints the old text's highlights over the new text.
 
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ropey::Rope;
 
@@ -25,9 +32,18 @@ pub struct TextBuffer {
     revision: u64,
 }
 
+/// A revision no buffer in this process has had before.
+fn next_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 impl TextBuffer {
     pub fn new(rope: Rope) -> Self {
-        Self { rope, revision: 0 }
+        Self {
+            rope,
+            revision: next_revision(),
+        }
     }
 
     /// A value that changes whenever this buffer might have. Cache keys
@@ -51,7 +67,7 @@ impl TextBuffer {
     /// noticing.
     pub fn replace(&mut self, rope: Rope) {
         self.rope = rope;
-        self.revision += 1;
+        self.revision = next_revision();
     }
 }
 
@@ -71,7 +87,7 @@ impl Deref for TextBuffer {
 
 impl DerefMut for TextBuffer {
     fn deref_mut(&mut self) -> &mut Rope {
-        self.revision += 1;
+        self.revision = next_revision();
         &mut self.rope
     }
 }

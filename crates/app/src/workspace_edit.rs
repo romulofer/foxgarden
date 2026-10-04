@@ -117,18 +117,24 @@ fn apply_file_edits(
 /// own doc comment (in `lsp-types` itself) already guarantees a real
 /// server's edits for one file never overlap, so this never needs to
 /// reconcile two edits touching the same range.
+///
+/// Several inserts at the *same* position are allowed, though, and LSP says
+/// their order in the array is the order their text appears in. Among those
+/// the later one is applied first, so each earlier one then lands in front
+/// of it — a plain stable sort on the start alone would reverse them.
 fn apply_text_edits(text: &str, edits: &[lsp_types::TextEdit]) -> Result<String, String> {
-    let mut ranges: Vec<(std::ops::Range<usize>, &str)> = edits
+    let mut ranges: Vec<(usize, std::ops::Range<usize>, &str)> = edits
         .iter()
-        .map(|edit| {
+        .enumerate()
+        .map(|(order, edit)| {
             utf16_range_to_bytes(text, edit.range)
-                .map(|range| (range, edit.new_text.as_str()))
+                .map(|range| (order, range, edit.new_text.as_str()))
                 .ok_or_else(|| "an edit's own range fell outside the file's current text".to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    ranges.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    ranges.sort_by_key(|(order, range, _)| std::cmp::Reverse((range.start, *order)));
     let mut result = text.to_string();
-    for (range, new_text) in ranges {
+    for (_, range, new_text) in ranges {
         result.replace_range(range, new_text);
     }
     Ok(result)

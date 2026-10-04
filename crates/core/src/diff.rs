@@ -173,14 +173,21 @@ pub fn git_file_diff_cached(path: &Path, root: &Path) -> Result<FileDiff, GitDif
 /// a captured fixture. A hunk header is recognized by `"@@ "` at the start
 /// of a line — real content lines never start that way, since every one of
 /// them starts with `' '`/`'+'`/`'-'` instead.
+///
+/// Lines are split on `\n` only, so a CRLF file's content lines keep their
+/// `\r`: `hunk_patch` must hand `git apply` the exact bytes of every context
+/// and removed line, and `str::lines` would drop the `\r` and make the patch
+/// match nothing. The header's own trailing text is an excerpt of the file
+/// that git ignores when applying, so it is trimmed for display.
 pub fn parse_file_diff(diff: &str) -> FileDiff {
     let mut preamble = String::new();
     let mut hunks: Vec<RawHunk> = Vec::new();
 
-    for line in diff.lines() {
+    for line in diff.split_inclusive('\n') {
+        let line = line.strip_suffix('\n').unwrap_or(line);
         if line.starts_with("@@ ") {
             hunks.push(RawHunk {
-                header: line.to_string(),
+                header: line.trim_end_matches('\r').to_string(),
                 lines: Vec::new(),
             });
         } else if let Some(hunk) = hunks.last_mut() {

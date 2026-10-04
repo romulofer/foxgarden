@@ -58,3 +58,21 @@ fn idle_mode_ignores_focus_state() {
         "idle mode fires even while unfocused, unlike OnFocusLoss"
     );
 }
+
+/// Once per idle stretch: later frames of the same stretch don't save again
+/// until new activity starts a new one.
+#[test]
+fn idle_mode_fires_once_per_idle_stretch() {
+    let mut state = AutoSaveState::default();
+    let settings = AutoSaveSettings {
+        enabled: true,
+        mode: AutoSaveMode::AfterIdle,
+        idle_seconds: 10,
+    };
+    state.record_activity(0.0);
+    assert!(state.tick(settings, true, 10.0));
+    assert!(!state.tick(settings, true, 11.0), "same idle stretch: no second save");
+    assert!(!state.tick(settings, true, 60.0));
+    state.record_activity(61.0);
+    assert!(state.tick(settings, true, 71.0), "a new stretch fires again");
+}

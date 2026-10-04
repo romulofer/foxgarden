@@ -392,3 +392,28 @@ fn spotbugs_findings_to_diagnostics_resolves_against_the_real_file_and_drops_unr
     assert_eq!(diagnostics[0].1.severity, Severity::Error);
     assert_eq!(diagnostics[0].1.message, "found");
 }
+
+/// A tool that failed to start prints nothing to stdout; that must come
+/// back as its error, not as an empty (clean) report.
+#[cfg(unix)]
+#[test]
+fn a_run_that_printed_no_report_is_an_error_carrying_its_stderr() {
+    let output = std::process::Command::new("sh")
+        .args(["-c", "echo 'Unable to find: bogus.xml' >&2; exit 254"])
+        .output()
+        .unwrap();
+    let error = report_or_error("Checkstyle", &output).unwrap_err().to_string();
+    assert!(error.contains("Checkstyle"), "{error}");
+    assert!(error.contains("bogus.xml"), "{error}");
+}
+
+/// A non-zero exit with a report is a run that found something.
+#[cfg(unix)]
+#[test]
+fn a_report_is_returned_even_when_the_tool_exits_non_zero() {
+    let output = std::process::Command::new("sh")
+        .args(["-c", "echo '<checkstyle/>'; exit 3"])
+        .output()
+        .unwrap();
+    assert_eq!(report_or_error("Checkstyle", &output).unwrap().trim(), "<checkstyle/>");
+}

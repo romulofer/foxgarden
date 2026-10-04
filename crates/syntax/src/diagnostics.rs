@@ -1,7 +1,14 @@
 use fg_core::{Diagnostic, Severity};
 use tree_sitter::{Node, Tree};
 
+/// Descends only into subtrees that contain an error (`has_error`), so a
+/// valid file costs one check at the root rather than a visit to every node
+/// on every reparse. An `ERROR` node's own squiggle already covers anything
+/// inside it, so its children are not reported again on top of it.
 fn walk_errors(node: Node, out: &mut Vec<Diagnostic>) {
+    if !node.has_error() {
+        return;
+    }
     if node.is_missing() {
         out.push(Diagnostic {
             range: node.byte_range(),
@@ -17,6 +24,7 @@ fn walk_errors(node: Node, out: &mut Vec<Diagnostic>) {
             severity: Severity::Error,
             message: "syntax error".to_string(),
         });
+        return;
     }
 
     let mut cursor = node.walk();

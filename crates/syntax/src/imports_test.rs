@@ -96,3 +96,15 @@ fn import_insertion_with_no_existing_imports_reports_after_last_zero() {
         ImportInsertion::AfterLast(0)
     );
 }
+
+/// A package that only starts with the letters of `static` keeps them.
+#[test]
+fn a_package_starting_with_static_is_not_mistaken_for_the_modifier() {
+    let source = "import staticfiles.Config;\n\nclass Foo {}\n";
+    let tree = parsed(Language::Java, source);
+    assert_eq!(existing_imports(&tree, source, Language::Java)[0].path, "staticfiles.Config");
+
+    let source = "import statistics.Mean\n\nclass Foo\n";
+    let tree = parsed(Language::Kotlin, source);
+    assert_eq!(existing_imports(&tree, source, Language::Kotlin)[0].path, "statistics.Mean");
+}

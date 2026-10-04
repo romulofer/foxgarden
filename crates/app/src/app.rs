@@ -168,6 +168,8 @@ pub struct FoxGardenApp {
     /// Drafts found at startup, waiting for the user to say whether to
     /// restore them (`show_draft_restore_prompt`).
     pending_drafts: Vec<fg_core::Draft>,
+    /// The project root `pending_drafts` was last read for.
+    drafts_checked_for: Option<PathBuf>,
     /// Project roots opened before, most recent first — offered on the
     /// welcome screen and persisted across restarts.
     recent_projects: Vec<PathBuf>,
@@ -1369,6 +1371,7 @@ impl FoxGardenApp {
             command_palette: crate::panels::command_palette::CommandPaletteState::default(),
             drafts_written_at: 0.0,
             pending_drafts: Vec::new(),
+            drafts_checked_for: None,
             recent_projects,
             generate_dialog: None,
             generate_method_dialog: None,
@@ -1493,6 +1496,11 @@ impl FoxGardenApp {
             let Some(root) = &doc.project_root else {
                 continue;
             };
+            // A draft still waiting on the restore prompt is the only copy
+            // of that work; its tab being clean is no reason to discard it.
+            if self.pending_drafts.iter().any(|draft| draft.file_path == doc.path()) {
+                continue;
+            }
             if doc.is_dirty() {
                 let _ = fg_core::write_draft(root, doc.path(), &doc.buffer.to_string());
             } else {
@@ -1768,16 +1776,30 @@ impl eframe::App for FoxGardenApp {
             self.auto_save_state.record_activity(now);
         }
         let auto_save_fired = self.auto_save_state.tick(self.auto_save_settings, focused, now);
-        if now - self.drafts_written_at >= DRAFT_INTERVAL_SECONDS {
-            self.drafts_written_at = now;
-            self.write_drafts();
-        }
 
         // Computed once and reused at every `git diff` trigger point below
         // (open/save/reload) — `None` when no project is open, in which
         // case each of those points is simply a no-op (nothing to diff
         // against).
         let diff_root = self.state.project.as_ref().map(|p| p.root.clone());
+        // Whatever the last session left unsaved in this project: read once,
+        // on the frame it's opened (including the restored session's own
+        // project at startup), rather than polled. Keyed on its own field,
+        // not on `recent_projects`: a restored session's project is already
+        // first in that list, so keying on it never read drafts at startup —
+        // exactly the crash-recovery case drafts exist for. And read before
+        // `write_drafts` below, whose first run would otherwise discard the
+        // drafts of every restored (still clean) tab before anyone saw them.
+        if let Some(root) = &diff_root
+            && self.drafts_checked_for.as_ref() != Some(root)
+        {
+            self.drafts_checked_for = Some(root.clone());
+            self.pending_drafts = fg_core::pending_drafts(root);
+        }
+        if now - self.drafts_written_at >= DRAFT_INTERVAL_SECONDS {
+            self.drafts_written_at = now;
+            self.write_drafts();
+        }
         // Recorded here rather than at each `open_project` call site (the
         // side panel's own button, the menu, the welcome screen, a restored
         // session): whatever route was taken, this frame sees the result.
@@ -1785,10 +1807,6 @@ impl eframe::App for FoxGardenApp {
             && self.recent_projects.first() != Some(root)
         {
             crate::panels::welcome::remember_project(&mut self.recent_projects, root);
-            // Whatever the last session left unsaved in this project: read
-            // once, here, on the frame it's opened (including the restored
-            // session's own project at startup), rather than polled.
-            self.pending_drafts = fg_core::pending_drafts(root);
         }
 
         sync_watched_dirs(&mut self.file_watcher, &mut self.watched_dirs, &self.state);
@@ -1865,8 +1883,11 @@ impl eframe::App for FoxGardenApp {
             &self.state.languages,
             wake,
         );
-        if self.last_error.is_none() {
-            self.last_error = lsp_errors.into_iter().next();
+        // One-shot: a lifecycle error not reported now is never seen. Through
+        // `errors::report`, so it joins whatever is already showing instead
+        // of being dropped, and every server that failed this frame is named.
+        for error in lsp_errors {
+            crate::errors::report(&mut self.last_error, error);
         }
         // A handshake response or an unprompted `publishDiagnostics` can
         // land on the background reader thread at any time, not just in
@@ -1880,6 +1901,9 @@ impl eframe::App for FoxGardenApp {
             || self.find_references.wants_repaint()
             || self.rename.wants_repaint()
             || self.code_action_gutter.wants_repaint()
+            // DAP traffic has no waker of its own: without this, a
+            // breakpoint hit while the mouse is still never shows.
+            || self.debug_state.is_running()
         {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
@@ -2219,8 +2243,9 @@ impl eframe::App for FoxGardenApp {
 
         if menu_outcome.open_run_configs_request
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
+            && let Err(err) = self.run_configs_dialog.open(&root)
         {
-            self.run_configs_dialog.open(&root);
+            crate::errors::report(&mut self.last_error, msg::run_configs_unreadable(&err));
         }
 
         if menu_outcome.build_request
@@ -2248,14 +2273,15 @@ impl eframe::App for FoxGardenApp {
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
             match self.state.languages.detect_build_tool(&root) {
-                Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
-                    Some(config) => match self.build_state.start_run(&root, &tool, config) {
+                Some(tool) => match fg_core::load_run_configs(&root).map(|configs| configs.into_iter().next()) {
+                    Ok(Some(config)) => match self.build_state.start_run(&root, &tool, config) {
                         Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                         Err(err) => {
                             crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
                         }
                     },
-                    None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
+                    Ok(None) => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
+                    Err(err) => crate::errors::report(&mut self.last_error, msg::run_configs_unreadable(&err)),
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
             }
@@ -2336,8 +2362,8 @@ impl eframe::App for FoxGardenApp {
                 self.debug_state.stop();
             } else {
                 match self.state.languages.detect_build_tool(&root) {
-                    Some(tool) => match fg_core::load_run_configs(&root).into_iter().next() {
-                        Some(config) => {
+                    Some(tool) => match fg_core::load_run_configs(&root).map(|configs| configs.into_iter().next()) {
+                        Ok(Some(config)) => {
                             let initial_breakpoints = self
                                 .state
                                 .open_tabs
@@ -2352,7 +2378,8 @@ impl eframe::App for FoxGardenApp {
                                 crate::errors::report(&mut self.last_error, err);
                             }
                         }
-                        None => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
+                        Ok(None) => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
+                        Err(err) => crate::errors::report(&mut self.last_error, msg::run_configs_unreadable(&err)),
                     },
                     None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
                 }
@@ -2813,18 +2840,9 @@ impl eframe::App for FoxGardenApp {
         // anything meaningful would be actively misleading.
         if let Some(target) = self.goto_definition.poll(&mut self.lsp) {
             let is_decompiled = matches!(target, GotoDefinitionTarget::Ready { .. });
-            let (path, byte) = match target {
-                GotoDefinitionTarget::Ready { path, byte_offset } => (path, Some(byte_offset)),
-                GotoDefinitionTarget::File { path, range } => {
-                    let byte = self
-                        .state
-                        .open_tabs
-                        .iter()
-                        .find(|doc| doc.path() == path.as_path())
-                        .and_then(|doc| crate::lsp_state::utf16_range_to_bytes(&doc.buffer.to_string(), range))
-                        .map(|range| range.start);
-                    (path, byte)
-                }
+            let (path, byte_offset, range) = match target {
+                GotoDefinitionTarget::Ready { path, byte_offset } => (path, Some(byte_offset), None),
+                GotoDefinitionTarget::File { path, range } => (path, None, Some(range)),
             };
             open_path(
                 &mut self.state,
@@ -2834,6 +2852,17 @@ impl eframe::App for FoxGardenApp {
                 diff_root.clone(),
                 path.clone(),
             );
+            // Converted only now that `open_path` has run: a target in a
+            // file with no tab yet has no buffer to convert against before.
+            let byte = byte_offset.or_else(|| {
+                let range = range?;
+                self.state
+                    .open_tabs
+                    .iter()
+                    .find(|doc| doc.path() == path.as_path())
+                    .and_then(|doc| crate::lsp_state::utf16_range_to_bytes(&doc.buffer.to_string(), range))
+                    .map(|range| range.start)
+            });
             if let Some(byte) = byte {
                 self.pending_navigation = Some((path.clone(), byte));
             }

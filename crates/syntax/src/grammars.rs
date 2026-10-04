@@ -182,7 +182,8 @@ fn install_into(installed: &mut HashMap<Language, Installed>, registry: &Registr
         if installed.contains_key(&language) {
             continue;
         }
-        match load(&grammar.source, &grammar.language_id, &registered.extension_id) {
+        let contributor = registered.grammar_extension_id.as_deref().unwrap_or(&registered.extension_id);
+        match load(&grammar.source, &grammar.language_id, contributor) {
             Ok(ts) => {
                 installed.insert(
                     language,

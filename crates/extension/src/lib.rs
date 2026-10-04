@@ -10,10 +10,11 @@
 //! than a matter of discipline — which, given 76 of 138 non-test files
 //! currently name a JVM concept, is the only enforcement worth relying on.
 //!
-//! **Nothing in here is wired into the running app yet, by design.** Phase
-//! 1 only adds the API; Phase 2 makes `fg_core::Language` a lookup against
-//! this registry, and Phase 3 does the same for grammars. The JVM support
-//! that exists today is untouched and still compiled in.
+//! The registry is what the running app consults for every language
+//! question: which language a file is, its grammar, its language servers,
+//! its build tools, what a new project of a kind is made of, and where a
+//! file's run markers go. The JVM support itself lives in the `spring`
+//! extension, compiled in through `fg-languages`.
 //!
 //! The shape follows Zed's own extension host (`../references/zed`,
 //! `crates/extension/src/extension_host_proxy.rs`): an extension declares
@@ -244,8 +245,9 @@ pub struct JdkRuntime {
 #[derive(Debug, Clone, Default)]
 pub struct ServerStartContext {
     /// The binary path the user configured for this server — empty means
-    /// "no path configured yet", which the extension should treat as an
-    /// error rather than a fallback.
+    /// "no path configured yet". An extension may treat that as an error
+    /// (jdt.ls cannot be found on `PATH` by a bare name); a server started
+    /// as declared falls back to its `binary_name`, looked up on `PATH`.
     pub configured_binary: String,
     /// A JVM home hint from settings (empty = auto-detect). Only meaningful
     /// for servers that run on the JVM themselves.
@@ -316,25 +318,15 @@ pub trait Extension: Send + Sync {
     /// (completed JDK scans, changed settings) by returning a different
     /// `restart_key`.
     ///
-    /// The default implementation builds a `ResolvedServerStart` straight
-    /// from the static `LanguageServerContribution` this extension declared
-    /// — correct for extensions whose server configuration is fully static.
-    /// Extensions with dynamic init options (jdt.ls runtimes, debug
-    /// bundles) override this.
-    ///
-    /// Returns `None` when this extension does not own `server_id`.
-    fn resolve_server_start(&self, server_id: &str, context: &ServerStartContext) -> Option<Result<ResolvedServerStart, String>> {
-        let server = self
-            .contributions()
-            .language_servers
-            .into_iter()
-            .find(|s| s.id == server_id)?;
-        Some(Ok(ResolvedServerStart {
-            binary: PathBuf::from(context.configured_binary.trim()),
-            args: server.args,
-            initialization_options: server.initialization_options,
-            restart_key: String::new(),
-        }))
+    /// `None` — the default — means "start it as declared": the registry
+    /// then builds the start from the `LanguageServerContribution` it
+    /// already holds (see `Registry::resolve_server_start`), which is right
+    /// for a server whose configuration is fully static. Extensions with
+    /// dynamic init options (jdt.ls runtimes, debug bundles) override this.
+    /// The default used to rebuild this extension's whole `contributions()`
+    /// on every call just to find one server, which is per-frame work.
+    fn resolve_server_start(&self, _server_id: &str, _context: &ServerStartContext) -> Option<Result<ResolvedServerStart, String>> {
+        None
     }
 
     /// The process that performs `task` for build tool `tool_id`, or `None`
@@ -477,6 +469,11 @@ pub struct RegisteredLanguage {
     /// in an error, and eventually the one to disable.
     pub extension_id: String,
     pub grammar: Option<GrammarContribution>,
+    /// Which extension contributed `grammar`. Not necessarily
+    /// `extension_id`: one extension may supply the grammar for a language
+    /// another declared, and a grammar that fails to load has to be blamed
+    /// on the extension that shipped it.
+    pub grammar_extension_id: Option<String>,
 }
 
 /// Lookup index from a file extension or filename to a language id.

@@ -184,3 +184,14 @@ fn fields_in_type_returns_empty_for_an_unknown_type() {
     let tree = tree_of(source);
     assert_eq!(fields_in_type(&tree, source, "NoSuchType", false), vec![]);
 }
+
+/// Modifiers are read from the modifier tokens, not the declaration's text:
+/// an annotation argument that happens to contain "static" or "final" must
+/// not make a field look static (skipped) or final (no setter).
+#[test]
+fn annotation_arguments_are_not_read_as_modifiers() {
+    let source = "class Foo {\n    @JsonProperty(\"staticUrl\") private String url;\n    @Value(\"${app.final.limit}\") private int limit;\n    private static final int MAX = 1;\n}\n";
+    let classes = classes_in(source);
+    let fields: Vec<(&str, bool)> = classes[0].fields.iter().map(|f| (f.name.as_str(), f.is_final)).collect();
+    assert_eq!(fields, [("url", false), ("limit", false)]);
+}

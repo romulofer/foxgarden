@@ -134,36 +134,43 @@ pub fn kotlin_properties_in_type(tree: &Tree, source: &str, type_name: &str) -> 
     out
 }
 
-/// A function's return type: its one child that isn't a modifier, name,
-/// parameter list, or body. `None` maps to `"Unit"` (Kotlin's default)
-/// when there's no explicit return type.
+/// A function's return type: the type node after its parameter list.
+/// Position matters — an extension function's receiver (`fun String.shout()`)
+/// is a type node too, before the name — and so does kind, since a comment
+/// between the signature and the body, or a `where` clause, is also a named
+/// child there. `None` maps to `"Unit"` (Kotlin's default) when there's no
+/// explicit return type.
 fn return_type_node(node: Node) -> Option<Node> {
+    let params_end = child_by_kind(node, "function_value_parameters")?.end_byte();
     let mut cursor = node.walk();
     node.named_children(&mut cursor).find(|c| {
-        !matches!(
-            c.kind(),
-            "modifiers"
-                | "identifier"
-                | "function_value_parameters"
-                | "type_parameters"
-                | "type_constraints"
-                | "function_body"
-        )
+        c.start_byte() >= params_end
+            && !c.is_extra()
+            && !matches!(c.kind(), "function_body" | "type_constraints")
     })
+}
+
+/// Whether `modifiers` declares `private` visibility — read from its
+/// `visibility_modifier` child, not its text, which also holds annotation
+/// arguments (`@Suppress("privateApi")`).
+fn is_private(modifiers: Node, source: &str) -> bool {
+    let mut cursor = modifiers.walk();
+    modifiers
+        .named_children(&mut cursor)
+        .any(|c| c.kind() == "visibility_modifier" && &source[c.byte_range()] == "private")
 }
 
 /// One function's signature, if `node` is a `function_declaration` —
 /// excludes `private` functions unless `unfiltered` (`this.`/`super.`
 /// sees everything; an external receiver doesn't, mirroring Java's
-/// `method_signature`). Modifiers are anonymous tokens in a `modifiers`
-/// node, so a text search over its span is how `private` is detected.
+/// `method_signature`).
 fn kotlin_function_signature(node: Node, source: &str, unfiltered: bool) -> Option<MethodSignature> {
     if node.kind() != "function_declaration" {
         return None;
     }
     if !unfiltered
         && let Some(modifiers) = child_by_kind(node, "modifiers")
-        && source[modifiers.byte_range()].contains("private")
+        && is_private(modifiers, source)
     {
         return None;
     }

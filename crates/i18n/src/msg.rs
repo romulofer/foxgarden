@@ -535,6 +535,16 @@ msg! {
 }
 
 msg! {
+    /// `.foxgarden/run_configs.json` exists but could not be read or parsed
+    /// — reported instead of treating it as "no configs", which would let
+    /// the next save overwrite it.
+    run_configs_unreadable(err: &str) {
+        pt: "não foi possível ler as configurações de execução: {err}",
+        en: "couldn't read the run configurations: {err}",
+    }
+}
+
+msg! {
     scaffold_failed(err: &str) {
         pt: "falha ao gerar o projeto: {err}",
         en: "failed to scaffold the project: {err}",

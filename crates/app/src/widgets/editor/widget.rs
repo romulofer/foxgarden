@@ -246,9 +246,7 @@ fn highlight_window(
     source: &str,
 ) -> Range<usize> {
     let total_lines = doc.buffer.len_lines().max(1);
-    let content = text_area::ContentKey::revision(doc.buffer.revision());
-    let Some(lines) = text_area::visible_line_window(ui, widget_id, content, font_id, word_wrap, hidden, total_lines)
-    else {
+    let Some(lines) = text_area::visible_line_window(ui, widget_id, font_id, word_wrap, hidden, total_lines) else {
         return 0..source.len();
     };
 
@@ -561,6 +559,15 @@ pub fn show(
     // one frame later than a click on anything else in the menu. That's
     // imperceptible, and it means Ctrl+Z and the menu item share the exact
     // same undo stack instead of risking two that quietly disagree.
+    // Every shortcut this function intercepts acts on this editor's persisted
+    // caret, which exists whether or not the editor has keyboard focus. So
+    // while it doesn't, this frame's keyboard events are set aside for the
+    // whole call and handed back when it returns (`KeyboardStash`'s drop):
+    // without that, Tab typed into the terminal indented the open file,
+    // Alt+Up there swapped its lines, and a read-only editor's stripping
+    // below swallowed the keystrokes before the terminal ever saw them.
+    let _keyboard_stash = KeyboardStash::unless_focused(ui, egui::Id::new(editor_id_salt(&doc.path, pane)));
+
     if !pending_input.is_empty() {
         let events = std::mem::take(pending_input);
         ui.ctx().input_mut(|i| i.events.extend(events));
@@ -623,11 +630,7 @@ pub fn show(
     // caret is byte-for-byte unchanged; a second pane on the same file gets a
     // distinct id (a NUL separator can't collide with any real path byte) so
     // the two panes don't share one caret/scroll/undo history.
-    let id_salt = if pane == 0 {
-        doc.path.to_string_lossy().into_owned()
-    } else {
-        format!("{}\u{0}pane{pane}", doc.path.to_string_lossy())
-    };
+    let id_salt = editor_id_salt(&doc.path, pane);
     let widget_id = egui::Id::new(&id_salt);
 
     let multi_cursor_active_at_start = !doc.extra_selections.is_empty();
@@ -839,7 +842,12 @@ pub fn show(
 
                 apply_edit(doc, parser, &old_text, &new_text);
                 manual_caret = Some(Caret::at(new_cursors[0]));
-                doc.extra_selections = new_cursors[1..].iter().map(|&c| c..c).collect();
+                // A cursor folded into another selection comes back sharing
+                // its position; keep one cursor per position.
+                let mut extras: Vec<usize> = new_cursors[1..].iter().copied().filter(|&c| c != new_cursors[0]).collect();
+                extras.sort_unstable();
+                extras.dedup();
+                doc.extra_selections = extras.into_iter().map(|c| c..c).collect();
                 old_text = new_text;
             }
         }
@@ -1556,9 +1564,20 @@ pub fn show(
         }
 
         let cursor_char = shell_out.caret.map(|c| c.primary);
-        let (text_after_indent, indent_cursor) =
-            apply_auto_indent(&old_text, &raw_new_text, cursor_char, indent_settings);
-        let corrected = if indent_cursor.is_some() {
+        // Auto-indent and auto-pair react to a character just *typed*, and
+        // only see a ±1-char difference — which an undo/redo, a one-char
+        // paste or an IME commit produce too. Run on those, undoing a deleted
+        // `{` added a second `}`, and undoing a deleted newline re-indented
+        // the restored text.
+        let typed = !ui.input(|i| i.events.iter().any(is_restoring_or_pasting_event));
+        let (text_after_indent, indent_cursor) = if typed {
+            apply_auto_indent(&old_text, &raw_new_text, cursor_char, indent_settings)
+        } else {
+            (std::borrow::Cow::Borrowed(raw_new_text.as_str()), None)
+        };
+        let corrected = if !typed {
+            raw_new_text.clone()
+        } else if indent_cursor.is_some() {
             manual_caret = indent_cursor.map(Caret::at);
             text_after_indent.into_owned()
         } else {
@@ -1870,6 +1889,9 @@ pub fn show(
         let text_now = doc.buffer.to_string();
         if let Some((joined, new_cursor)) = join_lines(&text_now, primary_caret.primary) {
             apply_edit(doc, parser, &text_now, &joined);
+            // Everything later this frame (occurrences, bracket match,
+            // diagnostic painting) reads `old_text` as the buffer's text.
+            old_text = joined;
             manual_caret = Some(Caret::at(new_cursor));
         }
     }
@@ -1944,6 +1966,7 @@ pub fn show(
                         let (inserted, new_cursor) =
                             insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                         apply_edit(doc, parser, &text_now, &inserted);
+                        old_text = inserted;
                         manual_caret = Some(Caret::at(new_cursor));
                     }
                 }
@@ -1968,6 +1991,7 @@ pub fn show(
             match outcome {
                 Ok((inserted, new_cursor)) => {
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
+                    old_text = inserted;
                     manual_caret = Some(Caret::at(new_cursor));
                 }
                 Err(message) => crate::errors::report(last_error, message),
@@ -1995,6 +2019,7 @@ pub fn show(
                         codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
                     let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                     apply_edit(doc, parser, &text_now, &inserted);
+                    old_text = inserted;
                     manual_caret = Some(Caret::at(new_cursor));
                 }
                 _ => *generate_method_dialog = Some(GenerateMethodDialog::new(classes, kind)),
@@ -2013,6 +2038,7 @@ pub fn show(
             &indent_settings.unit(),
         ) {
             apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
+            old_text = inserted;
             manual_caret = Some(Caret::at(new_cursor));
         }
     }
@@ -2104,6 +2130,7 @@ pub fn show(
             match outcome {
                 Ok((inserted, new_cursor)) => {
                     apply_edit(doc, parser, &doc_text_for_dialog, &inserted);
+                    old_text = inserted;
                     manual_caret = Some(Caret::at(new_cursor));
                 }
                 Err(message) => crate::errors::report(last_error, message),
@@ -2877,6 +2904,72 @@ fn kotlin_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltere
 /// `TECHNICAL_DEBT.md`'s formerly-open "two interception mechanisms" entry)
 /// — factored out once a third call site needed the identical shape, rather
 /// than let each new feature reinvent its own `position` + `remove`.
+/// The salt `show` derives the editor widget's id from — see the comment at
+/// its use in `show` for why it is a pure function of path and pane.
+fn editor_id_salt(path: &std::path::Path, pane: usize) -> String {
+    if pane == 0 {
+        path.to_string_lossy().into_owned()
+    } else {
+        format!("{}\u{0}pane{pane}", path.to_string_lossy())
+    }
+}
+
+/// Keyboard events held back from an editor that doesn't have focus, and
+/// put back into the frame's input when dropped, for whichever widget does.
+struct KeyboardStash {
+    ctx: egui::Context,
+    events: Vec<Event>,
+}
+
+impl KeyboardStash {
+    fn unless_focused(ui: &egui::Ui, widget_id: egui::Id) -> Self {
+        let events = if ui.memory(|m| m.has_focus(widget_id)) {
+            Vec::new()
+        } else {
+            ui.input_mut(|i| {
+                let (keyboard, rest) = std::mem::take(&mut i.events).into_iter().partition(is_keyboard_event);
+                i.events = rest;
+                keyboard
+            })
+        };
+        Self {
+            ctx: ui.ctx().clone(),
+            events,
+        }
+    }
+}
+
+impl Drop for KeyboardStash {
+    fn drop(&mut self) {
+        if !self.events.is_empty() {
+            let events = std::mem::take(&mut self.events);
+            self.ctx.input_mut(|i| i.events.extend(events));
+        }
+    }
+}
+
+/// Undo/redo shortcuts, pastes and IME commits — edits whose text was not
+/// typed one character at a time.
+fn is_restoring_or_pasting_event(event: &Event) -> bool {
+    match event {
+        Event::Key {
+            key: Key::Z | Key::Y,
+            pressed: true,
+            modifiers,
+            ..
+        } => modifiers.command,
+        Event::Paste(_) | Event::Ime(_) => true,
+        _ => false,
+    }
+}
+
+fn is_keyboard_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key { .. } | Event::Text(_) | Event::Paste(_) | Event::Copy | Event::Cut | Event::Ime(_)
+    )
+}
+
 fn take_event(ui: &egui::Ui, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
     ui.input_mut(|i| {
         let index = i.events.iter().position(predicate)?;

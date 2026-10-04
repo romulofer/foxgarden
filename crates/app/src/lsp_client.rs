@@ -176,7 +176,13 @@ pub(crate) fn write_message<W: Write>(writer: &mut W, value: &Value) -> std::io:
     writer.flush()
 }
 
-type PendingResponses = Arc<Mutex<HashMap<i64, Sender<Result<Value, ResponseError>>>>>;
+/// Every request still waiting for its response, by id. `None` once the
+/// reader thread has exited: the server is gone, so nothing will ever answer,
+/// and dropping the senders is what turns each waiting `Receiver`'s
+/// `try_recv` into `Disconnected` instead of an `Empty` that lasts forever
+/// (a server that crashed during startup otherwise left "Starting…" up for
+/// the rest of the session).
+type PendingResponses = Arc<Mutex<Option<HashMap<i64, Sender<Result<Value, ResponseError>>>>>>;
 
 /// Called from the reader thread whenever a message lands, to wake whatever
 /// event loop polls this session. Deliberately a plain callback rather than
@@ -226,7 +232,7 @@ impl LspSession {
         let mut stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
 
-        let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingResponses = Arc::new(Mutex::new(Some(HashMap::new())));
         let (server_tx, server_messages_rx) = mpsc::channel();
         let pending_for_thread = Arc::clone(&pending);
 
@@ -245,7 +251,8 @@ impl LspSession {
                 match read_message(&mut reader) {
                     Ok(Some(value)) => match classify(value) {
                         IncomingMessage::Response { id, result } => {
-                            if let Some(tx) = pending_for_thread.lock().unwrap().remove(&id) {
+                            let tx = pending_for_thread.lock().unwrap().as_mut().and_then(|p| p.remove(&id));
+                            if let Some(tx) = tx {
                                 let _ = tx.send(result);
                                 wake();
                             }
@@ -267,6 +274,8 @@ impl LspSession {
                     Err(_) => break,
                 }
             }
+            *pending_for_thread.lock().unwrap() = None;
+            wake();
         });
 
         // A dedicated writer thread, mirroring the reader thread above, is
@@ -316,14 +325,20 @@ impl LspSession {
         let id = self.next_id;
         self.next_id += 1;
         let (tx, rx) = mpsc::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        // After the reader has exited `tx` is simply dropped, so the caller's
+        // receiver reports `Disconnected` straight away.
+        if let Some(pending) = self.pending.lock().unwrap().as_mut() {
+            pending.insert(id, tx);
+        }
         let message = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if self.writer_tx.send(message).is_err() {
             // The writer thread only ever exits after a real write failure
             // (spawn's own loop) — the server is already dead or dying.
             // Leaving this request's sender in `pending` would turn that
             // into an unbounded leak for any later caller that retries.
-            self.pending.lock().unwrap().remove(&id);
+            if let Some(pending) = self.pending.lock().unwrap().as_mut() {
+                pending.remove(&id);
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "language server's writer thread has exited",

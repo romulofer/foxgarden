@@ -63,8 +63,24 @@ fn string_literal_text(node: Node, source: &str) -> String {
         .unwrap_or_default()
 }
 
+/// A path value as Java writes it: a `string_literal`, or an array
+/// initializer (`{"/users"}`, which Spring accepts anywhere a single path
+/// goes), whose first path is taken — the same choice the Kotlin side makes
+/// for a collection literal.
+fn path_value(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "string_literal" => Some(string_literal_text(node, source)),
+        "element_value_array_initializer" => {
+            let mut cursor = node.walk();
+            let first = node.named_children(&mut cursor).find(|c| c.kind() == "string_literal");
+            first.map(|literal| string_literal_text(literal, source))
+        }
+        _ => None,
+    }
+}
+
 /// The path an `annotation`/`marker_annotation` node contributes: a bare
-/// positional `string_literal`, a `value =`/`path =` `element_value_pair`
+/// positional path value, a `value =`/`path =` `element_value_pair`
 /// (Spring accepts either key as a synonym), or `""` for a marker
 /// annotation (no `()` at all) or an annotation with neither shape present.
 fn annotation_path(node: Node, source: &str) -> String {
@@ -74,7 +90,9 @@ fn annotation_path(node: Node, source: &str) -> String {
     let mut cursor = args.walk();
     for child in args.named_children(&mut cursor) {
         match child.kind() {
-            "string_literal" => return string_literal_text(child, source),
+            "string_literal" | "element_value_array_initializer" => {
+                return path_value(child, source).unwrap_or_default();
+            }
             "element_value_pair" => {
                 let Some(key) = child.child_by_field_name("key") else {
                     continue;
@@ -83,10 +101,11 @@ fn annotation_path(node: Node, source: &str) -> String {
                 if key_text != "value" && key_text != "path" {
                     continue;
                 }
-                if let Some(value) = child.child_by_field_name("value")
-                    && value.kind() == "string_literal"
+                if let Some(path) = child
+                    .child_by_field_name("value")
+                    .and_then(|value| path_value(value, source))
                 {
-                    return string_literal_text(value, source);
+                    return path;
                 }
             }
             _ => {}

@@ -134,3 +134,24 @@ fn all_methods_in_type_includes_static_private_and_final_methods() {
     let names: Vec<&str> = methods.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, vec!["a", "b", "c", "d"]);
 }
+
+#[test]
+fn an_annotation_argument_does_not_hide_an_overridable_method() {
+    let source = "class Base {\n    @Cacheable(\"staticData\") public Foo load() { return null; }\n    @Deprecated(since = \"final\") public void x() {}\n    private void hidden() {}\n    public static void util() {}\n    public final void locked() {}\n}\n";
+    let tree = parsed(source);
+    let names: Vec<String> = methods_in_type(&tree, source, "Base").into_iter().map(|m| m.name).collect();
+    assert_eq!(names, ["load", "x"]);
+}
+
+/// A varargs parameter is kept, `...` and all, so the generated override
+/// has the same signature and actually overrides.
+#[test]
+fn a_varargs_parameter_is_part_of_the_signature() {
+    let source = "class Base {\n    public void log(String fmt, Object... args) {}\n}\n";
+    let tree = parsed(source);
+    let methods = methods_in_type(&tree, source, "Base");
+    assert_eq!(
+        methods[0].params,
+        [("String".to_string(), "fmt".to_string()), ("Object...".to_string(), "args".to_string())]
+    );
+}

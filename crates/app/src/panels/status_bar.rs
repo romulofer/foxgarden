@@ -230,29 +230,40 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
 /// jobs running while one is in flight: no user input arrives during a
 /// multi-minute install, and none is needed.
 pub fn show(ui: &mut egui::Ui, activities: &[Activity], document: Option<&DocumentStatus>) {
-    ui.horizontal(|ui| {
+    ui.horizontal(|ui| match document {
         // The document's own facts sit on the right, where every editor
         // puts them, and are laid out first so the (variable-length)
-        // activity text on the left can't push them off screen.
-        if let Some(document) = document {
+        // activity text on the left can't push them off screen. The
+        // activities go in a left-to-right layout nested *inside* the
+        // right-to-left one, which hands them whatever width is left on the
+        // left. Laid out after the right-to-left block instead, as siblings,
+        // they started at the right edge that block had moved the cursor to,
+        // and were clipped away whenever a file was open.
+        Some(document) => {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 show_document_status(ui, document);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    show_activities(ui, activities);
+                });
             });
         }
-
-        let Some((first, rest)) = activities.split_first() else {
-            ui.weak(t().status_bar.ready);
-            return;
-        };
-        ui.add(egui::Spinner::new().size(SPINNER_SIZE));
-        let response = ui.label(first.text());
-        if rest.is_empty() {
-            return;
-        }
-        let response = response | ui.weak(format!("+{}", rest.len()));
-        let all: Vec<String> = activities.iter().map(Activity::text).collect();
-        response.on_hover_text(all.join("\n"));
+        None => show_activities(ui, activities),
     });
+}
+
+fn show_activities(ui: &mut egui::Ui, activities: &[Activity]) {
+    let Some((first, rest)) = activities.split_first() else {
+        ui.weak(t().status_bar.ready);
+        return;
+    };
+    ui.add(egui::Spinner::new().size(SPINNER_SIZE));
+    let response = ui.label(first.text());
+    if rest.is_empty() {
+        return;
+    }
+    let response = response | ui.weak(format!("+{}", rest.len()));
+    let all: Vec<String> = activities.iter().map(Activity::text).collect();
+    response.on_hover_text(all.join("\n"));
 }
 
 /// What the bar reports about the file currently being edited. Everything

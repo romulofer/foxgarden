@@ -35,6 +35,11 @@ pub enum AutoSaveMode {
 pub struct AutoSaveState {
     was_focused: bool,
     last_activity: f64,
+    /// Whether `AfterIdle` already fired for the current idle stretch. The
+    /// threshold is a level, not an edge — without this every frame after it
+    /// passed (and an idle app still repaints for LSP, the terminal, timers)
+    /// re-saved, and re-reported any save that keeps failing.
+    idle_fired: bool,
 }
 
 impl AutoSaveState {
@@ -42,6 +47,7 @@ impl AutoSaveState {
     /// pointer move/click, scroll, ...) — resets the idle clock.
     pub fn record_activity(&mut self, now: f64) {
         self.last_activity = now;
+        self.idle_fired = false;
     }
 
     /// Call once per frame, regardless of `settings.enabled`, so
@@ -57,7 +63,11 @@ impl AutoSaveState {
         }
         match settings.mode {
             AutoSaveMode::OnFocusLoss => focus_lost,
-            AutoSaveMode::AfterIdle => now - self.last_activity >= f64::from(settings.idle_seconds),
+            AutoSaveMode::AfterIdle => {
+                let fire = !self.idle_fired && now - self.last_activity >= f64::from(settings.idle_seconds);
+                self.idle_fired |= fire;
+                fire
+            }
         }
     }
 }

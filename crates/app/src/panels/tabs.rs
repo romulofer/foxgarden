@@ -684,11 +684,18 @@ fn show_close_confirm(
     let outcome = show_modal(ui, "close_confirm", Some(index), |ui, &index| {
         ui.label(msg::save_changes_before_closing(&name));
         ui.horizontal(|ui| {
+            // A save that failed (read-only file, full disk, deleted
+            // directory) has already been reported and leaves the tab
+            // dirty; closing it anyway would throw the edits away. It stays
+            // open and at the front of the queue, so the question is asked
+            // again and Discard/Cancel remain the user's call.
             if ui.button(t().common.save).clicked() {
                 save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
-                state.close_tab(index);
-                parsers.remove(index);
-                pending_close.remove(0);
+                if !state.open_tabs[index].is_dirty() {
+                    state.close_tab(index);
+                    parsers.remove(index);
+                    pending_close.remove(0);
+                }
             }
             // Only worth offering when this isn't the last one being asked
             // about: a batch close ("Close Others" over several unsaved
@@ -698,8 +705,12 @@ fn show_close_confirm(
                 for path in std::mem::take(pending_close) {
                     if let Some(index) = state.find_tab(&path) {
                         save_tab(state, parsers, index, last_error, trim_trailing_whitespace);
-                        state.close_tab(index);
-                        parsers.remove(index);
+                        if state.open_tabs[index].is_dirty() {
+                            pending_close.push(path);
+                        } else {
+                            state.close_tab(index);
+                            parsers.remove(index);
+                        }
                     }
                 }
             }

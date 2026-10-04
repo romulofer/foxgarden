@@ -142,3 +142,28 @@ fn two_servers_starting_at_once_are_both_reported() {
         vec!["Iniciando JDTLS…", "Iniciando Kotlin Language Server…"]
     );
 }
+
+/// With a file open the document facts fill the bar from the right; the
+/// activity text on the left must still be laid out inside the bar rather
+/// than past its right edge, where it was clipped away.
+#[test]
+fn activity_text_stays_inside_the_bar_while_a_file_is_open() {
+    use egui_kittest::kittest::Queryable as _;
+    let document = DocumentStatus {
+        line: 1,
+        column: 1,
+        language_name: Some("Java".to_string()),
+        indent: IndentSettings::default(),
+        errors: 0,
+        warnings: 0,
+    };
+    let width = 800.0;
+    let harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(width, 40.0))
+        .build_ui(|ui| show(ui, &[], Some(&document)));
+
+    let ready = harness.get_by_label(t().status_bar.ready).rect();
+    assert!(ready.max.x <= width, "\"ready\" laid out at {ready:?}, past the bar's right edge");
+    let position = harness.get_by_label(&msg::status_line_column(1, 1)).rect();
+    assert!(ready.max.x <= position.min.x, "the activity text overlaps the document status");
+}

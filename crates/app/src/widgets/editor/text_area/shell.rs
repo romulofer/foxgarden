@@ -411,7 +411,8 @@ pub fn show(
         // absent an edit, still the original `text` `index` started from)
         // — so no separate `final_buffer.to_string()` is needed just to
         // re-derive what `index` already has.
-        state.caret.primary = clamp_out_of_hidden(&index, state.caret.primary, hidden);
+        state.caret.primary =
+            clamp_out_of_hidden(&index, state.caret.primary, caret_at_frame_start.primary, hidden);
     }
 
     // Resets the blink cycle to solid-visible on anything that should make
@@ -539,17 +540,7 @@ fn paint_caret(
             }
             let start_col = range.start.max(line_start) - line_start;
             let end_col = range.end.min(line_end) - line_start;
-            let Some(row_galley) = out.row_galleys.get(i).map(|(_, g)| g) else {
-                continue;
-            };
-            let x0 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(start_col)).left();
-            let x1 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(end_col)).left();
-            let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
-            painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0), y + out.row_height)),
-                0.0,
-                selection_color,
-            );
+            paint_column_span(painter, out, i, start_col..end_col, selection_color);
         }
     }
 
@@ -591,15 +582,49 @@ fn paint_block_selection(ui: &egui::Ui, out: &TextAreaOutput, block: &BlockSelec
         let Some(i) = out.row_galleys.iter().position(|(logical, _)| *logical == line) else {
             continue;
         };
-        let row_galley = &out.row_galleys[i].1;
-        let x0 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(cols.start)).left();
-        let x1 = out.content_origin.x + row_galley.pos_from_cursor(egui::text::CCursor::new(cols.end)).left();
-        let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0), y + out.row_height)),
-            0.0,
-            selection_color,
-        );
+        paint_column_span(painter, out, i, cols.clone(), selection_color);
+    }
+}
+
+/// Fills columns `cols` of the logical line shaped as `out.row_galleys[i]`,
+/// one rect per visual row the span touches. A wrapped line's galley has
+/// several rows, and each part of the span has to be painted on its own row
+/// at that row's x offsets — painting a single rect at the galley's first
+/// row put a selection made on the second row over unrelated text on the
+/// first. Columns past the line's last character extend the last row (a
+/// block selection wider than a short line).
+fn paint_column_span(painter: &egui::Painter, out: &TextAreaOutput, i: usize, cols: Range<usize>, color: Color32) {
+    let Some((_, galley)) = out.row_galleys.get(i) else {
+        return;
+    };
+    let last = galley.rows.len().saturating_sub(1);
+    let mut row_start = 0usize;
+    for (r, placed) in galley.rows.iter().enumerate() {
+        let row_len = placed.row.char_count_excluding_newline().0;
+        let row_end = if r == last { usize::MAX } else { row_start + row_len };
+        let from = cols.start.max(row_start);
+        let to = cols.end.min(row_end);
+        if from < to {
+            let x_of = |col: usize| {
+                let column = col - row_start;
+                let x = if column > row_len {
+                    // Past the row's text: as far right again as the extra
+                    // columns would reach at the row's average glyph width.
+                    let width = if row_len == 0 { out.row_height * 0.5 } else { placed.row.size.x / row_len as f32 };
+                    placed.row.size.x + (column - row_len) as f32 * width
+                } else {
+                    placed.row.x_offset(egui::epaint::text::CharIndex(column))
+                };
+                out.content_origin.x + placed.pos.x + x
+            };
+            let y = out.content_origin.y + (out.row_offsets[i] + r) as f32 * out.row_height;
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x_of(from), y), egui::pos2(x_of(to), y + out.row_height)),
+                0.0,
+                color,
+            );
+        }
+        row_start += placed.char_count_including_newline().0;
     }
 }
 
@@ -790,7 +815,9 @@ fn process_events(
                 }
             }
 
-            _ if read_only => {}
+            // Copy changes nothing, so it stays live in a read-only document
+            // along with navigation and selection.
+            _ if read_only && !matches!(event, Event::Copy) => {}
 
             // PLAN.md Track 7 Phase 2: while a block selection is active,
             // Text/Backspace/Delete apply column-scoped across every row it
@@ -824,14 +851,18 @@ fn process_events(
                 ..
             } if state.block_selection.is_some() => {
                 let block = state.block_selection.expect("guarded by is_some() above");
-                state.history.checkpoint(
-                    Snapshot {
-                        text: current.clone(),
-                        caret: state.caret,
-                    },
-                    EditKind::Deleting,
-                );
+                // Checkpointed only when something is deleted: a no-op
+                // Backspace/Delete (start/end of text) would otherwise push
+                // a snapshot identical to the current text, and the next
+                // Ctrl+Z would appear to do nothing.
                 if let Some((out, new_block)) = block_backspace(&current, index, block) {
+                    state.history.checkpoint(
+                        Snapshot {
+                            text: current.clone(),
+                            caret: state.caret,
+                        },
+                        EditKind::Deleting,
+                    );
                     current = out;
                     *index = LineIndex::build(&current);
                     state.block_selection = Some(new_block);
@@ -844,14 +875,15 @@ fn process_events(
                 ..
             } if state.block_selection.is_some() => {
                 let block = state.block_selection.expect("guarded by is_some() above");
-                state.history.checkpoint(
-                    Snapshot {
-                        text: current.clone(),
-                        caret: state.caret,
-                    },
-                    EditKind::Deleting,
-                );
+                // Same no-op rule as Backspace above.
                 if let Some((out, new_block)) = block_delete_forward(&current, index, block) {
+                    state.history.checkpoint(
+                        Snapshot {
+                            text: current.clone(),
+                            caret: state.caret,
+                        },
+                        EditKind::Deleting,
+                    );
                     current = out;
                     *index = LineIndex::build(&current);
                     state.block_selection = Some(new_block);
@@ -926,14 +958,18 @@ fn process_events(
                 pressed: true,
                 ..
             } => {
-                state.history.checkpoint(
-                    Snapshot {
-                        text: current.clone(),
-                        caret: state.caret,
-                    },
-                    EditKind::Deleting,
-                );
+                // Checkpointed only when something is deleted: a no-op
+                // Backspace/Delete (start/end of text) would otherwise push
+                // a snapshot identical to the current text, and the next
+                // Ctrl+Z would appear to do nothing.
                 if let Some((out, caret)) = backspace(&current, index, state.caret) {
+                    state.history.checkpoint(
+                        Snapshot {
+                            text: current.clone(),
+                            caret: state.caret,
+                        },
+                        EditKind::Deleting,
+                    );
                     current = out;
                     *index = LineIndex::build(&current);
                     state.caret = caret;
@@ -946,14 +982,15 @@ fn process_events(
                 pressed: true,
                 ..
             } => {
-                state.history.checkpoint(
-                    Snapshot {
-                        text: current.clone(),
-                        caret: state.caret,
-                    },
-                    EditKind::Deleting,
-                );
+                // Same no-op rule as Backspace above.
                 if let Some((out, caret)) = delete_forward(&current, index, state.caret) {
+                    state.history.checkpoint(
+                        Snapshot {
+                            text: current.clone(),
+                            caret: state.caret,
+                        },
+                        EditKind::Deleting,
+                    );
                     current = out;
                     *index = LineIndex::build(&current);
                     state.caret = caret;

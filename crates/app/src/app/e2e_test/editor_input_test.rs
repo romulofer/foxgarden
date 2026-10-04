@@ -203,3 +203,34 @@ fn enter_inside_a_block_keeps_the_current_indentation() {
         "the new line must start at the previous line's indentation"
     );
 }
+
+/// A Backspace with nothing before the caret deletes nothing; it must not
+/// leave an undo step behind, or the next Ctrl+Z looks like it did nothing.
+#[test]
+fn a_backspace_that_deletes_nothing_adds_no_undo_step() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    app.click_tree("Main.java");
+    app.type_into_active_tab(MAIN_JAVA.chars().count(), "X");
+
+    app.press(egui::Modifiers::COMMAND, egui::Key::Home);
+    app.press(egui::Modifiers::NONE, egui::Key::Backspace);
+    app.press(egui::Modifiers::COMMAND, egui::Key::Z);
+
+    assert_eq!(app.active_tab_text(), MAIN_JAVA, "one Ctrl+Z undoes the typing");
+}
+
+/// Undo restores exactly what was there. Undoing a deleted newline used to
+/// be taken for a typed Enter and re-indented on top of the restored text.
+#[test]
+fn undoing_a_deleted_newline_restores_the_text_exactly() {
+    let mut app = E2e::launch(&[("Body.java", BODY_JAVA)]);
+    app.click_tree("Body.java");
+    let line_three_start = "class Body {\n    int a = 1;\n".chars().count();
+    app.type_into_active_tab(line_three_start, "");
+
+    app.press(egui::Modifiers::NONE, egui::Key::Backspace);
+    assert_ne!(app.active_tab_text(), BODY_JAVA, "the backspace joined the lines");
+    app.press(egui::Modifiers::COMMAND, egui::Key::Z);
+
+    assert_eq!(app.active_tab_text(), BODY_JAVA);
+}

@@ -248,3 +248,12 @@ fn dispatcher_returns_empty_for_an_unsupported_language() {
     let tree = parsed("class Foo {}\n");
     assert_eq!(endpoints_in_file(Language::Yaml, &tree, "class Foo {}\n"), vec![]);
 }
+
+/// Spring takes an array wherever it takes one path; the first one is used,
+/// as on the Kotlin side.
+#[test]
+fn array_initializer_paths() {
+    let source = "@RequestMapping(value = {\"/api\"})\nclass Foo {\n    @GetMapping({\"/users\", \"/people\"})\n    public void run() {}\n}\n";
+    let eps = endpoints(source);
+    assert_eq!(eps[0].path, "/api/users");
+}

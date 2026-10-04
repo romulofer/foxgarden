@@ -189,7 +189,7 @@ fn clamp_out_of_hidden_snaps_to_the_marker_line_end() {
     // up there snaps to the end of line 0 (the marker line), not line 1.
     let hidden = [1..2];
     let inside = index.line_col_to_char(1, 1);
-    let clamped = clamp_out_of_hidden(&index, inside, &hidden);
+    let clamped = clamp_out_of_hidden(&index, inside, inside, &hidden);
     assert_eq!(
         index.line_col(clamped),
         (0, 4),
@@ -197,17 +197,52 @@ fn clamp_out_of_hidden_snaps_to_the_marker_line_end() {
     );
 }
 
+/// The marker line is not line 0 here: computing its end must not overflow
+/// (it did, as `line start + usize::MAX`), and arrowing down from it must
+/// get past the fold rather than snap straight back to it.
+#[test]
+fn moving_down_into_a_fold_lands_on_the_first_line_after_it() {
+    let index = idx("ab\ncd\nef\ngh\nij");
+    let hidden = [2..4]; // lines 2 and 3 folded under marker line 1
+    let from = index.line_col_to_char(1, 1);
+    let landed = index.line_col_to_char(2, 1);
+    let clamped = clamp_out_of_hidden(&index, landed, from, &hidden);
+    assert_eq!(index.line_col(clamped), (4, 1));
+}
+
+#[test]
+fn moving_up_into_a_fold_lands_on_its_marker_line() {
+    let index = idx("ab\ncd\nef\ngh\nij");
+    let hidden = [2..4];
+    let from = index.line_col_to_char(4, 1);
+    let landed = index.line_col_to_char(3, 1);
+    let clamped = clamp_out_of_hidden(&index, landed, from, &hidden);
+    assert_eq!(index.line_col(clamped), (1, 2));
+}
+
+/// Nothing below a fold that reaches the last line, so even downward motion
+/// stays on the marker.
+#[test]
+fn moving_down_into_a_fold_at_the_end_stays_on_the_marker() {
+    let index = idx("ab\ncd\nef");
+    let hidden = [2..3];
+    let from = index.line_col_to_char(1, 0);
+    let landed = index.line_col_to_char(2, 0);
+    let clamped = clamp_out_of_hidden(&index, landed, from, &hidden);
+    assert_eq!(index.line_col(clamped), (1, 2));
+}
+
 #[test]
 fn clamp_out_of_hidden_is_a_no_op_on_a_visible_line() {
     let index = idx(GRID);
     let hidden = [1..2];
     let visible = index.line_col_to_char(2, 1);
-    assert_eq!(clamp_out_of_hidden(&index, visible, &hidden), visible);
+    assert_eq!(clamp_out_of_hidden(&index, visible, 0, &hidden), visible);
 }
 
 #[test]
 fn clamp_out_of_hidden_handles_an_empty_hidden_set() {
-    assert_eq!(clamp_out_of_hidden(&idx(GRID), 5, &[]), 5);
+    assert_eq!(clamp_out_of_hidden(&idx(GRID), 5, 0, &[]), 5);
 }
 
 // ---- LineIndex parity (SPEC.md §7 / PLAN.md 5b): the indexed lookups must

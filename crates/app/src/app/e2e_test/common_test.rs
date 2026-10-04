@@ -59,6 +59,37 @@ impl E2e {
         app
     }
 
+    /// Launches the way a restored session does after a crash: the project
+    /// is already first in the recent list, `open` is already open as a
+    /// clean tab, and `drafts` (`(relative path, unsaved contents)`) are what
+    /// the previous session left in `.foxgarden/drafts`.
+    pub(super) fn launch_restoring(files: &[(&str, &str)], open: &str, drafts: &[(&str, &str)]) -> Self {
+        let dir = test_support::tempdir();
+        for (name, contents) in files {
+            test_support::write_file(dir.path(), name, contents);
+        }
+        for (name, contents) in drafts {
+            fg_core::write_draft(dir.path(), &dir.path().join(name), contents).expect("write draft");
+        }
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_eframe(|cc| {
+                crate::style::fonts::install(&cc.egui_ctx);
+                FoxGardenApp::new(cc)
+            });
+        let app = harness.state_mut();
+        app.state.open_project(dir.path().to_path_buf()).expect("open temp project");
+        app.recent_projects = vec![dir.path().to_path_buf()];
+        let index = app.state.open_tab(dir.path().join(open)).expect("open restored tab");
+        let parser = crate::panels::tabs::open_parser_for(&mut app.state.open_tabs[index]);
+        app.parsers.insert(index, parser);
+
+        let mut app = Self { harness, dir };
+        app.settle();
+        app
+    }
+
     /// Enough of the project root row's label to identify it: the temp
     /// directory's own (per-run unique) name. Matched as a fragment rather
     /// than in full because the row also carries a folder icon and, for a

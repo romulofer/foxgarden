@@ -191,6 +191,15 @@ pub fn show(
                             let _ = session.write(&[0x03]);
                             interacted = true;
                         }
+                        // Same translation for Ctrl+X, which egui-winit turns
+                        // into `Cut` without a `Key` event — without this,
+                        // nano's exit and every Emacs `C-x` chord never reach
+                        // the shell. (Shift+Delete arrives as `Cut` too and
+                        // so also sends 0x18; Ctrl+X is the one that matters.)
+                        egui::Event::Cut => {
+                            let _ = session.write(&[0x18]);
+                            interacted = true;
+                        }
                         egui::Event::Key {
                             key,
                             pressed: true,

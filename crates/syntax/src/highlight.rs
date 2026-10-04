@@ -189,7 +189,13 @@ pub fn highlight_spans_in(
         }
     }
 
+    // Ordered by start, then by end: the renderer gives each byte to the
+    // first span that reaches it, so of two captures starting at the same
+    // byte the narrower (more specific) one wins its bytes and the wider
+    // one colors the rest. Sorting by start alone left that tie to the
+    // map's random iteration order, so the color could change from one
+    // recompute to the next.
     let mut spans: Vec<(Range<usize>, Scope)> = by_range.into_iter().collect();
-    spans.sort_by_key(|(range, _)| range.start);
+    spans.sort_by_key(|(range, _)| (range.start, range.end));
     spans
 }

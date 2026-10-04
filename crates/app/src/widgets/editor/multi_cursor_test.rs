@@ -169,3 +169,34 @@ fn apply_multi_edit_output_order_matches_input_order_not_processing_order() {
     let (_, positions) = apply_multi_edit("abcde", &selections, &MultiEditOp::Insert("_".to_string()));
     assert_eq!(positions, vec![6, 1]);
 }
+
+/// Ctrl+A with Ctrl+D extras still active: the primary now covers every
+/// extra. Typing replaces the whole text once, and each swallowed extra
+/// shares the primary's cursor, instead of being edited at an offset the
+/// first replacement already removed (which used to wrap negative and
+/// panic in `splice`).
+#[test]
+fn apply_multi_edit_folds_a_selection_inside_another_into_it() {
+    let selections = vec![0..11, 4..7, 8..11];
+    let (text, positions) = apply_multi_edit("aaa bbb ccc", &selections, &MultiEditOp::Insert("x".to_string()));
+    assert_eq!(text, "x");
+    assert_eq!(positions, vec![1, 1, 1]);
+}
+
+/// An extra left past the end of a text something else shortened is
+/// clamped to the end rather than spliced out of bounds.
+#[test]
+fn apply_multi_edit_clamps_a_selection_past_the_end() {
+    let selections = vec![0..0, 40..45];
+    let (text, positions) = apply_multi_edit("abc", &selections, &MultiEditOp::Insert("_".to_string()));
+    assert_eq!(text, "_abc_");
+    assert_eq!(positions, vec![1, 5]);
+}
+
+#[test]
+fn apply_multi_edit_still_edits_adjacent_selections_separately() {
+    let selections = vec![0..3, 3..6];
+    let (text, positions) = apply_multi_edit("aaabbb", &selections, &MultiEditOp::Insert("x".to_string()));
+    assert_eq!(text, "xx");
+    assert_eq!(positions, vec![1, 2]);
+}

@@ -260,8 +260,34 @@ pub fn show(ui: &mut egui::Ui, state: &mut EditorState, panel: &mut SidePanelSta
             project.insert_path(path, kind_on_disk(path));
         }
     }
+    forget_moved_selection(panel, &outcome.deleted, &outcome.renamed);
 
     outcome
+}
+
+/// Keeps the multi-selection pointing at paths that still exist: a deleted
+/// node (or anything under a deleted folder) leaves it, and a renamed or
+/// moved one follows its new path. Left alone, the next Delete/Copy/Cut
+/// acted on paths that were already gone ("Delete 2 items?" for files
+/// deleted a moment ago).
+fn forget_moved_selection(panel: &mut SidePanelState, deleted: &[PathBuf], renamed: &[(PathBuf, PathBuf)]) {
+    if deleted.is_empty() && renamed.is_empty() {
+        return;
+    }
+    let selected = std::mem::take(&mut panel.selected);
+    panel.selected = selected
+        .into_iter()
+        .filter(|path| !deleted.iter().any(|gone| path.starts_with(gone)))
+        .map(|path| {
+            renamed
+                .iter()
+                .find_map(|(old, new)| path.strip_prefix(old).ok().map(|rest| new.join(rest)))
+                .unwrap_or(path)
+        })
+        .collect();
+    if panel.last_selected.as_ref().is_some_and(|last| !panel.selected.contains(last)) {
+        panel.last_selected = None;
+    }
 }
 
 /// Opens the rows between the project root and the first directory that

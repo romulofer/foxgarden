@@ -121,3 +121,18 @@ fn docker_compose_up_command_sets_cwd_to_the_compose_files_own_directory() {
     let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args, vec!["compose", "-f", compose.to_str().unwrap(), "up", "--build"]);
 }
+
+/// Docker rejects a repository name ending in a separator or mixing them
+/// (`--`, `.-`), which these directory names used to produce.
+#[test]
+fn docker_image_tag_never_ends_in_or_doubles_a_separator() {
+    for (name, expected) in [
+        ("My App (copy)", "foxgarden-my-app-copy"),
+        ("Café", "foxgarden-caf"),
+        (".hidden..dir", "foxgarden-hidden-dir"),
+        ("___", "foxgarden-project"),
+    ] {
+        let dir = tempfile::tempdir().unwrap().path().join(name);
+        assert_eq!(docker_image_tag(&dir), expected, "{name:?}");
+    }
+}
