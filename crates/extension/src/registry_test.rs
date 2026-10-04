@@ -495,9 +495,9 @@ impl Extension for FakeForge {
             })
     }
 
-    fn config_properties(&self, _project_root: &Path) -> Vec<crate::ConfigProperty> {
+    fn config_properties(&self, _project_root: &Path, build_tool: &BuildToolHandle) -> Vec<crate::ConfigProperty> {
         vec![crate::ConfigProperty {
-            name: "anvil.heat".to_string(),
+            name: format!("{}.heat", build_tool.id),
             type_name: Some("int".to_string()),
             description: None,
             default_value: Some("900".to_string()),
@@ -591,12 +591,114 @@ fn an_extension_handle_answers_project_questions_away_from_the_registry() {
     let mut registry = Registry::new();
     registry.register(Box::new(FakeForge)).unwrap();
     let handle = registry.handles().into_iter().next().unwrap();
-    assert_eq!(handle.id, "forge");
+    assert_eq!(&*handle.id, "forge");
+    let anvil = registry.build_tool("anvil").unwrap();
 
     // The point of the handle: it is owned, so a background scan can hold it
     // while the registry stays where it is.
-    let scanned = std::thread::spawn(move || handle.config_properties(Path::new("/project")))
+    let scanned = std::thread::spawn(move || handle.config_properties(Path::new("/project"), &anvil))
         .join()
         .unwrap();
+    // Keyed off the tool it was handed, not one it detected itself.
     assert_eq!(scanned[0].name, "anvil.heat");
+}
+
+/// A second extension scaffolding a pair someone already scaffolds would
+/// never be asked — the wizard lists the pair once and generation picks the
+/// first match — so it is refused at registration, like every other
+/// duplicate, rather than silently shadowed.
+#[test]
+fn two_scaffolds_for_the_same_pair_are_refused() {
+    struct Copycat;
+    impl Extension for Copycat {
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "copycat".to_string(),
+                name: "copycat".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            Contributions {
+                scaffolds: vec![crate::ScaffoldContribution {
+                    build_tool_id: "anvil".to_string(),
+                    language_id: "khuzdul".to_string(),
+                    runtime_versions: Vec::new(),
+                }],
+                ..Default::default()
+            }
+        }
+    }
+
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeForge)).unwrap();
+    assert_eq!(
+        registry.register(Box::new(Copycat)),
+        Err(RegisterError::DuplicateScaffold {
+            tool_id: "anvil".to_string(),
+            language_id: "khuzdul".to_string(),
+            extension_id: "copycat".to_string(),
+        })
+    );
+    assert_eq!(registry.scaffolds().len(), 1);
+}
+
+#[test]
+fn one_extension_cannot_scaffold_the_same_pair_twice() {
+    struct Stutter;
+    impl Extension for Stutter {
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "stutter".to_string(),
+                name: "stutter".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            let scaffold = crate::ScaffoldContribution {
+                build_tool_id: "kiln".to_string(),
+                language_id: "elvish".to_string(),
+                runtime_versions: Vec::new(),
+            };
+            Contributions {
+                languages: vec![lang("elvish", &["elv"])],
+                build_tools: vec![BuildToolContribution {
+                    id: "kiln".to_string(),
+                    display_name: "Kiln".to_string(),
+                    marker_files: vec!["kiln.toml".to_string()],
+                }],
+                scaffolds: vec![scaffold.clone(), scaffold],
+                ..Default::default()
+            }
+        }
+    }
+
+    let mut registry = Registry::new();
+    assert!(matches!(
+        registry.register(Box::new(Stutter)),
+        Err(RegisterError::DuplicateScaffold { .. })
+    ));
+    assert!(registry.language("elvish").is_none());
+}
+
+/// A run marker's entry point is in its own extension's notation, so the
+/// tool that launches it must come from that extension even when another
+/// extension's tool claims the directory first.
+#[test]
+fn build_tool_detection_can_be_limited_to_one_extension() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeToolchain)).unwrap();
+    registry.register(Box::new(FakeForge)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("delve.toml"), "").unwrap();
+    std::fs::write(dir.path().join("anvil.toml"), "").unwrap();
+
+    assert_eq!(registry.detect_build_tool(dir.path()).unwrap().id, "delve");
+    assert_eq!(registry.detect_build_tool_of(dir.path(), "forge").unwrap().id, "anvil");
+
+    std::fs::remove_file(dir.path().join("anvil.toml")).unwrap();
+    assert!(registry.detect_build_tool_of(dir.path(), "forge").is_none());
+    assert!(registry.detect_build_tool_of(dir.path(), "nobody").is_none());
 }

@@ -30,7 +30,7 @@ pub use kotlin_members::{
     kotlin_properties_in_type, kotlin_superclass_name,
 };
 pub use methods::{MethodSignature, all_methods_in_type, enclosing_class, methods_in_type, superclass_name};
-pub use run_targets::{install as install_run_targets, main_entries};
+pub use run_targets::{RunMarker, install as install_run_targets, main_entries};
 pub use selection::expand_selection;
 pub use spring_endpoints::{EndpointInfo, endpoints_in_file, java_endpoints_in_file, kotlin_endpoints_in_file};
 pub use sticky::enclosing_scope_starts;

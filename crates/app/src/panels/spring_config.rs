@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::{ConfigProperty, ExtensionHandle};
+use fg_core::{BuildToolHandle, ConfigProperty, ExtensionHandle};
 use fg_extension::Registry;
 
 /// One project's own scanned properties, plus whichever project root
@@ -30,7 +30,12 @@ pub struct SpringConfigState {
     /// than looked up per scan: the completion trigger that starts one runs
     /// deep inside the editor widget, which has no registry to ask, and the
     /// scan itself runs on a thread that could not borrow one anyway.
-    extensions: Vec<ExtensionHandle>,
+    /// `None` until `observe` has run once.
+    extensions: Option<Vec<ExtensionHandle>>,
+    /// The build tool the registry detected for a project root, kept for the
+    /// same reason as `extensions`. `None` inside means no tool claims that
+    /// root, so there is no classpath to scan.
+    build_tool: Option<(PathBuf, Option<BuildToolHandle>)>,
 }
 
 impl SpringConfigState {
@@ -62,12 +67,18 @@ impl SpringConfigState {
         self.scan_rx.is_some()
     }
 
-    /// Picks up the registry's extension handles once — called from
-    /// `FoxGardenApp::ui`, where the registry is in reach. Cheap and
-    /// idempotent: nothing is registered after startup.
-    pub fn observe_extensions(&mut self, languages: &Registry) {
-        if self.extensions.len() != languages.extensions().len() {
-            self.extensions = languages.handles();
+    /// Picks up what a scan needs from the registry — called every frame
+    /// from `FoxGardenApp::ui`, where the registry is in reach. The handles
+    /// are taken once (nothing is registered after startup), and the build
+    /// tool is detected again only when `project_root` changes.
+    pub fn observe(&mut self, languages: &Registry, project_root: Option<&Path>) {
+        if self.extensions.is_none() {
+            self.extensions = Some(languages.handles());
+        }
+        match project_root {
+            Some(root) if self.build_tool.as_ref().is_some_and(|(seen, _)| seen == root) => {}
+            Some(root) => self.build_tool = Some((root.to_path_buf(), languages.detect_build_tool(root))),
+            None => self.build_tool = None,
         }
     }
 
@@ -78,6 +89,10 @@ impl SpringConfigState {
     /// scanned (a new project opened since) clears the stale cache
     /// immediately, before the fresh scan even finishes, rather than
     /// leaving the previous project's properties visible in the meantime.
+    ///
+    /// A project no build tool claims has no classpath, so it is marked
+    /// scanned without starting a thread. One `observe` has not seen yet is
+    /// left unmarked, to be scanned on a later call once it has.
     pub fn ensure_scanning(&mut self, project_root: &Path) {
         if self.scanned_root.as_deref() == Some(project_root) {
             return;
@@ -86,13 +101,18 @@ impl SpringConfigState {
             return;
         }
         self.properties.clear();
+        let Some((_, build_tool)) = self.build_tool.as_ref().filter(|(seen, _)| seen == project_root) else {
+            return;
+        };
+        let build_tool = build_tool.clone();
         self.scanned_root = Some(project_root.to_path_buf());
+        let Some(build_tool) = build_tool else { return };
 
-        let extensions = self.extensions.clone();
+        let extensions = self.extensions.clone().unwrap_or_default();
         let root = project_root.to_path_buf();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let _ = tx.send(scan_project(&extensions, &root));
+            let _ = tx.send(scan_project(&extensions, &root, &build_tool));
         });
         self.scan_rx = Some(rx);
     }
@@ -121,9 +141,17 @@ impl SpringConfigState {
 /// nothing" degrade `fg_core::diff`/`blame` uses for "not a git repository",
 /// since a failed background scan is exactly as unsurprising to a user who
 /// never asked for it directly.
-fn scan_project(extensions: &[ExtensionHandle], project_root: &Path) -> Vec<ConfigProperty> {
+fn scan_project(
+    extensions: &[ExtensionHandle],
+    project_root: &Path,
+    build_tool: &BuildToolHandle,
+) -> Vec<ConfigProperty> {
     extensions
         .iter()
-        .flat_map(|extension| extension.config_properties(project_root))
+        .flat_map(|extension| extension.config_properties(project_root, build_tool))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "spring_config_test.rs"]
+mod spring_config_test;

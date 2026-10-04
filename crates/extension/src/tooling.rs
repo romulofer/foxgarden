@@ -345,7 +345,7 @@ pub struct ConfigProperty {
 /// borrow the registry.
 #[derive(Clone)]
 pub struct ExtensionHandle {
-    pub id: &'static str,
+    pub id: Arc<str>,
     extension: Arc<dyn Extension>,
 }
 
@@ -356,7 +356,7 @@ impl std::fmt::Debug for ExtensionHandle {
 }
 
 impl ExtensionHandle {
-    pub(crate) fn new(id: &'static str, extension: Arc<dyn Extension>) -> Self {
+    pub(crate) fn new(id: Arc<str>, extension: Arc<dyn Extension>) -> Self {
         Self { id, extension }
     }
 
@@ -380,8 +380,8 @@ impl ExtensionHandle {
     /// Every configuration key this extension can offer for `project_root`.
     /// Resolving these can be slow (it may resolve a classpath), so callers
     /// run it off the UI thread.
-    pub fn config_properties(&self, project_root: &Path) -> Vec<ConfigProperty> {
-        self.extension.config_properties(project_root)
+    pub fn config_properties(&self, project_root: &Path, build_tool: &BuildToolHandle) -> Vec<ConfigProperty> {
+        self.extension.config_properties(project_root, build_tool)
     }
 }
 

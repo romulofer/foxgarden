@@ -10,7 +10,7 @@
 
 use egui::Sense;
 use fg_i18n::msg;
-use syntax::RunTarget;
+use syntax::RunMarker;
 
 use super::text_area::TextAreaOutput;
 use crate::style::theme;
@@ -29,11 +29,11 @@ pub(super) const RUN_GUTTER_WIDTH: f32 = 14.0;
 pub(super) fn show_run_gutter(
     ui: &egui::Ui,
     out: &TextAreaOutput,
-    entries: &[RunTarget],
+    entries: &[RunMarker],
     id_salt: &str,
     gutter_left: f32,
     dark_mode: bool,
-) -> Option<RunTarget> {
+) -> Option<RunMarker> {
     if entries.is_empty() {
         return None;
     }
@@ -48,14 +48,14 @@ pub(super) fn show_run_gutter(
         if i > 0 && out.row_galleys[i - 1].0 == *logical {
             continue;
         }
-        let Some(entry) = entries.iter().find(|entry| entry.line == *logical) else {
+        let Some(entry) = entries.iter().find(|entry| entry.target.line == *logical) else {
             continue;
         };
 
         let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
         let rect = egui::Rect::from_min_size(egui::pos2(gutter_left, y), egui::vec2(RUN_GUTTER_WIDTH, out.row_height));
         let id = egui::Id::new(("run_marker", id_salt, *logical));
-        let label = msg::run_main_class(&entry.label);
+        let label = msg::run_main_class(&entry.target.label);
         let response = ui
             .interact(rect, id, Sense::click())
             .on_hover_text(label.clone())

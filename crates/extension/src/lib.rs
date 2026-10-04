@@ -440,7 +440,12 @@ pub trait Extension: Send + Sync {
     /// Configuration keys this extension can offer for completion in
     /// `project_root`'s own configuration files. Called off the UI thread —
     /// resolving these may shell out to a build tool.
-    fn config_properties(&self, _project_root: &Path) -> Vec<ConfigProperty> {
+    ///
+    /// `build_tool` is the tool the registry detected for the project, which
+    /// may belong to another extension. Handed over rather than left for each
+    /// extension to work out again from marker files, so that every answer
+    /// agrees with the registry's own detection.
+    fn config_properties(&self, _project_root: &Path, _build_tool: &BuildToolHandle) -> Vec<ConfigProperty> {
         Vec::new()
     }
 

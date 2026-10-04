@@ -190,3 +190,54 @@ fn create_and_open_refuses_a_target_no_extension_scaffolds() {
     assert!(!dir.path().join("my-app").exists());
     assert!(editor_state.project.is_none());
 }
+
+#[test]
+fn runtime_versions_are_those_of_the_matching_pair_only() {
+    let scaffolds = [("anvil", "khuzdul", &[2u32, 7][..]), ("anvil", "elvish", &[][..])];
+    assert_eq!(runtime_versions_for(scaffolds, "anvil", "khuzdul"), vec![2, 7]);
+    assert!(runtime_versions_for(scaffolds, "anvil", "elvish").is_empty());
+    assert!(runtime_versions_for(scaffolds, "kiln", "khuzdul").is_empty());
+}
+
+/// Switching to a target that does not offer the current pick moves it to
+/// that target's newest version, and to 0 for a target with none — a stale
+/// pick from the previous target must never survive into a `ScaffoldSpec`.
+#[test]
+fn sync_runtime_version_keeps_the_pick_among_the_offered_versions() {
+    let mut state = NewProjectWizardState {
+        runtime_version: 8,
+        ..Default::default()
+    };
+    sync_runtime_version(&mut state, &[8, 11, 17]);
+    assert_eq!(state.runtime_version, 8, "an offered pick is kept");
+
+    sync_runtime_version(&mut state, &[17, 21]);
+    assert_eq!(state.runtime_version, 21);
+
+    sync_runtime_version(&mut state, &[]);
+    assert_eq!(state.runtime_version, 0);
+}
+
+/// A version the chosen target does not offer reaches neither the extension
+/// nor the saved project config.
+#[test]
+fn create_and_open_drops_a_runtime_version_the_target_does_not_offer() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = NewProjectWizardState {
+        group_id: "com.example".to_string(),
+        artifact_id: "my-app".to_string(),
+        location: dir.path().display().to_string(),
+        runtime_version: 0,
+        build_tool_id: "maven".to_string(),
+        language_id: "java".to_string(),
+        ..Default::default()
+    };
+    let mut editor_state = test_support::editor_state();
+
+    create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
+
+    let root = dir.path().join("my-app");
+    assert_eq!(fg_core::load_project_config(&root).java_release, None);
+    let pom = std::fs::read_to_string(root.join("pom.xml")).unwrap();
+    assert!(!pom.contains(">0<"), "{pom}");
+}

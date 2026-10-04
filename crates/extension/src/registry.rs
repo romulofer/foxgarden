@@ -63,6 +63,13 @@ pub enum RegisterError {
         tool_id: String,
         extension_id: String,
     },
+    /// Two scaffolds for one build tool/language pair. A wizard can only
+    /// offer the pair once, so a second contributor would never be asked.
+    DuplicateScaffold {
+        tool_id: String,
+        language_id: LanguageId,
+        extension_id: String,
+    },
 }
 
 impl std::fmt::Display for RegisterError {
@@ -116,6 +123,14 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} scaffolds for build tool {tool_id}, which no registered extension contributes"
             ),
+            Self::DuplicateScaffold {
+                tool_id,
+                language_id,
+                extension_id,
+            } => write!(
+                f,
+                "extension {extension_id} declares a scaffold for {tool_id}/{language_id}, which is already registered"
+            ),
         }
     }
 }
@@ -143,10 +158,6 @@ pub struct Registry {
     /// Manifests in the same order as `extensions`, kept separately so
     /// `extensions()` can return a slice without borrowing from temporaries.
     manifests: Vec<ExtensionManifest>,
-    /// Each extension's id, leaked once at registration so a handle can
-    /// carry it by `&'static str`. Leaking per handle instead would leak
-    /// without bound, since handles are built per frame.
-    extension_ids: Vec<&'static str>,
     /// Maps each registered server id to the index of the extension that
     /// owns it in `extensions`, for fast dynamic dispatch.
     server_extension: HashMap<String, usize>,
@@ -189,7 +200,6 @@ impl Registry {
         for server in &contributions.language_servers {
             self.server_extension.insert(server.id.clone(), idx);
         }
-        self.extension_ids.push(Box::leak(manifest.id.clone().into_boxed_str()));
         self.commit(manifest, contributions, idx);
         self.extensions.push(Arc::from(extension));
         Ok(())
@@ -293,7 +303,21 @@ impl Registry {
             tools_seen.push(&tool.id);
         }
 
+        let mut scaffolds_seen: Vec<(&str, &LanguageId)> = Vec::new();
         for scaffold in &contributions.scaffolds {
+            let pair = (scaffold.build_tool_id.as_str(), &scaffold.language_id);
+            let already_registered = self
+                .scaffolds
+                .iter()
+                .any(|(s, _)| s.build_tool_id == pair.0 && s.language_id == *pair.1);
+            if already_registered || scaffolds_seen.contains(&pair) {
+                return Err(RegisterError::DuplicateScaffold {
+                    tool_id: scaffold.build_tool_id.clone(),
+                    language_id: scaffold.language_id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            scaffolds_seen.push(pair);
             if !known(&scaffold.language_id) {
                 return Err(RegisterError::UnknownLanguage {
                     language_id: scaffold.language_id.clone(),
@@ -430,10 +454,10 @@ impl Registry {
     /// needs to ask a project-wide question from a background thread, where
     /// borrowing the registry is not an option.
     pub fn handles(&self) -> Vec<ExtensionHandle> {
-        self.extension_ids
+        self.manifests
             .iter()
             .zip(&self.extensions)
-            .map(|(id, extension)| ExtensionHandle::new(id, extension.clone()))
+            .map(|(manifest, extension)| ExtensionHandle::new(Arc::from(manifest.id.as_str()), extension.clone()))
             .collect()
     }
 
@@ -485,6 +509,20 @@ impl Registry {
     pub fn detect_build_tool(&self, project_root: &Path) -> Option<BuildToolHandle> {
         self.build_tools
             .iter()
+            .find(|(tool, ..)| tool.marker_files.iter().any(|name| project_root.join(name).is_file()))
+            .map(|(tool, static_id, idx)| {
+                BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())
+            })
+    }
+
+    /// Like [`Self::detect_build_tool`], but only among the tools
+    /// `extension_id` contributes — for launching something that extension
+    /// described in its own notation (a run marker's entry point), which
+    /// another extension's tool has no reason to understand.
+    pub fn detect_build_tool_of(&self, project_root: &Path, extension_id: &str) -> Option<BuildToolHandle> {
+        self.build_tools
+            .iter()
+            .filter(|(_, _, idx)| self.manifests[*idx].id == extension_id)
             .find(|(tool, ..)| tool.marker_files.iter().any(|name| project_root.join(name).is_file()))
             .map(|(tool, static_id, idx)| {
                 BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())

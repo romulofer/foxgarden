@@ -2514,7 +2514,8 @@ impl eframe::App for FoxGardenApp {
                 Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
-        self.spring_config.observe_extensions(&self.state.languages);
+        self.spring_config
+            .observe(&self.state.languages, self.state.project.as_ref().map(|p| p.root.as_path()));
         self.spring_config.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
@@ -2620,7 +2621,7 @@ impl eframe::App for FoxGardenApp {
         // Set when the run gutter's ▶ is clicked; acted on below, after the
         // central panel closes, so starting a run borrows `self` freely
         // rather than from inside the editor's own closure.
-        let mut run_request: Option<syntax::RunTarget> = None;
+        let mut run_request: Option<syntax::RunMarker> = None;
         let mut welcome = crate::panels::welcome::WelcomeOutcome::default();
         // Everything but the project already open — reopening that one is
         // not a thing anyone needs offered.
@@ -2717,9 +2718,14 @@ impl eframe::App for FoxGardenApp {
         // edited in another tab would otherwise silently run against the
         // last-saved version of it. Same "Run saves your work" behavior
         // IntelliJ has.
+        //
+        // The build tool is looked up among the marker's own extension's
+        // tools only: the entry point is in that extension's notation, and
+        // another extension's tool claiming the directory first could not
+        // launch it.
         if let Some(entry) = run_request.take() {
             match self.state.project.as_ref().map(|p| p.root.clone()) {
-                Some(root) => match self.state.languages.detect_build_tool(&root) {
+                Some(root) => match self.state.languages.detect_build_tool_of(&root, &entry.extension_id) {
                     Some(tool) => {
                         tabs::save_all_dirty_tabs(
                             &mut self.state,
@@ -2729,8 +2735,8 @@ impl eframe::App for FoxGardenApp {
                             self.trim_trailing_whitespace_on_save,
                         );
                         let config = fg_core::RunConfig {
-                            name: entry.label.clone(),
-                            main_class: entry.entry_point.clone(),
+                            name: entry.target.label.clone(),
+                            main_class: entry.target.entry_point.clone(),
                             ..fg_core::RunConfig::default()
                         };
                         match self.build_state.start_run(&root, &tool, config) {

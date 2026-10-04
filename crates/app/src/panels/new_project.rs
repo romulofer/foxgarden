@@ -29,7 +29,8 @@ struct ScaffoldOption {
 }
 
 /// Every target any registered extension scaffolds. Built once per frame
-/// the dialog is open rather than held in the state: nothing is registered
+/// while the dialog is open (and not at all while it is closed) rather than
+/// held in the state: nothing is registered
 /// after startup, and a `Registry` borrow cannot live inside the modal's
 /// own closure next to a mutable `EditorState`.
 fn scaffold_options(languages: &Registry) -> Vec<ScaffoldOption> {
@@ -109,6 +110,31 @@ impl NewProjectWizardState {
     }
 }
 
+/// The runtime versions the chosen build tool/language pair offers — empty
+/// when it offers none, or when no target matches the pair at all.
+fn runtime_versions_for<'a>(
+    scaffolds: impl IntoIterator<Item = (&'a str, &'a str, &'a [u32])>,
+    build_tool_id: &str,
+    language_id: &str,
+) -> Vec<u32> {
+    scaffolds
+        .into_iter()
+        .find(|(tool, language, _)| *tool == build_tool_id && *language == language_id)
+        .map(|(_, _, versions)| versions.to_vec())
+        .unwrap_or_default()
+}
+
+/// Keeps `runtime_version` one that `offered` actually lists: the newest
+/// offered one when the current pick is not among them (switching to a
+/// target that does not offer it), and 0 when the target offers none.
+fn sync_runtime_version(state: &mut NewProjectWizardState, offered: &[u32]) {
+    match offered.last() {
+        None => state.runtime_version = 0,
+        Some(&newest) if !offered.contains(&state.runtime_version) => state.runtime_version = newest,
+        Some(_) => {}
+    }
+}
+
 fn project_root(state: &NewProjectWizardState) -> PathBuf {
     Path::new(&state.location).join(&state.artifact_id)
 }
@@ -144,15 +170,42 @@ fn form_is_valid(state: &NewProjectWizardState) -> bool {
 /// Create. Regression test: `new_project_dialog_opens_and_cancel_closes_it`
 /// in `app::e2e_test::menus_test`.
 pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut EditorState) {
-    // Read out of the registry before the modal's closure borrows
-    // `editor_state` mutably to open the created project.
-    let options = scaffold_options(&editor_state.languages);
     if let Some(folder) = state.poll_picker() {
         state.location = folder.display().to_string();
     }
     if state.picker_running() {
         ui.ctx().request_repaint();
     }
+    // Called every frame from `app.rs`; everything below costs allocations
+    // that only an open dialog has any use for.
+    if !state.open {
+        return;
+    }
+    // Read out of the registry before the modal's closure borrows
+    // `editor_state` mutably to open the created project.
+    let options = scaffold_options(&editor_state.languages);
+
+    // Switching build tool can strand a language that tool has no scaffold
+    // for, and switching target can strand a runtime version the new one
+    // does not offer; both fall back before anything is drawn, rather than
+    // leaving Create enabled on a choice nothing generates.
+    let languages_for_tool: Vec<(String, String)> = unique_by(
+        options.iter().filter(|o| o.build_tool_id == state.build_tool_id),
+        |o| (o.language_id.clone(), o.language_name.clone()),
+    );
+    if !languages_for_tool.iter().any(|(id, _)| *id == state.language_id)
+        && let Some((id, _)) = languages_for_tool.first()
+    {
+        state.language_id = id.clone();
+    }
+    let runtime_versions = runtime_versions_for(
+        options
+            .iter()
+            .map(|o| (o.build_tool_id.as_str(), o.language_id.as_str(), o.runtime_versions.as_slice())),
+        &state.build_tool_id,
+        &state.language_id,
+    );
+    sync_runtime_version(state, &runtime_versions);
 
     let mut created = false;
     let outcome = show_modal(ui, "new_project_wizard", state.open.then_some(()), |ui, ()| {
@@ -185,11 +238,6 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                 });
                 ui.end_row();
 
-                let runtime_versions: Vec<u32> = options
-                    .iter()
-                    .filter(|o| o.build_tool_id == state.build_tool_id && o.language_id == state.language_id)
-                    .flat_map(|o| o.runtime_versions.clone())
-                    .collect();
                 if !runtime_versions.is_empty() {
                     ui.label(t().new_project.java_release);
                     egui::ComboBox::new("new_project_java_release", "")
@@ -216,18 +264,6 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                 ui.end_row();
 
                 ui.label(t().new_project.language);
-                let languages_for_tool: Vec<(String, String)> = unique_by(
-                    options.iter().filter(|o| o.build_tool_id == state.build_tool_id),
-                    |o| (o.language_id.clone(), o.language_name.clone()),
-                );
-                // Switching build tool can strand a language that tool has no
-                // scaffold for; fall back rather than leaving Create enabled
-                // on a pair nothing generates.
-                if !languages_for_tool.iter().any(|(id, _)| *id == state.language_id)
-                    && let Some((id, _)) = languages_for_tool.first()
-                {
-                    state.language_id = id.clone();
-                }
                 egui::ComboBox::new("new_project_language", "")
                     .selected_text(label_for(&options, |o| {
                         (o.language_id == state.language_id).then(|| o.language_name.clone())
@@ -308,21 +344,34 @@ fn unique_by<'a>(
 
 fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState) -> Result<(), String> {
     let root = project_root(state);
+    // Only a version the chosen target offers is passed on: anything else
+    // (0 for a target with none, or one left over from another target) is
+    // `None`, which leaves the extension to its own default.
+    let offered = runtime_versions_for(
+        editor_state
+            .languages
+            .scaffolds()
+            .into_iter()
+            .map(|s| (s.build_tool_id.as_str(), s.language_id.as_str(), s.runtime_versions.as_slice())),
+        &state.build_tool_id,
+        &state.language_id,
+    );
+    let runtime_version = offered.contains(&state.runtime_version).then_some(state.runtime_version);
     let spec = ScaffoldSpec {
         namespace: state.group_id.trim().to_string(),
         name: state.artifact_id.trim().to_string(),
-        runtime_version: Some(state.runtime_version),
+        runtime_version,
         build_tool_id: state.build_tool_id.clone(),
         language_id: state.language_id.clone(),
     };
     let files = editor_state
         .languages
         .scaffold_files(&spec)
-        .ok_or_else(|| msg::scaffold_failed("no extension scaffolds that kind of project"))?;
+        .ok_or_else(|| msg::scaffold_failed(t().new_project.no_scaffold_for_target))?;
     fg_core::write_scaffold(&root, &files).map_err(|e| msg::scaffold_failed(&e))?;
 
     let config = ProjectConfig {
-        java_release: Some(state.runtime_version),
+        java_release: runtime_version,
         jdk_home: None,
     };
     fg_core::save_project_config(&root, &config)

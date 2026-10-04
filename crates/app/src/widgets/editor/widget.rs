@@ -314,7 +314,7 @@ fn foldable_ranges_for(
 #[derive(Clone)]
 struct CachedMainEntries {
     revision: u64,
-    entries: Arc<Vec<syntax::RunTarget>>,
+    entries: Arc<Vec<syntax::RunMarker>>,
 }
 
 /// Cache-checking wrapper around `syntax::main_entries`, keyed on the
@@ -329,7 +329,7 @@ fn main_entries_for(
     revision: u64,
     source: &str,
     path: &Path,
-) -> Arc<Vec<syntax::RunTarget>> {
+) -> Arc<Vec<syntax::RunMarker>> {
     let cache_id = egui::Id::new(("widget_main_entries", widget_id));
 
     if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedMainEntries>(cache_id))
@@ -546,7 +546,7 @@ pub fn show(
     // `last_error` is one: this function already returns nothing and has
     // several other "tell the caller what the user did" channels of exactly
     // this shape.
-    run_request: &mut Option<syntax::RunTarget>,
+    run_request: &mut Option<syntax::RunMarker>,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own

@@ -19,11 +19,21 @@
 //! full parse per keystroke is exactly the kind of cost this editor exists
 //! not to pay.
 
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use fg_core::Language;
 use fg_extension::{ExtensionHandle, Registry, RunTarget};
 use tree_sitter::Tree;
+
+/// One entry point plus the extension that reported it. The entry point is
+/// written in that extension's own notation, so launching it has to go
+/// through a build tool the same extension owns — another extension's tool
+/// claiming the project directory is no reason to think it can read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunMarker {
+    pub extension_id: Arc<str>,
+    pub target: RunTarget,
+}
 
 type Providers = RwLock<Vec<ExtensionHandle>>;
 
@@ -41,11 +51,18 @@ fn providers() -> &'static Providers {
     })
 }
 
-/// Makes `registry`'s extensions the ones [`main_entries`] asks. Installing
-/// a second time replaces the set rather than appending, so a test's
-/// registry cannot leave a previous one's extensions answering.
+/// Adds `registry`'s extensions to the ones [`main_entries`] asks. Keeps
+/// whichever handle was installed first for an extension id, the rule
+/// `grammars::install` follows next door: the two are installed side by
+/// side, and opposite rules would let a second registry (another app in the
+/// same test process) leave grammars from one and run markers from another.
 pub fn install(registry: &Registry) {
-    *providers().write().expect("run target providers lock") = registry.handles();
+    let mut installed = providers().write().expect("run target providers lock");
+    for handle in registry.handles() {
+        if !installed.iter().any(|existing| existing.id == handle.id) {
+            installed.push(handle);
+        }
+    }
 }
 
 /// Every runnable entry point in `source`, in source order — the lines the
@@ -55,11 +72,19 @@ pub fn install(registry: &Registry) {
 /// toolchains need to name what a file compiles into. An extension that
 /// does not own `language` contributes nothing, so a language nobody claims
 /// simply has no run markers, exactly as before.
-pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &str) -> Vec<RunTarget> {
+pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &str) -> Vec<RunMarker> {
     let providers = providers().read().expect("run target providers lock");
     providers
         .iter()
-        .flat_map(|extension| extension.run_targets(language.id(), tree, source, file_stem))
+        .flat_map(|extension| {
+            extension
+                .run_targets(language.id(), tree, source, file_stem)
+                .into_iter()
+                .map(|target| RunMarker {
+                    extension_id: extension.id.clone(),
+                    target,
+                })
+        })
         .collect()
 }
 

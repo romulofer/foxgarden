@@ -333,6 +333,9 @@ pub struct NewProject {
     pub build_tool: &'static str,
     pub language: &'static str,
     pub gradle_no_wrapper_hint: &'static str,
+    /// Create was asked for a build tool/language pair no registered
+    /// extension generates.
+    pub no_scaffold_for_target: &'static str,
     pub create: &'static str,
 }
 
@@ -754,6 +757,7 @@ pub const PT_BR: Strings = Strings {
         build_tool: "Ferramenta de Build",
         language: "Linguagem",
         gradle_no_wrapper_hint: "Nenhum Gradle Wrapper é gerado — use um Gradle já instalado na máquina.",
+        no_scaffold_for_target: "nenhuma extensão gera esse tipo de projeto",
         create: "Criar",
     },
     palettes: Palettes {
@@ -1125,6 +1129,7 @@ pub const EN_US: Strings = Strings {
         build_tool: "Build Tool",
         language: "Language",
         gradle_no_wrapper_hint: "No Gradle Wrapper is generated — use a Gradle already installed on your machine.",
+        no_scaffold_for_target: "no extension scaffolds that kind of project",
         create: "Create",
     },
     palettes: Palettes {

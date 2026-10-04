@@ -161,7 +161,7 @@ pub fn show(
     welcome: &mut crate::panels::welcome::WelcomeOutcome,
     // Set to the entry point whose run-gutter ▶ was clicked this frame, for
     // the caller to launch — see `editor::show`'s own parameter.
-    run_request: &mut Option<syntax::RunTarget>,
+    run_request: &mut Option<syntax::RunMarker>,
     recent_projects: &[PathBuf],
 ) {
     let mut focus_request = None;
