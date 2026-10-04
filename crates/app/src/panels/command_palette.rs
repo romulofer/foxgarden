@@ -4,7 +4,7 @@
 //! of five menus holds it, or remembers a shortcut nothing ever showed
 //! them. The palette is also the honest answer to this app's shortcuts
 //! diverging from what people expect elsewhere (`Ctrl+E` for recent files,
-//! `Ctrl+Shift+E` for the Spring endpoint map): a user who types "recent"
+//! `Ctrl+Shift+E` for the HTTP route map): a user who types "recent"
 //! finds it and learns the key on the way.
 //!
 //! Commands are deliberately a fixed, hand-picked list rather than a

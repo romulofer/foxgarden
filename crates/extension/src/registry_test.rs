@@ -823,3 +823,40 @@ fn a_server_with_no_custom_start_starts_as_declared() {
     assert_eq!(configured.binary, PathBuf::from("/opt/elvish-ls"));
     assert!(registry.resolve_server_start("nobody", &context).is_none());
 }
+
+#[test]
+fn http_route_languages_are_answerable_once_registered_and_shared_between_extensions() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeExtension::new("rivendell", || Contributions {
+            languages: vec![lang("elvish", &["elv"])],
+            http_route_languages: vec!["elvish".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+    registry
+        .register(Box::new(FakeExtension::new("lothlorien", || Contributions {
+            http_route_languages: vec!["elvish".to_string()],
+            ..Default::default()
+        })))
+        .expect("a second web framework on the same language is ordinary, not a conflict");
+
+    assert!(registry.has_http_routes("elvish"));
+    assert!(!registry.has_http_routes("westron"));
+}
+
+#[test]
+fn http_routes_for_an_unregistered_language_are_refused() {
+    let mut registry = Registry::new();
+    assert_eq!(
+        registry.register(Box::new(FakeExtension::new("orphan", || Contributions {
+            http_route_languages: vec!["westron".to_string()],
+            ..Default::default()
+        }))),
+        Err(RegisterError::UnknownLanguage {
+            language_id: "westron".to_string(),
+            extension_id: "orphan".to_string(),
+        })
+    );
+    assert!(!registry.has_http_routes("westron"));
+}

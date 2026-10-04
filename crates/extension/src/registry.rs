@@ -209,6 +209,8 @@ pub struct Registry {
     build_tools: Vec<(BuildToolContribution, &'static str, usize)>,
     /// Scaffold targets with the index of the extension that generates them.
     scaffolds: Vec<(ScaffoldContribution, usize)>,
+    /// Languages at least one extension finds HTTP routes in, each once.
+    http_route_languages: Vec<LanguageId>,
     index: LanguageIndex,
 }
 
@@ -393,6 +395,15 @@ impl Registry {
             }
         }
 
+        for language_id in &contributions.http_route_languages {
+            if !known(language_id) {
+                return Err(RegisterError::UnknownLanguage {
+                    language_id: language_id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -429,6 +440,11 @@ impl Registry {
         }
         for scaffold in contributions.scaffolds {
             self.scaffolds.push((scaffold, extension_index));
+        }
+        for language_id in contributions.http_route_languages {
+            if !self.http_route_languages.contains(&language_id) {
+                self.http_route_languages.push(language_id);
+            }
         }
     }
 
@@ -505,6 +521,12 @@ impl Registry {
                     .and_then(|name| name.to_str())
                     .and_then(|name| self.language_for_filename(name))
             })
+    }
+
+    /// Whether any extension finds HTTP routes in `language_id` — what
+    /// decides which files a project-wide route scan parses at all.
+    pub fn has_http_routes(&self, language_id: &str) -> bool {
+        self.http_route_languages.iter().any(|id| id == language_id)
     }
 
     pub fn grammar(&self, language_id: &str) -> Option<&GrammarContribution> {

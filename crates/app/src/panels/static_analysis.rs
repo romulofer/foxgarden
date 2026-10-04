@@ -106,7 +106,7 @@ pub struct StaticAnalysisState {
 /// which `fg_core` function `work` calls. A real project's worth of source
 /// can take long enough to analyze that running either on the UI thread
 /// would freeze the whole app for that whole stretch — the same reasoning
-/// `SpringEndpointsState::toggle` already documents for its own scan.
+/// `HttpRoutesState::toggle` already documents for its own scan.
 fn spawn_scan(work: impl FnOnce() -> ScanResult + Send + 'static) -> Receiver<ScanResult> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {

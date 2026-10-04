@@ -29,7 +29,7 @@ use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
 use crate::panels::spring_config::SpringConfigState;
-use crate::panels::spring_endpoints::{self, SpringEndpointsState};
+use crate::panels::http_routes::{self, HttpRoutesState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::status_bar;
 use crate::panels::tabs;
@@ -256,7 +256,7 @@ pub struct FoxGardenApp {
     /// here, not on a per-tab basis, since only the active tab's editor (and
     /// so only one context menu) is ever shown at a time.
     cached_clipboard_text: Option<String>,
-    /// The Spring endpoint map's jump-to-handler (`PLAN.md` Phase 4): a
+    /// The HTTP route map's jump-to-handler (`PLAN.md` Phase 4): a
     /// picked popup row's `(path, byte offset)`, set the frame the popup
     /// closes and resolved (converted to a char offset, then cleared) the
     /// next time `resolve_pending_navigation` runs, once `open_path` has
@@ -314,8 +314,8 @@ pub struct FoxGardenApp {
     quick_switcher: QuickSwitcherState,
     /// `Ctrl+P`'s fuzzy-file-open popup.
     go_to_file: GoToFileState,
-    /// `Ctrl+Shift+E`'s Spring endpoint map popup.
-    spring_endpoints: SpringEndpointsState,
+    /// `Ctrl+Shift+E`'s HTTP route map popup.
+    http_routes: HttpRoutesState,
     /// Run > Edit Configurations… — see `panels::run_configs`.
     run_configs_dialog: RunConfigsDialogState,
     editor_font: EditorFont,
@@ -581,7 +581,7 @@ fn close_terminal_session(state: &mut EditorState, sessions: &mut Vec<PtySession
     state.close_terminal_tab(index);
 }
 
-/// Resolves `pending_navigation` (the Spring endpoint map's jump-to-handler,
+/// Resolves `pending_navigation` (the HTTP route map's jump-to-handler,
 /// `PLAN.md` Phase 4) once its target document is open: converts the byte
 /// offset to a char offset via that document's buffer, clears the field, and
 /// returns `(path, char_offset)` for the caller to act on. `None` if there's
@@ -1289,9 +1289,9 @@ impl FoxGardenApp {
         for error in syntax::install_grammars(&state.languages) {
             crate::errors::report(&mut last_error, error.to_string());
         }
-        // Run markers come from the same extensions, through a separate
+        // Run markers and HTTP routes come from the same extensions, through a separate
         // install because they need no loading and so cannot fail.
-        syntax::install_run_targets(&state.languages);
+        syntax::install_extension_providers(&state.languages);
         let mut editor_font = EditorFont::default();
         let mut font_size = DEFAULT_FONT_SIZE;
         let mut dark_mode = DEFAULT_DARK_MODE;
@@ -1404,7 +1404,7 @@ impl FoxGardenApp {
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
-            spring_endpoints: SpringEndpointsState::default(),
+            http_routes: HttpRoutesState::default(),
             run_configs_dialog: RunConfigsDialogState::default(),
             editor_font,
             font_size,
@@ -1735,8 +1735,8 @@ impl eframe::App for FoxGardenApp {
             self.command_palette.toggle();
         }
         if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::E) && i.modifiers.command && i.modifiers.shift) {
-            self.spring_endpoints
-                .toggle(self.state.project.as_ref().map(|p| &p.tree));
+            self.http_routes
+                .toggle(self.state.project.as_ref().map(|p| &p.tree), &self.state.languages);
         }
         if !terminal_focused
             && ui.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command)
@@ -1920,7 +1920,7 @@ impl eframe::App for FoxGardenApp {
 
         // Resolved here, once per frame, ahead of `tabs::show` below so its
         // own `jump_to_char` reflects whatever a popup pick set last frame
-        // (`spring_endpoints::show`, further down this same function, is
+        // (`http_routes::show`, further down this same function, is
         // what actually sets `pending_navigation` — see its own call site).
         let jump_target = resolve_pending_navigation(&self.state, &mut self.pending_navigation);
         if let Some((path, char_offset)) = &jump_target {
@@ -2184,7 +2184,7 @@ impl eframe::App for FoxGardenApp {
         }
         // `build_panel::show` only hands back the compiler's own 1-based
         // line/column, not a byte offset (`pending_navigation`'s own unit) —
-        // unlike the Spring endpoint map, which already knows a raw byte
+        // unlike the HTTP route map, which already knows a raw byte
         // offset at scan time, a build-output row has no buffer to convert
         // against until its file is actually open. `open_path` first, then
         // read the byte offset straight off that now-live `Rope` — no
@@ -2901,7 +2901,7 @@ impl eframe::App for FoxGardenApp {
                 path,
             );
         }
-        if let Some((path, handler_byte)) = spring_endpoints::show(ui, &self.state, &mut self.spring_endpoints) {
+        if let Some((path, handler_byte)) = http_routes::show(ui, &self.state, &mut self.http_routes) {
             open_path(
                 &mut self.state,
                 &mut self.parsers,

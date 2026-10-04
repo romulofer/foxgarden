@@ -3,7 +3,8 @@ use fg_extension::{
     Contributions, Extension, ExtensionManifest, LanguageContribution, Registry, RunTarget, CURRENT_SCHEMA_VERSION,
 };
 
-use super::{install, main_entries};
+use super::main_entries;
+use crate::providers::install;
 use crate::IncrementalParser;
 
 /// An extension that calls every top-level node of its own invented

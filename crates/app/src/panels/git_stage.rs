@@ -360,7 +360,7 @@ pub fn show(
         // so without this the op finishes almost instantly on its own
         // thread, but the checkbox/panel wouldn't visibly reflect it until
         // some unrelated input event (a mouse move, a keystroke elsewhere)
-        // happened to trigger the next frame. Same fix `spring_endpoints::
+        // happened to trigger the next frame. Same fix `http_routes::
         // show` already applies to its own background scan.
         ui.ctx().request_repaint();
     }

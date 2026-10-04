@@ -305,6 +305,31 @@ pub struct RunTarget {
     pub label: String,
 }
 
+/// One HTTP route an extension found declared in a file — a row in the
+/// route map, and where picking it jumps to.
+///
+/// Named for what it is rather than for any one framework: Spring's
+/// `@GetMapping`, a Rails `get`, an Express `app.get` and an Axum
+/// `.route(…, get(…))` all declare the same thing, and the map that lists
+/// them has no reason to know which one it is looking at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRoute {
+    /// `"GET"`, `"POST"`, … — or `"ANY"` for a route that matches every
+    /// method.
+    pub method: String,
+    /// The full path as the framework resolves it, prefixes included
+    /// (`"/api/users/{id}"`). Never empty: a route with no path anywhere is
+    /// `"/"`.
+    pub path: String,
+    /// What groups the handler — a controller class, a router module.
+    pub owner: String,
+    /// The function that handles the route.
+    pub handler: String,
+    /// Byte offset of the handler's name, which is where a jump lands the
+    /// caret.
+    pub handler_byte: usize,
+}
+
 /// Which language-runtime release a project targets, plus where that was
 /// read from — so the answer can be explained in the UI rather than only
 /// applied. The JVM's `maven.compiler.release` is the motivating case, but
@@ -375,6 +400,11 @@ impl ExtensionHandle {
         file_stem: &str,
     ) -> Vec<RunTarget> {
         self.extension.run_targets(language_id, tree, source, file_stem)
+    }
+
+    /// Every HTTP route declared in an already-parsed file.
+    pub fn http_routes(&self, language_id: &str, tree: &tree_sitter::Tree, source: &str) -> Vec<HttpRoute> {
+        self.extension.http_routes(language_id, tree, source)
     }
 
     /// Every configuration key this extension can offer for `project_root`.

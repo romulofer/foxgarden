@@ -1,6 +1,6 @@
 //! `PLAN.md` Track 20 Phase 4: `textDocument/definition`, resolved into a
 //! target `app.rs` feeds straight into `pending_navigation` — the same
-//! cross-tab jump primitive the Spring endpoint map and a clicked
+//! cross-tab jump primitive the HTTP route map and a clicked
 //! compiler-error row already use. Unlike `widgets::editor::hover`, there's
 //! no UI to own here (no popup, no painting), just a background request to
 //! poll once a frame, the same shape every other async LSP op in this app

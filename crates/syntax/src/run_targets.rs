@@ -8,21 +8,17 @@
 //! general is "ask whoever owns this language where its entry points are,
 //! and put a ▶ on those lines".
 //!
-//! **Installed process-wide, like the grammars next door**, and for the
-//! same reason: the answer is needed deep inside the editor's paint path
-//! (`widgets::editor::widget`), which has no registry in reach, and the set
-//! of extensions never changes after startup. `install` is called next to
-//! `grammars::install`, so an editor that has one has the other.
+//! Asks the extensions `providers` holds, installed beside the grammars.
 //!
 //! The extension is handed the tree the editor already parsed, never asked
 //! to parse the file itself: this runs again on every edit, and a second
 //! full parse per keystroke is exactly the kind of cost this editor exists
 //! not to pay.
 
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
 use fg_core::Language;
-use fg_extension::{ExtensionHandle, Registry, RunTarget};
+use fg_extension::RunTarget;
 use tree_sitter::Tree;
 
 /// One entry point plus the extension that reported it. The entry point is
@@ -35,36 +31,6 @@ pub struct RunMarker {
     pub target: RunTarget,
 }
 
-type Providers = RwLock<Vec<ExtensionHandle>>;
-
-fn providers() -> &'static Providers {
-    static PROVIDERS: OnceLock<Providers> = OnceLock::new();
-    PROVIDERS.get_or_init(|| {
-        #[allow(unused_mut)]
-        let mut installed: Vec<ExtensionHandle> = Vec::new();
-        // Same arrangement `grammars::store` makes for this crate's own
-        // tests: the shipped extensions are installed for them here, so a
-        // test about run markers is not also a test about installation.
-        #[cfg(test)]
-        installed.extend(fg_languages::builtin_registry().handles());
-        RwLock::new(installed)
-    })
-}
-
-/// Adds `registry`'s extensions to the ones [`main_entries`] asks. Keeps
-/// whichever handle was installed first for an extension id, the rule
-/// `grammars::install` follows next door: the two are installed side by
-/// side, and opposite rules would let a second registry (another app in the
-/// same test process) leave grammars from one and run markers from another.
-pub fn install(registry: &Registry) {
-    let mut installed = providers().write().expect("run target providers lock");
-    for handle in registry.handles() {
-        if !installed.iter().any(|existing| existing.id == handle.id) {
-            installed.push(handle);
-        }
-    }
-}
-
 /// Every runnable entry point in `source`, in source order — the lines the
 /// editor's run gutter marks.
 ///
@@ -73,8 +39,7 @@ pub fn install(registry: &Registry) {
 /// does not own `language` contributes nothing, so a language nobody claims
 /// simply has no run markers, exactly as before.
 pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &str) -> Vec<RunMarker> {
-    let providers = providers().read().expect("run target providers lock");
-    providers
+    crate::providers::providers()
         .iter()
         .flat_map(|extension| {
             extension

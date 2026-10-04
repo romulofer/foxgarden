@@ -1,5 +1,5 @@
 //! Getting somewhere without the tree: the `Ctrl+P` fuzzy file opener, the
-//! `Ctrl+E` recent-files switcher, and the `Ctrl+Shift+E` Spring endpoint
+//! `Ctrl+E` recent-files switcher, and the `Ctrl+Shift+E` HTTP route
 //! map.
 
 use super::common_test::{E2e, MAIN_JAVA};
@@ -76,7 +76,7 @@ fn ctrl_e_lists_recent_files_and_reopens_one() {
 }
 
 #[test]
-fn ctrl_shift_e_lists_the_projects_spring_endpoints_and_jumps_to_one() {
+fn ctrl_shift_e_lists_the_projects_http_routes_and_jumps_to_one() {
     const CONTROLLER: &str = "\
 @RestController
 @RequestMapping(\"/api\")
@@ -89,8 +89,8 @@ class UserController {
 
     app.press(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::E);
     assert!(
-        app.shows(t().palettes.spring_endpoints),
-        "Ctrl+Shift+E opens the endpoint map"
+        app.shows(t().palettes.http_routes),
+        "Ctrl+Shift+E opens the route map"
     );
     assert!(app.shows_containing("/api/users"), "and lists the mapped path");
 
@@ -101,5 +101,5 @@ class UserController {
         ["UserController.java"],
         "picking one opens its file"
     );
-    assert!(!app.shows(t().palettes.spring_endpoints));
+    assert!(!app.shows(t().palettes.http_routes));
 }

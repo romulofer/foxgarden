@@ -369,7 +369,7 @@ impl ToolManagerState {
     /// PMD's ~70MB archive (the largest of the three) on the UI thread
     /// would freeze the whole app for however long that takes, the same
     /// "background thread + channel, polled from `show`" shape every other
-    /// long-running action in this app already uses (`SpringEndpointsState`,
+    /// long-running action in this app already uses (`HttpRoutesState`,
     /// `StaticAnalysisState`'s own scans).
     pub fn install(&mut self, tool: Tool) {
         let (tx, rx) = channel();

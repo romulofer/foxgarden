@@ -3,25 +3,26 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use fg_core::{EditorState, FileNode};
-use syntax::EndpointInfo;
+use fg_extension::Registry;
+use syntax::HttpRoute;
 
 use crate::panels::go_to_file::fuzzy_score;
-use crate::widgets::editor::{EndpointCache, scan_project_endpoints_cached};
+use crate::widgets::editor::{RouteCache, route_files, scan_project_routes_cached};
 
 /// What a completed background scan sends back: the updated cache (for
-/// `SpringEndpointsState::cache` to keep across the next open) alongside
-/// this scan's flattened endpoint list.
-type ScanResult = (EndpointCache, Vec<(PathBuf, EndpointInfo)>);
+/// `HttpRoutesState::cache` to keep across the next open) alongside this
+/// scan's flattened route list.
+type ScanResult = (RouteCache, Vec<(PathBuf, HttpRoute)>);
 
-/// Transient state for the `Ctrl+Shift+E` Spring endpoint map popup, owned
+/// Transient state for the `Ctrl+Shift+E` HTTP route map popup, owned
 /// by the caller across frames — structurally a near-twin of
 /// `GoToFileState`/`QuickSwitcherState`, plus fields neither of those
-/// carries: `endpoints`, the last completed whole-project scan's result;
+/// carries: `routes`, the last completed whole-project scan's result;
 /// `scan_rx`, `Some` while a scan is still running on a background thread;
-/// and `cache`, carried *across* opens (unlike `endpoints`, not reset in
+/// and `cache`, carried *across* opens (unlike `routes`, not reset in
 /// `toggle()`) so a re-open only re-reads + re-parses files that actually
-/// changed since the last scan (`spring_scan::scan_project_endpoints_cached`).
-/// A real project's worth of `.java`/`.kt` files can take long enough to
+/// changed since the last scan (`route_scan::scan_project_routes_cached`).
+/// A real project's worth of source files can take long enough to
 /// read-and-parse that running the scan on the UI thread freezes the whole
 /// app for that whole stretch, and repeating that full cost on *every* open
 /// (rather than just the first) was directly reported as too slow on a real
@@ -31,18 +32,18 @@ type ScanResult = (EndpointCache, Vec<(PathBuf, EndpointInfo)>);
 /// shows, the same background-thread-plus-channel shape `SPEC.md` §8.3
 /// already calls for the terminal-tabs track's own pty reads.
 #[derive(Default)]
-pub struct SpringEndpointsState {
+pub struct HttpRoutesState {
     open: bool,
     query: String,
     selected: usize,
-    endpoints: Vec<(PathBuf, EndpointInfo)>,
+    routes: Vec<(PathBuf, HttpRoute)>,
     scan_rx: Option<Receiver<ScanResult>>,
-    cache: EndpointCache,
+    cache: RouteCache,
 }
 
-impl SpringEndpointsState {
-    /// Opens the popup and kicks off a fresh background scan of `root`
-    /// against `self.cache` (`None` when no project is open, same as every
+impl HttpRoutesState {
+    /// Opens the popup and kicks off a fresh background scan of `root`'s
+    /// route files (which ones, `languages` decides) against `self.cache` (`None` when no project is open, same as every
     /// other project-scoped popup here); closing needs no scan. Same
     /// "recomputed on open" reasoning `CompletionState::open` already uses
     /// for its own candidate list, not every frame the popup is shown.
@@ -54,24 +55,24 @@ impl SpringEndpointsState {
     /// closed and reopened quickly) loses that in-flight cache along with
     /// its result — the worker thread's own `send` then just fails silently
     /// and the thread exits — same "harmless, just a frame late or a re-scan
-    /// short of ideal" tolerance `endpoints` filling in a frame late already
+    /// short of ideal" tolerance `routes` filling in a frame late already
     /// has, just extended to the cache; the next successful scan rebuilds it
     /// from scratch.
-    pub fn toggle(&mut self, root: Option<&FileNode>) {
+    pub fn toggle(&mut self, root: Option<&FileNode>, languages: &Registry) {
         self.open = !self.open;
         self.query.clear();
         self.selected = 0;
         self.scan_rx = None;
-        self.endpoints.clear();
+        self.routes.clear();
         if self.open
             && let Some(root) = root
         {
-            let root = root.clone();
+            let files = route_files(root, languages);
             let mut cache = std::mem::take(&mut self.cache);
             let (tx, rx) = channel();
             std::thread::spawn(move || {
-                let endpoints = scan_project_endpoints_cached(&root, &mut cache);
-                let _ = tx.send((cache, endpoints));
+                let routes = scan_project_routes_cached(&files, &mut cache);
+                let _ = tx.send((cache, routes));
             });
             self.scan_rx = Some(rx);
         }
@@ -81,18 +82,15 @@ impl SpringEndpointsState {
 /// The row text a popup entry renders as, and what `fuzzy_score` filters
 /// against — typing either a path fragment or a method/controller name
 /// narrows the list.
-fn row_label(entry: &EndpointInfo) -> String {
-    format!(
-        "{} {} — {}#{}",
-        entry.http_method, entry.path, entry.controller_name, entry.handler_name
-    )
+fn row_label(route: &HttpRoute) -> String {
+    format!("{} {} — {}#{}", route.method, route.path, route.owner, route.handler)
 }
 
-/// Every cached endpoint whose rendered row fuzzy-matches `query`, best
+/// Every cached route whose rendered row fuzzy-matches `query`, best
 /// match first (ties broken by source order, for stable ordering) — reused
 /// straight from `go_to_file.rs` rather than a second fuzzy matcher.
-fn matching_endpoints<'a>(endpoints: &'a [(PathBuf, EndpointInfo)], query: &str) -> Vec<&'a (PathBuf, EndpointInfo)> {
-    let mut scored: Vec<(i32, usize, &(PathBuf, EndpointInfo))> = endpoints
+fn matching_routes<'a>(routes: &'a [(PathBuf, HttpRoute)], query: &str) -> Vec<&'a (PathBuf, HttpRoute)> {
+    let mut scored: Vec<(i32, usize, &(PathBuf, HttpRoute))> = routes
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| fuzzy_score(&row_label(&entry.1), query).map(|score| (score, index, entry)))
@@ -106,14 +104,14 @@ fn matching_endpoints<'a>(endpoints: &'a [(PathBuf, EndpointInfo)], query: &str)
 /// this gets checked again next frame instead of only on the next input
 /// event), `Disconnected` means the worker thread died without sending
 /// (treated the same as "found nothing" rather than spinning forever).
-fn poll_scan(popup: &mut SpringEndpointsState) {
+fn poll_scan(popup: &mut HttpRoutesState) {
     let Some(rx) = &popup.scan_rx else {
         return;
     };
     match rx.try_recv() {
-        Ok((cache, endpoints)) => {
+        Ok((cache, routes)) => {
             popup.cache = cache;
-            popup.endpoints = endpoints;
+            popup.routes = routes;
             popup.scan_rx = None;
         }
         Err(TryRecvError::Empty) => {}
@@ -127,10 +125,10 @@ fn poll_scan(popup: &mut SpringEndpointsState) {
 /// byte) elsewhere; picking here doesn't navigate by itself. Closes the
 /// popup on a pick or on Escape, same shape as `go_to_file::show`/
 /// `quick_switcher::show`. `_state` isn't read yet (every row's text comes
-/// from `popup.endpoints`, filled in once the background scan `toggle`
+/// from `popup.routes`, filled in once the background scan `toggle`
 /// started completes) but is kept so this call site matches those two
 /// popups' own `show(ui, &state, &mut popup)` shape.
-pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsState) -> Option<(PathBuf, usize)> {
+pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut HttpRoutesState) -> Option<(PathBuf, usize)> {
     if !popup.open {
         return None;
     }
@@ -149,7 +147,7 @@ pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsStat
     let candidates = if scanning {
         Vec::new()
     } else {
-        matching_endpoints(&popup.endpoints, &popup.query)
+        matching_routes(&popup.routes, &popup.query)
     };
     if !candidates.is_empty() {
         popup.selected = popup.selected.min(candidates.len() - 1);
@@ -159,9 +157,9 @@ pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsStat
     let mut chosen = None;
     let mut escaped = false;
 
-    egui::Modal::new(egui::Id::new("spring_endpoints")).show(&ctx, |ui| {
+    egui::Modal::new(egui::Id::new("http_routes")).show(&ctx, |ui| {
         ui.set_min_width(560.0);
-        ui.label(t().palettes.spring_endpoints);
+        ui.label(t().palettes.http_routes);
 
         let response = ui.text_edit_singleline(&mut popup.query);
         response.request_focus();
@@ -199,5 +197,5 @@ pub fn show(ui: &egui::Ui, _state: &EditorState, popup: &mut SpringEndpointsStat
 }
 
 #[cfg(test)]
-#[path = "spring_endpoints_test.rs"]
-mod spring_endpoints_test;
+#[path = "http_routes_test.rs"]
+mod http_routes_test;

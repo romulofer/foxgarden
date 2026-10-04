@@ -453,7 +453,7 @@ pub fn show(
             egui::ScrollArea::both()
                 .id_salt(("editor_scroll", pane))
                 .show(ui, |ui| {
-                    // The Spring endpoint map's jump-to-handler (PLAN.md Phase 4):
+                    // The HTTP route map's jump-to-handler (PLAN.md Phase 4):
                     // scrolls the picked handler's line into view. `ui.next_widget_
                     // position()` is exactly where `editor::show`'s own first
                     // allocation will land, so it doubles as that call's own internal

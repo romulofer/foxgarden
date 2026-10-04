@@ -5,7 +5,7 @@
 //! (`codegen`), live templates (`templates`), the completion popup
 //! (`completion`), the hover-docs popup (`hover`), the peek-definition
 //! popup (`peek`), the right-click context menu (`context_menu`), the
-//! Spring endpoint map's whole-project scan (`spring_scan`), the git diff
+//! HTTP route map's whole-project scan (`route_scan`), the git diff
 //! gutter (`diff_gutter`), and shared byte↔char offset conversion
 //! (`text_offset`). `show` and the
 //! handful of types the Tools menu needs to request generation/
@@ -26,10 +26,10 @@ mod painting;
 mod peek;
 mod references;
 mod rename;
+mod route_scan;
 mod run_gutter;
 mod spring_annotation_completion;
 mod spring_config_completion;
-mod spring_scan;
 mod templates;
 mod text_area;
 mod text_offset;
@@ -45,7 +45,7 @@ pub use hover::HoverState;
 pub use peek::PeekState;
 pub use references::FindReferencesState;
 pub use rename::RenameBox;
-pub use spring_scan::{EndpointCache, scan_project_endpoints_cached};
+pub use route_scan::{RouteCache, route_files, scan_project_routes_cached};
 pub use templates::{
     GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,
     serialize_user_templates,

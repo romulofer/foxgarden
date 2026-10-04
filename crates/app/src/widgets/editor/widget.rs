@@ -2292,7 +2292,7 @@ pub fn show(
     // Go to definition (`PLAN.md` Track 20 Phase 4): Ctrl+Click an
     // identifier to request `textDocument/definition` and jump there via
     // `pending_navigation` (`app.rs`), the same cross-tab jump primitive
-    // the Spring endpoint map and a clicked compiler-error row both already
+    // the HTTP route map and a clicked compiler-error row both already
     // use. Resolving *which* identifier was clicked reuses `hover`'s own
     // span logic (`hovered_span`) rather than duplicating it — the "is the
     // pointer really on a symbol, not just nearest one" problem is
@@ -2628,7 +2628,7 @@ pub fn show(
 }
 
 /// Overrides the persisted caret for the document at `path` to `char_offset`
-/// and gives its widget keyboard focus — the Spring endpoint map's
+/// and gives its widget keyboard focus — the HTTP route map's
 /// jump-to-handler (PLAN.md Phase 4), and the one place outside this module
 /// needs to reach into `text_area`'s otherwise-internal caret storage. Wraps
 /// `text_area::set_caret`/`Caret::at` and the exact same `Id::new`

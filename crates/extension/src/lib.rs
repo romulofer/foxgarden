@@ -35,7 +35,7 @@ mod tooling;
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
     BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, ExtensionHandle, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -289,6 +289,12 @@ pub struct Contributions {
     pub language_servers: Vec<LanguageServerContribution>,
     pub build_tools: Vec<BuildToolContribution>,
     pub scaffolds: Vec<ScaffoldContribution>,
+    /// Languages this extension finds HTTP routes in (`Extension::
+    /// http_routes`). Declared up front so a project-wide route scan parses
+    /// only the files someone can answer for, rather than every file it
+    /// has a grammar for. Several extensions may name the same language —
+    /// two web frameworks on one language is ordinary — and each is asked.
+    pub http_route_languages: Vec<LanguageId>,
 }
 
 /// One extension.
@@ -426,6 +432,13 @@ pub trait Extension: Send + Sync {
         _source: &str,
         _file_stem: &str,
     ) -> Vec<RunTarget> {
+        Vec::new()
+    }
+
+    /// Every HTTP route declared in `source`, whose parse `tree` the editor
+    /// built, in source order. Asked only for the languages this extension
+    /// listed in `Contributions::http_route_languages`.
+    fn http_routes(&self, _language_id: &str, _tree: &tree_sitter::Tree, _source: &str) -> Vec<HttpRoute> {
         Vec::new()
     }
 

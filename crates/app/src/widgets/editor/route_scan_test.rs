@@ -2,21 +2,28 @@
 use super::*;
 use fg_core::Project;
 
+/// Every route under `root`, through the registry's own choice of files —
+/// the same two steps `HttpRoutesState::toggle` takes.
+fn scan_tree(root: &FileNode, cache: &mut RouteCache) -> Vec<(PathBuf, HttpRoute)> {
+    test_support::install_grammars();
+    scan_project_routes_cached(&route_files(root, test_support::languages()), cache)
+}
+
 #[test]
 #[ignore]
 fn bench_scan_real_project() {
     let path = std::env::var("FG_BENCH_PATH").expect("set FG_BENCH_PATH");
     let project = Project::open(path.into()).unwrap();
-    let mut cache = EndpointCache::new();
+    let mut cache = RouteCache::new();
     let start = std::time::Instant::now();
-    let out = scan_project_endpoints_cached(&project.tree, &mut cache);
-    eprintln!("cold: endpoints={} elapsed={:?}", out.len(), start.elapsed());
+    let out = scan_tree(&project.tree, &mut cache);
+    eprintln!("cold: routes={} elapsed={:?}", out.len(), start.elapsed());
     let start = std::time::Instant::now();
-    let out = scan_project_endpoints_cached(&project.tree, &mut cache);
-    eprintln!("warm: endpoints={} elapsed={:?}", out.len(), start.elapsed());
+    let out = scan_tree(&project.tree, &mut cache);
+    eprintln!("warm: routes={} elapsed={:?}", out.len(), start.elapsed());
 }
 
-fn scan(files: &[(&str, &str)]) -> Vec<(PathBuf, EndpointInfo)> {
+fn scan(files: &[(&str, &str)]) -> Vec<(PathBuf, HttpRoute)> {
     let dir = tempfile::tempdir().unwrap();
     for (name, contents) in files {
         let path = dir.path().join(name);
@@ -26,12 +33,12 @@ fn scan(files: &[(&str, &str)]) -> Vec<(PathBuf, EndpointInfo)> {
         std::fs::write(&path, contents).unwrap();
     }
     let project = Project::open(dir.path().to_path_buf()).unwrap();
-    let mut cache = EndpointCache::new();
-    scan_project_endpoints_cached(&project.tree, &mut cache)
+    let mut cache = RouteCache::new();
+    scan_tree(&project.tree, &mut cache)
 }
 
 #[test]
-fn aggregates_endpoints_across_java_and_kotlin_files_with_the_right_paths() {
+fn aggregates_routes_across_java_and_kotlin_files_with_the_right_paths() {
     let results = scan(&[
         (
             "UserController.java",
@@ -49,11 +56,11 @@ fn aggregates_endpoints_across_java_and_kotlin_files_with_the_right_paths() {
 
     assert_eq!(results.len(), 2);
 
-    let java_entry = results.iter().find(|(_, e)| e.handler_name == "getUser").unwrap();
+    let java_entry = results.iter().find(|(_, e)| e.handler == "getUser").unwrap();
     assert!(java_entry.0.ends_with("UserController.java"));
     assert_eq!(java_entry.1.path, "/api/{id}");
 
-    let kotlin_entry = results.iter().find(|(_, e)| e.handler_name == "createOrder").unwrap();
+    let kotlin_entry = results.iter().find(|(_, e)| e.handler == "createOrder").unwrap();
     assert!(kotlin_entry.0.ends_with("OrderController.kt"));
     assert_eq!(kotlin_entry.1.path, "/orders");
 }
@@ -81,8 +88,8 @@ fn cached_scan_reuses_a_file_whose_mtime_is_unchanged() {
     .unwrap();
     let project = Project::open(dir.path().to_path_buf()).unwrap();
 
-    let mut cache = EndpointCache::new();
-    let first = scan_project_endpoints_cached(&project.tree, &mut cache);
+    let mut cache = RouteCache::new();
+    let first = scan_tree(&project.tree, &mut cache);
     assert_eq!(first.len(), 1);
     assert!(cache.contains_key(&path));
 
@@ -99,7 +106,7 @@ fn cached_scan_reuses_a_file_whose_mtime_is_unchanged() {
     .unwrap();
     std::fs::File::open(&path).unwrap().set_modified(cached_mtime).unwrap();
 
-    let second = scan_project_endpoints_cached(&project.tree, &mut cache);
+    let second = scan_tree(&project.tree, &mut cache);
     assert_eq!(
         second, first,
         "unchanged mtime must serve the cached result, not the file's new content"
@@ -117,9 +124,9 @@ fn cached_scan_rereads_a_file_whose_mtime_changed() {
     .unwrap();
     let project = Project::open(dir.path().to_path_buf()).unwrap();
 
-    let mut cache = EndpointCache::new();
-    let first = scan_project_endpoints_cached(&project.tree, &mut cache);
-    assert_eq!(first[0].1.handler_name, "run");
+    let mut cache = RouteCache::new();
+    let first = scan_tree(&project.tree, &mut cache);
+    assert_eq!(first[0].1.handler, "run");
 
     // A real edit: new content *and* an mtime bumped a full second past
     // whatever was cached, since some filesystems only have 1-second
@@ -133,8 +140,8 @@ fn cached_scan_rereads_a_file_whose_mtime_changed() {
     .unwrap();
     std::fs::File::open(&path).unwrap().set_modified(bumped).unwrap();
 
-    let second = scan_project_endpoints_cached(&project.tree, &mut cache);
-    assert_eq!(second[0].1.handler_name, "other");
+    let second = scan_tree(&project.tree, &mut cache);
+    assert_eq!(second[0].1.handler, "other");
 }
 
 #[test]
@@ -148,17 +155,33 @@ fn cached_scan_drops_entries_for_files_no_longer_in_the_tree() {
     .unwrap();
     let mut project = Project::open(dir.path().to_path_buf()).unwrap();
 
-    let mut cache = EndpointCache::new();
-    scan_project_endpoints_cached(&project.tree, &mut cache);
+    let mut cache = RouteCache::new();
+    scan_tree(&project.tree, &mut cache);
     assert!(cache.contains_key(&path));
 
     std::fs::remove_file(&path).unwrap();
     project = Project::open(dir.path().to_path_buf()).unwrap();
-    let results = scan_project_endpoints_cached(&project.tree, &mut cache);
+    let results = scan_tree(&project.tree, &mut cache);
 
     assert_eq!(results, vec![]);
     assert!(
         !cache.contains_key(&path),
         "a deleted file's stale entry must not linger in the cache"
     );
+}
+
+/// Which files get parsed at all is the registry's call: a language no
+/// extension finds routes in is never read, even when its text would look
+/// like a route to the extension that does.
+#[test]
+fn only_languages_an_extension_finds_routes_in_are_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Foo.java"), "class Foo {}\n").unwrap();
+    std::fs::write(dir.path().join("application.yml"), "server:\n  port: 8080\n").unwrap();
+    std::fs::write(dir.path().join("README.md"), "# hi\n").unwrap();
+    let project = Project::open(dir.path().to_path_buf()).unwrap();
+
+    let files = route_files(&project.tree, test_support::languages());
+
+    assert_eq!(files, vec![(dir.path().join("Foo.java"), Language::Java)]);
 }

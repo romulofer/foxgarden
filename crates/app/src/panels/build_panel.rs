@@ -4,7 +4,7 @@
 //! (`BuildToolHandle::command`) on a background thread, streaming its
 //! stdout+stderr live into a scrollable log; a row the same tool recognized
 //! as a compiler diagnostic is also a click-to-jump entry (`pending_navigation`,
-//! the same mechanism the Spring endpoint map already established — see
+//! the same mechanism the HTTP route map already established — see
 //! `app.rs`'s own `jump_to`/`resolve_pending_navigation`).
 //!
 //! Streaming, not spawn-wait-collect: this codebase's other background-job
@@ -630,7 +630,7 @@ where
 /// yet a byte offset — the frame a problem row is clicked; `app.rs`'s own
 /// call site opens that path and converts through its now-live buffer
 /// before setting `pending_navigation`, the same deferred-conversion shape
-/// the Spring endpoint map's own call site already uses.
+/// the HTTP route map's own call site already uses.
 pub fn show(ui: &mut egui::Ui, state: &mut BuildState) -> Option<(PathBuf, usize, usize)> {
     state.poll();
     if state.running() {
