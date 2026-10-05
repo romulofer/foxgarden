@@ -1,6 +1,5 @@
-//! Dot-completion tests: candidate resolution (`dot_completion_candidates`/
-//! `java_dot_completion_candidates`/`kotlin_dot_completion_candidates`)
-//! called directly, plus (below) real multi-frame trigger tests via
+//! Dot-completion tests: candidate resolution (`dot_completion_candidates`,
+//! answered by the extension that models each language) called directly, plus (below) real multi-frame trigger tests via
 //! `typing_session` that catch bugs in *when* `show` decides to call that
 //! resolution, which direct calls can't.
 
@@ -29,7 +28,7 @@ fn this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
     let tree = tree_of(source);
     let cursor = source.find("helper").unwrap();
 
-    let items = java_dot_completion_candidates(&tree, source, cursor, "this", None)
+    let items = dot_completion_candidates(Language::Java, &tree, source, cursor, "this", None)
         .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["MAX", "helper", "run", "x"]);
@@ -48,7 +47,7 @@ fn super_dot_offers_the_superclasss_members_from_the_project_tree() {
     let cursor = foo_source.find("go").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project))
+    let items = dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "super", Some(&project))
         .expect("super. should find Base.java in the project tree");
 
     assert_eq!(labels(&items), vec!["baseField", "run"]);
@@ -62,7 +61,7 @@ fn super_dot_reports_none_when_the_superclass_has_no_project_file() {
     let cursor = foo_source.find("go").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project)).is_none());
+    assert!(dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "super", Some(&project)).is_none());
 }
 
 #[test]
@@ -78,12 +77,12 @@ fn a_local_variable_typed_as_another_project_class_offers_that_classs_public_mem
     let cursor = foo_source.find("int x").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+    let items = dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "b", Some(&project))
         .expect("a local typed as an in-project class should resolve");
 
-    // `secret` is private on `Bar` — an external receiver keeps
-    // `methods_in_type`'s existing visibility filtering, unlike `this.`/
-    // `super.`'s unfiltered listing.
+    // `secret` is private on `Bar` — an external receiver gets
+    // `MemberView::Outside`'s visibility filtering, unlike `this.`/
+    // `super.`'s unfiltered `Inside` listing.
     assert_eq!(labels(&items), vec!["baz"]);
 }
 
@@ -105,7 +104,7 @@ fn an_external_receivers_one_level_supertype_is_included() {
     let cursor = foo_source.find("int x").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = java_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+    let items = dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "b", Some(&project))
         .expect("a local typed as an in-project class should resolve");
 
     assert_eq!(labels(&items), vec!["baz", "inherited"]);
@@ -119,7 +118,7 @@ fn a_jdk_typed_local_produces_no_candidates() {
     let dir = tempfile::tempdir().unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "s", Some(&project)).is_none());
+    assert!(dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "s", Some(&project)).is_none());
 }
 
 #[test]
@@ -128,24 +127,24 @@ fn an_undeclared_receiver_produces_no_candidates() {
     let tree = tree_of(foo_source);
     let cursor = foo_source.find("int x").unwrap();
 
-    assert!(java_dot_completion_candidates(&tree, foo_source, cursor, "neverDeclared", None).is_none());
+    assert!(dot_completion_candidates(Language::Java, &tree, foo_source, cursor, "neverDeclared", None).is_none());
 }
 
 #[test]
 fn this_dot_reports_none_outside_any_class() {
     let source = "// just a comment\n";
     let tree = tree_of(source);
-    assert!(java_dot_completion_candidates(&tree, source, 0, "this", None).is_none());
+    assert!(dot_completion_candidates(Language::Java, &tree, source, 0, "this", None).is_none());
 }
 
 #[test]
-fn dispatcher_routes_java_to_java_dot_completion_candidates() {
+fn java_resolves_through_the_extension_that_models_it() {
     let source = "class Foo {\n    private void helper() {\n    }\n    void run() {\n        int x = 0;\n    }\n}\n";
     let tree = tree_of(source);
     let cursor = source.find("int x").unwrap();
 
     let items = dot_completion_candidates(Language::Java, &tree, source, cursor, "this", None)
-        .expect("Java should dispatch to java_dot_completion_candidates");
+        .expect("the shipped extension models Java");
     assert_eq!(labels(&items), vec!["helper", "run"]);
 }
 
@@ -164,7 +163,7 @@ fn kotlin_this_dot_offers_every_member_of_the_enclosing_class_unfiltered() {
     let tree = kotlin_tree_of(source);
     let cursor = source.find("helper").unwrap();
 
-    let items = kotlin_dot_completion_candidates(&tree, source, cursor, "this", None)
+    let items = dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None)
         .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["helper", "run", "x"]);
@@ -183,7 +182,7 @@ fn kotlin_super_dot_offers_the_superclasss_members_from_the_project_tree() {
     let cursor = foo_source.find("go").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project))
+    let items = dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "super", Some(&project))
         .expect("super. should find Base.kt in the project tree");
 
     assert_eq!(labels(&items), vec!["baseField", "run"]);
@@ -197,7 +196,7 @@ fn kotlin_super_dot_reports_none_when_the_superclass_has_no_project_file() {
     let cursor = foo_source.find("go").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "super", Some(&project)).is_none());
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "super", Some(&project)).is_none());
 }
 
 #[test]
@@ -213,7 +212,7 @@ fn kotlin_a_local_variable_typed_as_another_project_class_offers_that_classs_pub
     let cursor = foo_source.find("val x").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+    let items = dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "b", Some(&project))
         .expect("a local typed as an in-project class should resolve");
 
     // `secret` is private on `Bar` — an external receiver keeps
@@ -240,7 +239,7 @@ fn kotlin_an_external_receivers_one_level_supertype_is_included() {
     let cursor = foo_source.find("val x").unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    let items = kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", Some(&project))
+    let items = dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "b", Some(&project))
         .expect("a local typed as an in-project class should resolve");
 
     assert_eq!(labels(&items), vec!["baz", "inherited"]);
@@ -252,7 +251,7 @@ fn kotlin_a_constructor_promoted_property_is_offered_via_this() {
     let tree = kotlin_tree_of(source);
     let cursor = source.find("run").unwrap();
 
-    let items = kotlin_dot_completion_candidates(&tree, source, cursor, "this", None)
+    let items = dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None)
         .expect("this. should resolve inside its own class");
 
     assert_eq!(labels(&items), vec!["run", "x"]);
@@ -266,7 +265,7 @@ fn kotlin_a_stdlib_typed_local_produces_no_candidates() {
     let dir = tempfile::tempdir().unwrap();
     let project = fg_core::Project::open(dir.path().to_path_buf()).unwrap();
 
-    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "s", Some(&project)).is_none());
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "s", Some(&project)).is_none());
 }
 
 #[test]
@@ -275,7 +274,7 @@ fn kotlin_a_non_constructor_call_inferred_local_produces_no_candidates() {
     let tree = kotlin_tree_of(foo_source);
     let cursor = foo_source.find("val x").unwrap();
 
-    assert!(kotlin_dot_completion_candidates(&tree, foo_source, cursor, "b", None).is_none());
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, foo_source, cursor, "b", None).is_none());
 }
 
 #[test]
@@ -284,25 +283,34 @@ fn kotlin_an_undeclared_receiver_produces_no_candidates() {
     let tree = kotlin_tree_of(source);
     let cursor = source.find("val x").unwrap();
 
-    assert!(kotlin_dot_completion_candidates(&tree, source, cursor, "neverDeclared", None).is_none());
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "neverDeclared", None).is_none());
 }
 
 #[test]
 fn kotlin_this_dot_reports_none_outside_any_class() {
     let source = "// just a comment\n";
     let tree = kotlin_tree_of(source);
-    assert!(kotlin_dot_completion_candidates(&tree, source, 0, "this", None).is_none());
+    assert!(dot_completion_candidates(Language::Kotlin, &tree, source, 0, "this", None).is_none());
 }
 
 #[test]
-fn dispatcher_routes_kotlin_to_kotlin_dot_completion_candidates() {
+fn kotlin_resolves_through_the_extension_that_models_it() {
     let source = "class Foo {\n    private fun helper() {\n    }\n    fun run() {\n        val x = 0\n    }\n}\n";
     let tree = kotlin_tree_of(source);
     let cursor = source.find("val x").unwrap();
 
     let items = dot_completion_candidates(Language::Kotlin, &tree, source, cursor, "this", None)
-        .expect("Kotlin should dispatch to kotlin_dot_completion_candidates");
+        .expect("the shipped extension models Kotlin");
     assert_eq!(labels(&items), vec!["helper", "run"]);
+}
+
+#[test]
+fn a_language_no_extension_models_offers_nothing() {
+    test_support::install_grammars();
+    let source = "this: value\n";
+    let mut parser = IncrementalParser::new(Language::Yaml).expect("an installed grammar must load");
+    let tree = parser.parse(source).clone();
+    assert!(dot_completion_candidates(Language::Yaml, &tree, source, 4, "this", None).is_none());
 }
 
 // `visible_labels` assumes ASCII fixture text, so a char offset doubles

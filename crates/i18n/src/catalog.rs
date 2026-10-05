@@ -372,6 +372,8 @@ pub struct Codegen {
     pub generate_accessors_for: &'static str,
     pub override_for: &'static str,
     pub generate: &'static str,
+    /// Marks a field the setter half of an accessor request skips.
+    pub read_only: &'static str,
 }
 
 /// The install/update row shared by Settings > Language Servers… and
@@ -407,13 +409,13 @@ pub struct StatusBar {
 /// [`crate::msg`] instead.
 pub struct Errors {
     pub select_text_first: &'static str,
-    pub accessors_java_only: &'static str,
+    pub accessors_unsupported: &'static str,
     pub no_class_fields: &'static str,
     pub every_field_is_final: &'static str,
     pub accessors_no_tree: &'static str,
-    pub generate_java_only: &'static str,
+    pub generate_unsupported: &'static str,
     pub generate_no_tree: &'static str,
-    pub override_java_only: &'static str,
+    pub override_unsupported: &'static str,
     pub override_needs_class: &'static str,
     pub override_no_tree: &'static str,
     pub checkstyle_not_configured: &'static str,
@@ -786,6 +788,7 @@ pub const PT_BR: Strings = Strings {
         generate_accessors_for: "Gerar acessores para:",
         override_for: "Sobrescrever:",
         generate: "Gerar",
+        read_only: "somente leitura",
     },
     install: Install {
         install: "Instalar",
@@ -804,13 +807,13 @@ pub const PT_BR: Strings = Strings {
     },
     errors: Errors {
         select_text_first: "Selecione algum texto primeiro e tente de novo.",
-        accessors_java_only: "Gerar getters/setters só funciona em arquivos Java.",
+        accessors_unsupported: "Gerar getters/setters não está disponível para este tipo de arquivo.",
         no_class_fields: "Nenhum campo de classe encontrado neste arquivo.",
-        every_field_is_final: "Nada a gerar: todos os campos aqui são final.",
+        every_field_is_final: "Nada a gerar: todos os campos aqui são somente leitura.",
         accessors_no_tree: "Não foi possível gerar os acessores: ainda não há árvore sintática.",
-        generate_java_only: "Gerar Construtor/toString/equals() só funciona em arquivos Java.",
+        generate_unsupported: "Gerar Construtor/toString/equals() não está disponível para este tipo de arquivo.",
         generate_no_tree: "Não foi possível gerar: ainda não há árvore sintática.",
-        override_java_only: "Sobrescrever Método só funciona em arquivos Java.",
+        override_unsupported: "Sobrescrever Método não está disponível para este tipo de arquivo.",
         override_needs_class: "Posicione o cursor dentro de uma classe para sobrescrever um método.",
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
         checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
@@ -1159,6 +1162,7 @@ pub const EN_US: Strings = Strings {
         generate_accessors_for: "Generate accessors for:",
         override_for: "Override:",
         generate: "Generate",
+        read_only: "read-only",
     },
     install: Install {
         install: "Install",
@@ -1177,13 +1181,13 @@ pub const EN_US: Strings = Strings {
     },
     errors: Errors {
         select_text_first: "Select some text first, then try again.",
-        accessors_java_only: "Generate getters/setters only works for Java files.",
+        accessors_unsupported: "Generate getters/setters isn't available for this file type.",
         no_class_fields: "No class fields found in this file.",
-        every_field_is_final: "Nothing to generate: every field here is final.",
+        every_field_is_final: "Nothing to generate: every field here is read-only.",
         accessors_no_tree: "Couldn't generate accessors: no syntax tree available yet.",
-        generate_java_only: "Generate Constructor/toString/equals() only works for Java files.",
+        generate_unsupported: "Generate Constructor/toString/equals() isn't available for this file type.",
         generate_no_tree: "Couldn't generate: no syntax tree available yet.",
-        override_java_only: "Override Method only works for Java files.",
+        override_unsupported: "Override Method isn't available for this file type.",
         override_needs_class: "Place the cursor inside a class to override a method.",
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
         checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",

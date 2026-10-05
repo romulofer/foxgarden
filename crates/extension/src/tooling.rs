@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::Extension;
+use crate::{CodeGeneration, Extension, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember};
 
 /// A registered build tool's stable identifier — `"maven"`, `"gradle"`.
 /// Lowercase by convention, and the key everything else matches on.
@@ -405,6 +405,61 @@ impl ExtensionHandle {
     /// Every HTTP route declared in an already-parsed file.
     pub fn http_routes(&self, language_id: &str, tree: &tree_sitter::Tree, source: &str) -> Vec<HttpRoute> {
         self.extension.http_routes(language_id, tree, source)
+    }
+
+    /// The type whose body `byte` sits in.
+    pub fn enclosing_type(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        byte: usize,
+    ) -> Option<TypeDeclaration> {
+        self.extension.enclosing_type(language_id, tree, source, byte)
+    }
+
+    /// The one type `type_name` extends or implements first.
+    pub fn supertype(&self, language_id: &str, tree: &tree_sitter::Tree, source: &str, type_name: &str) -> Option<String> {
+        self.extension.supertype(language_id, tree, source, type_name)
+    }
+
+    /// `type_name`'s own members as `view` sees them.
+    pub fn type_members(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        type_name: &str,
+        view: MemberView,
+    ) -> Vec<TypeMember> {
+        self.extension.type_members(language_id, tree, source, type_name, view)
+    }
+
+    /// What the word before a `.` resolves to.
+    pub fn receiver_type(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        byte: usize,
+        receiver: &str,
+    ) -> Option<ReceiverType> {
+        self.extension.receiver_type(language_id, tree, source, byte, receiver)
+    }
+
+    /// Whether this extension generates code for `language_id`.
+    pub fn generates_code(&self, language_id: &str) -> bool {
+        self.extension.generates_code(language_id)
+    }
+
+    /// Every type with fields code generation can use.
+    pub fn types_with_fields(&self, language_id: &str, tree: &tree_sitter::Tree, source: &str) -> Vec<TypeFields> {
+        self.extension.types_with_fields(language_id, tree, source)
+    }
+
+    /// The source text `request` asks for.
+    pub fn generate_code(&self, language_id: &str, request: CodeGeneration<'_>, indent_unit: &str) -> Option<String> {
+        self.extension.generate_code(language_id, request, indent_unit)
     }
 
     /// Every configuration key this extension can offer for `project_root`.

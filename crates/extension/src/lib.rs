@@ -29,9 +29,13 @@ use std::path::{Path, PathBuf};
 
 use tree_sitter_language::LanguageFn;
 
+mod code_model;
 mod registry;
 mod tooling;
 
+pub use code_model::{
+    CodeGeneration, MemberKind, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember,
+};
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
     BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
@@ -440,6 +444,77 @@ pub trait Extension: Send + Sync {
     /// listed in `Contributions::http_route_languages`.
     fn http_routes(&self, _language_id: &str, _tree: &tree_sitter::Tree, _source: &str) -> Vec<HttpRoute> {
         Vec::new()
+    }
+
+    /// The type whose body `byte` sits in, innermost first. `None` outside
+    /// any type, and for every language this extension does not own.
+    fn enclosing_type(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _byte: usize,
+    ) -> Option<TypeDeclaration> {
+        None
+    }
+
+    /// The simple name of the one type `type_name` (declared in `source`)
+    /// extends or implements first — the one place "Override Method" and
+    /// `super.` completion look for inherited members.
+    fn supertype(&self, _language_id: &str, _tree: &tree_sitter::Tree, _source: &str, _type_name: &str) -> Option<String> {
+        None
+    }
+
+    /// `type_name`'s own members as `view` sees them, in source order —
+    /// only what the declaration in `source` itself declares, never
+    /// inherited ones (the core walks to the supertype itself, through
+    /// `supertype`).
+    fn type_members(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _type_name: &str,
+        _view: MemberView,
+    ) -> Vec<TypeMember> {
+        Vec::new()
+    }
+
+    /// What `receiver` — the word written right before a `.` at `byte` —
+    /// resolves to: the type to list members of, and from which side.
+    /// `None` when it cannot be resolved syntactically, which closes
+    /// completion quietly rather than guessing.
+    fn receiver_type(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _byte: usize,
+        _receiver: &str,
+    ) -> Option<ReceiverType> {
+        None
+    }
+
+    /// Whether this extension generates code (`generate_code`) for
+    /// `language_id` — asked before anything is parsed, so the editor can
+    /// say "not for this kind of file" rather than "nothing found".
+    fn generates_code(&self, _language_id: &str) -> bool {
+        false
+    }
+
+    /// Every type in `source` with at least one field code generation can
+    /// use, in source order, nested types included.
+    fn types_with_fields(&self, _language_id: &str, _tree: &tree_sitter::Tree, _source: &str) -> Vec<TypeFields> {
+        Vec::new()
+    }
+
+    /// The source text `request` asks for, each line indented with
+    /// `indent_unit` — one block, ready to insert before a type body's
+    /// closing delimiter. `Some("")` when the request produces nothing (a
+    /// setter-only request over read-only fields), `None` when this
+    /// extension does not generate code for `language_id`.
+    fn generate_code(&self, _language_id: &str, _request: CodeGeneration<'_>, _indent_unit: &str) -> Option<String> {
+        None
     }
 
     /// Configuration keys this extension can offer for completion in

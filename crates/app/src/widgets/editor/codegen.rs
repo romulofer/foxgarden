@@ -1,8 +1,8 @@
 use super::text_offset::{byte_to_char, char_to_byte};
 use crate::widgets::modal::show_modal;
-use fg_core::{FileKind, FileNode};
+use fg_core::{FileKind, FileNode, Language};
 use fg_i18n::t;
-use syntax::{ClassFields, FieldInfo, MethodSignature};
+use syntax::{CodeGeneration, TypeFields, TypeMember};
 
 /// Which accessors to generate — driven by the Tools menu's separate
 /// "Generate Getters"/"Generate Setters" items and `Ctrl+Shift+G` (which
@@ -14,78 +14,47 @@ pub enum AccessorKind {
     Both,
 }
 
-/// Uppercases the first character of `name` for the `getX`/`setX` accessor
-/// method name suffix, leaving the rest as-is (so e.g. `userId` becomes
-/// `UserId`, matching standard Java bean-accessor naming).
-fn capitalized(name: &str) -> String {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn getter_for(field: &FieldInfo, indent_unit: &str) -> String {
-    let cap = capitalized(&field.name);
-    let ty = &field.java_type;
-    let name = &field.name;
-    format!(
-        "{indent_unit}public {ty} get{cap}() {{\n\
-         {indent_unit}{indent_unit}return this.{name};\n\
-         {indent_unit}}}\n"
-    )
-}
-
-/// `None` for a `final` field — it can't be reassigned, so a setter for it
-/// wouldn't compile.
-fn setter_for(field: &FieldInfo, indent_unit: &str) -> Option<String> {
-    if field.is_final {
-        return None;
-    }
-    let cap = capitalized(&field.name);
-    let ty = &field.java_type;
-    let name = &field.name;
-    Some(format!(
-        "{indent_unit}public void set{cap}({ty} {name}) {{\n\
-         {indent_unit}{indent_unit}this.{name} = {name};\n\
-         {indent_unit}}}\n"
-    ))
-}
-
-/// Generates the accessors `kind` asks for, for `field`, each line
-/// indented with `indent_unit`. `AccessorKind::Both` puts the getter
-/// first, a blank line, then the setter (skipped for a `final` field,
-/// which can't be reassigned) — standard Java accessor shape, `this.` on
-/// the getter's return and the setter's assignment to disambiguate the
-/// field from the setter's identically-named parameter. Empty for
-/// `AccessorKind::Setters` on a `final` field — there's nothing to
-/// generate.
-fn accessors_for(field: &FieldInfo, indent_unit: &str, kind: AccessorKind) -> String {
-    match kind {
-        AccessorKind::Getters => getter_for(field, indent_unit),
-        AccessorKind::Setters => setter_for(field, indent_unit).unwrap_or_default(),
-        AccessorKind::Both => {
-            let mut out = getter_for(field, indent_unit);
-            if let Some(setter) = setter_for(field, indent_unit) {
-                out.push('\n');
-                out.push_str(&setter);
-            }
-            out
+impl AccessorKind {
+    fn request(self, fields: &[TypeMember]) -> CodeGeneration<'_> {
+        CodeGeneration::Accessors {
+            fields,
+            getters: self != Self::Setters,
+            setters: self != Self::Getters,
         }
     }
 }
 
-/// Generates `kind`'s accessors for every field in `fields`, each field's
-/// block separated by a blank line — ready to insert as one standalone
-/// chunk of source. Empty if `fields` is empty, or if `kind` is
-/// `AccessorKind::Setters` and every field is `final`.
-pub fn generate_accessors(fields: &[FieldInfo], indent_unit: &str, kind: AccessorKind) -> String {
-    fields
-        .iter()
-        .map(|field| accessors_for(field, indent_unit, kind))
-        .filter(|block| !block.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+/// `kind`'s accessors for every field in `fields`, as `language`'s
+/// extension writes them — one block, each field's accessors separated by
+/// a blank line. Empty when there is nothing to generate: no fields, a
+/// setter-only request over read-only fields, or no extension generating
+/// code for `language`.
+pub fn generate_accessors(language: Language, fields: &[TypeMember], indent_unit: &str, kind: AccessorKind) -> String {
+    syntax::generate_code(language, kind.request(fields), indent_unit).unwrap_or_default()
+}
+
+/// A type code can be generated into: its name, the fields to offer, and
+/// where the generated block goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationTarget {
+    pub name: String,
+    pub fields: Vec<TypeMember>,
+    /// Just before the type body's closing delimiter.
+    pub insertion_byte: usize,
+}
+
+/// The types in `types` that have a body to generate into.
+pub fn generation_targets(types: Vec<TypeFields>) -> Vec<GenerationTarget> {
+    types
+        .into_iter()
+        .filter_map(|ty| {
+            Some(GenerationTarget {
+                insertion_byte: ty.declaration.insertion_byte?,
+                name: ty.declaration.name,
+                fields: ty.fields,
+            })
+        })
+        .collect()
 }
 
 /// Inserts `generated` at `cursor_char` in `text`, returning the new text
@@ -100,7 +69,7 @@ pub fn insert_generated(text: &str, cursor_char: usize, generated: &str) -> (Str
 }
 
 /// Inserts `generated` right before `insertion_byte` (a class body's
-/// closing `}`, per `ClassFields::insertion_byte`), prefixed with a blank
+/// closing `}`, per `GenerationTarget::insertion_byte`), prefixed with a blank
 /// line so it doesn't run into whatever line already precedes the brace.
 /// Delegates to `insert_generated` once the byte offset (from walking the
 /// syntax tree) is converted to the char offset it expects.
@@ -113,9 +82,7 @@ pub fn insert_at_class_end(text: &str, insertion_byte: usize, generated: &str) -
 /// menu's "Generate Constructor"/"Generate toString"/"Generate equals() and
 /// hashCode()" items. A sibling to `AccessorKind`, not a variant of it:
 /// these build one full method body from every selected field at once,
-/// not one accessor pair per field, so they don't share
-/// `generate_accessors`'s per-field iteration shape — see
-/// `generate_method`.
+/// not one accessor pair per field — see `generate_method`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GenerateMethodKind {
     Constructor,
@@ -123,96 +90,32 @@ pub enum GenerateMethodKind {
     EqualsAndHashCode,
 }
 
-/// A constructor assigning every field from a same-named parameter —
-/// `this.x = x;` per field, the same disambiguation `setter_for` already
-/// uses. Still valid Java with zero fields (an empty, parameterless
-/// constructor), so this doesn't special-case that.
-fn constructor_for(class_name: &str, fields: &[FieldInfo], indent_unit: &str) -> String {
-    let params = fields
-        .iter()
-        .map(|f| format!("{} {}", f.java_type, f.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let assignments: String = fields
-        .iter()
-        .map(|f| format!("{indent_unit}{indent_unit}this.{name} = {name};\n", name = f.name))
-        .collect();
-    format!("{indent_unit}public {class_name}({params}) {{\n{assignments}{indent_unit}}}\n")
-}
-
-/// `@Override public String toString()`, string-concatenation form (no
-/// import needed, unlike `String.format`/text blocks) — `"ClassName{x=" +
-/// x + ", y=" + y + "}"`.
-fn to_string_for(class_name: &str, fields: &[FieldInfo], indent_unit: &str) -> String {
-    let body = if fields.is_empty() {
-        format!("\"{class_name}{{}}\"")
-    } else {
-        let parts = fields
-            .iter()
-            .map(|f| format!("\"{name}=\" + {name}", name = f.name))
-            .collect::<Vec<_>>()
-            .join(" + \", \" + ");
-        format!("\"{class_name}{{\" + {parts} + \"}}\"")
+/// `kind`'s method(s) over `fields`, as `language`'s extension writes them —
+/// the whole-method-body counterpart to `generate_accessors`. Every kind
+/// generates something even with zero fields; empty only when no extension
+/// generates code for `language`.
+pub fn generate_method(
+    language: Language,
+    class_name: &str,
+    fields: &[TypeMember],
+    indent_unit: &str,
+    kind: GenerateMethodKind,
+) -> String {
+    let request = match kind {
+        GenerateMethodKind::Constructor => CodeGeneration::Constructor {
+            type_name: class_name,
+            fields,
+        },
+        GenerateMethodKind::ToString => CodeGeneration::ToString {
+            type_name: class_name,
+            fields,
+        },
+        GenerateMethodKind::EqualsAndHashCode => CodeGeneration::EqualsAndHashCode {
+            type_name: class_name,
+            fields,
+        },
     };
-    format!(
-        "{indent_unit}@Override\n\
-         {indent_unit}public String toString() {{\n\
-         {indent_unit}{indent_unit}return {body};\n\
-         {indent_unit}}}\n"
-    )
-}
-
-/// `@Override public boolean equals(Object o)` + `@Override public int
-/// hashCode()`, generated together (standard IDE behavior — the two must
-/// stay consistent with each other, so there's no separate "just equals"/
-/// "just hashCode" option the way getters/setters have). Uses
-/// `java.util.Objects.equals`/`.hash` (fully qualified, deliberately —
-/// correct for primitives via autoboxing same as for objects, and avoids
-/// needing to check for or insert an `import java.util.Objects;` line the
-/// way a bare `Objects.equals(...)` call would need). A zero-field class
-/// still generates validly: `equals` reduces to comparing only class
-/// identity, `hashCode` to `Objects.hash()` (a constant).
-fn equals_and_hash_code_for(class_name: &str, fields: &[FieldInfo], indent_unit: &str) -> String {
-    let comparison = if fields.is_empty() {
-        format!("{indent_unit}{indent_unit}return true;\n")
-    } else {
-        let conditions = fields
-            .iter()
-            .map(|f| format!("java.util.Objects.equals({name}, that.{name})", name = f.name))
-            .collect::<Vec<_>>()
-            .join(" && ");
-        format!("{indent_unit}{indent_unit}return {conditions};\n")
-    };
-    let equals = format!(
-        "{indent_unit}@Override\n\
-         {indent_unit}public boolean equals(Object o) {{\n\
-         {indent_unit}{indent_unit}if (this == o) return true;\n\
-         {indent_unit}{indent_unit}if (o == null || getClass() != o.getClass()) return false;\n\
-         {indent_unit}{indent_unit}{class_name} that = ({class_name}) o;\n\
-         {comparison}\
-         {indent_unit}}}\n"
-    );
-
-    let hash_args = fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ");
-    let hash_code = format!(
-        "{indent_unit}@Override\n\
-         {indent_unit}public int hashCode() {{\n\
-         {indent_unit}{indent_unit}return java.util.Objects.hash({hash_args});\n\
-         {indent_unit}}}\n"
-    );
-
-    format!("{equals}\n{hash_code}")
-}
-
-/// Generates `kind`'s method(s) for every field in `fields`, ready to
-/// insert as one standalone chunk of source — the whole-method-body
-/// counterpart to `generate_accessors`.
-pub fn generate_method(class_name: &str, fields: &[FieldInfo], indent_unit: &str, kind: GenerateMethodKind) -> String {
-    match kind {
-        GenerateMethodKind::Constructor => constructor_for(class_name, fields, indent_unit),
-        GenerateMethodKind::ToString => to_string_for(class_name, fields, indent_unit),
-        GenerateMethodKind::EqualsAndHashCode => equals_and_hash_code_for(class_name, fields, indent_unit),
-    }
+    syntax::generate_code(language, request, indent_unit).unwrap_or_default()
 }
 
 /// State for the "Generate Constructor"/"Generate toString"/"Generate
@@ -226,8 +129,9 @@ pub fn generate_method(class_name: &str, fields: &[FieldInfo], indent_unit: &str
 /// kinds" to share it buys little given there are only two, and costs a
 /// type parameter threaded through every method and caller.
 pub struct GenerateMethodDialog {
+    language: Language,
     kind: GenerateMethodKind,
-    classes: Vec<ClassFields>,
+    classes: Vec<GenerationTarget>,
     selected_class: usize,
     checked: Vec<bool>,
 }
@@ -235,9 +139,10 @@ pub struct GenerateMethodDialog {
 impl GenerateMethodDialog {
     /// Panics if `classes` is empty — same contract as
     /// `GenerateAccessorsDialog::new`.
-    pub fn new(classes: Vec<ClassFields>, kind: GenerateMethodKind) -> Self {
+    pub fn new(language: Language, classes: Vec<GenerationTarget>, kind: GenerateMethodKind) -> Self {
         let checked = vec![true; classes[0].fields.len()];
         Self {
+            language,
             kind,
             classes,
             selected_class: 0,
@@ -245,7 +150,7 @@ impl GenerateMethodDialog {
         }
     }
 
-    pub fn classes(&self) -> &[ClassFields] {
+    pub fn classes(&self) -> &[GenerationTarget] {
         &self.classes
     }
 
@@ -279,7 +184,7 @@ impl GenerateMethodDialog {
 /// comments), so there's no `Option` here.
 pub fn apply_method_dialog(dialog: &GenerateMethodDialog, text: &str, indent_unit: &str) -> (String, usize) {
     let class = &dialog.classes[dialog.selected_class];
-    let selected_fields: Vec<FieldInfo> = class
+    let selected_fields: Vec<TypeMember> = class
         .fields
         .iter()
         .zip(dialog.checked.iter())
@@ -287,7 +192,7 @@ pub fn apply_method_dialog(dialog: &GenerateMethodDialog, text: &str, indent_uni
         .map(|(field, _)| field.clone())
         .collect();
 
-    let generated = generate_method(&class.name, &selected_fields, indent_unit, dialog.kind);
+    let generated = generate_method(dialog.language, &class.name, &selected_fields, indent_unit, dialog.kind);
     insert_at_class_end(text, class.insertion_byte, &generated)
 }
 
@@ -329,7 +234,7 @@ pub fn show_generate_method_dialog(
 
         let class = &dialog.classes()[dialog.selected_class()];
         for (index, field) in class.fields.iter().enumerate() {
-            let label = format!("{} : {}", field.name, field.java_type);
+            let label = format!("{} : {}", field.name, field.type_text);
             let mut checked = dialog.checked()[index];
             if ui.checkbox(&mut checked, label).changed() {
                 toggled = Some((index, checked));
@@ -371,8 +276,9 @@ pub fn show_generate_method_dialog(
 /// file has exactly one eligible class: that case generates immediately
 /// for every field, no picker needed.
 pub struct GenerateAccessorsDialog {
+    language: Language,
     kind: AccessorKind,
-    classes: Vec<ClassFields>,
+    classes: Vec<GenerationTarget>,
     selected_class: usize,
     /// Index-aligned with `classes[selected_class].fields`; unchecked
     /// fields are skipped when generating.
@@ -385,9 +291,10 @@ impl GenerateAccessorsDialog {
     /// there's more than one eligible class (see `widget::show`), so an
     /// empty list here would be a caller bug, not a state to handle
     /// gracefully.
-    pub fn new(classes: Vec<ClassFields>, kind: AccessorKind) -> Self {
+    pub fn new(language: Language, classes: Vec<GenerationTarget>, kind: AccessorKind) -> Self {
         let checked = vec![true; classes[0].fields.len()];
         Self {
+            language,
             kind,
             classes,
             selected_class: 0,
@@ -395,7 +302,7 @@ impl GenerateAccessorsDialog {
         }
     }
 
-    pub fn classes(&self) -> &[ClassFields] {
+    pub fn classes(&self) -> &[GenerationTarget] {
         &self.classes
     }
 
@@ -430,7 +337,7 @@ impl GenerateAccessorsDialog {
 /// `Setters`-only dialog) every checked field is `final`.
 pub fn apply_dialog(dialog: &GenerateAccessorsDialog, text: &str, indent_unit: &str) -> Option<(String, usize)> {
     let class = &dialog.classes[dialog.selected_class];
-    let selected_fields: Vec<FieldInfo> = class
+    let selected_fields: Vec<TypeMember> = class
         .fields
         .iter()
         .zip(dialog.checked.iter())
@@ -438,7 +345,7 @@ pub fn apply_dialog(dialog: &GenerateAccessorsDialog, text: &str, indent_unit: &
         .map(|(field, _)| field.clone())
         .collect();
 
-    let generated = generate_accessors(&selected_fields, indent_unit, dialog.kind);
+    let generated = generate_accessors(dialog.language, &selected_fields, indent_unit, dialog.kind);
     if generated.is_empty() {
         return None;
     }
@@ -489,10 +396,10 @@ pub fn show_generate_accessors_dialog(
 
         let class = &dialog.classes()[dialog.selected_class()];
         for (index, field) in class.fields.iter().enumerate() {
-            let label = if field.is_final {
-                format!("{} : {} (final)", field.name, field.java_type)
+            let label = if field.read_only {
+                format!("{} : {} ({})", field.name, field.type_text, t().codegen.read_only)
             } else {
-                format!("{} : {}", field.name, field.java_type)
+                format!("{} : {}", field.name, field.type_text)
             };
             let mut checked = dialog.checked()[index];
             if ui.checkbox(&mut checked, label).changed() {
@@ -530,70 +437,39 @@ pub fn show_generate_accessors_dialog(
     }
 }
 
-/// Finds a source file of the given `extension` (no leading dot — `"java"`,
-/// `"kt"`) anywhere in `node`'s subtree whose name (without extension) is
-/// exactly `stem` — generalizes what was originally "Override Method"'s
-/// Java-only way of turning a superclass's simple name
-/// (`syntax::superclass_name`) into a source file to look its methods up
-/// in, now shared with dot-completion's cross-project member lookup
-/// (`SPEC.md` §4) for both languages. Deliberately limited to files already
-/// in the project's own (already-filtered, skip-list-applied) tree rather
-/// than a fresh filesystem walk — a JDK/library/stdlib type has no file in
-/// the project at all, so this correctly returns `None` for one rather
+/// Finds a source file carrying one of `extensions` (no leading dot)
+/// anywhere in `node`'s subtree whose name (without extension) is exactly
+/// `stem` — how a type's simple name (`syntax::supertype`,
+/// `syntax::receiver_type`) becomes a file to read its members from, for
+/// "Override Method" and dot-completion's cross-project member lookup
+/// (`SPEC.md` §4) alike. Deliberately limited to files already in the
+/// project's own (already-filtered, skip-list-applied) tree rather than a
+/// fresh filesystem walk — a library or standard-library type has no file
+/// in the project at all, so this correctly returns `None` for one rather
 /// than searching disk for it.
-pub fn find_source_file_by_stem(node: &FileNode, stem: &str, extension: &str) -> Option<std::path::PathBuf> {
+pub fn find_source_file_by_stem(node: &FileNode, stem: &str, extensions: &[String]) -> Option<std::path::PathBuf> {
     match node.kind {
         FileKind::File => {
-            let matches_ext = node.path.extension().and_then(|ext| ext.to_str()) == Some(extension);
+            let matches_ext = node
+                .path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| extensions.iter().any(|wanted| wanted == ext));
             let matches_stem = node.path.file_stem().and_then(|s| s.to_str()) == Some(stem);
             (matches_ext && matches_stem).then(|| node.path.clone())
         }
         FileKind::Dir => node
             .children
             .iter()
-            .find_map(|child| find_source_file_by_stem(child, stem, extension)),
+            .find_map(|child| find_source_file_by_stem(child, stem, extensions)),
     }
 }
 
-/// "Override Method"'s original entry point — kept as a one-line wrapper
-/// so its one existing call site doesn't need to change at all.
-pub fn find_java_file_by_stem(node: &FileNode, stem: &str) -> Option<std::path::PathBuf> {
-    find_source_file_by_stem(node, stem, "java")
-}
-
-/// The literal Java expression `Override Method`'s generated stub should
-/// `return` for `java_type` — `None` for `void`, which needs no `return`
-/// statement at all. Every non-`void` type needs *something*, since a
-/// stub with a missing return statement wouldn't compile.
-fn default_return_for(java_type: &str) -> Option<&'static str> {
-    match java_type {
-        "void" => None,
-        "boolean" => Some("false"),
-        "byte" | "short" | "int" | "long" => Some("0"),
-        "float" => Some("0.0f"),
-        "double" => Some("0.0"),
-        "char" => Some("'\\0'"),
-        _ => Some("null"),
-    }
-}
-
-/// `@Override` plus a stub body returning `default_return_for`'s value (or
-/// no `return` at all, for `void`) — one inherited method turned into a
-/// compilable override.
-fn override_stub_for(method: &MethodSignature, indent_unit: &str) -> String {
-    let params = method
-        .params
-        .iter()
-        .map(|(ty, name)| format!("{ty} {name}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let body = match default_return_for(&method.return_type) {
-        Some(value) => format!("{indent_unit}{indent_unit}return {value};\n"),
-        None => String::new(),
-    };
-    let ty = &method.return_type;
-    let name = &method.name;
-    format!("{indent_unit}@Override\n{indent_unit}public {ty} {name}({params}) {{\n{body}{indent_unit}}}\n")
+/// The project file `type_name` of `language` is declared in, by the
+/// one-type-per-file naming convention: a file named after the type, with
+/// one of the language's own extensions.
+pub fn find_type_source(node: &FileNode, type_name: &str, language: Language) -> Option<std::path::PathBuf> {
+    find_source_file_by_stem(node, type_name, &syntax::source_file_extensions(language))
 }
 
 /// State for the "Override Method" picker: every inherited, not-already-
@@ -601,9 +477,10 @@ fn override_stub_for(method: &MethodSignature, indent_unit: &str) -> String {
 /// Unlike `GenerateAccessorsDialog`/`GenerateMethodDialog`, there's no
 /// class-ambiguity step first — the target class (and so `insertion_byte`)
 /// is already fixed to wherever the cursor was when "Override Method" was
-/// invoked (`syntax::enclosing_class`), before this dialog ever opens.
+/// invoked (`syntax::enclosing_type`), before this dialog ever opens.
 pub struct OverrideMethodDialog {
-    methods: Vec<MethodSignature>,
+    language: Language,
+    methods: Vec<TypeMember>,
     checked: Vec<bool>,
     insertion_byte: usize,
 }
@@ -611,16 +488,17 @@ pub struct OverrideMethodDialog {
 impl OverrideMethodDialog {
     /// Starts with every candidate checked, same convention as
     /// `GenerateAccessorsDialog`/`GenerateMethodDialog`'s field lists.
-    pub fn new(methods: Vec<MethodSignature>, insertion_byte: usize) -> Self {
+    pub fn new(language: Language, methods: Vec<TypeMember>, insertion_byte: usize) -> Self {
         let checked = vec![true; methods.len()];
         Self {
+            language,
             methods,
             checked,
             insertion_byte,
         }
     }
 
-    pub fn methods(&self) -> &[MethodSignature] {
+    pub fn methods(&self) -> &[TypeMember] {
         &self.methods
     }
 
@@ -641,21 +519,18 @@ impl OverrideMethodDialog {
 /// always valid Java even with zero fields), an override dialog with
 /// nothing checked really does have nothing to generate.
 pub fn apply_override_dialog(dialog: &OverrideMethodDialog, text: &str, indent_unit: &str) -> Option<(String, usize)> {
-    let selected: Vec<&MethodSignature> = dialog
+    let selected: Vec<TypeMember> = dialog
         .methods
         .iter()
         .zip(dialog.checked.iter())
         .filter(|&(_, &checked)| checked)
-        .map(|(m, _)| m)
+        .map(|(m, _)| m.clone())
         .collect();
     if selected.is_empty() {
         return None;
     }
-    let generated = selected
-        .iter()
-        .map(|m| override_stub_for(m, indent_unit))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let generated = syntax::generate_code(dialog.language, CodeGeneration::Overrides { methods: &selected }, indent_unit)
+        .filter(|generated| !generated.is_empty())?;
     Some(insert_at_class_end(text, dialog.insertion_byte, &generated))
 }
 
@@ -687,7 +562,7 @@ pub fn show_override_method_dialog(
                 .map(|(ty, name)| format!("{ty} {name}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let label = format!("{} {}({})", method.return_type, method.name, params);
+            let label = format!("{} {}({})", method.type_text, method.name, params);
             let mut checked = dialog.checked()[index];
             if ui.checkbox(&mut checked, label).changed() {
                 toggled = Some((index, checked));

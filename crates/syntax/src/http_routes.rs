@@ -19,6 +19,7 @@ use tree_sitter::Tree;
 /// declared routes for simply has none.
 pub fn http_routes(tree: &Tree, source: &str, language: Language) -> Vec<HttpRoute> {
     crate::providers::providers()
+        .extensions
         .iter()
         .flat_map(|extension| extension.http_routes(language.id(), tree, source))
         .collect()

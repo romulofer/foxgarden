@@ -40,6 +40,7 @@ pub struct RunMarker {
 /// simply has no run markers, exactly as before.
 pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &str) -> Vec<RunMarker> {
     crate::providers::providers()
+        .extensions
         .iter()
         .flat_map(|extension| {
             extension

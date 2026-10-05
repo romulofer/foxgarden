@@ -10,7 +10,7 @@ use crate::node_kinds::scope_kinds;
 /// top of the viewport come out, ordered so they stack outer-to-inner
 /// top-to-bottom.
 ///
-/// Structurally the same upward climb `methods::enclosing_class` does, just
+/// Structurally the same upward climb an extension's `enclosing_type` does, just
 /// generalized from a single kind to the per-language scope set and
 /// collecting the whole ancestor chain instead of stopping at the first hit.
 /// Returns **byte offsets**, not line indices — the caller already owns the

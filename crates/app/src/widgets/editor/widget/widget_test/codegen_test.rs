@@ -10,10 +10,9 @@ fn ctrl_shift_g_generates_getter_and_setter_at_the_cursor() {
     let (_dir, mut doc) = open_fixture("public class Foo {\n    private int x;\n}\n", "Foo.java");
     let mut parser = parsed(Language::Java, &doc.buffer.to_string());
 
-    // A fresh widget's default cursor sits at char 0, which is still
-    // "inside" the class_declaration spanning the whole file — see
-    // `syntax::java_fields_in_enclosing_class`'s inclusive containment
-    // check.
+    // A fresh widget's default cursor sits at char 0 — irrelevant here:
+    // accessor generation offers every class in the file
+    // (`syntax::types_with_fields`), wherever the cursor is.
     focused_frame(&mut doc, &mut parser, vec![command_shift_key_event(egui::Key::G)]);
 
     let text = doc.buffer.to_string();
@@ -23,11 +22,10 @@ fn ctrl_shift_g_generates_getter_and_setter_at_the_cursor() {
 
 #[test]
 fn ctrl_shift_g_is_a_no_op_for_kotlin_files_but_reports_why() {
-    // Kotlin's `val`/`var` properties already are getters/setters;
-    // generating explicit Java-shaped ones for them isn't idiomatic
-    // (see `widget::show`'s comment on this shortcut), so the command
-    // does nothing for a non-Java file — but must say so via
-    // `last_error` rather than silently doing nothing.
+    // The extension that owns Kotlin generates no code for it (its
+    // `val`/`var` properties already are getters/setters), so the command
+    // does nothing for a Kotlin file — but must say so via `last_error`
+    // rather than silently doing nothing.
     let (_dir, mut doc) = open_fixture("class Foo(val x: Int)\n", "Foo.kt");
     let mut parser = parsed(Language::Kotlin, &doc.buffer.to_string());
     let before = doc.buffer.to_string();
@@ -41,7 +39,7 @@ fn ctrl_shift_g_is_a_no_op_for_kotlin_files_but_reports_why() {
     );
 
     assert_eq!(doc.buffer.to_string(), before);
-    assert!(last_error.is_some_and(|msg| msg.contains("Java")));
+    assert_eq!(last_error.as_deref(), Some(t().errors.accessors_unsupported));
 }
 
 #[test]
@@ -100,7 +98,7 @@ fn tools_menu_generate_setters_on_an_all_final_class_reports_why() {
         focused_frame_with_generate_request(&mut doc, &mut parser, Some(AccessorKind::Setters), &mut None, vec![]);
 
     assert_eq!(doc.buffer.to_string(), before);
-    assert!(last_error.is_some_and(|msg| msg.contains("final")));
+    assert_eq!(last_error.as_deref(), Some(t().errors.every_field_is_final));
 }
 
 #[test]
@@ -198,7 +196,7 @@ fn generate_method_request_on_a_kotlin_file_reports_why() {
     );
 
     assert_eq!(doc.buffer.to_string(), before);
-    assert!(last_error.is_some_and(|msg| msg.contains("Java")));
+    assert_eq!(last_error.as_deref(), Some(t().errors.generate_unsupported));
 }
 
 #[test]

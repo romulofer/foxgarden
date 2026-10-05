@@ -568,9 +568,9 @@ msg! {
 msg! {
     superclass_not_in_project(super_name: &str) {
         pt: "Sobrescrever Método só procura superclasses dentro deste projeto \
-             (não foi possível encontrar {super_name}.java).",
+             (não foi possível encontrar o arquivo-fonte de {super_name}).",
         en: "Override Method only looks up superclasses in this project \
-             (couldn't find {super_name}.java).",
+             (couldn't find a source file for {super_name}).",
     }
 }
 

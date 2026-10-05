@@ -6,7 +6,7 @@ use std::sync::Arc;
 use egui::{Event, FontId, Key};
 use fg_core::{Diagnostic, Document, Language, Project};
 use ropey::Rope;
-use syntax::{IncrementalParser, Scope, Tree};
+use syntax::{IncrementalParser, MemberKind, MemberView, Scope, Tree, TypeMember};
 
 use super::auto_edit::{
     CaseConversion, apply_auto_indent, apply_auto_pair, apply_auto_pair_delete, convert_selection_case,
@@ -1936,9 +1936,8 @@ pub fn show(
 
     // Ctrl+Shift+G (always `Both`) or a Tools menu click (`generate_request`,
     // already narrowed to `Getters`/`Setters`/`Both`) generate accessors for
-    // the file's classes. Java-only — Kotlin's `val`/`var` properties
-    // already *are* getters/setters, so generating explicit ones for them
-    // isn't the idiomatic move a Java accessor-boilerplate command is.
+    // the file's classes — for whichever languages an extension generates
+    // code for (`syntax::generates_code`), in that extension's own idiom.
     // Every non-applicable case sets `last_error` instead of silently doing
     // nothing — a request that visibly changes nothing (wrong file type, no
     // matching fields) is easy to mistake for "the shortcut doesn't work"
@@ -1949,15 +1948,16 @@ pub fn show(
     let keyboard_requested_accessors =
         (ui.input(|i| i.key_pressed(Key::G)) && modifiers.command && modifiers.shift).then_some(AccessorKind::Both);
     if let Some(kind) = generate_request.or(keyboard_requested_accessors) {
-        if doc.language != Some(Language::Java) {
-            crate::errors::report(last_error, t().errors.accessors_java_only.to_string());
-        } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
+        let language = doc.language.filter(|&language| syntax::generates_code(language));
+        if let Some(language) = language
+            && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        {
             let text_now = doc.buffer.to_string();
-            let classes = syntax::java_classes_with_fields(tree, &text_now);
+            let classes = codegen::generation_targets(syntax::types_with_fields(tree, &text_now, language));
             match classes.len() {
                 0 => crate::errors::report(last_error, t().errors.no_class_fields.to_string()),
                 1 => {
-                    let generated = generate_accessors(&classes[0].fields, &indent_settings.unit(), kind);
+                    let generated = generate_accessors(language, &classes[0].fields, &indent_settings.unit(), kind);
                     if generated.is_empty() {
                         // Only reachable for `AccessorKind::Setters` when
                         // every field found is `final`.
@@ -1970,8 +1970,10 @@ pub fn show(
                         manual_caret = Some(Caret::at(new_cursor));
                     }
                 }
-                _ => *generate_dialog = Some(GenerateAccessorsDialog::new(classes, kind)),
+                _ => *generate_dialog = Some(GenerateAccessorsDialog::new(language, classes, kind)),
             }
+        } else if language.is_none() {
+            crate::errors::report(last_error, t().errors.accessors_unsupported.to_string());
         } else {
             crate::errors::report(last_error, t().errors.accessors_no_tree.to_string());
         }
@@ -2002,28 +2004,36 @@ pub fn show(
     // A Tools menu click (`generate_method_request` — Constructor/
     // toString/equals+hashCode; no keyboard shortcut, same as Generate
     // Getters/Setters alone) generates a whole-method-body template for
-    // the file's classes — same Java-only gating and single-vs-multi-class
+    // the file's classes — same language gating and single-vs-multi-class
     // picker shape as accessor generation above, just never hitting the
-    // "nothing to generate" case (`codegen::generate_method`'s three
-    // templates are all valid Java even with zero fields selected).
+    // "nothing to generate" case (every template is valid with zero fields
+    // selected).
     if let Some(kind) = generate_method_request {
-        if doc.language != Some(Language::Java) {
-            crate::errors::report(last_error, t().errors.generate_java_only.to_string());
-        } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
+        let language = doc.language.filter(|&language| syntax::generates_code(language));
+        if let Some(language) = language
+            && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        {
             let text_now = doc.buffer.to_string();
-            let classes = syntax::java_classes_with_fields(tree, &text_now);
+            let classes = codegen::generation_targets(syntax::types_with_fields(tree, &text_now, language));
             match classes.len() {
                 0 => crate::errors::report(last_error, t().errors.no_class_fields.to_string()),
                 1 => {
-                    let generated =
-                        codegen::generate_method(&classes[0].name, &classes[0].fields, &indent_settings.unit(), kind);
+                    let generated = codegen::generate_method(
+                        language,
+                        &classes[0].name,
+                        &classes[0].fields,
+                        &indent_settings.unit(),
+                        kind,
+                    );
                     let (inserted, new_cursor) = insert_at_class_end(&text_now, classes[0].insertion_byte, &generated);
                     apply_edit(doc, parser, &text_now, &inserted);
                     old_text = inserted;
                     manual_caret = Some(Caret::at(new_cursor));
                 }
-                _ => *generate_method_dialog = Some(GenerateMethodDialog::new(classes, kind)),
+                _ => *generate_method_dialog = Some(GenerateMethodDialog::new(language, classes, kind)),
             }
+        } else if language.is_none() {
+            crate::errors::report(last_error, t().errors.generate_unsupported.to_string());
         } else {
             crate::errors::report(last_error, t().errors.generate_no_tree.to_string());
         }
@@ -2045,32 +2055,35 @@ pub fn show(
 
     // A Tools menu click (`override_method_request` — no keyboard shortcut,
     // same as the other Tools-only generation requests) looks up the
-    // superclass/interface of whichever class the cursor sits in
-    // (`syntax::enclosing_class` + `syntax::superclass_name`), finds *that*
-    // type's source file elsewhere in the open project
-    // (`codegen::find_java_file_by_stem` — in-project supertypes only, a
-    // JDK/library type has no file to find and correctly falls through to
-    // the last error case), and offers its not-already-overridden methods
-    // in a picker. Every non-applicable step reports specifically why
-    // through `last_error`, same reasoning as accessor/method generation
-    // above: a silent no-op is easy to mistake for "the shortcut doesn't
-    // work."
+    // supertype of whichever type the cursor sits in (`syntax::
+    // enclosing_type` + `syntax::supertype`), finds *that* type's source file
+    // elsewhere in the open project (`codegen::find_type_source` — in-project
+    // supertypes only, a library type has no file to find and correctly
+    // falls through to the last error case), and offers its
+    // not-already-overridden methods in a picker. Every non-applicable step
+    // reports specifically why through `last_error`, same reasoning as
+    // accessor/method generation above: a silent no-op is easy to mistake
+    // for "the shortcut doesn't work."
     if override_method_request {
-        if doc.language != Some(Language::Java) {
-            crate::errors::report(last_error, t().errors.override_java_only.to_string());
-        } else if let Some(tree) = parser.as_ref().and_then(|p| p.tree()) {
+        let language = doc.language.filter(|&language| syntax::generates_code(language));
+        if let Some(language) = language
+            && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        {
             let text_now = doc.buffer.to_string();
             let cursor_byte = shell_out.caret.map(|c| char_to_byte(&text_now, c.primary));
-            let enclosing = cursor_byte.and_then(|c| syntax::enclosing_class(tree, &text_now, c));
+            let enclosing = cursor_byte
+                .and_then(|c| syntax::enclosing_type(tree, &text_now, language, c))
+                .and_then(|ty| Some((ty.name, ty.insertion_byte?)));
 
             match enclosing {
                 None => crate::errors::report(last_error, t().errors.override_needs_class.to_string()),
-                Some((class_name, insertion_byte)) => match syntax::superclass_name(tree, &text_now, &class_name) {
+                Some((class_name, insertion_byte)) => match syntax::supertype(tree, &text_now, language, &class_name) {
                     None => {
                         crate::errors::report(last_error, msg::no_superclass(&class_name));
                     }
                     Some(super_name) => {
-                        let super_path = project.and_then(|p| codegen::find_java_file_by_stem(&p.tree, &super_name));
+                        let super_path =
+                            project.and_then(|p| codegen::find_type_source(&p.tree, &super_name, language));
                         match super_path {
                             None => {
                                 crate::errors::report(last_error, msg::superclass_not_in_project(&super_name));
@@ -2083,16 +2096,25 @@ pub fn show(
                                     );
                                 }
                                 Ok(super_source) => {
-                                    let Some(mut super_parser) = IncrementalParser::new(Language::Java) else {
-                                        crate::errors::report(
-                                            last_error,
-                                            msg::no_grammar_for_language(Language::Java.id()),
-                                        );
+                                    let Some(mut super_parser) = IncrementalParser::new(language) else {
+                                        crate::errors::report(last_error, msg::no_grammar_for_language(language.id()));
                                         return;
                                     };
                                     let super_tree = super_parser.parse(&super_source);
-                                    let inherited = syntax::methods_in_type(super_tree, &super_source, &super_name);
-                                    let already_here = syntax::methods_in_type(tree, &text_now, &class_name);
+                                    let inherited = syntax::type_members(
+                                        super_tree,
+                                        &super_source,
+                                        language,
+                                        &super_name,
+                                        MemberView::Overridable,
+                                    );
+                                    let already_here = syntax::type_members(
+                                        tree,
+                                        &text_now,
+                                        language,
+                                        &class_name,
+                                        MemberView::Overridable,
+                                    );
                                     let candidates: Vec<_> = inherited
                                         .into_iter()
                                         .filter(|m| {
@@ -2106,7 +2128,7 @@ pub fn show(
                                         crate::errors::report(last_error, msg::no_overridable_methods(&super_name));
                                     } else {
                                         *override_method_dialog =
-                                            Some(OverrideMethodDialog::new(candidates, insertion_byte));
+                                            Some(OverrideMethodDialog::new(language, candidates, insertion_byte));
                                     }
                                 }
                             },
@@ -2114,6 +2136,8 @@ pub fn show(
                     }
                 },
             }
+        } else if language.is_none() {
+            crate::errors::report(last_error, t().errors.override_unsupported.to_string());
         } else {
             crate::errors::report(last_error, t().errors.override_no_tree.to_string());
         }
@@ -2725,8 +2749,15 @@ fn word_completion_candidates(
     candidates
 }
 
-/// Dot-completion's candidate source, dispatched by language — the one
-/// entry point the trigger above calls. Every other language has none.
+/// Dot-completion's candidates — the one entry point the trigger above
+/// calls. The word before the `.` is resolved by whichever extension models
+/// `language` (`syntax::receiver_type`): the type the cursor sits in for
+/// `this`, its supertype for `super`, a variable's declared type otherwise.
+/// That type's members then come from this file, or from the project file
+/// named after the type (`codegen::find_type_source`), plus — for a value
+/// of another type — one level of inherited members found the same way.
+/// Anything unresolvable is `None`: don't open the popup, not an error. A
+/// language no extension models never resolves at all.
 fn dot_completion_candidates(
     language: Language,
     tree: &Tree,
@@ -2735,166 +2766,60 @@ fn dot_completion_candidates(
     receiver: &str,
     project: Option<&Project>,
 ) -> Option<Vec<CompletionItem>> {
-    match language {
-        Language::Java => java_dot_completion_candidates(tree, source, cursor_byte, receiver, project),
-        Language::Kotlin => kotlin_dot_completion_candidates(tree, source, cursor_byte, receiver, project),
-        _ => None,
-    }
-}
-
-/// Java's dot-completion candidates: `this.`/`super.` go through
-/// `syntax::enclosing_class`/`superclass_name` to an *unfiltered* member
-/// listing (own class sees everything). A bare identifier resolves via
-/// `type_of_identifier_java`; if it has a project source file, its members
-/// come from `methods_in_type`'s external-visibility filtering, plus one
-/// level of inherited members via the same file-finder chain "Override
-/// Method" uses. Anything unresolvable is `None` — don't open the popup,
-/// not an error.
-fn java_dot_completion_candidates(
-    tree: &Tree,
-    source: &str,
-    cursor_byte: usize,
-    receiver: &str,
-    project: Option<&Project>,
-) -> Option<Vec<CompletionItem>> {
-    let (class_name, _) = syntax::enclosing_class(tree, source, cursor_byte)?;
-
-    if receiver == "this" {
-        return Some(java_members_as_items(tree, source, &class_name, true));
+    let resolved = syntax::receiver_type(tree, source, language, cursor_byte, receiver)?;
+    if resolved.in_this_file {
+        return Some(members_as_items(tree, source, language, &resolved.type_name, resolved.view));
     }
 
-    if receiver == "super" {
-        let super_name = syntax::superclass_name(tree, source, &class_name)?;
-        let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))?;
-        let super_source = std::fs::read_to_string(&super_path).ok()?;
-        let mut super_parser = IncrementalParser::new(Language::Java)?;
-        let super_tree = super_parser.parse(&super_source).clone();
-        return Some(java_members_as_items(&super_tree, &super_source, &super_name, true));
-    }
+    let project = project?;
+    let (type_tree, type_source) = parse_type_source(project, &resolved.type_name, language)?;
+    let mut items = members_as_items(&type_tree, &type_source, language, &resolved.type_name, resolved.view);
 
-    let type_name = syntax::type_of_identifier_java(tree, source, cursor_byte, receiver)?;
-    let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "java"))?;
-    let type_source = std::fs::read_to_string(&type_path).ok()?;
-    let mut type_parser = IncrementalParser::new(Language::Java)?;
-    let type_tree = type_parser.parse(&type_source).clone();
-
-    let mut items = java_members_as_items(&type_tree, &type_source, &type_name, false);
-
-    if let Some(super_name) = syntax::superclass_name(&type_tree, &type_source, &type_name)
-        && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "java"))
-        && let Ok(super_source) = std::fs::read_to_string(&super_path)
+    if resolved.view == MemberView::Outside
+        && let Some(super_name) = syntax::supertype(&type_tree, &type_source, language, &resolved.type_name)
+        && let Some((super_tree, super_source)) = parse_type_source(project, &super_name, language)
     {
-        let mut super_parser = IncrementalParser::new(Language::Java)?;
-        let super_tree = super_parser.parse(&super_source).clone();
-        items.extend(java_members_as_items(&super_tree, &super_source, &super_name, false));
+        items.extend(members_as_items(&super_tree, &super_source, language, &super_name, MemberView::Outside));
     }
 
     Some(items)
 }
 
-/// `type_name`'s own fields and methods as `CompletionItem`s. `unfiltered`
-/// selects `fields_in_type`'s `include_static` and `all_methods_in_type`
-/// over `methods_in_type`, for the `this.`/`super.` case.
-fn java_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
-    let mut items: Vec<CompletionItem> = syntax::fields_in_type(tree, source, type_name, unfiltered)
-        .into_iter()
-        .map(|f| CompletionItem {
-            label: f.name,
-            kind: CompletionKind::Field,
-            detail: Some(f.java_type),
-            has_params: false,
-        })
-        .collect();
-
-    let methods = if unfiltered {
-        syntax::all_methods_in_type(tree, source, type_name)
-    } else {
-        syntax::methods_in_type(tree, source, type_name)
-    };
-    items.extend(methods.into_iter().map(|m| CompletionItem {
-        label: m.name,
-        kind: CompletionKind::Method,
-        detail: Some(m.return_type),
-        has_params: !m.params.is_empty(),
-    }));
-
-    items
+/// The parse of the project file `type_name` is declared in, with its text.
+fn parse_type_source(project: &Project, type_name: &str, language: Language) -> Option<(Tree, String)> {
+    let path = codegen::find_type_source(&project.tree, type_name, language)?;
+    let source = std::fs::read_to_string(&path).ok()?;
+    let mut parser = IncrementalParser::new(language)?;
+    let tree = parser.parse(&source).clone();
+    Some((tree, source))
 }
 
-/// Kotlin's dot-completion candidates — same shape as
-/// `java_dot_completion_candidates`, just `kotlin_enclosing_class`/
-/// `kotlin_superclass_name`/`type_of_identifier_kotlin` in place of the
-/// Java equivalents.
-fn kotlin_dot_completion_candidates(
+/// `type_name`'s own members, as `view` sees them, as `CompletionItem`s —
+/// fields first, then methods, each in source order.
+fn members_as_items(
     tree: &Tree,
     source: &str,
-    cursor_byte: usize,
-    receiver: &str,
-    project: Option<&Project>,
-) -> Option<Vec<CompletionItem>> {
-    let class_name = syntax::kotlin_enclosing_class(tree, source, cursor_byte)?;
-
-    if receiver == "this" {
-        return Some(kotlin_members_as_items(tree, source, &class_name, true));
-    }
-
-    if receiver == "super" {
-        let super_name = syntax::kotlin_superclass_name(tree, source, &class_name)?;
-        let super_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))?;
-        let super_source = std::fs::read_to_string(&super_path).ok()?;
-        let mut super_parser = IncrementalParser::new(Language::Kotlin)?;
-        let super_tree = super_parser.parse(&super_source).clone();
-        return Some(kotlin_members_as_items(&super_tree, &super_source, &super_name, true));
-    }
-
-    let type_name = syntax::type_of_identifier_kotlin(tree, source, cursor_byte, receiver)?;
-    let type_path = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &type_name, "kt"))?;
-    let type_source = std::fs::read_to_string(&type_path).ok()?;
-    let mut type_parser = IncrementalParser::new(Language::Kotlin)?;
-    let type_tree = type_parser.parse(&type_source).clone();
-
-    let mut items = kotlin_members_as_items(&type_tree, &type_source, &type_name, false);
-
-    if let Some(super_name) = syntax::kotlin_superclass_name(&type_tree, &type_source, &type_name)
-        && let Some(super_path) = project.and_then(|p| codegen::find_source_file_by_stem(&p.tree, &super_name, "kt"))
-        && let Ok(super_source) = std::fs::read_to_string(&super_path)
-    {
-        let mut super_parser = IncrementalParser::new(Language::Kotlin)?;
-        let super_tree = super_parser.parse(&super_source).clone();
-        items.extend(kotlin_members_as_items(&super_tree, &super_source, &super_name, false));
-    }
-
-    Some(items)
+    language: Language,
+    type_name: &str,
+    view: MemberView,
+) -> Vec<CompletionItem> {
+    syntax::type_members(tree, source, language, type_name, view)
+        .into_iter()
+        .map(member_as_item)
+        .collect()
 }
 
-/// `type_name`'s own properties and functions as `CompletionItem`s.
-/// `unfiltered` selects `all_kotlin_functions_in_type` over
-/// `kotlin_functions_in_type`, for `this.`/`super.`; properties aren't
-/// visibility-filtered at all, mirroring Java's `fields_in_type`.
-fn kotlin_members_as_items(tree: &Tree, source: &str, type_name: &str, unfiltered: bool) -> Vec<CompletionItem> {
-    let mut items: Vec<CompletionItem> = syntax::kotlin_properties_in_type(tree, source, type_name)
-        .into_iter()
-        .map(|f| CompletionItem {
-            label: f.name,
-            kind: CompletionKind::Field,
-            detail: Some(f.java_type),
-            has_params: false,
-        })
-        .collect();
-
-    let functions = if unfiltered {
-        syntax::all_kotlin_functions_in_type(tree, source, type_name)
-    } else {
-        syntax::kotlin_functions_in_type(tree, source, type_name)
+fn member_as_item(member: TypeMember) -> CompletionItem {
+    let (kind, has_params) = match member.kind {
+        MemberKind::Field => (CompletionKind::Field, false),
+        MemberKind::Method => (CompletionKind::Method, !member.params.is_empty()),
     };
-    items.extend(functions.into_iter().map(|m| CompletionItem {
-        label: m.name,
-        kind: CompletionKind::Method,
-        detail: Some(m.return_type),
-        has_params: !m.params.is_empty(),
-    }));
-
-    items
+    CompletionItem {
+        label: member.name,
+        kind,
+        detail: Some(member.type_text),
+        has_params,
+    }
 }
 
 /// Removes and returns the first event in this frame's input queue matching
