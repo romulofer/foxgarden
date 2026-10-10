@@ -119,3 +119,26 @@ fn jvm_languages_and_file_types_come_from_different_extensions() {
     assert_eq!(registry.language("yaml").unwrap().extension_id, "file-types");
     assert_eq!(registry.language("dockerfile").unwrap().extension_id, "file-types");
 }
+
+#[test]
+fn shipped_extensions_are_listed_in_registration_order() {
+    let ids: Vec<String> = shipped_extensions().into_iter().map(|e| e.manifest.id).collect();
+    assert_eq!(ids, vec!["spring", "file-types"]);
+}
+
+#[test]
+fn a_disabled_extension_contributes_nothing_but_stays_listed() {
+    let disabled = vec!["spring".to_string()];
+    let registry = builtin_registry_without(&disabled);
+    let ids: Vec<&str> = registry.extensions().iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["file-types"]);
+    assert!(registry.language_for_extension("java").is_none());
+    assert!(registry.language_for_extension("yaml").is_some());
+    assert_eq!(shipped_extensions().len(), 2);
+}
+
+#[test]
+fn an_unknown_disabled_id_is_ignored() {
+    let registry = builtin_registry_without(&["nope".to_string()]);
+    assert_eq!(registry.extensions().len(), 2);
+}

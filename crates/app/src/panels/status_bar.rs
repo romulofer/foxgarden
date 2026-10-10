@@ -28,7 +28,7 @@ use crate::lsp_state::LspState;
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::GitStageState;
 use crate::panels::lsp_servers::LspServersState;
-use crate::panels::spring_config::SpringConfigState;
+use crate::panels::config_properties::ConfigPropertiesState;
 use crate::panels::static_analysis::StaticAnalysisState;
 use crate::tool_manager::ToolManagerState;
 use fg_extension::AnalyzerHandle;
@@ -63,7 +63,7 @@ pub struct BackgroundWork {
     pub detecting_java_home: bool,
     /// Display names of the analyzers with a scan in flight.
     pub running_analyzers: Vec<String>,
-    /// A `mvn`/`gradle` classpath resolution feeding Spring config
+    /// A `mvn`/`gradle` classpath resolution feeding config
     /// completion.
     pub scanning_classpath: bool,
     /// Any `git` subprocess at all: a `status` refresh, a `diff`/`blame`
@@ -93,7 +93,7 @@ impl BackgroundWork {
         lsp_servers: &LspServersState,
         static_analysis: &StaticAnalysisState,
         analyzers: &[AnalyzerHandle],
-        spring_config: &SpringConfigState,
+        config_properties: &ConfigPropertiesState,
         git_stage: &GitStageState,
         diff: &DiffState,
         debug: &DebugState,
@@ -111,7 +111,7 @@ impl BackgroundWork {
                 .filter(|analyzer| static_analysis.running(analyzer.id()))
                 .map(|analyzer| analyzer.display_name().to_string())
                 .collect(),
-            scanning_classpath: spring_config.scanning(),
+            scanning_classpath: config_properties.scanning(),
             running_git: diff.running()
                 || git_stage.status_running()
                 || git_stage.op_running()

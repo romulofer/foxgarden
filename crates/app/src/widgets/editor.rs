@@ -29,7 +29,7 @@ mod rename;
 mod route_scan;
 mod run_gutter;
 mod import_completion;
-mod spring_config_completion;
+mod config_completion;
 mod templates;
 mod text_area;
 mod text_offset;

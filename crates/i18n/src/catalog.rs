@@ -37,6 +37,18 @@ pub struct Strings {
     pub debug: Debug,
     pub jdk: Jdk,
     pub dock: Dock,
+    pub extensions: Extensions,
+}
+
+/// Extensions > Manage Extensions… (`panels::extensions`).
+pub struct Extensions {
+    pub heading: &'static str,
+    pub intro: &'static str,
+    pub restart_required: &'static str,
+    pub languages: &'static str,
+    pub language_servers: &'static str,
+    pub build_tools: &'static str,
+    pub analyzers: &'static str,
 }
 
 /// The bottom dock's own tab strip (`panels::bottom_dock`). Deliberately
@@ -133,6 +145,9 @@ pub struct Menu {
     pub inline_blame_hint: &'static str,
     pub fold_all: &'static str,
     pub expand_all: &'static str,
+
+    pub extensions: &'static str,
+    pub manage_extensions: &'static str,
 
     pub help: &'static str,
     pub live_templates: &'static str,
@@ -588,6 +603,9 @@ pub const PT_BR: Strings = Strings {
         fold_all: "Recolher Tudo",
         expand_all: "Expandir Tudo",
 
+        extensions: "Extensões",
+        manage_extensions: "Gerenciar Extensões…",
+
         help: "Ajuda",
         live_templates: "Modelos Dinâmicos…",
         about: "Sobre",
@@ -874,6 +892,15 @@ pub const PT_BR: Strings = Strings {
         profiler: "Perfil",
         hide: "Ocultar painel",
     },
+    extensions: Extensions {
+        heading: "Extensões",
+        intro: "Extensões adicionam suporte a linguagens e ferramentas. Desmarque uma para desativá-la.",
+        restart_required: "Reinicie o FoxGarden para aplicar as mudanças.",
+        languages: "Linguagens",
+        language_servers: "Servidores de linguagem",
+        build_tools: "Ferramentas de build",
+        analyzers: "Analisadores",
+    },
 };
 
 /// US English.
@@ -954,6 +981,9 @@ pub const EN_US: Strings = Strings {
         inline_blame_hint: "Dimmed author/date/summary annotation on the cursor's current line",
         fold_all: "Fold All",
         expand_all: "Expand All",
+
+        extensions: "Extensions",
+        manage_extensions: "Manage Extensions…",
 
         help: "Help",
         live_templates: "Live Templates…",
@@ -1240,5 +1270,14 @@ pub const EN_US: Strings = Strings {
         build: "Build",
         profiler: "Profiler",
         hide: "Hide panel",
+    },
+    extensions: Extensions {
+        heading: "Extensions",
+        intro: "Extensions add language and tooling support. Untick one to disable it.",
+        restart_required: "Restart FoxGarden to apply the changes.",
+        languages: "Languages",
+        language_servers: "Language servers",
+        build_tools: "Build tools",
+        analyzers: "Analyzers",
     },
 };

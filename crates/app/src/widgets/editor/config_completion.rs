@@ -1,8 +1,8 @@
-//! Spring config property autocomplete (`PLAN.md` Track 12 Phase 1) — pure
+//! Config property autocomplete (`PLAN.md` Track 12 Phase 1) — pure
 //! candidate-generation logic for `application.properties`/`.yml`, fed by
-//! `fg_core::ConfigProperty` (the resolved-classpath jar scan;
-//! `crate::panels::spring_config` owns the background scan that produces
-//! it). Two shapes, matching the two real file formats: `.properties` is
+//! `fg_core::ConfigProperty` (what the extensions know about the project's
+//! keys; `crate::panels::config_properties` owns the background scan that
+//! produces them). Two shapes, matching the two real file formats: `.properties` is
 //! flat (`server.port=8080`, the whole dotted key on one line), `.yml` is
 //! nested (`server:` / `  port: 8080`), so a completed *segment* there has
 //! to be reconstructed from indentation ancestry rather than read straight
@@ -154,5 +154,5 @@ pub(super) fn yaml_ancestor_path(source: &str, current_line: usize, current_inde
 }
 
 #[cfg(test)]
-#[path = "spring_config_completion_test.rs"]
-mod spring_config_completion_test;
+#[path = "config_completion_test.rs"]
+mod config_completion_test;

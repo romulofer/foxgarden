@@ -75,6 +75,8 @@ pub struct MenuBarOutcome {
     /// which owns the enable/binary-path settings that used to live in a
     /// nested Settings submenu, plus installing the servers themselves.
     pub open_lsp_servers_settings_request: bool,
+    /// Extensions > Manage Extensions… — opens `panels::extensions`' dialog.
+    pub open_extensions_request: bool,
     /// Tools > Run <analyzer>: the index, into the analyzers the menu was
     /// shown with, of the one picked.
     pub run_analyzer_request: Option<usize>,
@@ -760,6 +762,13 @@ pub fn show(
                 .clicked()
             {
                 outcome.expand_all_request = true;
+                ui.close();
+            }
+        });
+
+        ui.menu_button(t().menu.extensions, |ui| {
+            if ui.button(t().menu.manage_extensions).clicked() {
+                outcome.open_extensions_request = true;
                 ui.close();
             }
         });

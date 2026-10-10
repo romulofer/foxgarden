@@ -21,7 +21,7 @@ pub enum CompletionKind {
     Method,
     Keyword,
     Template,
-    /// A Spring config property key (`application.properties`/`.yml` —
+    /// A config property key (`application.properties`/`.yml` —
     /// `PLAN.md` Track 12), sourced from a scanned dependency jar's own
     /// bundled `spring-configuration-metadata.json` rather than anything
     /// parsed from the open project's own source.
@@ -240,7 +240,7 @@ impl CompletionState {
 }
 
 /// One popup row's own text: `item.label`, plus `item.detail` (if any) in
-/// the theme's dimmed/weak color right after it — e.g. a Spring config
+/// the theme's dimmed/weak color right after it — e.g. a config
 /// property's own `"java.lang.Integer = 8080"`. `weak_text_color` rather
 /// than threading a `dark_mode` bool into `paint` just for this: egui's own
 /// theme-aware "de-emphasized but still legible" color already exists for

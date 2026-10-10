@@ -50,3 +50,38 @@ fn index_resolves_extensions_case_insensitively() {
     assert_eq!(index.by_extension("YAML").map(String::as_str), Some("yaml"));
     assert_eq!(index.by_extension("java"), None);
 }
+
+struct Probe;
+
+impl Extension for Probe {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: "probe".to_string(),
+            name: "Probe".to_string(),
+            version: "1.2.3".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            languages: vec![LanguageContribution {
+                id: "zz".to_string(),
+                display_name: "ZZ".to_string(),
+                file_extensions: vec!["zz".to_string()],
+                filename_patterns: Vec::new(),
+            }],
+            ..Default::default()
+        }
+    }
+}
+
+#[test]
+fn info_names_what_an_extension_contributes_by_display_name() {
+    let info = ExtensionInfo::of(&Probe);
+    assert_eq!(info.manifest.id, "probe");
+    assert_eq!(info.languages, vec!["ZZ"]);
+    assert!(info.language_servers.is_empty());
+    assert!(info.build_tools.is_empty());
+    assert!(info.analyzers.is_empty());
+}

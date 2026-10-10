@@ -375,7 +375,7 @@ fn zzz_repro_enter_hang() {
         &mut parser,
         None,
         &mut None,
-        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::panels::config_properties::ConfigPropertiesState::default(),
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),

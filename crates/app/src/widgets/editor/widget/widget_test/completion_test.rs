@@ -353,7 +353,7 @@ fn java_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediatel
         &mut parser,
         Some(&project),
         &mut completion,
-        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::panels::config_properties::ConfigPropertiesState::default(),
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -397,7 +397,7 @@ fn kotlin_typing_super_dot_one_character_at_a_time_opens_dot_completion_immediat
         &mut parser,
         Some(&project),
         &mut completion,
-        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::panels::config_properties::ConfigPropertiesState::default(),
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -437,7 +437,7 @@ fn kotlin_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
         &mut parser,
         Some(&project),
         &mut completion,
-        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::panels::config_properties::ConfigPropertiesState::default(),
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -477,7 +477,7 @@ fn java_typing_a_single_char_receiver_then_dot_opens_dot_completion() {
         &mut parser,
         Some(&project),
         &mut completion,
-        &mut crate::panels::spring_config::SpringConfigState::default(),
+        &mut crate::panels::config_properties::ConfigPropertiesState::default(),
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -502,11 +502,11 @@ fn spring_prop(name: &str) -> fg_core::ConfigProperty {
 }
 
 #[test]
-fn typing_a_partial_key_in_application_properties_opens_spring_config_completion() {
+fn typing_a_partial_key_in_application_properties_opens_config_completion() {
     let (_dir, mut doc) = open_fixture("", "application.properties");
     let mut parser = parsed(Language::Properties, "");
     let mut completion = None;
-    let mut spring_config = crate::panels::spring_config::SpringConfigState::with_properties(vec![
+    let mut config_properties = crate::panels::config_properties::ConfigPropertiesState::with_properties(vec![
         spring_prop("server.port"),
         spring_prop("server.address"),
         spring_prop("spring.application.name"),
@@ -523,7 +523,7 @@ fn typing_a_partial_key_in_application_properties_opens_spring_config_completion
         &mut parser,
         None,
         &mut completion,
-        &mut spring_config,
+        &mut config_properties,
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -533,7 +533,7 @@ fn typing_a_partial_key_in_application_properties_opens_spring_config_completion
     );
 
     let state =
-        completion.expect("typing a partial dotted key in a .properties file should open Spring config completion");
+        completion.expect("typing a partial dotted key in a .properties file should open Config completion");
     let text = doc.buffer.to_string();
     let cursor_byte = "server.po".len();
     assert_eq!(
@@ -548,8 +548,8 @@ fn typing_past_the_equals_sign_in_application_properties_does_not_open_completio
     let (_dir, mut doc) = open_fixture("server.port=", "application.properties");
     let mut parser = parsed(Language::Properties, "server.port=");
     let mut completion = None;
-    let mut spring_config =
-        crate::panels::spring_config::SpringConfigState::with_properties(vec![spring_prop("server.port")]);
+    let mut config_properties =
+        crate::panels::config_properties::ConfigPropertiesState::with_properties(vec![spring_prop("server.port")]);
 
     let initial_caret = "server.port=".len();
     let frames = vec![
@@ -562,7 +562,7 @@ fn typing_past_the_equals_sign_in_application_properties_does_not_open_completio
         &mut parser,
         None,
         &mut completion,
-        &mut spring_config,
+        &mut config_properties,
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -583,7 +583,7 @@ fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor
     let (_dir, mut doc) = open_fixture(before, "application.yml");
     let mut parser = parsed(Language::Yaml, before);
     let mut completion = None;
-    let mut spring_config = crate::panels::spring_config::SpringConfigState::with_properties(vec![
+    let mut config_properties = crate::panels::config_properties::ConfigPropertiesState::with_properties(vec![
         spring_prop("server.port"),
         spring_prop("server.servlet.jsp.class-name"),
         spring_prop("spring.application.name"),
@@ -597,7 +597,7 @@ fn typing_a_nested_key_in_a_yaml_file_offers_the_next_segment_under_its_ancestor
         &mut parser,
         None,
         &mut completion,
-        &mut spring_config,
+        &mut config_properties,
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -624,7 +624,7 @@ fn accepting_a_spring_annotation_inserts_it_and_adds_the_import_alphabetically()
     let (_dir, mut doc) = open_fixture(&source, "Foo.java");
     let mut parser = parsed(Language::Java, &source);
     let mut completion = None;
-    let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
+    let mut config_properties = crate::panels::config_properties::ConfigPropertiesState::default();
 
     let initial_caret = before.len();
     let mut frames: Vec<Vec<egui::Event>> = "@Compo"
@@ -638,7 +638,7 @@ fn accepting_a_spring_annotation_inserts_it_and_adds_the_import_alphabetically()
         &mut parser,
         None,
         &mut completion,
-        &mut spring_config,
+        &mut config_properties,
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),
@@ -664,7 +664,7 @@ fn accepting_a_spring_annotation_already_imported_does_not_duplicate_the_import(
     let (_dir, mut doc) = open_fixture(&source, "Foo.java");
     let mut parser = parsed(Language::Java, &source);
     let mut completion = None;
-    let mut spring_config = crate::panels::spring_config::SpringConfigState::default();
+    let mut config_properties = crate::panels::config_properties::ConfigPropertiesState::default();
 
     let initial_caret = before.len();
     let mut frames: Vec<Vec<egui::Event>> = "@Compo"
@@ -678,7 +678,7 @@ fn accepting_a_spring_annotation_already_imported_does_not_duplicate_the_import(
         &mut parser,
         None,
         &mut completion,
-        &mut spring_config,
+        &mut config_properties,
         &mut crate::lsp_state::LspState::default(),
         &mut FindReferencesState::default(),
         &mut RenameBox::default(),

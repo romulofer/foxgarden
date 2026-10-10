@@ -21,6 +21,7 @@ use crate::panels::debug_toolbar;
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
+use crate::panels::extensions::{self as extensions_ui, ExtensionsState};
 use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
 use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::menu_bar::{self, MenuBarState};
@@ -28,7 +29,7 @@ use crate::panels::new_project::{self, NewProjectWizardState};
 use crate::panels::quick_switcher::{self, QuickSwitcherState};
 use crate::panels::run_configs::{self, RunConfigsDialogState};
 use crate::panels::side_panel::{self, SidePanelState};
-use crate::panels::spring_config::SpringConfigState;
+use crate::panels::config_properties::ConfigPropertiesState;
 use crate::panels::http_routes::{self, HttpRoutesState};
 use crate::panels::static_analysis::{self, ExternalToolPaths, StaticAnalysisState};
 use crate::panels::status_bar;
@@ -377,10 +378,10 @@ pub struct FoxGardenApp {
     /// Settings > External Tools… dialog state and any in-flight Checkstyle
     /// scan — see `panels::static_analysis`.
     static_analysis: StaticAnalysisState,
-    /// The current project's own scanned Spring config properties (Track
+    /// The current project's own scanned config properties (Track
     /// 12), lazily scanned the first time a `.properties`/`.yml` file's
-    /// completion trigger actually needs them — see `panels::spring_config`.
-    spring_config: SpringConfigState,
+    /// completion trigger actually needs them — see `panels::config_properties`.
+    config_properties: ConfigPropertiesState,
     /// Settings > External Tools — binary/config paths for Checkstyle/PMD/
     /// SpotBugs, a personal per-machine preference like `editor_font`, so
     /// persisted the same way (see `restore_settings`/`persist_settings`),
@@ -423,6 +424,10 @@ pub struct FoxGardenApp {
     /// Settings > JDKs… — the dialog that edits `jdk_registry` above.
     /// Runtime-only, same reasoning as `lsp_servers` above.
     jdk_registry_ui: JdkRegistryState,
+    /// Extensions > Manage Extensions… — which shipped extensions are
+    /// switched off. Persisted; applies on the next launch, since the
+    /// registry is built once, before the session restores.
+    extensions_ui: ExtensionsState,
     /// File > New Project… — `PLAN.md` Track 29 Phase 3. Runtime-only, same
     /// reasoning as `lsp_servers`/`jdk_registry_ui` above: nothing here is
     /// meaningful to resume across a restart.
@@ -1235,7 +1240,8 @@ impl FoxGardenApp {
         // every file as plain text. The registrations go in before
         // anything restores a session below, since a restored tab's
         // language is resolved as it is opened.
-        let mut state = EditorState::with_languages(fg_languages::builtin_registry());
+        let disabled_extensions = extensions_ui::stored_disabled(cc.storage);
+        let mut state = EditorState::with_languages(fg_languages::builtin_registry_without(&disabled_extensions));
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
         // Declaring a language and being able to parse it are two separate
@@ -1380,7 +1386,7 @@ impl FoxGardenApp {
             external_conflicts: HashSet::new(),
             externally_deleted: HashSet::new(),
             static_analysis: StaticAnalysisState::default(),
-            spring_config: SpringConfigState::default(),
+            config_properties: ConfigPropertiesState::default(),
             external_tool_paths,
             auto_save_settings,
             tree_refresh_due: None,
@@ -1391,6 +1397,7 @@ impl FoxGardenApp {
             lsp_servers: LspServersState::default(),
             jdk_registry,
             jdk_registry_ui: JdkRegistryState::default(),
+            extensions_ui: ExtensionsState::new(fg_languages::shipped_extensions(), disabled_extensions),
             new_project_wizard: NewProjectWizardState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),
@@ -2080,7 +2087,7 @@ impl eframe::App for FoxGardenApp {
                 &self.lsp_servers,
                 &self.static_analysis,
                 &analyzers,
-                &self.spring_config,
+                &self.config_properties,
                 &self.git_stage,
                 &self.diff,
                 &self.debug_state,
@@ -2501,6 +2508,9 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.open_jdk_registry_settings_request {
             self.jdk_registry_ui.open_settings();
         }
+        if menu_outcome.open_extensions_request {
+            self.extensions_ui.open();
+        }
         if menu_outcome.open_new_project_wizard_request {
             self.new_project_wizard.open(&self.state.languages);
         }
@@ -2519,9 +2529,9 @@ impl eframe::App for FoxGardenApp {
                 }
             }
         }
-        self.spring_config
+        self.config_properties
             .observe(&self.state.languages, self.state.project.as_ref().map(|p| p.root.as_path()));
-        self.spring_config.poll();
+        self.config_properties.poll();
         self.debug_state.poll();
         self.debug_state.sync_breakpoints(self.state.open_tabs.iter());
         if let Some(err) = self.debug_state.take_failure() {
@@ -2677,7 +2687,7 @@ impl eframe::App for FoxGardenApp {
                 &mut self.cached_clipboard_text,
                 jump_target.as_ref().map(|(_, char_offset)| *char_offset),
                 &self.custom_templates,
-                &mut self.spring_config,
+                &mut self.config_properties,
                 &mut self.lsp,
                 &mut self.find_references,
                 &mut self.rename_box,
@@ -2902,6 +2912,7 @@ impl eframe::App for FoxGardenApp {
         );
         lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
         jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
+        extensions_ui::show(ui, &mut self.extensions_ui);
         new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
 
         self.show_draft_restore_prompt(ui);
@@ -2931,6 +2942,7 @@ impl eframe::App for FoxGardenApp {
             &self.lsp_settings,
             &self.jdk_registry,
         );
+        extensions_ui::persist_disabled(storage, self.extensions_ui.disabled());
     }
 
     /// Stop anything that would otherwise outlive the window on quit. A

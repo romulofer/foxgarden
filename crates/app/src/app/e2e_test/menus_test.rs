@@ -226,6 +226,28 @@ fn help_about_lists_the_shortcuts() {
 }
 
 #[test]
+fn extensions_manage_lists_the_shipped_extensions_and_flags_a_restart() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.extensions, t().menu.manage_extensions);
+
+    assert!(app.shows(t().extensions.intro));
+    assert!(app.shows_containing("Common file types"));
+    assert!(!app.shows(t().extensions.restart_required));
+
+    let file_types = fg_languages::shipped_extensions()
+        .into_iter()
+        .find(|e| e.manifest.id == "file-types")
+        .expect("file-types ships with the build");
+    app.click_checkbox(&format!("{} {}", file_types.manifest.name, file_types.manifest.version));
+
+    assert!(app.shows(t().extensions.restart_required));
+    assert_eq!(app.app().extensions_ui.disabled(), ["file-types"]);
+    app.click(t().common.close);
+    assert!(!app.shows(t().extensions.intro));
+}
+
+#[test]
 fn help_live_templates_dialog_opens() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 

@@ -33,6 +33,7 @@ mod analyzers;
 mod code_model;
 mod editing;
 mod imports;
+mod info;
 mod registry;
 mod tooling;
 
@@ -44,6 +45,7 @@ pub use code_model::{
 };
 pub use editing::Snippet;
 pub use imports::{DocStub, ImportCandidate, ImportEdit};
+pub use info::ExtensionInfo;
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,

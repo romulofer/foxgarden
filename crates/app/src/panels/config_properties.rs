@@ -1,15 +1,15 @@
-//! Background classpath scan feeding Spring config property autocomplete
-//! (`PLAN.md` Track 12 Phase 1) — the app-side counterpart to the project's
-//! own build tool resolving a classpath (`BuildToolHandle::
-//! analysis_classpath`) and `fg_core::scan_classpath_for_metadata` reading
-//! Spring's metadata out of it. Lazily triggered (`ensure_scanning`, called from the
+//! Background scan feeding config property autocomplete (`PLAN.md` Track 12
+//! Phase 1). Which keys a project has is the extensions' answer
+//! (`ExtensionHandle::config_properties`, given the project's detected build
+//! tool); this module only runs that question off the UI thread and caches
+//! the result. Lazily triggered (`ensure_scanning`, called from the
 //! completion trigger the first time a `.properties`/`.yml` file actually
-//! needs candidates) rather than eagerly on every project open — real
-//! classpath resolution shells out to `mvn`/`gradle` and can be genuinely
-//! slow, so a project that never opens a Spring config file never pays for
-//! it, mirroring `static_analysis`'s own "only runs on an explicit ask, not
-//! automatically" cost discipline, just triggered by a file-open condition
-//! instead of a menu click.
+//! needs candidates) rather than eagerly on every project open — resolving
+//! a classpath shells out to the build tool and can be genuinely slow, so a
+//! project that never opens a config file never pays for it, mirroring
+//! `static_analysis`'s own "only runs on an explicit ask, not automatically"
+//! cost discipline, just triggered by a file-open condition instead of a menu
+//! click.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -22,7 +22,7 @@ use fg_extension::Registry;
 /// a previous project's stale results rather than silently keep serving
 /// them under the new project's own files.
 #[derive(Default)]
-pub struct SpringConfigState {
+pub struct ConfigPropertiesState {
     scanned_root: Option<PathBuf>,
     scan_rx: Option<Receiver<Vec<ConfigProperty>>>,
     properties: Vec<ConfigProperty>,
@@ -38,7 +38,7 @@ pub struct SpringConfigState {
     build_tool: Option<(PathBuf, Option<BuildToolHandle>)>,
 }
 
-impl SpringConfigState {
+impl ConfigPropertiesState {
     /// Test-only fixture: a state that already has `properties` cached, as
     /// if a real scan had already completed, without spawning one — the
     /// widget-side completion trigger tests need known candidates without
@@ -153,5 +153,5 @@ fn scan_project(
 }
 
 #[cfg(test)]
-#[path = "spring_config_test.rs"]
-mod spring_config_test;
+#[path = "config_properties_test.rs"]
+mod config_properties_test;

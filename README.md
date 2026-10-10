@@ -102,6 +102,10 @@ SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendar
 compiled in today; loading extensions from outside the binary is the next
 milestone.
 
+Manage them from the **Extensions** menu: *Manage Extensions…* lists each
+extension with what it contributes and lets you switch it off (applies on the
+next launch).
+
 ### 🛠️ Build & run
 
 ```bash
@@ -118,7 +122,7 @@ cargo test --workspace
 ```
 
 **Requirements:** a recent Rust toolchain (edition 2024). Java, Kotlin and
-Spring support comes from the `spring-foxgarden` add-on, which the build
+Spring support comes from the `spring-foxgarden` extension, which the build
 expects at `../spring-foxgarden`. The editor reaches it only through its
 extension API; a few JVM-specific pieces (the language-server installers, the
 JDK registry panels) have not moved across yet. Java language features
@@ -221,6 +225,10 @@ extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxg
 compilada junto por enquanto; carregar extensões de fora do binário é o próximo
 marco.
 
+Gerencie-as no menu **Extensões**: *Gerenciar Extensões…* lista cada extensão
+com o que ela contribui e permite desativá-la (vale a partir da próxima
+inicialização).
+
 ### 🛠️ Compilar & executar
 
 ```bash
@@ -237,7 +245,7 @@ cargo test --workspace
 ```
 
 **Requisitos:** uma toolchain Rust recente (edição 2024). O suporte a Java,
-Kotlin e Spring vem do add-on `spring-foxgarden`, que o build espera em
+Kotlin e Spring vem do extension `spring-foxgarden`, que o build espera em
 `../spring-foxgarden`. O editor só a alcança pela API de extensões; algumas
 peças específicas da JVM (instaladores de language server, painéis do registro
 de JDKs) ainda não foram movidas. Recursos de Java exigem

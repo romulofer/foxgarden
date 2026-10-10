@@ -11,11 +11,11 @@
 //!
 //! Each language brings its own grammar and highlight query now (Phase 3):
 //! `crates/syntax` no longer links a single grammar crate, so the answer to
-//! "which languages can this editor parse" lives here and in the add-on
+//! "which languages can this editor parse" lives here and in the extension
 //! rather than in a `match` in the middle of the editor.
 
 use fg_extension::{
-    Contributions, Extension, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
+    Contributions, Extension, ExtensionInfo, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
     LanguageContribution, NodeKinds, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
 };
 
@@ -108,15 +108,30 @@ impl Extension for FileTypesExtension {
     }
 }
 
-/// Registers everything this build ships with.
+/// Every extension this build ships with, in registration order.
+fn shipped() -> Vec<Box<dyn Extension>> {
+    vec![Box::new(SpringExtension), Box::new(FileTypesExtension)]
+}
+
+/// What each shipped extension brings, whether or not it is enabled: the
+/// extension manager lists these.
+pub fn shipped_extensions() -> Vec<ExtensionInfo> {
+    shipped().iter().map(|e| ExtensionInfo::of(e.as_ref())).collect()
+}
+
+/// Registers everything this build ships with, except the extensions whose
+/// id is in `disabled`.
 ///
 /// Returns the first refusal rather than panicking: this is the exact call
 /// a host will one day make over extensions it did not write, and a
 /// registration path that aborts the process on a bad contribution is not
 /// one that can ever be pointed at somebody else's extension.
-pub fn register_builtins(registry: &mut Registry) -> Result<(), RegisterError> {
-    registry.register(Box::new(SpringExtension))?;
-    registry.register(Box::new(FileTypesExtension))?;
+pub fn register_builtins(registry: &mut Registry, disabled: &[String]) -> Result<(), RegisterError> {
+    for extension in shipped() {
+        if !disabled.contains(&extension.manifest().id) {
+            registry.register(extension)?;
+        }
+    }
     Ok(())
 }
 
@@ -128,8 +143,13 @@ pub fn register_builtins(registry: &mut Registry) -> Result<(), RegisterError> {
 /// editor's tree-sitter machinery — an extension describes a grammar, it
 /// does not load one.
 pub fn builtin_registry() -> Registry {
+    builtin_registry_without(&[])
+}
+
+/// [`builtin_registry`] minus the extensions the user switched off.
+pub fn builtin_registry_without(disabled: &[String]) -> Registry {
     let mut registry = Registry::new();
-    register_builtins(&mut registry).expect("this build's own extensions must not conflict");
+    register_builtins(&mut registry, disabled).expect("this build's own extensions must not conflict");
     registry
 }
 
