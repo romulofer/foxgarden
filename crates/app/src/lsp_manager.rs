@@ -257,9 +257,8 @@ fn extract_tar_gz(bytes: &[u8], dir: &Path) -> Result<(), String> {
 /// tries to start) and by `resolve_jdtls_java` (to pin every jdt.ls spawn to
 /// a verified JVM rather than trusting whatever `java` PATH resolves to
 /// later). `crate::jdk::detect_major_version` (Track 29 Phase 1) does the
-/// actual "run `java -version`, parse it" work generically — shared with
-/// `jdk_registry`, which has no jdt.ls-specific minimum to enforce; this
-/// function is just that generic result plus jdt.ls's own wording on top.
+/// actual "run `java -version`, parse it" work generically; this function is
+/// just that generic result plus jdt.ls's own minimum and wording on top.
 fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
     match crate::jdk::detect_major_version(java_home) {
         Ok(major) if major >= minimum_major => Ok(()),

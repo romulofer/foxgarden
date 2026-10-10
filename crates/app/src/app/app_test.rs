@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
-use crate::jdk_registry::RegisteredJdk;
+use crate::runtime_inventory::{RegisteredRuntime, RuntimeInventory};
 use crate::panels::static_analysis::AnalyzerSettings;
 use crate::widgets::editor::UserTemplate;
 use eframe::Storage as _;
@@ -309,13 +309,16 @@ fn persisted_settings_round_trip() {
         kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
         kotlin_language_server_installed_version: "1.3.13".to_string(),
     };
-    let saved_jdk_registry = JdkRegistry {
-        jdks: vec![RegisteredJdk {
-            label: "Java 21".to_string(),
-            home: PathBuf::from("/usr/lib/jvm/java-21"),
-            major_version: Some(21),
-        }],
-    };
+    let saved_runtimes = RuntimeInventories::from([(
+        "jdk".to_string(),
+        RuntimeInventory {
+            runtimes: vec![RegisteredRuntime {
+                label: "Java 21".to_string(),
+                home: PathBuf::from("/usr/lib/jvm/java-21"),
+                major_version: Some(21),
+            }],
+        },
+    )]);
     persist_settings(
         &mut storage,
         EditorFont::Default,
@@ -334,7 +337,7 @@ fn persisted_settings_round_trip() {
         saved_auto_save,
         false,
         &saved_lsp,
-        &saved_jdk_registry,
+        &saved_runtimes,
     );
 
     let mut editor_font = EditorFont::JetBrainsMono;
@@ -351,7 +354,7 @@ fn persisted_settings_round_trip() {
     let mut external_tool_paths = ExternalToolPaths::default();
     let mut auto_save_settings = AutoSaveSettings::default();
     let mut lsp_settings = LspSettings::default();
-    let mut jdk_registry = JdkRegistry::default();
+    let mut runtimes = RuntimeInventories::default();
     let mut trim_trailing_whitespace_on_save = true;
     restore_settings(
         &storage,
@@ -371,7 +374,7 @@ fn persisted_settings_round_trip() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut jdk_registry,
+        &mut runtimes,
     );
 
     assert_eq!(editor_font, EditorFont::Default);
@@ -392,7 +395,7 @@ fn persisted_settings_round_trip() {
     }
     assert_eq!(auto_save_settings, saved_auto_save);
     assert_eq!(lsp_settings, saved_lsp);
-    assert_eq!(jdk_registry, saved_jdk_registry);
+    assert_eq!(runtimes, saved_runtimes);
 }
 
 /// Before analyzers were contributed by extensions, PMD's ruleset was stored
@@ -445,7 +448,7 @@ fn persist_settings_writes_the_active_language() {
         AutoSaveSettings::default(),
         true,
         &LspSettings::default(),
-        &JdkRegistry::default(),
+        &RuntimeInventories::default(),
     );
 
     assert_eq!(storage.get_string(LANGUAGE_KEY).as_deref(), Some(fg_i18n::lang().tag()));
@@ -511,7 +514,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut JdkRegistry::default(),
+        &mut RuntimeInventories::default(),
     );
 
     assert_eq!(editor_font, EditorFont::default());
@@ -560,7 +563,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut JdkRegistry::default(),
+        &mut RuntimeInventories::default(),
     );
 
     assert_eq!(font_size, DEFAULT_FONT_SIZE);
@@ -602,7 +605,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut JdkRegistry::default(),
+        &mut RuntimeInventories::default(),
     );
 
     assert_eq!(indent_settings.width, IndentSettings::default().width);
@@ -791,7 +794,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut JdkRegistry::default(),
+        &mut RuntimeInventories::default(),
     );
 
     assert_eq!(
@@ -840,7 +843,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
-        &mut JdkRegistry::default(),
+        &mut RuntimeInventories::default(),
     );
 
     assert_eq!(auto_save_settings.mode, AutoSaveMode::OnFocusLoss);

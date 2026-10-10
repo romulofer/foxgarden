@@ -14,7 +14,7 @@ use fg_core::{EditorState, ProjectConfig, ScaffoldSpec};
 use fg_extension::Registry;
 use fg_i18n::{msg, t};
 
-use crate::jdk_registry::JdkRegistry;
+use crate::runtime_inventory::RuntimeInventory;
 use crate::widgets::modal::show_modal;
 
 /// One scaffoldable project kind, flattened out of the registry for the
@@ -104,7 +104,7 @@ impl NewProjectWizardState {
         self.picker.is_open()
     }
 
-    /// Same shape as `panels::jdk_registry::JdkRegistryState::poll_picker`.
+    /// Same shape as `panels::runtimes::RuntimesState::poll_picker`.
     pub fn poll_picker(&mut self) -> Option<PathBuf> {
         self.picker.poll()
     }
@@ -172,7 +172,7 @@ fn form_is_valid(state: &NewProjectWizardState) -> bool {
 ///
 /// Cancel/Escape close the dialog without creating anything — driven by
 /// `show_modal`'s own `(result, escape_pressed)` outcome, same as every
-/// other dialog in this app (`jdk_registry.rs`'s own `show_settings` is the
+/// other dialog in this app (`runtimes.rs`'s own `show_settings` is the
 /// closest template). An earlier version of this function called
 /// `show_modal` for its side effects only and never looked at that return
 /// value at all, so Cancel's own `clicked()` was computed and then
@@ -392,13 +392,13 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
         .map_err(|e| msg::scaffolded_but_open_failed(&root.display().to_string(), &e.to_string()))
 }
 
-/// Not wired into `show`'s own UI yet — `JdkRegistry` only gains a real
+/// Not wired into `show`'s own UI yet — `RuntimeInventory` only gains a real
 /// caller once the wizard offers targeting a specific registered JDK
 /// (`jdk_home` in `ProjectConfig`) rather than leaving it to auto-detection
 /// the way `create_and_open` does today. Kept and exported so the intent is
 /// visible in the panel's own signature rather than a silent gap.
 #[allow(dead_code)]
-pub fn registered_jdks_for(java_release: u32, registry: &JdkRegistry) -> Option<PathBuf> {
+pub fn registered_jdks_for(java_release: u32, registry: &RuntimeInventory) -> Option<PathBuf> {
     registry.closest_for(java_release).map(|jdk| jdk.home.clone())
 }
 

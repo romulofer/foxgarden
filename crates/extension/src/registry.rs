@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::{
-    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, BuildToolHandle, Contributions, Extension,
+    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
     ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerStartContext,
@@ -70,6 +70,11 @@ pub enum RegisterError {
     /// Two extensions claim the same analyzer id.
     DuplicateAnalyzer {
         analyzer_id: String,
+        extension_id: String,
+    },
+    /// Two extensions claim the same runtime id.
+    DuplicateRuntime {
+        runtime_id: String,
         extension_id: String,
     },
     /// A scaffold names a build tool nobody registered. Like
@@ -148,6 +153,10 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} declares analyzer {analyzer_id}, which is already registered"
             ),
+            Self::DuplicateRuntime { runtime_id, extension_id } => write!(
+                f,
+                "extension {extension_id} declares runtime {runtime_id}, which is already registered"
+            ),
             Self::UnknownBuildTool { tool_id, extension_id } => write!(
                 f,
                 "extension {extension_id} scaffolds for build tool {tool_id}, which no registered extension contributes"
@@ -220,6 +229,9 @@ pub struct Registry {
     /// Analyzers in registration order — the order the UI lists them in —
     /// with the index of the extension that runs each.
     analyzers: Vec<(AnalyzerContribution, usize)>,
+    /// Runtime kinds in registration order, with the index of the extension
+    /// that recognizes their installs.
+    runtimes: Vec<(RuntimeContribution, usize)>,
     /// Scaffold targets with the index of the extension that generates them.
     scaffolds: Vec<(ScaffoldContribution, usize)>,
     /// Languages at least one extension finds HTTP routes in, each once.
@@ -391,6 +403,17 @@ impl Registry {
             analyzers_seen.push(&analyzer.id);
         }
 
+        let mut runtimes_seen: Vec<&str> = Vec::new();
+        for runtime in &contributions.runtimes {
+            if self.runtimes.iter().any(|(r, _)| r.id == runtime.id) || runtimes_seen.contains(&runtime.id.as_str()) {
+                return Err(RegisterError::DuplicateRuntime {
+                    runtime_id: runtime.id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            runtimes_seen.push(&runtime.id);
+        }
+
         let mut scaffolds_seen: Vec<(&str, &LanguageId)> = Vec::new();
         for scaffold in &contributions.scaffolds {
             let pair = (scaffold.build_tool_id.as_str(), &scaffold.language_id);
@@ -467,6 +490,9 @@ impl Registry {
         }
         for analyzer in contributions.analyzers {
             self.analyzers.push((analyzer, extension_index));
+        }
+        for runtime in contributions.runtimes {
+            self.runtimes.push((runtime, extension_index));
         }
         for scaffold in contributions.scaffolds {
             self.scaffolds.push((scaffold, extension_index));
@@ -606,6 +632,15 @@ impl Registry {
         self.analyzers
             .iter()
             .map(|(analyzer, idx)| AnalyzerHandle::new(analyzer.clone(), self.extensions[*idx].clone()))
+            .collect()
+    }
+
+    /// Every kind of runtime an extension keeps an inventory for, in
+    /// registration order — what Settings lists one entry per.
+    pub fn runtimes(&self) -> Vec<RuntimeHandle> {
+        self.runtimes
+            .iter()
+            .map(|(runtime, idx)| RuntimeHandle::new(runtime.clone(), self.extensions[*idx].clone()))
             .collect()
     }
 

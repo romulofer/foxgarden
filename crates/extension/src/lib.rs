@@ -35,6 +35,7 @@ mod editing;
 mod imports;
 mod info;
 mod registry;
+mod runtimes;
 mod tooling;
 
 pub use analyzers::{
@@ -47,6 +48,7 @@ pub use editing::Snippet;
 pub use imports::{DocStub, ImportCandidate, ImportEdit};
 pub use info::ExtensionInfo;
 pub use registry::{RegisterError, Registry};
+pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
     CoverageReport, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
@@ -304,6 +306,9 @@ pub struct Contributions {
     pub build_tools: Vec<BuildToolContribution>,
     /// External static-analysis tools (`Extension::run_analyzer`).
     pub analyzers: Vec<AnalyzerContribution>,
+    /// Kinds of runtime the user keeps an inventory of (Settings lists one
+    /// entry per kind).
+    pub runtimes: Vec<RuntimeContribution>,
     pub scaffolds: Vec<ScaffoldContribution>,
     /// Languages this extension finds HTTP routes in (`Extension::
     /// http_routes`). Declared up front so a project-wide route scan parses
@@ -547,6 +552,19 @@ pub trait Extension: Send + Sync {
     /// nothing.
     fn run_analyzer(&self, _analyzer_id: &str, _run: &AnalyzerRun) -> Result<Vec<AnalyzerFinding>, String> {
         Err("this extension does not run that analyzer".to_string())
+    }
+
+    /// Verifies that `home` holds an install of runtime `runtime_id` — one of
+    /// this extension's own `Contributions::runtimes` — by running it. Called
+    /// off the UI thread. `Err` is a message for the user.
+    fn detect_runtime(&self, _runtime_id: &str, _home: &Path) -> Result<RuntimeInstall, String> {
+        Err("this extension does not recognize that runtime".to_string())
+    }
+
+    /// Every install of runtime `runtime_id` on this machine. Blocking (it
+    /// spawns a process per candidate), so called off the UI thread.
+    fn discover_runtimes(&self, _runtime_id: &str) -> Vec<RuntimeInstall> {
+        Vec::new()
     }
 
     /// A documentation-comment skeleton for the declaration `byte` sits in:

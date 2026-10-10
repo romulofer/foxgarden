@@ -22,7 +22,7 @@ pub struct ProjectConfig {
     /// 2 reads that directly), kept here anyway as the wizard's own record
     /// of intent, independent of a build file a user could hand-edit later.
     pub java_release: Option<u32>,
-    /// The specific JDK (from the machine-wide `JdkRegistry`, `PLAN.md`
+    /// The specific JDK (from the machine-wide JDK inventory, `PLAN.md`
     /// Track 29 Phase 1) the wizard scaffolded this project against, if the
     /// user picked one rather than leaving it to auto-detection.
     #[serde(with = "jdk_home_as_string")]

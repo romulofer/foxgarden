@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
+    RuntimeContribution, RuntimeInstall,
     GrammarSource, LanguageContribution, NodeKinds, ProblemSeverity,
 };
 
@@ -993,5 +994,112 @@ fn debuggable_languages_are_the_ones_an_extension_declares_and_must_be_registere
             ..Default::default()
         }))),
         Err(RegisterError::UnknownLanguage { .. })
+    ));
+}
+
+fn runtime(id: &str) -> RuntimeContribution {
+    RuntimeContribution {
+        id: id.to_string(),
+        display_name: format!("{id}s"),
+        item_name: id.to_string(),
+        description: String::new(),
+    }
+}
+
+struct FakeRuntimes {
+    extension_id: &'static str,
+    runtimes: Vec<RuntimeContribution>,
+}
+
+impl Extension for FakeRuntimes {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: self.extension_id.to_string(),
+            name: self.extension_id.to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            runtimes: self.runtimes.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn detect_runtime(&self, runtime_id: &str, home: &Path) -> Result<RuntimeInstall, String> {
+        if home.ends_with("broken") {
+            return Err(format!("{runtime_id} at {} does not run", home.display()));
+        }
+        Ok(RuntimeInstall {
+            home: home.to_path_buf(),
+            label: format!("{runtime_id} 3"),
+            major_version: 3,
+        })
+    }
+
+    fn discover_runtimes(&self, runtime_id: &str) -> Vec<RuntimeInstall> {
+        vec![RuntimeInstall {
+            home: PathBuf::from(format!("/opt/{runtime_id}")),
+            label: format!("{runtime_id} 7"),
+            major_version: 7,
+        }]
+    }
+}
+
+#[test]
+fn runtimes_are_listed_in_registration_order_and_answer_through_their_extension() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeRuntimes {
+            extension_id: "first",
+            runtimes: vec![runtime("zig"), runtime("ada")],
+        }))
+        .unwrap();
+    registry
+        .register(Box::new(FakeRuntimes {
+            extension_id: "second",
+            runtimes: vec![runtime("nim")],
+        }))
+        .unwrap();
+
+    let runtimes = registry.runtimes();
+    assert_eq!(runtimes.iter().map(|r| r.id()).collect::<Vec<_>>(), ["zig", "ada", "nim"]);
+    assert_eq!(runtimes[2].display_name(), "nims");
+
+    let install = runtimes[2].detect(Path::new("/x/nim")).unwrap();
+    assert_eq!((install.label.as_str(), install.major_version), ("nim 3", 3));
+    assert_eq!(runtimes[2].detect(Path::new("/x/broken")).unwrap_err(), "nim at /x/broken does not run");
+    assert_eq!(runtimes[0].discover()[0].home, PathBuf::from("/opt/zig"));
+}
+
+#[test]
+fn a_runtime_id_claimed_twice_is_refused_whole() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeRuntimes {
+            extension_id: "first",
+            runtimes: vec![runtime("zig")],
+        }))
+        .unwrap();
+    assert_eq!(
+        registry.register(Box::new(FakeRuntimes {
+            extension_id: "second",
+            runtimes: vec![runtime("zig")],
+        })),
+        Err(RegisterError::DuplicateRuntime {
+            runtime_id: "zig".to_string(),
+            extension_id: "second".to_string(),
+        })
+    );
+    assert_eq!(registry.runtimes().len(), 1);
+
+    assert!(matches!(
+        Registry::new().register(Box::new(FakeRuntimes {
+            extension_id: "third",
+            runtimes: vec![runtime("zig"), runtime("zig")],
+        })),
+        Err(RegisterError::DuplicateRuntime { .. })
     ));
 }

@@ -2,15 +2,14 @@
 use super::*;
 
 #[test]
-fn open_settings_opens_the_dialog_and_clears_the_previous_error() {
-    let mut state = JdkRegistryState {
-        settings_open: false,
+fn open_settings_opens_the_dialog_for_that_kind_and_clears_the_previous_error() {
+    let mut state = RuntimesState {
         last_add_error: Some("stale".to_string()),
-        picker: crate::folder_picker::FolderPicker::default(),
-        auto_detect_rx: None,
+        ..Default::default()
     };
-    state.open_settings();
-    assert!(state.settings_open);
+    assert!(state.open.is_none());
+    state.open_settings("jdk");
+    assert_eq!(state.open.as_deref(), Some("jdk"));
     assert!(state.last_add_error.is_none());
 }
 
@@ -21,7 +20,7 @@ fn open_settings_opens_the_dialog_and_clears_the_previous_error() {
 #[test]
 fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut state = JdkRegistryState {
+    let mut state = RuntimesState {
         auto_detect_rx: Some(rx),
         ..Default::default()
     };
@@ -33,10 +32,10 @@ fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
     assert!(state.poll_auto_detect().is_empty());
     assert!(state.auto_detect_running());
 
-    let found = vec![JavaRuntime {
-        major: 21,
-        name: "JavaSE-21".to_string(),
-        path: PathBuf::from("/jdk21"),
+    let found = vec![RuntimeInstall {
+        home: std::path::PathBuf::from("/jdk21"),
+        label: "Java 21".to_string(),
+        major_version: 21,
     }];
     tx.send(found.clone()).unwrap();
     assert_eq!(state.poll_auto_detect(), found);
@@ -45,8 +44,8 @@ fn poll_auto_detect_drains_a_completed_scan_without_blocking_the_caller() {
 
 #[test]
 fn poll_auto_detect_on_a_disconnected_sender_clears_the_slot_without_a_result() {
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<JavaRuntime>>();
-    let mut state = JdkRegistryState {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<RuntimeInstall>>();
+    let mut state = RuntimesState {
         auto_detect_rx: Some(rx),
         ..Default::default()
     };

@@ -11,7 +11,7 @@ use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::debug_state;
 use crate::file_watch::{self, ReconcileOutcome};
 use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
-use crate::jdk_registry::JdkRegistry;
+use crate::runtime_inventory::{self, RuntimeInventories};
 use crate::lsp_settings::LspSettings;
 use crate::lsp_state::LspState;
 use crate::panels::bottom_dock::{self, BottomDock, BottomTab};
@@ -22,7 +22,7 @@ use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::{self, GitStageState};
 use crate::panels::go_to_file::{self, GoToFileState};
 use crate::panels::extensions::{self as extensions_ui, ExtensionsState};
-use crate::panels::jdk_registry::{self as jdk_registry_ui, JdkRegistryState};
+use crate::panels::runtimes::{self as runtimes_ui, RuntimesState};
 use crate::panels::lsp_servers::{self, LspServersState};
 use crate::panels::menu_bar::{self, MenuBarState};
 use crate::panels::new_project::{self, NewProjectWizardState};
@@ -109,7 +109,6 @@ const LSP_JDTLS_INSTALLED_VERSION_KEY: &str = "lsp_jdtls_installed_version";
 const LSP_JDTLS_JAVA_HOME_KEY: &str = "lsp_jdtls_java_home";
 const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
 const LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY: &str = "lsp_kotlin_language_server_installed_version";
-const JDK_REGISTRY_KEY: &str = "jdk_registry";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -416,20 +415,21 @@ pub struct FoxGardenApp {
     /// through `lsp_settings`, and a job in flight at shutdown is simply
     /// gone, not resumed.
     lsp_servers: LspServersState,
-    /// Machine-wide inventory of registered JDKs (`PLAN.md` Track 29,
-    /// Phase 1) — persisted (a JDK install is a fact about the machine,
-    /// same as `lsp_settings` above), edited through Settings > JDKs… via
-    /// `jdk_registry_ui`.
-    jdk_registry: JdkRegistry,
-    /// Settings > JDKs… — the dialog that edits `jdk_registry` above.
+    /// Machine-wide inventories of registered runtimes, one per kind an
+    /// extension contributes (JDKs, for the JVM one; `PLAN.md` Track 29,
+    /// Phase 1) — persisted (an install is a fact about the machine, same
+    /// as `lsp_settings` above), edited through Settings > <kind>… via
+    /// `runtimes_ui`.
+    runtimes: RuntimeInventories,
+    /// Settings > <runtime kind>… — the dialog that edits `runtimes` above.
     /// Runtime-only, same reasoning as `lsp_servers` above.
-    jdk_registry_ui: JdkRegistryState,
+    runtimes_ui: RuntimesState,
     /// Extensions > Manage Extensions… — which shipped extensions are
     /// switched off. Persisted; applies on the next launch, since the
     /// registry is built once, before the session restores.
     extensions_ui: ExtensionsState,
     /// File > New Project… — `PLAN.md` Track 29 Phase 3. Runtime-only, same
-    /// reasoning as `lsp_servers`/`jdk_registry_ui` above: nothing here is
+    /// reasoning as `lsp_servers`/`runtimes_ui` above: nothing here is
     /// meaningful to resume across a restart.
     new_project_wizard: NewProjectWizardState,
     /// Focus-edge/idle-clock tracking `auto_save_settings`'s triggers need —
@@ -1030,7 +1030,7 @@ fn restore_settings(
     auto_save_settings: &mut AutoSaveSettings,
     trim_trailing_whitespace_on_save: &mut bool,
     lsp_settings: &mut LspSettings,
-    jdk_registry: &mut JdkRegistry,
+    runtimes: &mut RuntimeInventories,
 ) {
     if let Some(key) = storage.get_string(EDITOR_FONT_KEY)
         && let Some(font) = EditorFont::from_storage_key(&key)
@@ -1136,8 +1136,8 @@ fn restore_settings(
     if let Some(version) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY) {
         lsp_settings.kotlin_language_server_installed_version = version;
     }
-    if let Some(saved) = storage.get_string(JDK_REGISTRY_KEY) {
-        *jdk_registry = JdkRegistry::from_json(&saved);
+    for handle in languages.runtimes() {
+        runtimes.insert(handle.id().to_string(), runtime_inventory::restore(storage, handle.id()));
     }
 }
 
@@ -1164,7 +1164,7 @@ fn persist_settings(
     auto_save_settings: AutoSaveSettings,
     trim_trailing_whitespace_on_save: bool,
     lsp_settings: &LspSettings,
-    jdk_registry: &JdkRegistry,
+    runtimes: &RuntimeInventories,
 ) {
     storage.set_string(EDITOR_FONT_KEY, editor_font.storage_key().to_string());
     storage.set_string(FONT_SIZE_KEY, font_size.to_string());
@@ -1230,7 +1230,9 @@ fn persist_settings(
         LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,
         lsp_settings.kotlin_language_server_installed_version.clone(),
     );
-    storage.set_string(JDK_REGISTRY_KEY, jdk_registry.to_json());
+    for (kind, inventory) in runtimes {
+        runtime_inventory::persist(storage, kind, inventory);
+    }
 }
 
 impl FoxGardenApp {
@@ -1273,7 +1275,7 @@ impl FoxGardenApp {
         let mut trim_trailing_whitespace_on_save = true;
         let mut recent_projects: Vec<PathBuf> = Vec::new();
         let mut lsp_settings = LspSettings::default();
-        let mut jdk_registry = JdkRegistry::default();
+        let mut runtimes = RuntimeInventories::default();
 
         // Resolved before anything else can render, and deliberately outside
         // the `if let Some(storage)` below — a first run has no storage at
@@ -1314,7 +1316,7 @@ impl FoxGardenApp {
                 &mut auto_save_settings,
                 &mut trim_trailing_whitespace_on_save,
                 &mut lsp_settings,
-                &mut jdk_registry,
+                &mut runtimes,
             );
         }
         theme::apply(&cc.egui_ctx, dark_mode);
@@ -1395,8 +1397,8 @@ impl FoxGardenApp {
             lsp_settings,
             lsp: LspState::default(),
             lsp_servers: LspServersState::default(),
-            jdk_registry,
-            jdk_registry_ui: JdkRegistryState::default(),
+            runtimes,
+            runtimes_ui: RuntimesState::default(),
             extensions_ui: ExtensionsState::new(fg_languages::shipped_extensions(), disabled_extensions),
             new_project_wizard: NewProjectWizardState::default(),
             auto_save_state: AutoSaveState::default(),
@@ -1983,6 +1985,13 @@ impl eframe::App for FoxGardenApp {
         // on by the very same code paths the menus feed, rather than a
         // frame later.
         let analyzers = self.state.languages.analyzers();
+        let runtime_names: Vec<String> = self
+            .state
+            .languages
+            .runtimes()
+            .iter()
+            .map(|runtime| runtime.display_name().to_string())
+            .collect();
         let analyzer_names: Vec<String> = analyzers.iter().map(|a| a.display_name().to_string()).collect();
         match crate::panels::command_palette::show(ui, &mut self.command_palette, &analyzer_names) {
             Some(crate::panels::command_palette::Picked::Command(command)) => {
@@ -2030,6 +2039,7 @@ impl eframe::App for FoxGardenApp {
                                 running: self.static_analysis.running(analyzer.id()),
                             })
                             .collect::<Vec<_>>(),
+                        &runtime_names,
                         self.build_state.is_build_running(),
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
@@ -2505,8 +2515,10 @@ impl eframe::App for FoxGardenApp {
                 &self.state.languages,
             );
         }
-        if menu_outcome.open_jdk_registry_settings_request {
-            self.jdk_registry_ui.open_settings();
+        if let Some(index) = menu_outcome.open_runtime_request
+            && let Some(handle) = self.state.languages.runtimes().into_iter().nth(index)
+        {
+            self.runtimes_ui.open_settings(handle.id());
         }
         if menu_outcome.open_extensions_request {
             self.extensions_ui.open();
@@ -2911,7 +2923,7 @@ impl eframe::App for FoxGardenApp {
             &self.state.languages.analyzers(),
         );
         lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
-        jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
+        runtimes_ui::show_settings(ui, &mut self.runtimes_ui, &self.state.languages.runtimes(), &mut self.runtimes);
         extensions_ui::show(ui, &mut self.extensions_ui);
         new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
 
@@ -2940,7 +2952,7 @@ impl eframe::App for FoxGardenApp {
             self.auto_save_settings,
             self.trim_trailing_whitespace_on_save,
             &self.lsp_settings,
-            &self.jdk_registry,
+            &self.runtimes,
         );
         extensions_ui::persist_disabled(storage, self.extensions_ui.disabled());
     }

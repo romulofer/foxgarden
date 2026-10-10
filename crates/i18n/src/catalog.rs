@@ -35,7 +35,7 @@ pub struct Strings {
     pub errors: Errors,
     pub common: Common,
     pub debug: Debug,
-    pub jdk: Jdk,
+    pub runtimes: Runtimes,
     pub dock: Dock,
     pub extensions: Extensions,
 }
@@ -97,7 +97,6 @@ pub struct Menu {
     /// (`panels::menu_bar::show_accessibility_settings`).
     pub accessibility: &'static str,
     pub language_servers: &'static str,
-    pub jdks: &'static str,
     pub external_tools: &'static str,
 
     pub tools: &'static str,
@@ -289,13 +288,11 @@ pub struct Lsp {
     pub project_java_undeclared: &'static str,
 }
 
-/// Settings > JDKs… (`panels::jdk_registry`) — the machine-wide inventory
-/// of JDKs a project can target. `JDKs` stays in English: it's an acronym,
-/// identical in both languages, and matches its own menu entry.
-pub struct Jdk {
-    pub hint: &'static str,
+/// A runtime kind's inventory dialog (`panels::runtimes`) — the machine-wide
+/// list of installs a project can target. Its heading, description and the
+/// install's name come from the extension that contributes the kind.
+pub struct Runtimes {
     pub none_registered: &'static str,
-    pub add: &'static str,
     pub auto_detect: &'static str,
 }
 
@@ -554,7 +551,6 @@ pub const PT_BR: Strings = Strings {
         language: "Idioma",
         accessibility: "Acessibilidade…",
         language_servers: "Servidores de Linguagem…",
-        jdks: "JDKs…",
         external_tools: "Ferramentas Externas…",
 
         tools: "Ferramentas",
@@ -878,12 +874,8 @@ pub const PT_BR: Strings = Strings {
         loading: "(carregando…)",
         none: "(nenhuma)",
     },
-    jdk: Jdk {
-        hint: "Os JDKs registrados aqui ficam disponíveis para usar como alvo ao analisar ou criar um projeto em \
-               uma versão específica do Java — separado do Java Home em Configurações > Servidores de Linguagem…, \
-               que é apenas a JVM sob a qual o próprio jdt.ls roda.",
-        none_registered: "Nenhum JDK registrado ainda.",
-        add: "Adicionar JDK…",
+    runtimes: Runtimes {
+        none_registered: "Nenhum registrado ainda.",
         auto_detect: "Detectar automaticamente",
     },
     dock: Dock {
@@ -933,7 +925,6 @@ pub const EN_US: Strings = Strings {
         language: "Language",
         accessibility: "Accessibility…",
         language_servers: "Language Servers…",
-        jdks: "JDKs…",
         external_tools: "External Tools…",
 
         tools: "Tools",
@@ -1257,12 +1248,8 @@ pub const EN_US: Strings = Strings {
         loading: "(loading…)",
         none: "(none)",
     },
-    jdk: Jdk {
-        hint: "JDKs registered here are available to target when analyzing or scaffolding a project at a \
-               specific Java version — separate from Settings > Language Servers…'s Java Home, which is only \
-               the JVM jdt.ls itself runs under.",
-        none_registered: "No JDKs registered yet.",
-        add: "Add JDK…",
+    runtimes: Runtimes {
+        none_registered: "None registered yet.",
         auto_detect: "Auto-detect",
     },
     dock: Dock {

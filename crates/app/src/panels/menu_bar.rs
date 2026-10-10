@@ -58,11 +58,13 @@ pub struct MenuBarOutcome {
     pub open_run_configs_request: bool,
     pub fold_all_request: bool,
     pub expand_all_request: bool,
-    /// Settings > JDKs… — opens `panels::jdk_registry`'s dialog (`PLAN.md`
-    /// Track 29 Phase 1). Deliberately separate from Language Servers…:
-    /// `LspSettings::jdtls_java_home` is "which JVM runs jdt.ls itself"
-    /// (always 21+), this is "which JDKs exist to *target*" (any version).
-    pub open_jdk_registry_settings_request: bool,
+    /// Settings > <runtime kind>…: the index, into the runtime kinds the menu
+    /// was shown with, of the one picked — opens `panels::runtimes`' dialog
+    /// (`PLAN.md` Track 29 Phase 1). Deliberately separate from Language
+    /// Servers…: `LspSettings::jdtls_java_home` is "which JVM runs jdt.ls
+    /// itself" (always 21+), this is "which installs exist to *target*" (any
+    /// version).
+    pub open_runtime_request: Option<usize>,
     /// File > New Project… — opens `panels::new_project`'s wizard
     /// (`PLAN.md` Track 29 Phase 3).
     pub open_new_project_wizard_request: bool,
@@ -155,6 +157,7 @@ pub fn show(
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
     analyzers: &[AnalyzerEntry],
+    runtime_names: &[String],
     build_running: bool,
     run_running: bool,
     test_running: bool,
@@ -353,9 +356,11 @@ pub fn show(
                 outcome.open_lsp_servers_settings_request = true;
                 ui.close();
             }
-            if ui.button(t().menu.jdks).clicked() {
-                outcome.open_jdk_registry_settings_request = true;
-                ui.close();
+            for (index, name) in runtime_names.iter().enumerate() {
+                if ui.button(format!("{name}…")).clicked() {
+                    outcome.open_runtime_request = Some(index);
+                    ui.close();
+                }
             }
             if ui.button(t().menu.external_tools).clicked() {
                 outcome.open_external_tools_settings_request = true;

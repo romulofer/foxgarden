@@ -48,6 +48,17 @@ msg! {
     }
 }
 
+// --- Settings > runtimes ------------------------------------------------
+
+msg! {
+    /// The button that registers one more install of a runtime kind
+    /// (`item` is the extension's name for it, e.g. "JDK").
+    add_runtime(item: &str) {
+        pt: "Adicionar {item}…",
+        en: "Add {item}…",
+    }
+}
+
 // --- Opening, saving, and closing files ---------------------------------
 
 msg! {

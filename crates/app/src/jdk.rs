@@ -1,9 +1,7 @@
-//! Generic JDK discovery/verification (`PLAN.md` Track 29 Phase 1) —
-//! shared by `lsp_manager` (which JVM jdt.ls itself must run under, always
-//! 21+) and `jdk_registry` (which JDKs exist on this machine to *target*
-//! when analyzing or scaffolding a project, any version). Neither owns
-//! this logic; both need it, so it lives here instead of one being built
-//! on top of the other's private internals.
+//! JDK discovery/verification for `lsp_manager` (`PLAN.md` Track 29 Phase 1):
+//! which JVM jdt.ls itself must run under, always 21+. The inventory of JDKs
+//! to *target* is the JVM extension's (`Extension::detect_runtime`), so this
+//! goes away with the language-server installers.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -43,8 +41,7 @@ pub fn java_major_version(version_output: &str) -> Option<u32> {
 /// Runs `java_command(java_home) -version` and reads its major version —
 /// no minimum enforced, no caller-specific wording. `lsp_manager::
 /// check_java` wraps this with jdt.ls's own minimum-version message on
-/// top; `JdkRegistry::detect_and_add` uses it directly to label a newly
-/// registered JDK.
+/// top.
 pub fn detect_major_version(java_home: &str) -> Result<u32, String> {
     let java = java_command(java_home);
     let output = Command::new(&java)

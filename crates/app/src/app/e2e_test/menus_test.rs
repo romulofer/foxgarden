@@ -248,6 +248,19 @@ fn extensions_manage_lists_the_shipped_extensions_and_flags_a_restart() {
 }
 
 #[test]
+fn settings_lists_the_runtime_kind_an_extension_contributes_and_opens_its_dialog() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.settings, "JDKs…");
+
+    assert!(app.shows(t().runtimes.none_registered));
+    assert!(app.shows(&fg_i18n::msg::add_runtime("JDK")));
+    assert!(app.shows(t().runtimes.auto_detect));
+    app.click(t().common.close);
+    assert!(!app.shows(t().runtimes.auto_detect));
+}
+
+#[test]
 fn help_live_templates_dialog_opens() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
 
