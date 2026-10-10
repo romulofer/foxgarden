@@ -972,3 +972,26 @@ fn an_extension_repeating_its_own_analyzer_id_is_refused() {
         Err(RegisterError::DuplicateAnalyzer { .. })
     ));
 }
+
+#[test]
+fn debuggable_languages_are_the_ones_an_extension_declares_and_must_be_registered() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeExtension::new("elves", || Contributions {
+            languages: vec![lang("elvish", &["elv"]), lang("orcish", &["orc"])],
+            debug_languages: vec!["elvish".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+    assert!(registry.is_debuggable("elvish"));
+    assert!(!registry.is_debuggable("orcish"));
+
+    let mut other = Registry::new();
+    assert!(matches!(
+        other.register(Box::new(FakeExtension::new("ghosts", || Contributions {
+            debug_languages: vec!["nowhere".to_string()],
+            ..Default::default()
+        }))),
+        Err(RegisterError::UnknownLanguage { .. })
+    ));
+}

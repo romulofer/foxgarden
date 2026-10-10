@@ -15,14 +15,14 @@ mod sticky;
 
 pub use brackets::bracket_match;
 pub use code_model::{
-    enclosing_type, generate_code, generates_code, receiver_type, source_file_extensions, supertype, type_members,
-    types_with_fields,
+    enclosing_type, generate_code, generates_code, is_debuggable, language_keywords, language_snippets, receiver_type,
+    source_file_extensions, supertype, type_members, types_with_fields,
 };
 pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use folding::{FoldRange, foldable_ranges};
 pub use fg_extension::{
-    CodeGeneration, DocStub, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunTarget, TypeDeclaration, TypeFields, TypeMember,
+    CodeGeneration, DocStub, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunTarget, Snippet, TypeDeclaration, TypeFields, TypeMember,
 };
 pub use grammars::{GrammarError, install as install_grammars};
 pub use highlight::{Scope, highlight_spans, highlight_spans_in};

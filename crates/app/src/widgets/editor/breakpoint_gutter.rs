@@ -18,7 +18,7 @@ use super::text_area::TextAreaOutput;
 use crate::style::theme;
 
 /// Always reserved for a debuggable document (`widget.rs` gates this on
-/// `doc.language == Some(Language::Java)`), regardless of whether any
+/// `syntax::is_debuggable`), regardless of whether any
 /// breakpoint is set yet — unlike every other gutter column here, whose
 /// width is reserved only once there's already something to show, this one
 /// exists specifically so the user has somewhere to click to create the

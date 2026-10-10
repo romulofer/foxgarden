@@ -763,9 +763,10 @@ pub fn show(
                         let expansion = if item.kind == CompletionKind::Template {
                             let (language_templates, language_custom) =
                                 language_template_tables(doc.language, custom_templates);
+                            let global = templates::global_templates();
                             find_expansion(
                                 &[language_custom, &custom_templates.global],
-                                &[language_templates, templates::GLOBAL_TEMPLATES],
+                                &[&language_templates, &global],
                                 &item.label,
                             )
                             .map(|body| expand(&old_text, anchor_char..cursor_char, body))
@@ -991,14 +992,15 @@ pub fn show(
                     let word_end_byte = char_to_byte(&old_text, word_range.end);
                     let (language_templates, language_custom) =
                         language_template_tables(doc.language, custom_templates);
-                    // `templates::GLOBAL_TEMPLATES`/`custom_templates.global` are
+                    // `templates::global_templates`/`custom_templates.global` are
                     // included unconditionally, even for a file with no
                     // recognized language at all — a global trigger like `pipe`
                     // expands the same way everywhere, language-specific tables
                     // included or not.
+                    let global = templates::global_templates();
                     let template_body = find_expansion(
                         &[language_custom, &custom_templates.global],
-                        &[language_templates, templates::GLOBAL_TEMPLATES],
+                        &[&language_templates, &global],
                         &old_text[word_start_byte..word_end_byte],
                     );
 
@@ -1394,11 +1396,11 @@ pub fn show(
     // Unlike every other gutter column here, this one is reserved whenever
     // the document is debuggable at all (`PLAN.md` Track 23 Phase 2), not
     // only once a breakpoint already exists — its whole point is to give
-    // the user somewhere to click to create the first one. Kotlin is
-    // excluded: Phase 1's own research found no evidence java-debug
-    // supports it, so a breakpoint gutter that can never actually pause
-    // anything would be misleading.
-    let breakpoint_gutter_width = if doc.language == Some(Language::Java) {
+    // the user somewhere to click to create the first one. Which
+    // languages are debuggable is the extensions' call
+    // (`Contributions::debug_languages`), so a gutter that can never
+    // actually pause anything isn't drawn.
+    let breakpoint_gutter_width = if doc.language.is_some_and(syntax::is_debuggable) {
         breakpoint_gutter::BREAKPOINT_GUTTER_WIDTH
     } else {
         0.0
@@ -1785,9 +1787,9 @@ pub fn show(
                 let local_candidates =
                     dot_completion_candidates(language, tree, &old_text, receiver_end, &receiver, project);
                 let anchor_byte = char_to_byte(&old_text, cursor_char);
-                let lsp_rx = matches!(language, Language::Java | Language::Kotlin)
-                    .then(|| lsp.request_completion(doc, anchor_byte))
-                    .flatten();
+                // `request_completion` is `None` for a language with no
+                // running language server, so it needs no gate of its own.
+                let lsp_rx = lsp.request_completion(doc, anchor_byte);
                 if local_candidates.is_some() || lsp_rx.is_some() {
                     let mut state = CompletionState::open(anchor_byte, local_candidates.unwrap_or_default());
                     if let Some(rx) = lsp_rx {
@@ -2704,20 +2706,21 @@ pub fn jump_to(ctx: &egui::Context, path: &std::path::Path, char_offset: usize) 
     ctx.memory_mut(|m| m.request_focus(widget_id));
 }
 
-/// The active language's built-in live-template table and any user-defined
-/// overrides for it (`custom_templates.java`/`.kotlin`) — the pairing both
-/// the Tab-trigger interception and the completion popup's `Template`
-/// candidate sourcing/acceptance need, factored out once a second and third
-/// call site wanted the identical `match language { ... }` this used to be
-/// inlined just once for.
+/// The active language's live templates (from its extension) and any
+/// user-defined overrides for it (`custom_templates.for_language`) — the
+/// pairing both the Tab-trigger interception and the completion popup's
+/// `Template` candidate sourcing/acceptance need, factored out once a second
+/// and third call site wanted it.
 fn language_template_tables(
     language: Option<Language>,
     custom_templates: &UserTemplates,
-) -> (&'static [templates::Template], &[templates::UserTemplate]) {
+) -> (Vec<templates::Template>, &[templates::UserTemplate]) {
     match language {
-        Some(Language::Java) => (templates::JAVA_TEMPLATES, &custom_templates.java),
-        Some(Language::Kotlin) => (templates::KOTLIN_TEMPLATES, &custom_templates.kotlin),
-        _ => (&[], &[]),
+        Some(language) => (
+            syntax::language_snippets(language),
+            custom_templates.for_language(language.id()),
+        ),
+        None => (Vec::new(), &[]),
     }
 }
 
@@ -2748,10 +2751,10 @@ fn word_completion_candidates(
 
     let (language_templates, language_custom) = language_template_tables(language, custom_templates);
     let template_labels = language_templates
-        .iter()
-        .map(|t| t.trigger.to_string())
+        .into_iter()
+        .map(|t| t.trigger)
         .chain(language_custom.iter().map(|t| t.trigger.clone()))
-        .chain(templates::GLOBAL_TEMPLATES.iter().map(|t| t.trigger.to_string()))
+        .chain(templates::global_templates().into_iter().map(|t| t.trigger))
         .chain(custom_templates.global.iter().map(|t| t.trigger.clone()));
     candidates.extend(template_labels.map(|label| CompletionItem {
         label,
@@ -2760,13 +2763,9 @@ fn word_completion_candidates(
         has_params: false,
     }));
 
-    let keywords: &[&str] = match language {
-        Some(Language::Java) => templates::JAVA_KEYWORDS,
-        Some(Language::Kotlin) => templates::KOTLIN_KEYWORDS,
-        _ => &[],
-    };
-    candidates.extend(keywords.iter().map(|&label| CompletionItem {
-        label: label.to_string(),
+    let keywords = language.map(syntax::language_keywords).unwrap_or_default();
+    candidates.extend(keywords.into_iter().map(|label| CompletionItem {
+        label,
         kind: CompletionKind::Keyword,
         detail: None,
         has_params: false,

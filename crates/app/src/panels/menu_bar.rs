@@ -13,7 +13,7 @@ use crate::style::indent::IndentSettings;
 use crate::style::theme;
 use crate::style::view::ViewSettings;
 use crate::widgets::editor::{
-    AccessorKind, CaseConversion, GLOBAL_TEMPLATES, GenerateMethodKind, JAVA_TEMPLATES, KOTLIN_TEMPLATES, UserTemplate,
+    AccessorKind, CaseConversion, GenerateMethodKind, UserTemplate,
     UserTemplates,
 };
 use crate::widgets::modal::show_modal;
@@ -31,15 +31,12 @@ pub struct MenuBarState {
     accessibility_open: bool,
     /// Help > Live Templates… — see `show_live_templates`.
     live_templates_open: bool,
-    /// A new custom Java template being typed, not yet added to
-    /// `UserTemplates::java` — see `show_user_templates_editor`.
-    new_java_trigger: String,
-    new_java_body: String,
-    /// Same as `new_java_trigger`/`new_java_body`, for Kotlin.
-    new_kotlin_trigger: String,
-    new_kotlin_body: String,
-    /// Same as `new_java_trigger`/`new_java_body`, for the language-agnostic
-    /// Global section (`UserTemplates::global`).
+    /// A new custom template being typed per language id — `(trigger,
+    /// body)`, not yet added to `UserTemplates` — see
+    /// `show_user_templates_editor`.
+    new_templates: std::collections::HashMap<String, (String, String)>,
+    /// Same, for the language-agnostic Global section
+    /// (`UserTemplates::global`).
     new_global_trigger: String,
     new_global_body: String,
 }
@@ -807,7 +804,7 @@ pub fn show(
     show_about(ui, menu);
     show_font_settings(ui, menu, editor_font, font_size);
     show_accessibility_settings(ui, menu, ui_scale);
-    show_live_templates(ui, menu, *dark_mode, custom_templates);
+    show_live_templates(ui, menu, *dark_mode, custom_templates, &state.languages);
 
     outcome
 }
@@ -921,14 +918,20 @@ fn show_accessibility_settings(ui: &egui::Ui, menu: &mut MenuBarState, ui_scale:
 /// user's own custom triggers (`custom_templates`, threaded all the way
 /// down to `widgets::editor::widget::show`'s Tab-expansion lookup, which
 /// checks these before the built-ins — see `templates::find_expansion`).
-/// Three sections: Global (`GLOBAL_TEMPLATES`/`UserTemplates::global`, which
-/// expand the same way in any file regardless of language), then Java and
-/// Kotlin. Lists every section unconditionally rather than only the active
+/// A Global section (`global_templates`/`UserTemplates::global`, which
+/// expand the same way in any file regardless of language), then one for each
+/// registered language that has snippets. Lists every section unconditionally rather than only the active
 /// tab's language: this is a reference dialog a user opens to remember
 /// what's available, not a context-sensitive one, so showing just one
 /// language when e.g. no file is open, or a non-Java/Kotlin file is active,
 /// would leave it with nothing to show at all.
-fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, custom_templates: &mut UserTemplates) {
+fn show_live_templates(
+    ui: &egui::Ui,
+    menu: &mut MenuBarState,
+    dark_mode: bool,
+    custom_templates: &mut UserTemplates,
+    languages: &fg_extension::Registry,
+) {
     let outcome = show_modal(
         ui,
         "live_templates_dialog",
@@ -943,7 +946,7 @@ fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, 
                 ui.strong(t().dialogs.live_templates_global);
                 ui.label(egui::RichText::new(t().dialogs.live_templates_global_hint).weak());
                 ui.add_space(4.0);
-                show_template_group(ui, GLOBAL_TEMPLATES, dark_mode);
+                show_template_group(ui, &crate::widgets::editor::global_templates(), dark_mode);
                 show_user_templates_editor(
                     ui,
                     "global_user_templates",
@@ -953,37 +956,29 @@ fn show_live_templates(ui: &egui::Ui, menu: &mut MenuBarState, dark_mode: bool, 
                     dark_mode,
                 );
 
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(6.0);
+                for registered in languages.languages() {
+                    let language = fg_core::Language::new(registered.static_id);
+                    let snippets = syntax::language_snippets(language);
+                    if snippets.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(6.0);
 
-                ui.strong("Java");
-                ui.add_space(4.0);
-                show_template_group(ui, JAVA_TEMPLATES, dark_mode);
-                show_user_templates_editor(
-                    ui,
-                    "java_user_templates",
-                    &mut custom_templates.java,
-                    &mut menu.new_java_trigger,
-                    &mut menu.new_java_body,
-                    dark_mode,
-                );
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(6.0);
-
-                ui.strong("Kotlin");
-                ui.add_space(4.0);
-                show_template_group(ui, KOTLIN_TEMPLATES, dark_mode);
-                show_user_templates_editor(
-                    ui,
-                    "kotlin_user_templates",
-                    &mut custom_templates.kotlin,
-                    &mut menu.new_kotlin_trigger,
-                    &mut menu.new_kotlin_body,
-                    dark_mode,
-                );
+                    ui.strong(&registered.language.display_name);
+                    ui.add_space(4.0);
+                    show_template_group(ui, &snippets, dark_mode);
+                    let (new_trigger, new_body) = menu.new_templates.entry(registered.static_id.to_string()).or_default();
+                    show_user_templates_editor(
+                        ui,
+                        &format!("{}_user_templates", registered.static_id),
+                        custom_templates.for_language_mut(registered.static_id),
+                        new_trigger,
+                        new_body,
+                        dark_mode,
+                    );
+                }
             });
             ui.separator();
             ui.button(t().common.close).clicked()
@@ -1012,7 +1007,7 @@ fn show_template_group(ui: &mut egui::Ui, templates: &[crate::widgets::editor::T
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.label(
-                egui::RichText::new(template.trigger)
+                egui::RichText::new(&template.trigger)
                     .monospace()
                     .strong()
                     .color(trigger_color),

@@ -8,205 +8,38 @@ use super::text_offset::char_to_byte;
 pub(super) const CURSOR_MARKER: &str = "${cursor}";
 
 /// One trigger-word-to-expansion live template — IntelliJ-style: type
-/// `trigger`, press Tab with no selection, get `body` in its place.
-pub struct Template {
-    pub trigger: &'static str,
-    pub body: &'static str,
-}
+/// `trigger`, press Tab with no selection, get `body` in its place. A
+/// language's own come from its extension (`syntax::language_snippets`).
+pub use syntax::Snippet as Template;
 
-/// A user-added live template — same trigger/body shape as the built-in
-/// `Template`, just owned rather than `&'static str` since it's typed in at
-/// runtime (Help > Live Templates…) instead of compiled in. Kept as its own
-/// type rather than reusing `Template` with owned fields: the built-in
-/// tables are `const` data specifically so they can live in a `&'static
-/// [Template]`, which owned `String` fields would rule out.
+/// A user-added live template — same trigger/body shape as a built-in
+/// `Template`, typed in at runtime (Help > Live Templates…).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UserTemplate {
     pub trigger: String,
     pub body: String,
 }
 
-/// A user's saved live templates, one list per language plus `global` (see
-/// `GLOBAL_TEMPLATES`'s doc comment) — the in-memory form `menu_bar`'s Live
-/// Templates dialog edits directly and `app.rs` persists/restores via
+/// A user's saved live templates, one list per language id plus `global`
+/// (see `global_templates`) — the in-memory form `menu_bar`'s Live Templates
+/// dialog edits directly and `app.rs` persists/restores via
 /// `serialize_user_templates`/`parse_user_templates`.
 #[derive(Debug, Clone, Default)]
 pub struct UserTemplates {
-    pub java: Vec<UserTemplate>,
-    pub kotlin: Vec<UserTemplate>,
+    languages: std::collections::BTreeMap<String, Vec<UserTemplate>>,
     pub global: Vec<UserTemplate>,
 }
 
-/// Built-in Java live templates — alongside a user's own custom ones
-/// (`UserTemplates::java`, editable via Help > Live Templates…), which take
-/// priority when a trigger collides (see `find_expansion`).
-pub const JAVA_TEMPLATES: &[Template] = &[
-    Template {
-        trigger: "sout",
-        body: "System.out.println(${cursor});",
-    },
-    Template {
-        trigger: "souf",
-        body: "System.out.printf(${cursor});",
-    },
-    Template {
-        trigger: "serr",
-        body: "System.err.println(${cursor});",
-    },
-    Template {
-        trigger: "psvm",
-        body: "public static void main(String[] args) {\n    ${cursor}\n}",
-    },
-    Template {
-        trigger: "fori",
-        body: "for (int i = 0; i < ${cursor}; i++) {\n    \n}",
-    },
-    Template {
-        trigger: "iter",
-        body: "for (var item : ${cursor}) {\n    \n}",
-    },
-    Template {
-        trigger: "ifn",
-        body: "if (${cursor} == null) {\n    \n}",
-    },
-    Template {
-        trigger: "inn",
-        body: "if (${cursor} != null) {\n    \n}",
-    },
-    Template {
-        trigger: "trycatch",
-        body: "try {\n    ${cursor}\n} catch (Exception e) {\n    e.printStackTrace();\n}",
-    },
-];
+impl UserTemplates {
+    /// `language_id`'s templates; none if the user never added any.
+    pub fn for_language(&self, language_id: &str) -> &[UserTemplate] {
+        self.languages.get(language_id).map_or(&[], Vec::as_slice)
+    }
 
-/// Built-in Kotlin live templates.
-pub const KOTLIN_TEMPLATES: &[Template] = &[
-    Template {
-        trigger: "sout",
-        body: "println(${cursor})",
-    },
-    Template {
-        trigger: "serr",
-        body: "System.err.println(${cursor})",
-    },
-    Template {
-        trigger: "main",
-        body: "fun main() {\n    ${cursor}\n}",
-    },
-    Template {
-        trigger: "fori",
-        body: "for (i in 0 until ${cursor}) {\n    \n}",
-    },
-    Template {
-        trigger: "ifn",
-        body: "if (${cursor} == null) {\n    \n}",
-    },
-    Template {
-        trigger: "inn",
-        body: "if (${cursor} != null) {\n    \n}",
-    },
-    Template {
-        trigger: "trycatch",
-        body: "try {\n    ${cursor}\n} catch (e: Exception) {\n    e.printStackTrace()\n}",
-    },
-];
-
-/// Java's reserved words (`CompletionKind::Keyword` candidates, `SPEC.md`
-/// §1's "Also includes") — not exhaustive of every contextual/restricted
-/// identifier the JLS defines (`sealed`, `permits`, `yield` etc. are
-/// context-sensitive, not reserved everywhere), just the always-reserved
-/// set a word-completion popup is worth offering.
-pub const JAVA_KEYWORDS: &[&str] = &[
-    "abstract",
-    "assert",
-    "boolean",
-    "break",
-    "byte",
-    "case",
-    "catch",
-    "char",
-    "class",
-    "const",
-    "continue",
-    "default",
-    "do",
-    "double",
-    "else",
-    "enum",
-    "extends",
-    "final",
-    "finally",
-    "float",
-    "for",
-    "goto",
-    "if",
-    "implements",
-    "import",
-    "instanceof",
-    "int",
-    "interface",
-    "long",
-    "native",
-    "new",
-    "package",
-    "private",
-    "protected",
-    "public",
-    "return",
-    "short",
-    "static",
-    "strictfp",
-    "super",
-    "switch",
-    "synchronized",
-    "this",
-    "throw",
-    "throws",
-    "transient",
-    "try",
-    "void",
-    "volatile",
-    "while",
-    "true",
-    "false",
-    "null",
-    "var",
-];
-
-/// Kotlin's hard keywords — always reserved, unlike its soft/modifier
-/// keywords (`data`, `sealed`, `internal`, etc.), which are valid
-/// identifiers elsewhere and so are a worse fit for an unconditional
-/// candidate list.
-pub const KOTLIN_KEYWORDS: &[&str] = &[
-    "as",
-    "break",
-    "class",
-    "continue",
-    "do",
-    "else",
-    "false",
-    "for",
-    "fun",
-    "if",
-    "in",
-    "interface",
-    "is",
-    "null",
-    "object",
-    "package",
-    "return",
-    "super",
-    "this",
-    "throw",
-    "true",
-    "try",
-    "typealias",
-    "typeof",
-    "val",
-    "var",
-    "when",
-    "while",
-];
+    pub fn for_language_mut(&mut self, language_id: &str) -> &mut Vec<UserTemplate> {
+        self.languages.entry(language_id.to_string()).or_default()
+    }
+}
 
 /// Every distinct identifier-shaped token in `text` (`SPEC.md` §1) — the
 /// word-completion candidate source, first-seen order, deduplicated. Same
@@ -225,17 +58,16 @@ pub fn identifiers_in(text: &str) -> Vec<String> {
 }
 
 /// Built-in templates that expand the same way regardless of the active
-/// file's language — checked *in addition to* `JAVA_TEMPLATES`/
-/// `KOTLIN_TEMPLATES` (see `find_expansion`'s call site in `widget::show`),
-/// not instead of them, and unlike those two, still available in a file
+/// file's language — checked *in addition to* a language's own snippets
+/// (see `find_expansion`'s call site in `widget::show`), not
+/// instead of them, and unlike those, still available in a file
 /// with no recognized language at all (plain text, an unrecognized
 /// extension). `pipe` is the prototypical example: a literal `|` isn't
-/// Java- or Kotlin-specific, so it belongs here rather than duplicated in
-/// both language tables.
-pub const GLOBAL_TEMPLATES: &[Template] = &[Template {
-    trigger: "pipe",
-    body: "|",
-}];
+/// specific to any one language, so it belongs here rather than duplicated
+/// in every language's table.
+pub fn global_templates() -> Vec<Template> {
+    vec![Template::new("pipe", "|")]
+}
 
 /// The maximal run of identifier characters (letters, digits, underscore)
 /// ending exactly at `cursor_char` — the word a just-pressed Tab would be
@@ -254,11 +86,11 @@ pub fn word_before_cursor(text: &str, cursor_char: usize) -> Range<usize> {
 /// Looks up `word` among `templates` by exact match — triggers are short,
 /// deliberately memorable mnemonics, not a fuzzy-search target — returning
 /// its body if found.
-pub fn find_template(templates: &[Template], word: &str) -> Option<&'static str> {
+pub fn find_template<'a>(templates: &'a [Template], word: &str) -> Option<&'a str> {
     templates
         .iter()
         .find(|template| template.trigger == word)
-        .map(|template| template.body)
+        .map(|template| template.body.as_str())
 }
 
 /// Looks up `word` across any number of custom-template groups (checked

@@ -65,3 +65,26 @@ fn source_file_extensions_come_from_the_registered_language() {
     assert_eq!(source_file_extensions(Language::Kotlin), ["kt"]);
     assert!(source_file_extensions(Language::new("never-registered")).is_empty());
 }
+
+#[test]
+fn the_shipped_extension_supplies_snippets_and_keywords_per_language() {
+    let java = language_snippets(Language::Java);
+    let kotlin = language_snippets(Language::Kotlin);
+    let sout = |snippets: &[fg_extension::Snippet]| snippets.iter().find(|s| s.trigger == "sout").map(|s| s.body.clone());
+    assert_eq!(sout(&java).as_deref(), Some("System.out.println(${cursor});"));
+    assert_eq!(sout(&kotlin).as_deref(), Some("println(${cursor})"));
+
+    assert!(language_keywords(Language::Java).contains(&"synchronized".to_string()));
+    assert!(language_keywords(Language::Kotlin).contains(&"when".to_string()));
+    assert!(language_snippets(Language::Yaml).is_empty());
+    assert!(language_keywords(Language::Yaml).is_empty());
+}
+
+/// Java has a debugger behind it; Kotlin has none, so it gets no breakpoint
+/// gutter.
+#[test]
+fn only_java_is_debuggable() {
+    assert!(is_debuggable(Language::Java));
+    assert!(!is_debuggable(Language::Kotlin));
+    assert!(!is_debuggable(Language::Yaml));
+}

@@ -478,6 +478,16 @@ impl ExtensionHandle {
         self.extension.import_edit(language_id, tree, source, qualified_name)
     }
 
+    /// The live templates offered in `language_id` files.
+    pub fn snippets(&self, language_id: &str) -> Vec<crate::Snippet> {
+        self.extension.snippets(language_id)
+    }
+
+    /// The words reserved in `language_id`.
+    pub fn keywords(&self, language_id: &str) -> Vec<String> {
+        self.extension.keywords(language_id)
+    }
+
     /// A documentation-comment skeleton for the declaration at `byte`.
     pub fn doc_stub(
         &self,

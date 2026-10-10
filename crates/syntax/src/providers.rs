@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
-use fg_extension::{ExtensionHandle, Registry};
+use fg_extension::{ExtensionHandle, Registry, Snippet};
 
 #[derive(Default)]
 pub(crate) struct Providers {
@@ -21,6 +21,13 @@ pub(crate) struct Providers {
     /// Each registered language's file extensions, keyed by language id —
     /// what `code_model` needs to find the file a type is declared in.
     pub(crate) file_extensions: HashMap<String, Vec<String>>,
+    /// Each language's live templates and reserved words, gathered once at
+    /// installation from every extension that has any: word completion asks
+    /// for them on a keystroke, and they never change afterwards.
+    pub(crate) snippets: HashMap<String, Vec<Snippet>>,
+    pub(crate) keywords: HashMap<String, Vec<String>>,
+    /// Languages a breakpoint gutter is drawn for.
+    pub(crate) debuggable: std::collections::HashSet<String>,
 }
 
 impl Providers {
@@ -31,9 +38,34 @@ impl Providers {
             }
         }
         for registered in registry.languages() {
+            let id = &registered.language.id;
+            if registry.is_debuggable(id) {
+                self.debuggable.insert(id.clone());
+            }
+            if self.file_extensions.contains_key(id) {
+                continue;
+            }
             self.file_extensions
-                .entry(registered.language.id.clone())
-                .or_insert_with(|| registered.language.file_extensions.clone());
+                .insert(id.clone(), registered.language.file_extensions.clone());
+            let mut snippets: Vec<Snippet> = Vec::new();
+            let mut keywords: Vec<String> = Vec::new();
+            for extension in &self.extensions {
+                for snippet in extension.snippets(id) {
+                    // Two extensions on one language may define the same
+                    // trigger; the first installed wins, as with every
+                    // other first-answer-wins lookup here.
+                    if !snippets.iter().any(|s| s.trigger == snippet.trigger) {
+                        snippets.push(snippet);
+                    }
+                }
+                for keyword in extension.keywords(id) {
+                    if !keywords.contains(&keyword) {
+                        keywords.push(keyword);
+                    }
+                }
+            }
+            self.snippets.insert(id.clone(), snippets);
+            self.keywords.insert(id.clone(), keywords);
         }
     }
 }

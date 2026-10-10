@@ -94,6 +94,22 @@ pub fn source_file_extensions(language: Language) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The live templates installed extensions offer in `language` files.
+pub fn language_snippets(language: Language) -> Vec<fg_extension::Snippet> {
+    providers().snippets.get(language.id()).cloned().unwrap_or_default()
+}
+
+/// Whether an extension can debug `language` — whether its files get a
+/// breakpoint gutter.
+pub fn is_debuggable(language: Language) -> bool {
+    providers().debuggable.contains(language.id())
+}
+
+/// The words installed extensions reserve in `language`, for completion.
+pub fn language_keywords(language: Language) -> Vec<String> {
+    providers().keywords.get(language.id()).cloned().unwrap_or_default()
+}
+
 #[cfg(test)]
 #[path = "code_model_test.rs"]
 mod code_model_test;

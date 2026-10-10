@@ -89,8 +89,6 @@ const BOTTOM_DOCK_TAB_KEY: &str = "bottom_dock_tab";
 const SOURCE_CONTROL_PANEL_VISIBLE_KEY: &str = "source_control_panel_visible";
 const SIDE_PANEL_WIDTH_KEY: &str = "side_panel_width";
 const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
-const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
-const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
 const CUSTOM_GLOBAL_TEMPLATES_KEY: &str = "custom_global_templates";
 const AUTO_SAVE_ENABLED_KEY: &str = "auto_save_enabled";
 const AUTO_SAVE_MODE_KEY: &str = "auto_save_mode";
@@ -999,6 +997,12 @@ fn restore_bottom_dock(storage: &dyn eframe::Storage) -> BottomDock {
     BottomDock::restored(terminal_was_open || build_was_open, active)
 }
 
+/// The storage key a language's user live templates are saved under. The
+/// shipped languages keep the keys older builds wrote (`custom_java_templates`).
+fn custom_templates_key(language_id: &str) -> String {
+    format!("custom_{language_id}_templates")
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is an independently-owned Settings value restored from its own storage key, not a bundle waiting to be a struct — same shape and reasoning as menu_bar::show's own allowance"
@@ -1017,7 +1021,7 @@ fn restore_settings(
     source_control_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
-    analyzer_ids: &[&str],
+    languages: &fg_extension::Registry,
     auto_save_settings: &mut AutoSaveSettings,
     trim_trailing_whitespace_on_save: &mut bool,
     lsp_settings: &mut LspSettings,
@@ -1080,16 +1084,17 @@ fn restore_settings(
     if let Some(visible) = storage.get_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY) {
         *source_control_visible = visible == "true";
     }
-    if let Some(saved) = storage.get_string(CUSTOM_JAVA_TEMPLATES_KEY) {
-        custom_templates.java = crate::widgets::editor::parse_user_templates(&saved);
-    }
-    if let Some(saved) = storage.get_string(CUSTOM_KOTLIN_TEMPLATES_KEY) {
-        custom_templates.kotlin = crate::widgets::editor::parse_user_templates(&saved);
+    for registered in languages.languages() {
+        if let Some(saved) = storage.get_string(&custom_templates_key(registered.static_id)) {
+            *custom_templates.for_language_mut(registered.static_id) =
+                crate::widgets::editor::parse_user_templates(&saved);
+        }
     }
     if let Some(saved) = storage.get_string(CUSTOM_GLOBAL_TEMPLATES_KEY) {
         custom_templates.global = crate::widgets::editor::parse_user_templates(&saved);
     }
-    external_tool_paths.restore(storage, analyzer_ids);
+    let analyzers = languages.analyzers();
+    external_tool_paths.restore(storage, &analyzers.iter().map(|a| a.id()).collect::<Vec<_>>());
     if let Some(enabled) = storage.get_string(AUTO_SAVE_ENABLED_KEY) {
         auto_save_settings.enabled = enabled == "true";
     }
@@ -1150,7 +1155,7 @@ fn persist_settings(
     source_control_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
-    analyzer_ids: &[&str],
+    languages: &fg_extension::Registry,
     auto_save_settings: AutoSaveSettings,
     trim_trailing_whitespace_on_save: bool,
     lsp_settings: &LspSettings,
@@ -1179,19 +1184,18 @@ fn persist_settings(
     storage.set_string(BOTTOM_DOCK_OPEN_KEY, bottom_dock.is_open().to_string());
     storage.set_string(BOTTOM_DOCK_TAB_KEY, bottom_dock.active().key().to_string());
     storage.set_string(SOURCE_CONTROL_PANEL_VISIBLE_KEY, source_control_visible.to_string());
-    storage.set_string(
-        CUSTOM_JAVA_TEMPLATES_KEY,
-        crate::widgets::editor::serialize_user_templates(&custom_templates.java),
-    );
-    storage.set_string(
-        CUSTOM_KOTLIN_TEMPLATES_KEY,
-        crate::widgets::editor::serialize_user_templates(&custom_templates.kotlin),
-    );
+    for registered in languages.languages() {
+        storage.set_string(
+            &custom_templates_key(registered.static_id),
+            crate::widgets::editor::serialize_user_templates(custom_templates.for_language(registered.static_id)),
+        );
+    }
     storage.set_string(
         CUSTOM_GLOBAL_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.global),
     );
-    external_tool_paths.persist(storage, analyzer_ids);
+    let analyzers = languages.analyzers();
+    external_tool_paths.persist(storage, &analyzers.iter().map(|a| a.id()).collect::<Vec<_>>());
     storage.set_string(AUTO_SAVE_ENABLED_KEY, auto_save_settings.enabled.to_string());
     storage.set_string(
         AUTO_SAVE_MODE_KEY,
@@ -1286,8 +1290,6 @@ impl FoxGardenApp {
                 recent_projects = stored.lines().map(PathBuf::from).filter(|path| path.is_dir()).collect();
             }
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
-            let analyzers = state.languages.analyzers();
-            let analyzer_ids: Vec<&str> = analyzers.iter().map(|a| a.id()).collect();
             restore_settings(
                 storage,
                 &mut editor_font,
@@ -1302,7 +1304,7 @@ impl FoxGardenApp {
                 &mut source_control_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
-                &analyzer_ids,
+                &state.languages,
                 &mut auto_save_settings,
                 &mut trim_trailing_whitespace_on_save,
                 &mut lsp_settings,
@@ -2909,8 +2911,6 @@ impl eframe::App for FoxGardenApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         persist_session(storage, &self.state, &self.recent_projects);
-        let analyzers = self.state.languages.analyzers();
-        let analyzer_ids: Vec<&str> = analyzers.iter().map(|a| a.id()).collect();
         persist_settings(
             storage,
             self.editor_font,
@@ -2925,7 +2925,7 @@ impl eframe::App for FoxGardenApp {
             self.source_control_visible,
             &self.custom_templates,
             &self.external_tool_paths,
-            &analyzer_ids,
+            &self.state.languages,
             self.auto_save_settings,
             self.trim_trailing_whitespace_on_save,
             &self.lsp_settings,

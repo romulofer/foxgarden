@@ -1,6 +1,15 @@
 
 use super::*;
 
+/// A language table shaped like a real one — the shipped ones come from
+/// extensions, which this module doesn't depend on.
+fn language_table() -> Vec<Template> {
+    vec![
+        Template::new("sout", "System.out.println(${cursor});"),
+        Template::new("psvm", "public static void main(String[] args) {}"),
+    ]
+}
+
 #[test]
 fn word_before_cursor_finds_the_trailing_identifier() {
     let text = "System.out.println(sout";
@@ -49,11 +58,11 @@ fn identifiers_in_keeps_underscores_as_part_of_a_word() {
 #[test]
 fn find_template_matches_by_exact_trigger() {
     assert_eq!(
-        find_template(JAVA_TEMPLATES, "sout"),
+        find_template(&language_table(), "sout"),
         Some("System.out.println(${cursor});")
     );
-    assert_eq!(find_template(JAVA_TEMPLATES, "so"), None);
-    assert_eq!(find_template(JAVA_TEMPLATES, ""), None);
+    assert_eq!(find_template(&language_table(), "so"), None);
+    assert_eq!(find_template(&language_table(), ""), None);
 }
 
 #[test]
@@ -90,7 +99,7 @@ fn expand_multiline_template_lands_cursor_on_the_indented_body_line() {
 #[test]
 fn find_expansion_falls_back_to_the_built_in_table_when_custom_has_no_match() {
     assert_eq!(
-        find_expansion(&[], &[JAVA_TEMPLATES], "sout"),
+        find_expansion(&[], &[&language_table()], "sout"),
         Some("System.out.println(${cursor});")
     );
 }
@@ -102,7 +111,7 @@ fn find_expansion_prefers_a_custom_template_over_a_built_in_of_the_same_trigger(
         body: "my.own.println(${cursor});".to_string(),
     }];
     assert_eq!(
-        find_expansion(&[&custom], &[JAVA_TEMPLATES], "sout"),
+        find_expansion(&[&custom], &[&language_table()], "sout"),
         Some("my.own.println(${cursor});")
     );
 }
@@ -114,19 +123,19 @@ fn find_expansion_finds_a_custom_only_trigger() {
         body: "custom body".to_string(),
     }];
     assert_eq!(
-        find_expansion(&[&custom], &[JAVA_TEMPLATES], "myown"),
+        find_expansion(&[&custom], &[&language_table()], "myown"),
         Some("custom body")
     );
-    assert_eq!(find_expansion(&[&custom], &[JAVA_TEMPLATES], "nope"), None);
+    assert_eq!(find_expansion(&[&custom], &[&language_table()], "nope"), None);
 }
 
 #[test]
 fn find_expansion_falls_through_to_the_global_built_in_group() {
-    // "pipe" lives only in `GLOBAL_TEMPLATES`, not `JAVA_TEMPLATES` —
+    // "pipe" lives only in `global_templates`, not the language's own table —
     // still found once that group is included in the lookup, the same
     // way `widget::show` includes it regardless of a file's language.
     assert_eq!(
-        find_expansion(&[], &[JAVA_TEMPLATES, GLOBAL_TEMPLATES], "pipe"),
+        find_expansion(&[], &[&language_table(), &global_templates()], "pipe"),
         Some("|")
     );
 }

@@ -31,6 +31,7 @@ use tree_sitter_language::LanguageFn;
 
 mod analyzers;
 mod code_model;
+mod editing;
 mod imports;
 mod registry;
 mod tooling;
@@ -41,6 +42,7 @@ pub use analyzers::{
 pub use code_model::{
     CodeGeneration, MemberKind, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember,
 };
+pub use editing::Snippet;
 pub use imports::{DocStub, ImportCandidate, ImportEdit};
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
@@ -307,6 +309,9 @@ pub struct Contributions {
     /// has a grammar for. Several extensions may name the same language —
     /// two web frameworks on one language is ordinary — and each is asked.
     pub http_route_languages: Vec<LanguageId>,
+    /// Languages the editor can set breakpoints in and debug — what decides
+    /// which files get a breakpoint gutter.
+    pub debug_languages: Vec<LanguageId>,
 }
 
 /// One extension.
@@ -555,6 +560,17 @@ pub trait Extension: Send + Sync {
         _byte: usize,
     ) -> Option<DocStub> {
         None
+    }
+
+    /// The live templates this extension offers in `language_id` files.
+    /// Empty for every language it does not own.
+    fn snippets(&self, _language_id: &str) -> Vec<Snippet> {
+        Vec::new()
+    }
+
+    /// The words reserved in `language_id`, offered by word completion.
+    fn keywords(&self, _language_id: &str) -> Vec<String> {
+        Vec::new()
     }
 
     /// The annotations offered after an `@` in a `language_id` file, each

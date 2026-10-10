@@ -47,7 +47,7 @@ pub use references::FindReferencesState;
 pub use rename::RenameBox;
 pub use route_scan::{RouteCache, route_files, scan_project_routes_cached};
 pub use templates::{
-    GLOBAL_TEMPLATES, JAVA_TEMPLATES, KOTLIN_TEMPLATES, Template, UserTemplate, UserTemplates, parse_user_templates,
+    Template, global_templates, UserTemplate, UserTemplates, parse_user_templates,
     serialize_user_templates,
 };
 /// Where the caret sits in a given editor widget — read by the status bar,

@@ -271,17 +271,15 @@ fn persisted_settings_round_trip() {
         show_editor_outline: false,
         show_inline_blame: false,
     };
-    let saved_templates = UserTemplates {
-        java: vec![UserTemplate {
-            trigger: "myown".to_string(),
-            body: "custom body".to_string(),
-        }],
-        kotlin: vec![],
-        global: vec![UserTemplate {
-            trigger: "mypipe".to_string(),
-            body: "|".to_string(),
-        }],
-    };
+    let mut saved_templates = UserTemplates::default();
+    saved_templates.global = vec![UserTemplate {
+        trigger: "mypipe".to_string(),
+        body: "|".to_string(),
+    }];
+    *saved_templates.for_language_mut("java") = vec![UserTemplate {
+        trigger: "myown".to_string(),
+        body: "custom body".to_string(),
+    }];
     let mut saved_tools = ExternalToolPaths::default();
     *saved_tools.get_mut("checkstyle") = AnalyzerSettings {
         binary: "/usr/bin/checkstyle".to_string(),
@@ -298,7 +296,6 @@ fn persisted_settings_round_trip() {
         config: String::new(),
         installed_version: "4.10.3".to_string(),
     };
-    let tool_ids = ["checkstyle", "pmd", "spotbugs"];
     let saved_auto_save = AutoSaveSettings {
         enabled: true,
         mode: AutoSaveMode::AfterIdle,
@@ -333,7 +330,7 @@ fn persisted_settings_round_trip() {
         true,
         &saved_templates,
         &saved_tools,
-        &tool_ids,
+        &fg_languages::builtin_registry(),
         saved_auto_save,
         false,
         &saved_lsp,
@@ -370,7 +367,7 @@ fn persisted_settings_round_trip() {
         &mut source_control_visible,
         &mut custom_templates,
         &mut external_tool_paths,
-        &tool_ids,
+        &fg_languages::builtin_registry(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -387,10 +384,10 @@ fn persisted_settings_round_trip() {
     assert_eq!(ui_scale, 1.25, "the accessibility zoom survives a restart");
     assert!(bottom_dock.shows(BottomTab::Build));
     assert!(source_control_visible);
-    assert_eq!(custom_templates.java, saved_templates.java);
-    assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
+    assert_eq!(custom_templates.for_language("java"), saved_templates.for_language("java"));
+    assert!(custom_templates.for_language("kotlin").is_empty());
     assert_eq!(custom_templates.global, saved_templates.global);
-    for id in tool_ids {
+    for id in ["checkstyle", "pmd", "spotbugs"] {
         assert_eq!(external_tool_paths.get(id), saved_tools.get(id), "{id}");
     }
     assert_eq!(auto_save_settings, saved_auto_save);
@@ -444,7 +441,7 @@ fn persist_settings_writes_the_active_language() {
         false,
         &UserTemplates::default(),
         &ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         AutoSaveSettings::default(),
         true,
         &LspSettings::default(),
@@ -510,7 +507,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -559,7 +556,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -601,7 +598,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -790,7 +787,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -839,7 +836,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
-        &[],
+        &fg_extension::Registry::new(),
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
