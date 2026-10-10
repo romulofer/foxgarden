@@ -321,14 +321,14 @@ fn tools_generate_getters_inserts_one_for_the_only_class() {
 }
 
 #[test]
-fn tools_generate_javadoc_documents_the_method_at_the_caret() {
+fn tools_generate_doc_comment_documents_the_method_at_the_caret() {
     let source = "class Calc {\n    int add(int a, int b) {\n        return a + b;\n    }\n}\n";
     let mut app = E2e::launch(&[("Calc.java", source)]);
     app.click_tree("Calc.java");
 
     // The caret inside the method body.
     app.select_in_active_tab(source.find("return").unwrap(), 0);
-    app.menu(t().menu.tools, t().menu.generate_javadoc);
+    app.menu(t().menu.tools, t().menu.generate_doc_comment);
 
     assert_eq!(
         app.active_tab_text(),
@@ -337,16 +337,31 @@ fn tools_generate_javadoc_documents_the_method_at_the_caret() {
 }
 
 #[test]
-fn tools_generate_javadoc_says_so_when_the_declaration_is_already_documented() {
+fn tools_generate_doc_comment_says_so_when_the_declaration_is_already_documented() {
     let source = "class Calc {\n    /** Adds. */\n    int add(int a) {\n        return a;\n    }\n}\n";
     let mut app = E2e::launch(&[("Calc.java", source)]);
     app.click_tree("Calc.java");
 
     app.select_in_active_tab(source.find("return").unwrap(), 0);
-    app.menu(t().menu.tools, t().menu.generate_javadoc);
+    app.menu(t().menu.tools, t().menu.generate_doc_comment);
 
     assert_eq!(app.active_tab_text(), source, "nothing is inserted");
     assert!(app.shows_containing(t().errors.no_doc_target));
+}
+
+#[test]
+fn tools_generate_doc_comment_writes_a_kdoc_for_a_kotlin_function() {
+    let source = "class Calc {\n    fun add(a: Int, b: Int): Int {\n        return a + b\n    }\n}\n";
+    let mut app = E2e::launch(&[("Calc.kt", source)]);
+    app.click_tree("Calc.kt");
+
+    app.select_in_active_tab(source.find("return").unwrap(), 0);
+    app.menu(t().menu.tools, t().menu.generate_doc_comment);
+
+    assert_eq!(
+        app.active_tab_text(),
+        "class Calc {\n    /**\n     * \n     *\n     * @param a\n     * @param b\n     * @return\n     */\n    fun add(a: Int, b: Int): Int {\n        return a + b\n    }\n}\n"
+    );
 }
 
 /// The palette is how an action is found by name rather than by knowing

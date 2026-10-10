@@ -52,9 +52,9 @@ pub struct MenuBarOutcome {
     pub generate_request: Option<AccessorKind>,
     pub generate_method_request: Option<GenerateMethodKind>,
     pub override_method_request: bool,
-    /// Tools > Generate Javadoc — a doc-comment skeleton above the
+    /// Tools > Generate Doc Comment — a doc-comment skeleton above the
     /// declaration at the caret.
-    pub generate_javadoc_request: bool,
+    pub generate_doc_comment_request: bool,
     pub case_conversion_request: Option<CaseConversion>,
     pub sort_lines_request: bool,
     pub unique_lines_request: bool,
@@ -427,10 +427,10 @@ pub fn show(
                 ui.close();
             }
             if ui
-                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_javadoc))
+                .add_enabled(has_active_tab, egui::Button::new(t().menu.generate_doc_comment))
                 .clicked()
             {
-                outcome.generate_javadoc_request = true;
+                outcome.generate_doc_comment_request = true;
                 ui.close();
             }
             ui.separator();

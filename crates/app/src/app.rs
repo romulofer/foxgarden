@@ -2666,7 +2666,7 @@ impl eframe::App for FoxGardenApp {
                     case_conversion: menu_outcome.case_conversion_request,
                     sort_lines: menu_outcome.sort_lines_request,
                     unique_lines: menu_outcome.unique_lines_request,
-                    javadoc: menu_outcome.generate_javadoc_request,
+                    doc_comment: menu_outcome.generate_doc_comment_request,
                     fold_all: menu_outcome.fold_all_request,
                     expand_all: menu_outcome.expand_all_request,
                 },
