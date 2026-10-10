@@ -1197,13 +1197,11 @@ version = "0.2.0"
 dependencies = [
  "fg-extension",
  "fg-languages",
- "quick-xml",
  "ropey",
  "serde",
  "serde_json",
  "tempfile",
  "test-support",
- "zip",
 ]
 
 [[package]]

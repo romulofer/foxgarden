@@ -61,7 +61,7 @@ fn an_indexing_server_shows_its_latest_status_message() {
 #[test]
 fn an_installs_progress_line_is_appended_to_its_label() {
     let work = BackgroundWork {
-        installing: vec![("JDTLS", Some("Building…".to_string()))],
+        installing: vec![("JDTLS".to_string(), Some("Building…".to_string()))],
         ..BackgroundWork::default()
     };
     assert_eq!(texts(&work), vec!["Instalando JDTLS… Building…"]);
@@ -70,7 +70,7 @@ fn an_installs_progress_line_is_appended_to_its_label() {
 #[test]
 fn an_install_with_no_progress_line_is_just_its_label() {
     let work = BackgroundWork {
-        installing: vec![("PMD", None)],
+        installing: vec![("PMD".to_string(), None)],
         ..BackgroundWork::default()
     };
     assert_eq!(texts(&work), vec!["Instalando PMD…"]);
@@ -79,12 +79,11 @@ fn an_install_with_no_progress_line_is_just_its_label() {
 #[test]
 fn every_flag_produces_its_own_line() {
     let work = BackgroundWork {
-        running_checkstyle: true,
-        running_pmd: true,
+        running_analyzers: vec!["Checkstyle".to_string(), "PMD".to_string()],
         scanning_classpath: true,
         running_git: true,
         detecting_java_home: true,
-        checking_versions: vec!["Checkstyle"],
+        checking_versions: vec!["Checkstyle".to_string()],
         ..BackgroundWork::default()
     };
     assert_eq!(
@@ -107,7 +106,7 @@ fn every_flag_produces_its_own_line() {
 fn a_starting_server_outranks_every_other_running_job() {
     let work = BackgroundWork {
         starting_servers: vec!["Kotlin Language Server".to_string()],
-        checking_versions: vec!["PMD"],
+        checking_versions: vec!["PMD".to_string()],
         detecting_java_home: true,
         running_git: true,
         ..BackgroundWork::default()
@@ -116,15 +115,15 @@ fn a_starting_server_outranks_every_other_running_job() {
 }
 
 /// One string, read by both the Tools menu's own running-scan label and
-/// the bar — the reason it lives in `Strings::common` rather than being
-/// spelled out twice.
+/// the bar — the reason it lives in `msg::running_analyzer` rather than
+/// being spelled out twice.
 #[test]
-fn the_checkstyle_line_is_worded_exactly_as_the_tools_menu_words_it() {
+fn an_analyzer_line_is_worded_exactly_as_the_tools_menu_words_it() {
     let work = BackgroundWork {
-        running_checkstyle: true,
+        running_analyzers: vec!["Checkstyle".to_string()],
         ..BackgroundWork::default()
     };
-    assert_eq!(texts(&work), vec![t().common.running_checkstyle]);
+    assert_eq!(texts(&work), vec![fg_i18n::msg::running_analyzer("Checkstyle")]);
 }
 
 /// Both servers can be coming up at once (a project with Java *and* Kotlin

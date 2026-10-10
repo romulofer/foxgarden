@@ -261,9 +261,42 @@ msg! {
 // --- External tools and language servers --------------------------------
 
 msg! {
-    checkstyle_failed(err: &str) {
-        pt: "o Checkstyle falhou: {err}",
-        en: "Checkstyle failed: {err}",
+    /// An analyzer's Tools menu entry and command-palette name.
+    run_analyzer(name: &str) {
+        pt: "Executar {name}",
+        en: "Run {name}",
+    }
+}
+
+msg! {
+    /// The Tools menu shows this in place of `run_analyzer` while a scan is
+    /// in flight, and the status bar reports the same scan with the same
+    /// words — one string, so the two can't drift apart.
+    running_analyzer(name: &str) {
+        pt: "Executando {name}…",
+        en: "Running {name}…",
+    }
+}
+
+msg! {
+    analyzer_not_configured(name: &str) {
+        pt: "Defina o binário e a configuração do {name} em Configurações > Ferramentas Externas primeiro.",
+        en: "Set the {name} binary and configuration in Settings > External Tools first.",
+    }
+}
+
+msg! {
+    /// For an analyzer that takes no configuration of its own.
+    analyzer_binary_not_configured(name: &str) {
+        pt: "Defina o binário do {name} em Configurações > Ferramentas Externas primeiro.",
+        en: "Set the {name} binary in Settings > External Tools first.",
+    }
+}
+
+msg! {
+    analyzer_failed(name: &str, err: &str) {
+        pt: "o {name} falhou: {err}",
+        en: "{name} failed: {err}",
     }
 }
 
@@ -295,13 +328,6 @@ msg! {
     failed_to_start_docker(err: &str) {
         pt: "falha ao iniciar o Docker: {err}",
         en: "failed to start Docker: {err}",
-    }
-}
-
-msg! {
-    pmd_failed(err: &str) {
-        pt: "o PMD falhou: {err}",
-        en: "PMD failed: {err}",
     }
 }
 
@@ -349,13 +375,6 @@ msg! {
     coverage_report_failed(err: &str) {
         pt: "não foi possível ler o relatório de cobertura: {err}",
         en: "coverage report couldn't be read: {err}",
-    }
-}
-
-msg! {
-    spotbugs_failed(err: &str) {
-        pt: "o SpotBugs falhou: {err}",
-        en: "SpotBugs failed: {err}",
     }
 }
 

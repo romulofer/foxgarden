@@ -1,137 +1,132 @@
-//! Tools > "Run Checkstyle"/"Run PMD"/"Run SpotBugs" (`PLAN.md` Track 5, all
-//! 3 phases) plus their shared Settings > External Tools… dialog, including
-//! installing/updating the tools themselves (`crate::tool_manager`).
-//! Running each tool itself lives in `fg_core::checkstyle_diagnostics`/
-//! `fg_core::pmd_diagnostics`/`fg_core::spotbugs_diagnostics`; this module
-//! is the app-side wiring: persisted binary/config paths, each tool's own
-//! background scan, and applying a completed scan's findings to open
-//! documents.
+//! Tools > "Run <analyzer>" for every analyzer an extension contributes
+//! (`PLAN.md` Track 5), plus their shared Settings > External Tools… dialog,
+//! including installing/updating the tools themselves
+//! (`crate::tool_manager`). Running a tool and reading its report is the
+//! contributing extension's (`fg_extension::AnalyzerHandle::run`); this
+//! module is the app-side wiring: persisted binary/config paths, each
+//! analyzer's own background scan, and applying a completed scan's findings
+//! to open documents.
 
 use fg_i18n::{msg, t};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use fg_core::{Diagnostic, EditorState};
+use fg_extension::{AnalyzerHandle, AnalyzerRun};
 
-use crate::tool_manager::{self, Tool, ToolManagerState};
+use crate::tool_manager::{self, ToolManagerState};
 use crate::widgets::modal::show_modal;
 
-/// Settings > External Tools — binary/config paths for the static-analysis
-/// tools Tools > "Run Checkstyle"/"Run PMD"/"Run SpotBugs" shell out to
-/// (`SPEC.md` §5), plus which version (if any) `tool_manager` last
-/// installed into its own cache directory for each — `""` means "not
-/// installed via the in-app downloader," which is also the correct default
-/// for someone who's pointed a binary field at an existing system install
-/// instead. Grouped into one struct, the same "travels together through
-/// persistence as one unit" shape `IndentSettings`/`ViewSettings` already
-/// use, rather than a growing list of flat `menu_bar::show` parameters.
+/// One analyzer's Settings > External Tools entry: where its binary is,
+/// what configuration to run it with, and which version (if any)
+/// `tool_manager` last installed into its own cache directory — `""` means
+/// "not installed via the in-app downloader," which is also the correct
+/// default for someone who's pointed a binary field at an existing system
+/// install instead.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnalyzerSettings {
+    pub binary: String,
+    /// Required (not optional convenience) for an analyzer whose
+    /// contribution declares a `config_label`: Checkstyle and PMD have no
+    /// usable default of their own, so "Run" does nothing without it.
+    pub config: String,
+    pub installed_version: String,
+}
+
+/// Settings > External Tools — the binary/config paths for every analyzer,
+/// keyed by analyzer id (`SPEC.md` §5). Grouped into one struct, the same
+/// "travels together through persistence as one unit" shape
+/// `IndentSettings`/`ViewSettings` already use, rather than a growing list
+/// of flat `menu_bar::show` parameters.
 #[derive(Debug, Clone, Default)]
 pub struct ExternalToolPaths {
-    pub checkstyle_binary: String,
-    /// Checkstyle has no usable default ruleset of its own — every real
-    /// run needs an explicit `-c`, so this is required (not optional
-    /// convenience) for "Run Checkstyle" to do anything.
-    pub checkstyle_config: String,
-    pub checkstyle_installed_version: String,
-    pub pmd_binary: String,
-    /// PMD's `-R` — one ruleset path, or several comma-separated (PMD's own
-    /// `-R=<rulesets>[,<rulesets>...]` shape, forwarded verbatim); required
-    /// the same way `checkstyle_config` is, PMD also has no usable default.
-    pub pmd_ruleset: String,
-    pub pmd_installed_version: String,
-    pub spotbugs_binary: String,
-    pub spotbugs_installed_version: String,
+    analyzers: HashMap<String, AnalyzerSettings>,
 }
 
 impl ExternalToolPaths {
+    pub fn get(&self, analyzer_id: &str) -> Option<&AnalyzerSettings> {
+        self.analyzers.get(analyzer_id)
+    }
+
+    pub fn get_mut(&mut self, analyzer_id: &str) -> &mut AnalyzerSettings {
+        self.analyzers.entry(analyzer_id.to_string()).or_default()
+    }
+
     /// Writes `installed`'s binary path (and default config, if the tool
-    /// has one) into the matching fields, overwriting whatever was there —
+    /// has one) into the matching entry, overwriting whatever was there —
     /// called after `tool_manager::ToolManagerState::install` completes.
     /// An explicit "Install"/"Reinstall" click is exactly the case where
     /// overwriting a hand-typed path is the right call: the user just
     /// asked this app to go get a fresh copy and use it.
     pub fn apply_installed(&mut self, installed: &tool_manager::Installed) {
-        let config = installed.default_config.clone().unwrap_or_default();
-        match installed.tool {
-            Tool::Checkstyle => {
-                self.checkstyle_binary = installed.binary.display().to_string();
-                self.checkstyle_config = config;
-                self.checkstyle_installed_version = installed.version.clone();
+        let entry = self.get_mut(&installed.analyzer_id);
+        entry.binary = installed.binary.display().to_string();
+        entry.config = installed.default_config.clone().unwrap_or_default();
+        entry.installed_version = installed.version.clone();
+    }
+
+    /// Reads each of `analyzer_ids`' settings back out of `storage`, leaving
+    /// the ones that were never saved at their defaults. The keys are
+    /// `<id>_binary`, `<id>_config` and `<id>_installed_version`.
+    pub fn restore(&mut self, storage: &dyn eframe::Storage, analyzer_ids: &[&str]) {
+        for &id in analyzer_ids {
+            let entry = self.get_mut(id);
+            if let Some(binary) = storage.get_string(&storage_key(id, "binary")) {
+                entry.binary = binary;
             }
-            Tool::Pmd => {
-                self.pmd_binary = installed.binary.display().to_string();
-                self.pmd_ruleset = config;
-                self.pmd_installed_version = installed.version.clone();
+            // Before analyzers were contributed by extensions, PMD's
+            // configuration was stored as `pmd_ruleset`; read it when the
+            // current key was never written so an upgrade keeps it.
+            if let Some(config) = storage
+                .get_string(&storage_key(id, "config"))
+                .or_else(|| storage.get_string(&storage_key(id, "ruleset")))
+            {
+                entry.config = config;
             }
-            Tool::SpotBugs => {
-                self.spotbugs_binary = installed.binary.display().to_string();
-                self.spotbugs_installed_version = installed.version.clone();
+            if let Some(version) = storage.get_string(&storage_key(id, "installed_version")) {
+                entry.installed_version = version;
             }
         }
     }
+
+    /// Writes each of `analyzer_ids`' settings to `storage`; the inverse of
+    /// [`Self::restore`].
+    pub fn persist(&self, storage: &mut dyn eframe::Storage, analyzer_ids: &[&str]) {
+        for &id in analyzer_ids {
+            let settings = self.get(id).cloned().unwrap_or_default();
+            storage.set_string(&storage_key(id, "binary"), settings.binary);
+            storage.set_string(&storage_key(id, "config"), settings.config);
+            storage.set_string(&storage_key(id, "installed_version"), settings.installed_version);
+        }
+    }
+}
+
+fn storage_key(analyzer_id: &str, field: &str) -> String {
+    format!("{analyzer_id}_{field}")
 }
 
 type ScanResult = Result<Vec<(PathBuf, Diagnostic)>, String>;
 
-/// Settings > External Tools… dialog open flag, plus a still-running
-/// Checkstyle/PMD/SpotBugs scan (if any) — see `run_checkstyle`/`run_pmd`/
-/// `run_spotbugs` and `poll_checkstyle`/`poll_pmd`/`poll_spotbugs`. Three
-/// independent slots (not one shared "a scan is running" flag): each tool
-/// is a separate Tools-menu action with its own outcome, so one running
-/// doesn't block another from starting.
+/// Settings > External Tools… dialog open flag, plus every still-running
+/// analyzer scan — see `run` and `poll`. One slot per analyzer (not one
+/// shared "a scan is running" flag): each is a separate Tools-menu action
+/// with its own outcome, so one running doesn't block another from starting.
 #[derive(Default)]
 pub struct StaticAnalysisState {
     settings_open: bool,
-    checkstyle_scan_rx: Option<Receiver<ScanResult>>,
-    pmd_scan_rx: Option<Receiver<ScanResult>>,
-    spotbugs_scan_rx: Option<Receiver<ScanResult>>,
+    scans: HashMap<String, Receiver<ScanResult>>,
     /// Backs the Settings > External Tools… dialog's own Install/Check for
-    /// Updates buttons — a separate concern from the two scan slots above
-    /// (installing a tool vs. running it), so it's its own type rather than
-    /// three more near-identical `Option<Receiver<...>>` field pairs.
+    /// Updates buttons — a separate concern from the scans above
+    /// (installing a tool vs. running it).
     pub tool_manager: ToolManagerState,
-    /// The last "Check for Updates" result per tool, for the Settings
+    /// The last "Check for Updates" result per analyzer, for the Settings
     /// dialog to display — session-only (not persisted, and not written
     /// back into `ExternalToolPaths`): this app never auto-installs
-    /// whatever GitHub calls latest (see `tool_manager::Tool::
-    /// recommended_version`'s own doc comment on why "Install" always
-    /// installs a pinned, verified version instead), so this is purely
-    /// informational, re-fetched fresh every time the user asks.
-    latest_versions: std::collections::HashMap<Tool, tool_manager::LatestVersionResult>,
-}
-
-/// Runs `work` on a fresh background thread and returns the receiving end
-/// of the channel it'll send its one result on — the thread-plus-channel
-/// mechanics shared by `run_checkstyle`/`run_pmd`, which differ only in
-/// which `fg_core` function `work` calls. A real project's worth of source
-/// can take long enough to analyze that running either on the UI thread
-/// would freeze the whole app for that whole stretch — the same reasoning
-/// `HttpRoutesState::toggle` already documents for its own scan.
-fn spawn_scan(work: impl FnOnce() -> ScanResult + Send + 'static) -> Receiver<ScanResult> {
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(work());
-    });
-    rx
-}
-
-/// Drains `rx_slot`'s completed result, if any finished since the last
-/// poll, clearing the slot either way once it resolves (a value or a
-/// disconnected sender both mean "nothing left to wait for"). Shared by
-/// `poll_checkstyle`/`poll_pmd`.
-fn poll_scan(rx_slot: &mut Option<Receiver<ScanResult>>) -> Option<ScanResult> {
-    let rx = rx_slot.as_ref()?;
-    match rx.try_recv() {
-        Ok(result) => {
-            *rx_slot = None;
-            Some(result)
-        }
-        Err(TryRecvError::Empty) => None,
-        Err(TryRecvError::Disconnected) => {
-            *rx_slot = None;
-            None
-        }
-    }
+    /// whatever GitHub calls latest (an extension pins a verified version
+    /// instead), so this is purely informational, re-fetched fresh every
+    /// time the user asks.
+    latest_versions: HashMap<String, tool_manager::LatestVersionResult>,
 }
 
 impl StaticAnalysisState {
@@ -139,123 +134,86 @@ impl StaticAnalysisState {
         self.settings_open = true;
     }
 
-    /// True while a Checkstyle scan is running — `Tools > Run Checkstyle`
+    /// True while `analyzer_id`'s scan is running — its Tools menu entry
     /// disables itself on this so a second click can't pile up a second
     /// concurrent scan.
-    pub fn checkstyle_running(&self) -> bool {
-        self.checkstyle_scan_rx.is_some()
+    pub fn running(&self, analyzer_id: &str) -> bool {
+        self.scans.contains_key(analyzer_id)
     }
 
-    /// Same as `checkstyle_running`, for PMD.
-    pub fn pmd_running(&self) -> bool {
-        self.pmd_scan_rx.is_some()
+    /// Kicks off `analyzer`'s run on a background thread. A real project's
+    /// worth of source can take long enough to analyze that running it on
+    /// the UI thread would freeze the whole app for that whole stretch — the
+    /// same reasoning `HttpRoutesState::toggle` already documents for its
+    /// own scan.
+    pub fn run(&mut self, analyzer: AnalyzerHandle, run: AnalyzerRun) {
+        let (tx, rx) = channel();
+        let id = analyzer.id().to_string();
+        std::thread::spawn(move || {
+            let _ = tx.send(analyzer.run(&run).map(fg_core::analyzer_diagnostics));
+        });
+        self.scans.insert(id, rx);
     }
 
-    /// Same as `checkstyle_running`, for SpotBugs.
-    pub fn spotbugs_running(&self) -> bool {
-        self.spotbugs_scan_rx.is_some()
-    }
-
-    /// Kicks off a Checkstyle run against `project_root` on a background
-    /// thread.
-    pub fn run_checkstyle(&mut self, binary: PathBuf, config: PathBuf, project_root: PathBuf) {
-        self.checkstyle_scan_rx = Some(spawn_scan(move || {
-            fg_core::checkstyle_diagnostics(&binary, &config, &project_root).map_err(|e| e.to_string())
-        }));
-    }
-
-    /// Kicks off a PMD run against `project_root` on a background thread.
-    pub fn run_pmd(&mut self, binary: PathBuf, ruleset: String, project_root: PathBuf) {
-        self.pmd_scan_rx = Some(spawn_scan(move || {
-            fg_core::pmd_diagnostics(&binary, &ruleset, &project_root).map_err(|e| e.to_string())
-        }));
-    }
-
-    /// Kicks off a SpotBugs run against `classes_dir` (the project's own
-    /// build tool's compiled-classes output directory — the caller's job to
-    /// ask the tool for and confirm exists, via `BuildToolHandle::
-    /// classes_dir`, since "no compiled classes yet" is a distinct, more
-    /// actionable error — "run Build first" — than anything this scan itself
-    /// can express) on a background thread.
-    pub fn run_spotbugs(&mut self, binary: PathBuf, classes_dir: PathBuf, project_root: PathBuf) {
-        self.spotbugs_scan_rx = Some(spawn_scan(move || {
-            fg_core::spotbugs_diagnostics(&binary, &classes_dir, &project_root).map_err(|e| e.to_string())
-        }));
-    }
-
-    /// Drains a completed Checkstyle scan's result, if any finished since
-    /// the last poll — called once per frame from `FoxGardenApp::ui`.
-    pub fn poll_checkstyle(&mut self) -> Option<ScanResult> {
-        poll_scan(&mut self.checkstyle_scan_rx)
-    }
-
-    /// Same as `poll_checkstyle`, for PMD.
-    pub fn poll_pmd(&mut self) -> Option<ScanResult> {
-        poll_scan(&mut self.pmd_scan_rx)
-    }
-
-    /// Same as `poll_checkstyle`, for SpotBugs.
-    pub fn poll_spotbugs(&mut self) -> Option<ScanResult> {
-        poll_scan(&mut self.spotbugs_scan_rx)
+    /// Drains every scan that finished since the last poll — called once
+    /// per frame from `FoxGardenApp::ui`. A slot is cleared once it resolves
+    /// (a value or a disconnected sender both mean "nothing left to wait
+    /// for").
+    pub fn poll(&mut self) -> Vec<(String, ScanResult)> {
+        let mut done = Vec::new();
+        self.scans.retain(|id, rx| match rx.try_recv() {
+            Ok(result) => {
+                done.push((id.clone(), result));
+                false
+            }
+            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => false,
+        });
+        done
     }
 
     /// Records a completed "Check for Updates" result for the Settings
     /// dialog to read back via `latest_version` — called from
     /// `FoxGardenApp::ui`'s per-frame poll of `self.tool_manager`.
-    pub fn record_latest_version(&mut self, tool: Tool, result: tool_manager::LatestVersionResult) {
-        self.latest_versions.insert(tool, result);
+    pub fn record_latest_version(&mut self, analyzer_id: String, result: tool_manager::LatestVersionResult) {
+        self.latest_versions.insert(analyzer_id, result);
     }
 
-    fn latest_version(&self, tool: Tool) -> Option<&tool_manager::LatestVersionResult> {
-        self.latest_versions.get(&tool)
+    fn latest_version(&self, analyzer_id: &str) -> Option<&tool_manager::LatestVersionResult> {
+        self.latest_versions.get(analyzer_id)
     }
 }
 
-/// Applies a completed scan's findings to every currently open tab, keyed
-/// by path, via `field` (`|doc| &mut doc.checkstyle_diagnostics` or `|doc|
-/// &mut doc.pmd_diagnostics`) — shared by `apply_checkstyle_results`/
-/// `apply_pmd_results` below, since "replace this one field with whatever
-/// matches this path, per open doc" is identical between tools; only
-/// *which* field differs. Replaces the target field wholesale rather than
-/// merging into it — a fresh run's results always supersede whatever the
-/// previous run left, including a document with no findings this time
-/// correctly ending up with none rather than stale squiggles from before.
-/// Only open tabs get findings applied — this is a tool's results reaching
-/// the same squiggle pipeline as syntax errors already does, and that
-/// pipeline only exists for open documents.
-fn apply_results(
-    state: &mut EditorState,
-    results: &[(PathBuf, Diagnostic)],
-    field: impl Fn(&mut fg_core::Document) -> &mut Vec<Diagnostic>,
-) {
+/// Applies a completed scan's findings for `analyzer_id` to every currently
+/// open tab, keyed by path. Replaces that analyzer's findings wholesale
+/// rather than merging into them — a fresh run's results always supersede
+/// whatever the previous run left, including a document with no findings
+/// this time correctly ending up with none rather than stale squiggles from
+/// before. Only open tabs get findings applied — this is a tool's results
+/// reaching the same squiggle pipeline as syntax errors already does, and
+/// that pipeline only exists for open documents.
+pub fn apply_results(state: &mut EditorState, analyzer_id: &str, results: &[(PathBuf, Diagnostic)]) {
     for doc in &mut state.open_tabs {
-        *field(doc) = results
+        let findings = results
             .iter()
             .filter(|(path, _)| *path == doc.path)
             .map(|(_, diag)| diag.clone())
             .collect();
+        doc.analyzer_diagnostics.insert(analyzer_id.to_string(), findings);
     }
 }
 
-pub fn apply_checkstyle_results(state: &mut EditorState, results: &[(PathBuf, Diagnostic)]) {
-    apply_results(state, results, |doc| &mut doc.checkstyle_diagnostics);
-}
-
-pub fn apply_pmd_results(state: &mut EditorState, results: &[(PathBuf, Diagnostic)]) {
-    apply_results(state, results, |doc| &mut doc.pmd_diagnostics);
-}
-
-pub fn apply_spotbugs_results(state: &mut EditorState, results: &[(PathBuf, Diagnostic)]) {
-    apply_results(state, results, |doc| &mut doc.spotbugs_diagnostics);
-}
-
-/// Settings > External Tools… dialog — one binary/config path field per
-/// tool, plus an Install/Update row backed by `crate::tool_manager`: a
-/// tool doesn't have to already be on the user's system for these fields
-/// to get filled in. SpotBugs has no config/ruleset field of its own (it
-/// takes a compiled-classes directory, computed at Run time, not a
-/// user-set path) — just the binary field, same as the other two.
-pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut ExternalToolPaths) {
+/// Settings > External Tools… dialog — one section per analyzer: a binary
+/// path field, a configuration field when the analyzer takes one, and an
+/// Install/Update row backed by `crate::tool_manager` when the extension
+/// says how to fetch it. A tool doesn't have to already be on the user's
+/// system for these fields to get filled in.
+pub fn show_settings(
+    ui: &egui::Ui,
+    state: &mut StaticAnalysisState,
+    tools: &mut ExternalToolPaths,
+    analyzers: &[AnalyzerHandle],
+) {
     let outcome = show_modal(
         ui,
         "external_tools_dialog",
@@ -273,26 +231,20 @@ pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut
             );
             ui.separator();
 
-            ui.strong("Checkstyle");
-            show_install_row(ui, state, Tool::Checkstyle, &tools.checkstyle_installed_version);
-            labeled_path_field(ui, "checkstyle_binary_path", "Binary", &mut tools.checkstyle_binary);
-            labeled_path_field(
-                ui,
-                "checkstyle_config_path",
-                "Config (-c)",
-                &mut tools.checkstyle_config,
-            );
-
-            ui.add_space(8.0);
-            ui.strong("PMD");
-            show_install_row(ui, state, Tool::Pmd, &tools.pmd_installed_version);
-            labeled_path_field(ui, "pmd_binary_path", "Binary", &mut tools.pmd_binary);
-            labeled_path_field(ui, "pmd_ruleset_path", "Ruleset (-R)", &mut tools.pmd_ruleset);
-
-            ui.add_space(8.0);
-            ui.strong("SpotBugs");
-            show_install_row(ui, state, Tool::SpotBugs, &tools.spotbugs_installed_version);
-            labeled_path_field(ui, "spotbugs_binary_path", "Binary", &mut tools.spotbugs_binary);
+            for (index, analyzer) in analyzers.iter().enumerate() {
+                if index > 0 {
+                    ui.add_space(8.0);
+                }
+                let id = analyzer.id();
+                ui.strong(analyzer.display_name());
+                let installed_version = tools.get(id).map(|s| s.installed_version.clone()).unwrap_or_default();
+                show_install_row(ui, state, analyzer, &installed_version);
+                let settings = tools.get_mut(id);
+                labeled_path_field(ui, &format!("{id}_binary_path"), "Binary", &mut settings.binary);
+                if let Some(label) = &analyzer.contribution.config_label {
+                    labeled_path_field(ui, &format!("{id}_config_path"), label, &mut settings.config);
+                }
+            }
 
             ui.separator();
             ui.button(t().common.close).clicked()
@@ -305,14 +257,18 @@ pub fn show_settings(ui: &egui::Ui, state: &mut StaticAnalysisState, tools: &mut
     }
 }
 
-/// One tool's Install/Update row: installed-version status, an Install (or
-/// Reinstall) button, and a Check for Updates button + whatever its last
+/// One analyzer's Install/Update row: installed-version status, an Install
+/// (or Reinstall) button, and a Check for Updates button + whatever its last
 /// result was. Kicks off `state.tool_manager`'s background work directly
 /// from the button click — this dialog already owns `&mut
 /// StaticAnalysisState`, so there's no need to bubble a `menu_bar`-style
 /// outcome flag up through `FoxGardenApp::ui` just to start it one frame
-/// later.
-fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: Tool, installed_version: &str) {
+/// later. Nothing is drawn for an analyzer the extension can't fetch.
+fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, analyzer: &AnalyzerHandle, installed_version: &str) {
+    let Some(install) = &analyzer.contribution.install else {
+        return;
+    };
+    let id = analyzer.id();
     ui.horizontal(|ui| {
         if installed_version.is_empty() {
             ui.label(egui::RichText::new(t().common.not_installed).weak());
@@ -320,7 +276,7 @@ fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: To
             ui.label(msg::installed_version(installed_version));
         }
 
-        let installing = state.tool_manager.installing(tool);
+        let installing = state.tool_manager.installing(id);
         let install_label = if installing {
             t().install.installing
         } else if installed_version.is_empty() {
@@ -329,25 +285,29 @@ fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: To
             t().install.reinstall
         };
         if ui.add_enabled(!installing, egui::Button::new(install_label)).clicked() {
-            state.tool_manager.install(tool);
+            state
+                .tool_manager
+                .install(id, analyzer.display_name(), install.clone());
         }
 
-        let checking = state.tool_manager.checking(tool);
-        if ui
-            .add_enabled(
-                !checking,
-                egui::Button::new(if checking {
-                    t().install.checking
-                } else {
-                    t().install.check_for_updates
-                }),
-            )
-            .clicked()
-        {
-            state.tool_manager.check_latest(tool);
+        if let Some(latest) = &install.latest_release {
+            let checking = state.tool_manager.checking(id);
+            if ui
+                .add_enabled(
+                    !checking,
+                    egui::Button::new(if checking {
+                        t().install.checking
+                    } else {
+                        t().install.check_for_updates
+                    }),
+                )
+                .clicked()
+            {
+                state.tool_manager.check_latest(id, latest.clone());
+            }
         }
 
-        match state.latest_version(tool) {
+        match state.latest_version(id) {
             Some(Ok(version)) if version == installed_version => {
                 ui.label(egui::RichText::new(msg::up_to_date_at(version)).weak());
             }
@@ -356,7 +316,7 @@ fn show_install_row(ui: &mut egui::Ui, state: &mut StaticAnalysisState, tool: To
             // normal steady state, not a warning. See the hover text.
             Some(Ok(version)) => {
                 ui.label(egui::RichText::new(msg::githubs_latest(version)).weak())
-                    .on_hover_text(msg::install_pin_explanation(tool.recommended_version()));
+                    .on_hover_text(msg::install_pin_explanation(&install.version));
             }
             Some(Err(err)) => {
                 ui.label(egui::RichText::new(msg::update_check_failed(&err.to_string())).weak());

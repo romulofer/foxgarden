@@ -30,7 +30,8 @@ use crate::panels::git_stage::GitStageState;
 use crate::panels::lsp_servers::LspServersState;
 use crate::panels::spring_config::SpringConfigState;
 use crate::panels::static_analysis::StaticAnalysisState;
-use crate::tool_manager::{ALL_TOOLS, ToolManagerState};
+use crate::tool_manager::ToolManagerState;
+use fg_extension::AnalyzerHandle;
 
 /// The spinner's diameter, in points. Sized to sit inside a body-text line
 /// rather than stretch the bar taller than the text it precedes.
@@ -54,15 +55,14 @@ pub struct BackgroundWork {
     /// line, when it reports one. Language-server installs do (jdt.ls is
     /// built from source and takes minutes — see `lsp_manager`); external
     /// tools are a single download, so they report none.
-    pub installing: Vec<(&'static str, Option<String>)>,
+    pub installing: Vec<(String, Option<String>)>,
     /// Display names of the servers/tools whose "Check for Updates" is
     /// still waiting on the GitHub API.
-    pub checking_versions: Vec<&'static str>,
+    pub checking_versions: Vec<String>,
     /// A `detect_java_home` scan of this machine's JDK installs.
     pub detecting_java_home: bool,
-    pub running_checkstyle: bool,
-    pub running_pmd: bool,
-    pub running_spotbugs: bool,
+    /// Display names of the analyzers with a scan in flight.
+    pub running_analyzers: Vec<String>,
     /// A `mvn`/`gradle` classpath resolution feeding Spring config
     /// completion.
     pub scanning_classpath: bool,
@@ -84,10 +84,15 @@ impl BackgroundWork {
     /// right now. Cheap enough to call every frame: each answer is an
     /// `Option`/`HashMap` emptiness check, no I/O and no allocation beyond
     /// the handful of names actually collected.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct subsystem asked what it is doing, not a bundle waiting to be a struct"
+    )]
     pub fn gather(
         lsp: &LspState,
         lsp_servers: &LspServersState,
         static_analysis: &StaticAnalysisState,
+        analyzers: &[AnalyzerHandle],
         spring_config: &SpringConfigState,
         git_stage: &GitStageState,
         diff: &DiffState,
@@ -98,12 +103,14 @@ impl BackgroundWork {
         Self {
             starting_servers: lsp.starting_servers(),
             indexing_servers: lsp.indexing_servers(),
-            installing: installing_servers(servers).chain(installing_tools(tools)).collect(),
-            checking_versions: checking_servers(servers).chain(checking_tools(tools)).collect(),
+            installing: installing_servers(servers).chain(installing_tools(tools, analyzers)).collect(),
+            checking_versions: checking_servers(servers).chain(checking_tools(tools, analyzers)).collect(),
             detecting_java_home: servers.detecting_java_home(),
-            running_checkstyle: static_analysis.checkstyle_running(),
-            running_pmd: static_analysis.pmd_running(),
-            running_spotbugs: static_analysis.spotbugs_running(),
+            running_analyzers: analyzers
+                .iter()
+                .filter(|analyzer| static_analysis.running(analyzer.id()))
+                .map(|analyzer| analyzer.display_name().to_string())
+                .collect(),
             scanning_classpath: spring_config.scanning(),
             running_git: diff.running()
                 || git_stage.status_running()
@@ -115,32 +122,38 @@ impl BackgroundWork {
     }
 }
 
-fn installing_servers(servers: &LspManagerState) -> impl Iterator<Item = (&'static str, Option<String>)> {
+fn installing_servers(servers: &LspManagerState) -> impl Iterator<Item = (String, Option<String>)> {
     ALL_SERVERS
         .into_iter()
         .filter(|&server| servers.installing(server))
-        .map(|server| (server.display_name(), servers.status(server).map(str::to_string)))
+        .map(|server| (server.display_name().to_string(), servers.status(server).map(str::to_string)))
 }
 
-fn installing_tools(tools: &ToolManagerState) -> impl Iterator<Item = (&'static str, Option<String>)> {
-    ALL_TOOLS
-        .into_iter()
-        .filter(|&tool| tools.installing(tool))
-        .map(|tool| (tool.display_name(), None))
+fn installing_tools<'a>(
+    tools: &'a ToolManagerState,
+    analyzers: &'a [AnalyzerHandle],
+) -> impl Iterator<Item = (String, Option<String>)> + 'a {
+    analyzers
+        .iter()
+        .filter(|analyzer| tools.installing(analyzer.id()))
+        .map(|analyzer| (analyzer.display_name().to_string(), None))
 }
 
-fn checking_servers(servers: &LspManagerState) -> impl Iterator<Item = &'static str> {
+fn checking_servers(servers: &LspManagerState) -> impl Iterator<Item = String> {
     ALL_SERVERS
         .into_iter()
         .filter(|&server| servers.checking(server))
-        .map(|server| server.display_name())
+        .map(|server| server.display_name().to_string())
 }
 
-fn checking_tools(tools: &ToolManagerState) -> impl Iterator<Item = &'static str> {
-    ALL_TOOLS
-        .into_iter()
-        .filter(|&tool| tools.checking(tool))
-        .map(|tool| tool.display_name())
+fn checking_tools<'a>(
+    tools: &'a ToolManagerState,
+    analyzers: &'a [AnalyzerHandle],
+) -> impl Iterator<Item = String> + 'a {
+    analyzers
+        .iter()
+        .filter(|analyzer| tools.checking(analyzer.id()))
+        .map(|analyzer| analyzer.display_name().to_string())
 }
 
 /// One job, as the bar words it.
@@ -192,14 +205,8 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
             detail: detail.clone(),
         });
     }
-    if work.running_checkstyle {
-        activities.push(Activity::new(t().common.running_checkstyle.to_string()));
-    }
-    if work.running_pmd {
-        activities.push(Activity::new(t().common.running_pmd.to_string()));
-    }
-    if work.running_spotbugs {
-        activities.push(Activity::new(t().common.running_spotbugs.to_string()));
+    for name in &work.running_analyzers {
+        activities.push(Activity::new(msg::running_analyzer(name)));
     }
     if work.scanning_classpath {
         activities.push(Activity::new(t().status_bar.scanning_classpath.to_string()));

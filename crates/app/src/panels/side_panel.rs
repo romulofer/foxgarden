@@ -452,9 +452,8 @@ fn show_new_file_row(
                     let content = state
                         .languages
                         .language_for_path(&new_path)
-                        .map(|registered| fg_core::Language::new(registered.static_id))
                         .zip(project_root.as_ref())
-                        .map(|(language, root)| fg_core::generate_boilerplate(language, root, &new_path))
+                        .map(|(registered, root)| state.languages.new_file_template(registered.static_id, root, &new_path))
                         .unwrap_or_default();
 
                     match create_file_with_parents(&new_path, &content) {

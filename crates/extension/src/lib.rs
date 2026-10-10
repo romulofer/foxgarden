@@ -29,16 +29,22 @@ use std::path::{Path, PathBuf};
 
 use tree_sitter_language::LanguageFn;
 
+mod analyzers;
 mod code_model;
+mod imports;
 mod registry;
 mod tooling;
 
+pub use analyzers::{
+    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerInstall, AnalyzerPackaging, AnalyzerRun, LatestRelease,
+};
 pub use code_model::{
     CodeGeneration, MemberKind, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember,
 };
+pub use imports::{ImportCandidate, ImportEdit};
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
-    BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
+    AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
     CoverageReport, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
@@ -292,6 +298,8 @@ pub struct Contributions {
     pub grammars: Vec<GrammarContribution>,
     pub language_servers: Vec<LanguageServerContribution>,
     pub build_tools: Vec<BuildToolContribution>,
+    /// External static-analysis tools (`Extension::run_analyzer`).
+    pub analyzers: Vec<AnalyzerContribution>,
     pub scaffolds: Vec<ScaffoldContribution>,
     /// Languages this extension finds HTTP routes in (`Extension::
     /// http_routes`). Declared up front so a project-wide route scan parses
@@ -413,6 +421,14 @@ pub trait Extension: Send + Sync {
         None
     }
 
+    /// Starter content for a file just created at `file_path` in
+    /// `project_root`, which this extension's `language_id` claims — a class
+    /// declaration and `package` line, say. `None` when it has nothing
+    /// useful to put there, and the file starts empty.
+    fn new_file_template(&self, _language_id: &str, _project_root: &Path, _file_path: &Path) -> Option<String> {
+        None
+    }
+
     /// Which runtime release `project_root` declares, read from whatever
     /// build files this extension understands. `None` means "nothing I
     /// recognize says", which is a normal answer and leaves the decision to
@@ -514,6 +530,38 @@ pub trait Extension: Send + Sync {
     /// setter-only request over read-only fields), `None` when this
     /// extension does not generate code for `language_id`.
     fn generate_code(&self, _language_id: &str, _request: CodeGeneration<'_>, _indent_unit: &str) -> Option<String> {
+        None
+    }
+
+    /// Runs analyzer `analyzer_id` — one of this extension's own
+    /// `Contributions::analyzers` — and reads back what it found. Called off
+    /// the UI thread: this spawns the tool and waits for it. `Err` is a
+    /// message for the user, for a run that failed rather than one that found
+    /// nothing.
+    fn run_analyzer(&self, _analyzer_id: &str, _run: &AnalyzerRun) -> Result<Vec<AnalyzerFinding>, String> {
+        Err("this extension does not run that analyzer".to_string())
+    }
+
+    /// The annotations offered after an `@` in a `language_id` file, each
+    /// with the name it needs imported. Empty for every language this
+    /// extension does not own, which is also how the editor knows not to open
+    /// a completion popup at all.
+    fn annotation_candidates(&self, _language_id: &str) -> Vec<ImportCandidate> {
+        Vec::new()
+    }
+
+    /// The edit that makes `qualified_name` resolve in `source`, whose parse
+    /// `tree` the editor built: an `import` at its alphabetical place among
+    /// the file's own, or after the `package` line when it has none. `None`
+    /// when it is already imported, and for languages this extension does not
+    /// own.
+    fn import_edit(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _qualified_name: &str,
+    ) -> Option<ImportEdit> {
         None
     }
 

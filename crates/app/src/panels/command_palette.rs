@@ -37,9 +37,6 @@ pub enum Command {
     Build,
     RunProject,
     RunTests,
-    RunCheckstyle,
-    RunPmd,
-    RunSpotBugs,
     FoldAll,
     ExpandAll,
     SortLines,
@@ -50,7 +47,7 @@ impl Command {
     /// Every command, in the order the palette lists them with an empty
     /// query: the file/editing ones first, then panels, then the
     /// build/analysis actions.
-    pub const ALL: [Command; 26] = [
+    pub const ALL: [Command; 23] = [
         Command::Save,
         Command::SaveAll,
         Command::CloseTab,
@@ -70,9 +67,6 @@ impl Command {
         Command::Build,
         Command::RunProject,
         Command::RunTests,
-        Command::RunCheckstyle,
-        Command::RunPmd,
-        Command::RunSpotBugs,
         Command::FoldAll,
         Command::ExpandAll,
         Command::SortLines,
@@ -104,9 +98,6 @@ impl Command {
             Command::Build => strings.menu.build,
             Command::RunProject => strings.menu.run_project,
             Command::RunTests => strings.menu.run_tests,
-            Command::RunCheckstyle => strings.menu.run_checkstyle,
-            Command::RunPmd => strings.menu.run_pmd,
-            Command::RunSpotBugs => strings.menu.run_spotbugs,
             Command::FoldAll => strings.menu.fold_all,
             Command::ExpandAll => strings.menu.expand_all,
             Command::SortLines => strings.menu.sort_lines,
@@ -149,19 +140,48 @@ impl CommandPaletteState {
     }
 }
 
-/// Case-insensitive substring match on the command's own name, the same
-/// rule the other palettes in this app use.
-fn matches(command: Command, query: &str) -> bool {
-    query.is_empty() || command.label().to_lowercase().contains(&query.to_lowercase())
+/// What the palette can pick: a fixed command, or one of the analyzers an
+/// extension contributed (an index into the list `show` was given — they
+/// are only known at runtime, so they can't be `Command` variants).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picked {
+    Command(Command),
+    Analyzer(usize),
 }
 
-/// Draws the palette, returning whichever command was picked this frame.
-pub fn show(ui: &egui::Ui, state: &mut CommandPaletteState) -> Option<Command> {
+/// Case-insensitive substring match on the command's own name, the same
+/// rule the other palettes in this app use.
+fn matches(label: &str, query: &str) -> bool {
+    query.is_empty() || label.to_lowercase().contains(&query.to_lowercase())
+}
+
+/// Every entry in listing order, with its name and shortcut: the fixed
+/// commands, with the analyzers' "Run <analyzer>" entries where the build and
+/// analysis actions sit — right after Run Tests.
+fn entries(analyzers: &[String]) -> Vec<(Picked, String, &'static str)> {
+    let mut entries = Vec::new();
+    for command in Command::ALL {
+        entries.push((Picked::Command(command), command.label().to_string(), command.shortcut()));
+        if command == Command::RunTests {
+            for (index, name) in analyzers.iter().enumerate() {
+                entries.push((Picked::Analyzer(index), fg_i18n::msg::run_analyzer(name), ""));
+            }
+        }
+    }
+    entries
+}
+
+/// Draws the palette, returning whichever entry was picked this frame.
+/// `analyzers` are the display names of the contributed analyzers.
+pub fn show(ui: &egui::Ui, state: &mut CommandPaletteState, analyzers: &[String]) -> Option<Picked> {
     if !state.open {
         return None;
     }
 
-    let candidates: Vec<Command> = Command::ALL.into_iter().filter(|c| matches(*c, &state.query)).collect();
+    let candidates: Vec<(Picked, String, &'static str)> = entries(analyzers)
+        .into_iter()
+        .filter(|(_, label, _)| matches(label, &state.query))
+        .collect();
     if !candidates.is_empty() {
         state.selected = state.selected.min(candidates.len() - 1);
     }
@@ -191,19 +211,19 @@ pub fn show(ui: &egui::Ui, state: &mut CommandPaletteState) -> Option<Command> {
             ui.weak(t().common.no_matches);
         }
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for (index, command) in candidates.iter().enumerate() {
+            for (index, (picked, label, shortcut)) in candidates.iter().enumerate() {
                 let is_selected = index == state.selected;
                 let response = ui
                     .horizontal(|ui| {
-                        let picked = ui.selectable_label(is_selected, command.label()).clicked();
+                        let clicked = ui.selectable_label(is_selected, label).clicked();
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.weak(command.shortcut());
+                            ui.weak(*shortcut);
                         });
-                        picked
+                        clicked
                     })
                     .inner;
                 if response || (is_selected && enter_pressed) {
-                    chosen = Some(*command);
+                    chosen = Some(*picked);
                 }
             }
         });

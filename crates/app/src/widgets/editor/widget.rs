@@ -37,7 +37,7 @@ use super::peek::PeekState;
 use super::references::FindReferencesState;
 use super::rename::RenameBox;
 use super::run_gutter;
-use super::spring_annotation_completion;
+use super::import_completion;
 use super::spring_config_completion;
 use super::templates::{self, UserTemplates, expand, find_expansion, word_before_cursor};
 use super::text_area::{self, Caret, HighlightSpan};
@@ -767,7 +767,7 @@ pub fn show(
                             )
                             .map(|body| expand(&old_text, anchor_char..cursor_char, body))
                         } else if item.kind == CompletionKind::Annotation {
-                            // Accepting a Spring annotation also inserts a
+                            // Accepting an annotation also inserts a
                             // matching `import`, if the file doesn't
                             // already have one — computed against the
                             // *pre*-completion `old_text`/`tree` (see
@@ -777,11 +777,11 @@ pub fn show(
                             let (completed_text, cursor_after_label) =
                                 insert_completion(&old_text, anchor_char, cursor_char, &item);
                             match (doc.language, parser.as_ref().and_then(|p| p.tree())) {
-                                (Some(language), Some(tree)) => Some(spring_annotation_completion::apply_with_import(
+                                (Some(language), Some(tree)) => Some(import_completion::apply_with_import(
                                     &old_text,
                                     tree,
                                     language,
-                                    &item.label,
+                                    &item,
                                     anchor_byte,
                                     completed_text,
                                     cursor_after_label,
@@ -1787,7 +1787,6 @@ pub fn show(
     if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
         let typed_at = ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(s) if s == "@")));
         if typed_at
-            && matches!(doc.language, Some(Language::Java) | Some(Language::Kotlin))
             && let Some(cursor_char) = shell_out.caret.map(|c| c.primary)
             && let Some(language) = doc.language
             && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
@@ -1802,8 +1801,10 @@ pub fn show(
                     });
 
             if !inside_comment_or_string {
-                let candidates = spring_annotation_completion::spring_annotation_candidates();
-                *completion = Some(CompletionState::open(anchor_byte, candidates));
+                let candidates = import_completion::import_candidates(language);
+                if !candidates.is_empty() {
+                    *completion = Some(CompletionState::open(anchor_byte, candidates));
+                }
             }
         }
     }
@@ -2440,7 +2441,7 @@ pub fn show(
     }
 
     // Several independent sources feeding one squiggle pipeline (see
-    // `Document::checkstyle_diagnostics`'s own doc comment for why they're
+    // `Document::analyzer_diagnostics`'s own doc comment for why they're
     // separate fields) — gathered into one slice here, at paint time,
     // rather than a fifth stored field, since the cost scales with this
     // one document's own diagnostic count, not project size. References,
@@ -2451,9 +2452,7 @@ pub fn show(
     let all_diagnostics: Vec<&Diagnostic> = doc
         .diagnostics
         .iter()
-        .chain(doc.checkstyle_diagnostics.iter())
-        .chain(doc.pmd_diagnostics.iter())
-        .chain(doc.spotbugs_diagnostics.iter())
+        .chain(doc.analyzer_diagnostics.values().flatten())
         .chain(doc.lsp_diagnostics.iter())
         .collect();
     // F8 / Shift+F8 walk this file's diagnostics, in file order, wrapping

@@ -101,9 +101,6 @@ pub struct Menu {
     pub convert_to_title_case: &'static str,
     pub sort_lines: &'static str,
     pub unique_lines: &'static str,
-    pub run_checkstyle: &'static str,
-    pub run_pmd: &'static str,
-    pub run_spotbugs: &'static str,
 
     pub run: &'static str,
     pub edit_configurations: &'static str,
@@ -286,7 +283,7 @@ pub struct Jdk {
     pub auto_detect: &'static str,
 }
 
-/// Settings > External Tools… (Checkstyle, PMD, SpotBugs).
+/// Settings > External Tools…, one section per contributed analyzer.
 pub struct ExternalTools {
     pub heading: &'static str,
 }
@@ -418,10 +415,7 @@ pub struct Errors {
     pub override_unsupported: &'static str,
     pub override_needs_class: &'static str,
     pub override_no_tree: &'static str,
-    pub checkstyle_not_configured: &'static str,
-    pub pmd_not_configured: &'static str,
-    pub spotbugs_not_configured: &'static str,
-    pub spotbugs_no_compiled_classes: &'static str,
+    pub no_compiled_classes: &'static str,
     pub no_build_tool_detected: &'static str,
     /// The run gutter's ▶ clicked with no project open at all — there's no
     /// root to resolve a classpath against, so nothing to run.
@@ -456,16 +450,10 @@ pub struct Common {
     pub keep_mine: &'static str,
     pub not_installed: &'static str,
     pub no_matches: &'static str,
-    /// The Tools menu shows this in place of `menu.run_checkstyle` while a
-    /// scan is in flight, and the status bar reports the same scan with the
-    /// same words — one string, so the two can't drift apart.
-    pub running_checkstyle: &'static str,
-    pub running_pmd: &'static str,
-    pub running_spotbugs: &'static str,
     /// The Run menu shows this in place of `menu.build` while a build is in
     /// flight, and the status bar reports the same build with the same
     /// words — same "one string, so the two can't drift apart" shape as
-    /// `running_checkstyle`/`running_pmd`.
+    /// `msg::running_analyzer`.
     pub running_build: &'static str,
     pub running_run: &'static str,
     pub running_tests: &'static str,
@@ -565,9 +553,6 @@ pub const PT_BR: Strings = Strings {
         convert_to_title_case: "Converter para Iniciais Maiúsculas",
         sort_lines: "Ordenar Linhas",
         unique_lines: "Remover Linhas Duplicadas",
-        run_checkstyle: "Executar Checkstyle",
-        run_pmd: "Executar PMD",
-        run_spotbugs: "Executar SpotBugs",
 
         run: "Executar",
         edit_configurations: "Editar Configurações…",
@@ -816,16 +801,13 @@ pub const PT_BR: Strings = Strings {
         override_unsupported: "Sobrescrever Método não está disponível para este tipo de arquivo.",
         override_needs_class: "Posicione o cursor dentro de uma classe para sobrescrever um método.",
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
-        checkstyle_not_configured: "Defina o binário e o caminho de configuração do Checkstyle em Configurações > Ferramentas Externas primeiro.",
         no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
         no_project_open: "Abra um projeto antes de executar — sem raiz não há classpath para resolver.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
         coverage_requires_maven: "Cobertura de código só é suportada em projetos Maven no momento.",
         no_dockerfile_detected: "Nenhum Dockerfile encontrado na raiz do projeto.",
         no_compose_file_detected: "Nenhum arquivo compose.yaml/docker-compose.yml encontrado na raiz do projeto.",
-        pmd_not_configured: "Defina o binário e o caminho do ruleset do PMD em Configurações > Ferramentas Externas primeiro.",
-        spotbugs_not_configured: "Defina o binário do SpotBugs em Configurações > Ferramentas Externas primeiro.",
-        spotbugs_no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
+        no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
         rename_empty_name: "falha ao renomear: nome vazio",
         rename_no_parent: "falha ao renomear: sem diretório pai",
     },
@@ -849,9 +831,6 @@ pub const PT_BR: Strings = Strings {
         keep_mine: "Manter o Meu",
         not_installed: "Não instalado",
         no_matches: "Nenhum resultado",
-        running_checkstyle: "Executando Checkstyle…",
-        running_pmd: "Executando PMD…",
-        running_spotbugs: "Executando SpotBugs…",
         running_build: "Compilando…",
         running_run: "Executando…",
         running_tests: "Executando Testes…",
@@ -939,9 +918,6 @@ pub const EN_US: Strings = Strings {
         convert_to_title_case: "Convert to Title Case",
         sort_lines: "Sort Lines",
         unique_lines: "Unique Lines",
-        run_checkstyle: "Run Checkstyle",
-        run_pmd: "Run PMD",
-        run_spotbugs: "Run SpotBugs",
 
         run: "Run",
         edit_configurations: "Edit Configurations…",
@@ -1190,16 +1166,13 @@ pub const EN_US: Strings = Strings {
         override_unsupported: "Override Method isn't available for this file type.",
         override_needs_class: "Place the cursor inside a class to override a method.",
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
-        checkstyle_not_configured: "Set the Checkstyle binary and config path in Settings > External Tools first.",
         no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
         no_project_open: "Open a project before running — with no root there is no classpath to resolve.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
         coverage_requires_maven: "Code coverage is only supported for Maven projects right now.",
         no_dockerfile_detected: "No Dockerfile found at the project root.",
         no_compose_file_detected: "No compose.yaml/docker-compose.yml found at the project root.",
-        pmd_not_configured: "Set the PMD binary and ruleset path in Settings > External Tools first.",
-        spotbugs_not_configured: "Set the SpotBugs binary in Settings > External Tools first.",
-        spotbugs_no_compiled_classes: "No compiled classes found. Run Run > Build first.",
+        no_compiled_classes: "No compiled classes found. Run Run > Build first.",
         rename_empty_name: "rename failed: empty name",
         rename_no_parent: "rename failed: no parent directory",
     },
@@ -1223,9 +1196,6 @@ pub const EN_US: Strings = Strings {
         keep_mine: "Keep Mine",
         not_installed: "Not installed",
         no_matches: "No matches",
-        running_checkstyle: "Running Checkstyle…",
-        running_pmd: "Running PMD…",
-        running_spotbugs: "Running SpotBugs…",
         running_build: "Building…",
         running_run: "Running…",
         running_tests: "Running Tests…",

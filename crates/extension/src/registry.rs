@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::{
-    BuildToolContribution, BuildToolHandle, Contributions, Extension, ExtensionHandle, ExtensionManifest,
+    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, BuildToolHandle, Contributions, Extension,
+    ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerStartContext,
     CURRENT_SCHEMA_VERSION,
@@ -64,6 +65,11 @@ pub enum RegisterError {
     /// Two extensions claim the same build tool id.
     DuplicateBuildTool {
         tool_id: String,
+        extension_id: String,
+    },
+    /// Two extensions claim the same analyzer id.
+    DuplicateAnalyzer {
+        analyzer_id: String,
         extension_id: String,
     },
     /// A scaffold names a build tool nobody registered. Like
@@ -138,6 +144,10 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} declares build tool {tool_id}, which is already registered"
             ),
+            Self::DuplicateAnalyzer { analyzer_id, extension_id } => write!(
+                f,
+                "extension {extension_id} declares analyzer {analyzer_id}, which is already registered"
+            ),
             Self::UnknownBuildTool { tool_id, extension_id } => write!(
                 f,
                 "extension {extension_id} scaffolds for build tool {tool_id}, which no registered extension contributes"
@@ -207,6 +217,9 @@ pub struct Registry {
     /// map because order is the semantics here, not an implementation
     /// detail. The `usize` indexes `extensions`.
     build_tools: Vec<(BuildToolContribution, &'static str, usize)>,
+    /// Analyzers in registration order — the order the UI lists them in —
+    /// with the index of the extension that runs each.
+    analyzers: Vec<(AnalyzerContribution, usize)>,
     /// Scaffold targets with the index of the extension that generates them.
     scaffolds: Vec<(ScaffoldContribution, usize)>,
     /// Languages at least one extension finds HTTP routes in, each once.
@@ -364,6 +377,18 @@ impl Registry {
             tools_seen.push(&tool.id);
         }
 
+        let mut analyzers_seen: Vec<&str> = Vec::new();
+        for analyzer in &contributions.analyzers {
+            if self.analyzers.iter().any(|(a, _)| a.id == analyzer.id) || analyzers_seen.contains(&analyzer.id.as_str())
+            {
+                return Err(RegisterError::DuplicateAnalyzer {
+                    analyzer_id: analyzer.id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            analyzers_seen.push(&analyzer.id);
+        }
+
         let mut scaffolds_seen: Vec<(&str, &LanguageId)> = Vec::new();
         for scaffold in &contributions.scaffolds {
             let pair = (scaffold.build_tool_id.as_str(), &scaffold.language_id);
@@ -437,6 +462,9 @@ impl Registry {
         for tool in contributions.build_tools {
             let static_id = intern(&tool.id);
             self.build_tools.push((tool, static_id, extension_index));
+        }
+        for analyzer in contributions.analyzers {
+            self.analyzers.push((analyzer, extension_index));
         }
         for scaffold in contributions.scaffolds {
             self.scaffolds.push((scaffold, extension_index));
@@ -558,6 +586,16 @@ impl Registry {
             .collect()
     }
 
+    /// Every registered analyzer, in registration order, each with what it
+    /// takes to run one — what Tools > Run <analyzer> and Settings > External
+    /// Tools list.
+    pub fn analyzers(&self) -> Vec<AnalyzerHandle> {
+        self.analyzers
+            .iter()
+            .map(|(analyzer, idx)| AnalyzerHandle::new(analyzer.clone(), self.extensions[*idx].clone()))
+            .collect()
+    }
+
     /// Every kind of project that can be scaffolded, in registration order —
     /// what the new-project wizard lists.
     pub fn scaffolds(&self) -> Vec<&ScaffoldContribution> {
@@ -572,6 +610,15 @@ impl Registry {
             .iter()
             .find(|(s, _)| s.build_tool_id == spec.build_tool_id && s.language_id == spec.language_id)?;
         self.extensions[*idx].scaffold_files(spec)
+    }
+
+    /// Starter content for a new file of `language_id`, from the first
+    /// extension that has some. Empty when none does.
+    pub fn new_file_template(&self, language_id: &str, project_root: &Path, file_path: &Path) -> String {
+        self.extensions
+            .iter()
+            .find_map(|e| e.new_file_template(language_id, project_root, file_path))
+            .unwrap_or_default()
     }
 
     /// The runtime release the open project declares, as the first extension

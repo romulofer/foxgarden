@@ -462,6 +462,22 @@ impl ExtensionHandle {
         self.extension.generate_code(language_id, request, indent_unit)
     }
 
+    /// The annotations offered after an `@` in a `language_id` file.
+    pub fn annotation_candidates(&self, language_id: &str) -> Vec<crate::ImportCandidate> {
+        self.extension.annotation_candidates(language_id)
+    }
+
+    /// The edit that makes `qualified_name` resolve in `source`.
+    pub fn import_edit(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        qualified_name: &str,
+    ) -> Option<crate::ImportEdit> {
+        self.extension.import_edit(language_id, tree, source, qualified_name)
+    }
+
     /// Every configuration key this extension can offer for `project_root`.
     /// Resolving these can be slow (it may resolve a classpath), so callers
     /// run it off the UI thread.
@@ -568,5 +584,42 @@ impl BuildToolHandle {
     /// or nonstandard-layout test simply shows without a jump target.
     pub fn test_failure_location(&self, project_root: &Path, case: &TestCase) -> Option<TestFailureLocation> {
         self.extension.test_failure_location(self.id, project_root, case)
+    }
+}
+
+/// A registered analyzer together with the extension that runs it — the
+/// analyzer counterpart of [`BuildToolHandle`], and for the same reason: a
+/// run lasts as long as the tool takes, so the background thread owns an
+/// `Arc` to the extension rather than borrowing the registry.
+#[derive(Clone)]
+pub struct AnalyzerHandle {
+    pub contribution: crate::AnalyzerContribution,
+    extension: Arc<dyn Extension>,
+}
+
+impl std::fmt::Debug for AnalyzerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnalyzerHandle")
+            .field("id", &self.contribution.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AnalyzerHandle {
+    pub(crate) fn new(contribution: crate::AnalyzerContribution, extension: Arc<dyn Extension>) -> Self {
+        Self { contribution, extension }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.contribution.id
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.contribution.display_name
+    }
+
+    /// Runs the tool and reads its report.
+    pub fn run(&self, run: &crate::AnalyzerRun) -> Result<Vec<crate::AnalyzerFinding>, String> {
+        self.extension.run_analyzer(&self.contribution.id, run)
     }
 }

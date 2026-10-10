@@ -1,114 +1,36 @@
-//! Existing `import` statement discovery and insertion-point computation —
-//! the primitive Spring-annotation auto-import (`app`-side) needs: "what
-//! does this file already import, and where does a new one belong,
-//! alphabetically." A sibling concern to `folding.rs`'s own `collect_
-//! import_blocks` (both walk the same `node_kinds::import_kind` nodes),
-//! but that one only cares about *grouping* consecutive imports for a fold
-//! marker — this one cares about each import's own *path*, to compare and
-//! insert against.
-
-use std::ops::Range;
+//! `PLAN.md` Track 24 Phase 6: annotation completion and the `import` that
+//! makes an accepted annotation resolve, answered by whichever extension
+//! owns the language.
+//!
+//! Which names an `@` offers, how an import statement is spelled and where
+//! it goes among a file's existing ones are all a language's own rules, so
+//! the core only asks. Same dispatch rule as `code_model`: handing over the
+//! tree the caller already parsed, first extension that answers wins.
 
 use fg_core::Language;
+use fg_extension::{ImportCandidate, ImportEdit};
 use tree_sitter::Tree;
 
-use crate::node_kinds::import_kind;
+use crate::providers::providers;
 
-/// One `import` statement already in the file, in document order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExistingImport {
-    /// The imported path, with any Java `static` prefix and the
-    /// language's own statement terminator (`;` for Java, none for
-    /// Kotlin) stripped — e.g. `"org.springframework.stereotype.
-    /// Component"`, not `"import org.springframework.stereotype.
-    /// Component;"`. An aliased Kotlin import (`import x.Y as Z`) is kept
-    /// as-is, `"x.Y as Z"` — real but rare enough for Spring annotations
-    /// specifically that this doesn't special-case it further.
-    pub path: String,
-    /// The whole `import` statement's own byte range (including Java's
-    /// own trailing `;`, not including a trailing newline).
-    pub byte_range: Range<usize>,
+/// The annotations offered after an `@` in a `language` file. Empty when no
+/// extension has any, which is how the editor decides not to open a popup.
+pub fn annotation_candidates(language: Language) -> Vec<ImportCandidate> {
+    providers()
+        .extensions
+        .iter()
+        .map(|extension| extension.annotation_candidates(language.id()))
+        .find(|candidates| !candidates.is_empty())
+        .unwrap_or_default()
 }
 
-/// Every `import` statement directly in `tree`'s root, in document order.
-/// Empty for a language with no import vocabulary at all
-/// (`node_kinds::import_kind` returning `None`) or a file with none.
-/// Verified against real Java/Kotlin grammars (`node_kinds::import_kind`'s
-/// own doc comment): both `import_declaration`/`import` are always direct
-/// children of the root node, never nested, so this only walks one level
-/// deep rather than a full recursive tree walk.
-pub fn existing_imports(tree: &Tree, source: &str, language: Language) -> Vec<ExistingImport> {
-    let Some(kind) = import_kind(language) else {
-        return Vec::new();
-    };
-
-    let mut cursor = tree.root_node().walk();
-    tree.root_node()
-        .children(&mut cursor)
-        .filter(|child| child.kind() == kind)
-        .map(|child| {
-            let text = &source[child.start_byte()..child.end_byte()];
-            ExistingImport {
-                path: import_path_text(text).to_string(),
-                byte_range: child.byte_range(),
-            }
-        })
-        .collect()
-}
-
-/// Strips `import`/`import static`'s own keyword(s) and any trailing
-/// `;`/whitespace from a raw `import_declaration`/`import` node's text,
-/// leaving just the dotted path.
-fn import_path_text(text: &str) -> &str {
-    let text = strip_keyword(text, "import");
-    let text = strip_keyword(text, "static");
-    text.trim_end_matches(';').trim()
-}
-
-/// `text` without a leading `keyword`, only when it is the whole word — a
-/// package that merely starts with the same letters (`staticfiles`,
-/// `statistics`) is part of the path, not a modifier.
-fn strip_keyword<'a>(text: &'a str, keyword: &str) -> &'a str {
-    match text.strip_prefix(keyword) {
-        Some(rest) if rest.starts_with(char::is_whitespace) => rest.trim_start(),
-        _ => text,
-    }
-}
-
-/// Where a new `path` belongs among `existing` (assumed already in
-/// document order, not necessarily alphabetically sorted — a caller
-/// inserting one new import into an otherwise-unsorted block still lands
-/// it in the *locally* correct alphabetical slot, without this function
-/// re-sorting the whole file's existing imports, which isn't its job).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportInsertion {
-    /// `path` is already imported exactly — nothing to insert.
-    AlreadyImported,
-    /// Insert immediately before this existing import's own start byte —
-    /// the first one (in document order) whose own path sorts after
-    /// `path`.
-    Before(usize),
-    /// No existing import sorts after `path` — insert immediately after
-    /// this last existing import's own end byte.
-    AfterLast(usize),
-}
-
-/// Computes `ImportInsertion` for adding `path` given `existing` (from
-/// `existing_imports`, in document order). Pure string comparison — no
-/// package-relative shortening or wildcard-import awareness (an existing
-/// `import org.springframework.stereotype.*;` covering `path` isn't
-/// detected as "already imported," a known, disclosed simplification).
-pub fn import_insertion(existing: &[ExistingImport], path: &str) -> ImportInsertion {
-    if existing.iter().any(|e| e.path == path) {
-        return ImportInsertion::AlreadyImported;
-    }
-    match existing.iter().find(|e| e.path.as_str() > path) {
-        Some(next) => ImportInsertion::Before(next.byte_range.start),
-        None => match existing.last() {
-            Some(last) => ImportInsertion::AfterLast(last.byte_range.end),
-            None => ImportInsertion::AfterLast(0), // no existing imports at all; caller decides the real anchor
-        },
-    }
+/// The edit that makes `qualified_name` resolve in `source`. `None` when it
+/// already does, and for languages no extension imports for.
+pub fn import_edit(tree: &Tree, source: &str, language: Language, qualified_name: &str) -> Option<ImportEdit> {
+    providers()
+        .extensions
+        .iter()
+        .find_map(|extension| extension.import_edit(language.id(), tree, source, qualified_name))
 }
 
 #[cfg(test)]

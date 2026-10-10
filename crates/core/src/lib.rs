@@ -1,6 +1,6 @@
+mod analyzer_diagnostics;
 mod atomic_file;
 mod blame;
-mod boilerplate;
 mod diagnostic;
 mod diff;
 mod docker;
@@ -14,13 +14,12 @@ mod project;
 mod project_config;
 mod run_config;
 mod scaffold;
-mod static_analysis;
 mod status;
 mod text_buffer;
 
+pub use analyzer_diagnostics::{analyzer_diagnostics, line_col_to_byte};
 pub use atomic_file::write_atomically;
 pub use blame::{BlameLine, GitBlameError, git_blame, parse_porcelain_blame};
-pub use boilerplate::generate as generate_boilerplate;
 // Build tooling is contributed, not built in (`PLAN.md` Track 24 Phase 5):
 // which process compiles a project, where it leaves its classes, what its
 // diagnostics look like and where it writes its reports are all answers an
@@ -52,9 +51,6 @@ pub use project_config::{
 };
 pub use run_config::{RunConfig, load_run_configs, parse_run_configs, save_run_configs, serialize_run_configs};
 pub use scaffold::write_scaffold;
-pub use static_analysis::{
-    StaticAnalysisError, checkstyle_diagnostics, line_col_to_byte, pmd_diagnostics, spotbugs_diagnostics,
-};
 pub use status::{
     GitCommandError, GitStatusError, StatusEntry, git_add, git_apply_cached, git_commit, git_push, git_reset_paths,
     git_status, git_user_first_name,

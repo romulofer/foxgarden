@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::ops::Range;
@@ -43,27 +44,16 @@ pub struct Document {
     /// completion.
     pub language: Option<Language>,
     pub diagnostics: Vec<Diagnostic>,
-    /// Findings from an externally-run Checkstyle scan (`fg_core::
-    /// checkstyle_diagnostics`), painted alongside `diagnostics` rather
-    /// than merged into it. Kept separate — from `diagnostics` *and* from
-    /// `pmd_diagnostics` below — because each has its own lifecycle:
-    /// `diagnostics` is recomputed wholesale on every reparse (open/edit/
-    /// save), while this is a whole-project batch result that only changes
-    /// when the user re-runs Checkstyle specifically, and would otherwise
-    /// be silently wiped out by the next keystroke's reparse (or by a PMD
-    /// run) if they all shared one field.
-    pub checkstyle_diagnostics: Vec<Diagnostic>,
-    /// Same as `checkstyle_diagnostics`, for an externally-run PMD scan
-    /// (`fg_core::pmd_diagnostics`) — a distinct field, not a shared
-    /// "static analysis" bucket, so re-running one tool doesn't clear the
-    /// other's still-valid findings.
-    pub pmd_diagnostics: Vec<Diagnostic>,
-    /// Same as `checkstyle_diagnostics`/`pmd_diagnostics`, for an externally-
-    /// run SpotBugs scan (`fg_core::spotbugs_diagnostics`) — its own field
-    /// for the same reason: SpotBugs analyzes compiled bytecode on a
-    /// separate, user-triggered lifecycle (`PLAN.md` Track 5 Phase 3), not
-    /// something that should clear or be cleared by the other two.
-    pub spotbugs_diagnostics: Vec<Diagnostic>,
+    /// Findings from externally-run analyzers (`fg_core::analyzer_diagnostics`),
+    /// keyed by analyzer id and painted alongside `diagnostics` rather than
+    /// merged into it. Kept separate — from `diagnostics` *and* per analyzer
+    /// — because each has its own lifecycle: `diagnostics` is recomputed
+    /// wholesale on every reparse (open/edit/save), while an analyzer's
+    /// findings are a whole-project batch result that only changes when the
+    /// user re-runs that analyzer specifically, and would otherwise be
+    /// silently wiped out by the next keystroke's reparse (or by another
+    /// analyzer's run) if they all shared one field.
+    pub analyzer_diagnostics: BTreeMap<String, Vec<Diagnostic>>,
     /// Semantic diagnostics published by the opt-in language server. Kept
     /// separate from syntax and batch-tool findings because each source has
     /// its own replacement/staleness lifecycle.
@@ -76,7 +66,7 @@ pub struct Document {
     /// Per-line added/removed/modified marks from an externally-run `git
     /// diff` (`fg_core::git_diff_hunks`, `PLAN.md` Track 9 Phase 1) — a
     /// batch result refreshed wholesale on open/save/reload, the same
-    /// lifecycle `checkstyle_diagnostics`/`pmd_diagnostics` already have and
+    /// lifecycle `analyzer_diagnostics` already has and
     /// for the same reason: recomputing it on every reparse would be both
     /// wasteful (a `git diff` shells out; a keystroke shouldn't pay for
     /// that) and wrong (it needs to reflect the *last saved* state versus
@@ -121,7 +111,7 @@ pub struct Document {
     /// this session; replaced wholesale by the next run for every open
     /// document, including to empty for one no longer reported — the same
     /// "a fresh run's results always supersede the previous one" rule
-    /// `checkstyle_diagnostics`'s own apply-results already established.
+    /// `analyzer_diagnostics`'s own apply-results already established.
     pub coverage_lines: Vec<LineCoverage>,
     /// Lines with a user-toggled breakpoint (`PLAN.md` Track 23 Phase 2) —
     /// membership only, same session-only shape `folded_lines` already
@@ -184,9 +174,7 @@ impl Document {
             saved_buffer,
             language,
             diagnostics: Vec::new(),
-            checkstyle_diagnostics: Vec::new(),
-            pmd_diagnostics: Vec::new(),
-            spotbugs_diagnostics: Vec::new(),
+            analyzer_diagnostics: BTreeMap::new(),
             lsp_diagnostics: Vec::new(),
             lsp_version: 0,
             lsp_sync_pending: false,

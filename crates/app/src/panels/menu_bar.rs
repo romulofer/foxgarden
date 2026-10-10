@@ -75,12 +75,9 @@ pub struct MenuBarOutcome {
     /// which owns the enable/binary-path settings that used to live in a
     /// nested Settings submenu, plus installing the servers themselves.
     pub open_lsp_servers_settings_request: bool,
-    /// Tools > Run Checkstyle.
-    pub run_checkstyle_request: bool,
-    /// Tools > Run PMD.
-    pub run_pmd_request: bool,
-    /// Tools > Run SpotBugs (`PLAN.md` Track 5 Phase 3).
-    pub run_spotbugs_request: bool,
+    /// Tools > Run <analyzer>: the index, into the analyzers the menu was
+    /// shown with, of the one picked.
+    pub run_analyzer_request: Option<usize>,
     /// Run > Build (`PLAN.md` Track 22 Phase 1).
     pub build_request: bool,
     /// Run > Run Project (`PLAN.md` Track 22 Phase 2).
@@ -122,6 +119,14 @@ const INDENT_WIDTH_RANGE: std::ops::RangeInclusive<usize> = 1..=8;
 /// to still count as "auto."
 const AUTO_SAVE_IDLE_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 5..=600;
 
+/// One analyzer's Tools menu entry: what to call it and whether a scan of it
+/// is in flight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzerEntry {
+    pub name: String,
+    pub running: bool,
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "each parameter is an independently-owned piece of app-wide state a distinct menu section reads or mutates (editor settings, dialog state, error/input plumbing), not a bundle waiting to be a struct — same shape and reasoning as widgets::editor::show's own allowance"
@@ -147,9 +152,7 @@ pub fn show(
     source_control_visible: &mut bool,
     last_error: &mut Option<String>,
     custom_templates: &mut UserTemplates,
-    checkstyle_running: bool,
-    pmd_running: bool,
-    spotbugs_running: bool,
+    analyzers: &[AnalyzerEntry],
     build_running: bool,
     run_running: bool,
     test_running: bool,
@@ -464,47 +467,21 @@ pub fn show(
                 ui.close();
             }
             ui.separator();
-            if ui
-                .add_enabled(
-                    state.project.is_some() && !checkstyle_running,
-                    egui::Button::new(if checkstyle_running {
-                        t().common.running_checkstyle
-                    } else {
-                        t().menu.run_checkstyle
-                    }),
-                )
-                .clicked()
-            {
-                outcome.run_checkstyle_request = true;
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    state.project.is_some() && !pmd_running,
-                    egui::Button::new(if pmd_running {
-                        t().common.running_pmd
-                    } else {
-                        t().menu.run_pmd
-                    }),
-                )
-                .clicked()
-            {
-                outcome.run_pmd_request = true;
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    state.project.is_some() && !spotbugs_running,
-                    egui::Button::new(if spotbugs_running {
-                        t().common.running_spotbugs
-                    } else {
-                        t().menu.run_spotbugs
-                    }),
-                )
-                .clicked()
-            {
-                outcome.run_spotbugs_request = true;
-                ui.close();
+            for (index, analyzer) in analyzers.iter().enumerate() {
+                if ui
+                    .add_enabled(
+                        state.project.is_some() && !analyzer.running,
+                        egui::Button::new(if analyzer.running {
+                            msg::running_analyzer(&analyzer.name)
+                        } else {
+                            msg::run_analyzer(&analyzer.name)
+                        }),
+                    )
+                    .clicked()
+                {
+                    outcome.run_analyzer_request = Some(index);
+                    ui.close();
+                }
             }
         });
 

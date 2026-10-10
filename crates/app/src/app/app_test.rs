@@ -5,6 +5,7 @@
 use super::*;
 use crate::auto_save::{AutoSaveMode, AutoSaveSettings, AutoSaveState};
 use crate::jdk_registry::RegisteredJdk;
+use crate::panels::static_analysis::AnalyzerSettings;
 use crate::widgets::editor::UserTemplate;
 use eframe::Storage as _;
 use std::collections::HashMap;
@@ -281,16 +282,23 @@ fn persisted_settings_round_trip() {
             body: "|".to_string(),
         }],
     };
-    let saved_tools = ExternalToolPaths {
-        checkstyle_binary: "/usr/bin/checkstyle".to_string(),
-        checkstyle_config: "/usr/share/checkstyle/sun_checks.xml".to_string(),
-        checkstyle_installed_version: "10.26.1".to_string(),
-        pmd_binary: "/usr/bin/pmd".to_string(),
-        pmd_ruleset: "rulesets/java/quickstart.xml".to_string(),
-        pmd_installed_version: "7.26.0".to_string(),
-        spotbugs_binary: "/usr/bin/spotbugs".to_string(),
-        spotbugs_installed_version: "4.10.3".to_string(),
+    let mut saved_tools = ExternalToolPaths::default();
+    *saved_tools.get_mut("checkstyle") = AnalyzerSettings {
+        binary: "/usr/bin/checkstyle".to_string(),
+        config: "/usr/share/checkstyle/sun_checks.xml".to_string(),
+        installed_version: "10.26.1".to_string(),
     };
+    *saved_tools.get_mut("pmd") = AnalyzerSettings {
+        binary: "/usr/bin/pmd".to_string(),
+        config: "rulesets/java/quickstart.xml".to_string(),
+        installed_version: "7.26.0".to_string(),
+    };
+    *saved_tools.get_mut("spotbugs") = AnalyzerSettings {
+        binary: "/usr/bin/spotbugs".to_string(),
+        config: String::new(),
+        installed_version: "4.10.3".to_string(),
+    };
+    let tool_ids = ["checkstyle", "pmd", "spotbugs"];
     let saved_auto_save = AutoSaveSettings {
         enabled: true,
         mode: AutoSaveMode::AfterIdle,
@@ -325,6 +333,7 @@ fn persisted_settings_round_trip() {
         true,
         &saved_templates,
         &saved_tools,
+        &tool_ids,
         saved_auto_save,
         false,
         &saved_lsp,
@@ -361,6 +370,7 @@ fn persisted_settings_round_trip() {
         &mut source_control_visible,
         &mut custom_templates,
         &mut external_tool_paths,
+        &tool_ids,
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -380,26 +390,36 @@ fn persisted_settings_round_trip() {
     assert_eq!(custom_templates.java, saved_templates.java);
     assert_eq!(custom_templates.kotlin, saved_templates.kotlin);
     assert_eq!(custom_templates.global, saved_templates.global);
-    assert_eq!(external_tool_paths.checkstyle_binary, saved_tools.checkstyle_binary);
-    assert_eq!(external_tool_paths.checkstyle_config, saved_tools.checkstyle_config);
-    assert_eq!(
-        external_tool_paths.checkstyle_installed_version,
-        saved_tools.checkstyle_installed_version
-    );
-    assert_eq!(external_tool_paths.pmd_binary, saved_tools.pmd_binary);
-    assert_eq!(external_tool_paths.pmd_ruleset, saved_tools.pmd_ruleset);
-    assert_eq!(
-        external_tool_paths.pmd_installed_version,
-        saved_tools.pmd_installed_version
-    );
-    assert_eq!(external_tool_paths.spotbugs_binary, saved_tools.spotbugs_binary);
-    assert_eq!(
-        external_tool_paths.spotbugs_installed_version,
-        saved_tools.spotbugs_installed_version
-    );
+    for id in tool_ids {
+        assert_eq!(external_tool_paths.get(id), saved_tools.get(id), "{id}");
+    }
     assert_eq!(auto_save_settings, saved_auto_save);
     assert_eq!(lsp_settings, saved_lsp);
     assert_eq!(jdk_registry, saved_jdk_registry);
+}
+
+/// Before analyzers were contributed by extensions, PMD's ruleset was stored
+/// under `pmd_ruleset`; an upgrade must keep it, and the binary and installed
+/// version keys never changed.
+#[test]
+fn restore_settings_reads_the_ruleset_key_older_builds_wrote_for_pmd() {
+    let mut storage = FakeStorage::default();
+    storage.set_string("pmd_binary", "/usr/bin/pmd".to_string());
+    storage.set_string("pmd_ruleset", "rulesets/java/quickstart.xml".to_string());
+    storage.set_string("pmd_installed_version", "7.26.0".to_string());
+
+    let mut tools = ExternalToolPaths::default();
+    tools.restore(&storage, &["pmd"]);
+
+    let pmd = tools.get("pmd").unwrap();
+    assert_eq!(pmd.binary, "/usr/bin/pmd");
+    assert_eq!(pmd.config, "rulesets/java/quickstart.xml");
+    assert_eq!(pmd.installed_version, "7.26.0");
+
+    // Once the current key exists it wins.
+    storage.set_string("pmd_config", "mine.xml".to_string());
+    tools.restore(&storage, &["pmd"]);
+    assert_eq!(tools.get("pmd").unwrap().config, "mine.xml");
 }
 
 /// Settings > Language is persisted like any other setting, but through
@@ -424,6 +444,7 @@ fn persist_settings_writes_the_active_language() {
         false,
         &UserTemplates::default(),
         &ExternalToolPaths::default(),
+        &[],
         AutoSaveSettings::default(),
         true,
         &LspSettings::default(),
@@ -489,6 +510,7 @@ fn restore_settings_with_no_saved_keys_leaves_defaults_untouched() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &[],
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -537,6 +559,7 @@ fn restore_settings_ignores_an_unparseable_font_size() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &[],
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -578,6 +601,7 @@ fn restore_settings_ignores_an_unparseable_indent_width() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &[],
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -766,6 +790,7 @@ fn restore_settings_ignores_an_unparseable_auto_save_idle_seconds() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &[],
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,
@@ -814,6 +839,7 @@ fn restore_settings_falls_back_to_on_focus_loss_for_an_unrecognized_mode() {
         &mut source_control_visible,
         &mut UserTemplates::default(),
         &mut ExternalToolPaths::default(),
+        &[],
         &mut auto_save_settings,
         &mut trim_trailing_whitespace_on_save,
         &mut lsp_settings,

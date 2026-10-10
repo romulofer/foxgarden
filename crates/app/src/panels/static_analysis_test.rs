@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn diag(msg: &str) -> Diagnostic {
@@ -9,8 +8,35 @@ fn diag(msg: &str) -> Diagnostic {
     }
 }
 
+/// The shipped analyzers: running one with a binary that doesn't exist still
+/// exercises the real spawn path.
+fn analyzer(id: &str) -> AnalyzerHandle {
+    fg_languages::builtin_registry()
+        .analyzers()
+        .into_iter()
+        .find(|a| a.id() == id)
+        .expect("a shipped analyzer")
+}
+
+fn run_of(binary: &str, config: &str, classes_dir: Option<&str>) -> AnalyzerRun {
+    AnalyzerRun {
+        binary: PathBuf::from(binary),
+        config: config.to_string(),
+        project_root: PathBuf::from("."),
+        classes_dir: classes_dir.map(PathBuf::from),
+    }
+}
+
+fn wait_for(state: &mut StaticAnalysisState, id: &str) -> ScanResult {
+    loop {
+        if let Some((_, result)) = state.poll().into_iter().find(|(done, _)| done == id) {
+            return result;
+        }
+    }
+}
+
 #[test]
-fn apply_checkstyle_results_sets_matching_docs_and_clears_the_rest() {
+fn apply_results_sets_matching_docs_and_clears_the_rest() {
     let (_dir_a, doc_a) = test_support::temp_document("A.java", "class A {}");
     let (_dir_b, doc_b) = test_support::temp_document("B.java", "class B {}");
     let path_a = doc_a.path.clone();
@@ -20,31 +46,35 @@ fn apply_checkstyle_results_sets_matching_docs_and_clears_the_rest() {
     };
 
     let results = vec![(path_a.clone(), diag("A has a problem"))];
-    apply_checkstyle_results(&mut state, &results);
+    apply_results(&mut state, "checkstyle", &results);
 
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics.len(), 1);
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics[0].message, "A has a problem");
-    assert!(state.open_tabs[1].checkstyle_diagnostics.is_empty());
+    assert_eq!(state.open_tabs[0].analyzer_diagnostics["checkstyle"].len(), 1);
+    assert_eq!(
+        state.open_tabs[0].analyzer_diagnostics["checkstyle"][0].message,
+        "A has a problem"
+    );
+    assert!(state.open_tabs[1].analyzer_diagnostics["checkstyle"].is_empty());
 }
 
 #[test]
-fn apply_checkstyle_results_replaces_rather_than_accumulates() {
+fn apply_results_replaces_rather_than_accumulates() {
     let (_dir, mut doc) = test_support::temp_document("A.java", "class A {}");
-    doc.checkstyle_diagnostics = vec![diag("stale from a previous run")];
+    doc.analyzer_diagnostics
+        .insert("checkstyle".to_string(), vec![diag("stale from a previous run")]);
     let path = doc.path.clone();
     let mut state = EditorState {
         open_tabs: vec![doc],
         ..Default::default()
     };
 
-    apply_checkstyle_results(&mut state, &[(path, diag("fresh"))]);
+    apply_results(&mut state, "checkstyle", &[(path, diag("fresh"))]);
 
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics.len(), 1);
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics[0].message, "fresh");
+    assert_eq!(state.open_tabs[0].analyzer_diagnostics["checkstyle"].len(), 1);
+    assert_eq!(state.open_tabs[0].analyzer_diagnostics["checkstyle"][0].message, "fresh");
 }
 
 #[test]
-fn checkstyle_and_pmd_results_dont_clobber_each_other() {
+fn one_analyzers_results_dont_clobber_another_s() {
     let (_dir, doc) = test_support::temp_document("A.java", "class A {}");
     let path = doc.path.clone();
     let mut state = EditorState {
@@ -52,125 +82,88 @@ fn checkstyle_and_pmd_results_dont_clobber_each_other() {
         ..Default::default()
     };
 
-    apply_checkstyle_results(&mut state, &[(path.clone(), diag("from checkstyle"))]);
-    apply_pmd_results(&mut state, &[(path, diag("from pmd"))]);
+    apply_results(&mut state, "checkstyle", &[(path.clone(), diag("from checkstyle"))]);
+    apply_results(&mut state, "pmd", &[(path.clone(), diag("from pmd"))]);
+    apply_results(&mut state, "spotbugs", &[(path, diag("from spotbugs"))]);
 
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics.len(), 1);
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics[0].message, "from checkstyle");
-    assert_eq!(state.open_tabs[0].pmd_diagnostics.len(), 1);
-    assert_eq!(state.open_tabs[0].pmd_diagnostics[0].message, "from pmd");
+    let findings = &state.open_tabs[0].analyzer_diagnostics;
+    assert_eq!(findings["checkstyle"][0].message, "from checkstyle");
+    assert_eq!(findings["pmd"][0].message, "from pmd");
+    assert_eq!(findings["spotbugs"][0].message, "from spotbugs");
 }
 
 #[test]
-fn poll_returns_none_while_no_scan_is_running() {
+fn poll_returns_nothing_while_no_scan_is_running() {
     let mut state = StaticAnalysisState::default();
-    assert!(!state.checkstyle_running());
-    assert!(!state.pmd_running());
-    assert!(!state.spotbugs_running());
-    assert!(state.poll_checkstyle().is_none());
-    assert!(state.poll_pmd().is_none());
-    assert!(state.poll_spotbugs().is_none());
+    assert!(!state.running("checkstyle"));
+    assert!(state.poll().is_empty());
 }
 
 #[test]
-fn apply_spotbugs_results_leaves_checkstyle_and_pmd_untouched() {
-    let (_dir, doc) = test_support::temp_document("A.java", "class A {}");
-    let path = doc.path.clone();
-    let mut state = EditorState {
-        open_tabs: vec![doc],
-        ..Default::default()
-    };
-
-    apply_checkstyle_results(&mut state, &[(path.clone(), diag("from checkstyle"))]);
-    apply_pmd_results(&mut state, &[(path.clone(), diag("from pmd"))]);
-    apply_spotbugs_results(&mut state, &[(path, diag("from spotbugs"))]);
-
-    assert_eq!(state.open_tabs[0].checkstyle_diagnostics[0].message, "from checkstyle");
-    assert_eq!(state.open_tabs[0].pmd_diagnostics[0].message, "from pmd");
-    assert_eq!(state.open_tabs[0].spotbugs_diagnostics.len(), 1);
-    assert_eq!(state.open_tabs[0].spotbugs_diagnostics[0].message, "from spotbugs");
-}
-
-#[test]
-fn run_checkstyle_marks_running_until_polled_after_completion() {
+fn a_scan_is_running_until_polled_after_completion() {
     let mut state = StaticAnalysisState::default();
-    // A binary that doesn't exist still exercises the real spawn path —
-    // `checkstyle_diagnostics` reports `Err`, not a panic, and that
-    // `Err` should reach `poll_checkstyle` exactly like a real failure
+    // `checkstyle` reports `Err` for a binary that doesn't exist, not a
+    // panic, and that `Err` should reach `poll` exactly like a real failure
     // would.
-    state.run_checkstyle(
-        PathBuf::from("/nonexistent/checkstyle-binary"),
-        PathBuf::from("/nonexistent/config.xml"),
-        PathBuf::from("."),
+    state.run(
+        analyzer("checkstyle"),
+        run_of("/nonexistent/checkstyle-binary", "/nonexistent/config.xml", None),
     );
-    assert!(state.checkstyle_running());
+    assert!(state.running("checkstyle"));
 
-    let result = loop {
-        if let Some(result) = state.poll_checkstyle() {
-            break result;
-        }
-    };
-    assert!(result.is_err());
-    assert!(!state.checkstyle_running());
+    assert!(wait_for(&mut state, "checkstyle").is_err());
+    assert!(!state.running("checkstyle"));
 }
 
 #[test]
-fn run_pmd_marks_running_until_polled_after_completion() {
+fn a_pmd_scan_with_a_missing_binary_fails_cleanly() {
     let mut state = StaticAnalysisState::default();
-    state.run_pmd(
-        PathBuf::from("/nonexistent/pmd-binary"),
-        "rulesets/java/quickstart.xml".to_string(),
-        PathBuf::from("."),
+    state.run(
+        analyzer("pmd"),
+        run_of("/nonexistent/pmd-binary", "rulesets/java/quickstart.xml", None),
     );
-    assert!(state.pmd_running());
-
-    let result = loop {
-        if let Some(result) = state.poll_pmd() {
-            break result;
-        }
-    };
-    assert!(result.is_err());
-    assert!(!state.pmd_running());
+    assert!(wait_for(&mut state, "pmd").is_err());
 }
 
 #[test]
-fn run_spotbugs_marks_running_until_polled_after_completion() {
+fn a_spotbugs_scan_with_a_missing_binary_fails_cleanly() {
     let mut state = StaticAnalysisState::default();
-    state.run_spotbugs(
-        PathBuf::from("/nonexistent/spotbugs-binary"),
-        PathBuf::from("/nonexistent/classes"),
-        PathBuf::from("."),
+    state.run(
+        analyzer("spotbugs"),
+        run_of("/nonexistent/spotbugs-binary", "", Some("/nonexistent/classes")),
     );
-    assert!(state.spotbugs_running());
-
-    let result = loop {
-        if let Some(result) = state.poll_spotbugs() {
-            break result;
-        }
-    };
-    assert!(result.is_err());
-    assert!(!state.spotbugs_running());
+    assert!(wait_for(&mut state, "spotbugs").is_err());
 }
 
 #[test]
-fn checkstyle_pmd_and_spotbugs_scans_run_independently() {
+fn analyzer_scans_run_independently() {
     let mut state = StaticAnalysisState::default();
-    state.run_checkstyle(
-        PathBuf::from("/nonexistent/checkstyle"),
-        PathBuf::from("/nonexistent/config"),
-        PathBuf::from("."),
+    state.run(analyzer("checkstyle"), run_of("/nonexistent/checkstyle", "/nonexistent/config", None));
+    state.run(analyzer("pmd"), run_of("/nonexistent/pmd", "quickstart", None));
+    state.run(
+        analyzer("spotbugs"),
+        run_of("/nonexistent/spotbugs", "", Some("/nonexistent/classes")),
     );
-    state.run_pmd(
-        PathBuf::from("/nonexistent/pmd"),
-        "quickstart".to_string(),
-        PathBuf::from("."),
-    );
-    state.run_spotbugs(
-        PathBuf::from("/nonexistent/spotbugs"),
-        PathBuf::from("/nonexistent/classes"),
-        PathBuf::from("."),
-    );
-    assert!(state.checkstyle_running());
-    assert!(state.pmd_running());
-    assert!(state.spotbugs_running());
+    assert!(state.running("checkstyle"));
+    assert!(state.running("pmd"));
+    assert!(state.running("spotbugs"));
+}
+
+#[test]
+fn installing_writes_the_binary_config_and_version_into_that_analyzers_entry() {
+    let mut tools = ExternalToolPaths::default();
+    tools.get_mut("pmd").binary = "/hand/typed".to_string();
+
+    tools.apply_installed(&tool_manager::Installed {
+        analyzer_id: "pmd".to_string(),
+        version: "7.26.0".to_string(),
+        binary: PathBuf::from("/cache/pmd/bin/pmd"),
+        default_config: Some("rulesets/java/quickstart.xml".to_string()),
+    });
+
+    let pmd = tools.get("pmd").unwrap();
+    assert_eq!(pmd.binary, "/cache/pmd/bin/pmd");
+    assert_eq!(pmd.config, "rulesets/java/quickstart.xml");
+    assert_eq!(pmd.installed_version, "7.26.0");
+    assert!(tools.get("checkstyle").is_none());
 }

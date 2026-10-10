@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::{BuildTask, CommandSpec, FilenamePattern, GrammarSource, LanguageContribution, NodeKinds};
+use crate::{
+    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
+    GrammarSource, LanguageContribution, NodeKinds, ProblemSeverity,
+};
 
 /// A stand-in extension built entirely from its contribution set —
 /// Checkpoint 1's "fake extension that registers a fake language". It is
@@ -859,4 +862,113 @@ fn http_routes_for_an_unregistered_language_are_refused() {
         })
     );
     assert!(!registry.has_http_routes("westron"));
+}
+
+fn linter(id: &str, uses: AnalyzerInput) -> AnalyzerContribution {
+    AnalyzerContribution {
+        id: id.to_string(),
+        display_name: id.to_uppercase(),
+        input: uses,
+        config_label: None,
+        install: None,
+    }
+}
+
+struct FakeLinter {
+    extension_id: &'static str,
+    analyzers: Vec<AnalyzerContribution>,
+}
+
+impl Extension for FakeLinter {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: self.extension_id.to_string(),
+            name: self.extension_id.to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            analyzers: self.analyzers.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn run_analyzer(&self, analyzer_id: &str, run: &AnalyzerRun) -> Result<Vec<AnalyzerFinding>, String> {
+        Ok(vec![AnalyzerFinding {
+            file: run.project_root.join(analyzer_id),
+            line: 1,
+            column: None,
+            end: None,
+            severity: ProblemSeverity::Warning,
+            message: run.config.clone(),
+        }])
+    }
+}
+
+#[test]
+fn analyzers_are_listed_in_registration_order_and_run_through_their_extension() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeLinter {
+            extension_id: "first",
+            analyzers: vec![linter("zeta", AnalyzerInput::Sources), linter("alpha", AnalyzerInput::BuildOutput)],
+        }))
+        .unwrap();
+    registry
+        .register(Box::new(FakeLinter {
+            extension_id: "second",
+            analyzers: vec![linter("mid", AnalyzerInput::Sources)],
+        }))
+        .unwrap();
+
+    let analyzers = registry.analyzers();
+    assert_eq!(analyzers.iter().map(|a| a.id()).collect::<Vec<_>>(), ["zeta", "alpha", "mid"]);
+
+    let findings = analyzers[2]
+        .run(&AnalyzerRun {
+            binary: PathBuf::from("tool"),
+            config: "strict".to_string(),
+            project_root: PathBuf::from("/p"),
+            classes_dir: None,
+        })
+        .unwrap();
+    assert_eq!(findings[0].file, PathBuf::from("/p/mid"));
+    assert_eq!(findings[0].message, "strict");
+}
+
+#[test]
+fn two_extensions_claiming_one_analyzer_id_are_refused_whole() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeLinter {
+            extension_id: "first",
+            analyzers: vec![linter("lint", AnalyzerInput::Sources)],
+        }))
+        .unwrap();
+    assert_eq!(
+        registry.register(Box::new(FakeLinter {
+            extension_id: "second",
+            analyzers: vec![linter("lint", AnalyzerInput::Sources)],
+        })),
+        Err(RegisterError::DuplicateAnalyzer {
+            analyzer_id: "lint".to_string(),
+            extension_id: "second".to_string(),
+        })
+    );
+    assert_eq!(registry.analyzers().len(), 1);
+}
+
+#[test]
+fn an_extension_repeating_its_own_analyzer_id_is_refused() {
+    let mut registry = Registry::new();
+    assert!(matches!(
+        registry.register(Box::new(FakeLinter {
+            extension_id: "first",
+            analyzers: vec![linter("lint", AnalyzerInput::Sources), linter("lint", AnalyzerInput::Sources)],
+        })),
+        Err(RegisterError::DuplicateAnalyzer { .. })
+    ));
 }

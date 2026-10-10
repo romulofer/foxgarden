@@ -92,14 +92,6 @@ const SIDE_PANEL_VISIBLE_KEY: &str = "side_panel_visible";
 const CUSTOM_JAVA_TEMPLATES_KEY: &str = "custom_java_templates";
 const CUSTOM_KOTLIN_TEMPLATES_KEY: &str = "custom_kotlin_templates";
 const CUSTOM_GLOBAL_TEMPLATES_KEY: &str = "custom_global_templates";
-const CHECKSTYLE_BINARY_KEY: &str = "checkstyle_binary";
-const CHECKSTYLE_CONFIG_KEY: &str = "checkstyle_config";
-const CHECKSTYLE_INSTALLED_VERSION_KEY: &str = "checkstyle_installed_version";
-const PMD_BINARY_KEY: &str = "pmd_binary";
-const PMD_RULESET_KEY: &str = "pmd_ruleset";
-const PMD_INSTALLED_VERSION_KEY: &str = "pmd_installed_version";
-const SPOTBUGS_BINARY_KEY: &str = "spotbugs_binary";
-const SPOTBUGS_INSTALLED_VERSION_KEY: &str = "spotbugs_installed_version";
 const AUTO_SAVE_ENABLED_KEY: &str = "auto_save_enabled";
 const AUTO_SAVE_MODE_KEY: &str = "auto_save_mode";
 const AUTO_SAVE_IDLE_SECONDS_KEY: &str = "auto_save_idle_seconds";
@@ -1025,6 +1017,7 @@ fn restore_settings(
     source_control_visible: &mut bool,
     custom_templates: &mut UserTemplates,
     external_tool_paths: &mut ExternalToolPaths,
+    analyzer_ids: &[&str],
     auto_save_settings: &mut AutoSaveSettings,
     trim_trailing_whitespace_on_save: &mut bool,
     lsp_settings: &mut LspSettings,
@@ -1096,30 +1089,7 @@ fn restore_settings(
     if let Some(saved) = storage.get_string(CUSTOM_GLOBAL_TEMPLATES_KEY) {
         custom_templates.global = crate::widgets::editor::parse_user_templates(&saved);
     }
-    if let Some(path) = storage.get_string(CHECKSTYLE_BINARY_KEY) {
-        external_tool_paths.checkstyle_binary = path;
-    }
-    if let Some(path) = storage.get_string(CHECKSTYLE_CONFIG_KEY) {
-        external_tool_paths.checkstyle_config = path;
-    }
-    if let Some(version) = storage.get_string(CHECKSTYLE_INSTALLED_VERSION_KEY) {
-        external_tool_paths.checkstyle_installed_version = version;
-    }
-    if let Some(path) = storage.get_string(PMD_BINARY_KEY) {
-        external_tool_paths.pmd_binary = path;
-    }
-    if let Some(path) = storage.get_string(PMD_RULESET_KEY) {
-        external_tool_paths.pmd_ruleset = path;
-    }
-    if let Some(version) = storage.get_string(PMD_INSTALLED_VERSION_KEY) {
-        external_tool_paths.pmd_installed_version = version;
-    }
-    if let Some(path) = storage.get_string(SPOTBUGS_BINARY_KEY) {
-        external_tool_paths.spotbugs_binary = path;
-    }
-    if let Some(version) = storage.get_string(SPOTBUGS_INSTALLED_VERSION_KEY) {
-        external_tool_paths.spotbugs_installed_version = version;
-    }
+    external_tool_paths.restore(storage, analyzer_ids);
     if let Some(enabled) = storage.get_string(AUTO_SAVE_ENABLED_KEY) {
         auto_save_settings.enabled = enabled == "true";
     }
@@ -1180,6 +1150,7 @@ fn persist_settings(
     source_control_visible: bool,
     custom_templates: &UserTemplates,
     external_tool_paths: &ExternalToolPaths,
+    analyzer_ids: &[&str],
     auto_save_settings: AutoSaveSettings,
     trim_trailing_whitespace_on_save: bool,
     lsp_settings: &LspSettings,
@@ -1220,23 +1191,7 @@ fn persist_settings(
         CUSTOM_GLOBAL_TEMPLATES_KEY,
         crate::widgets::editor::serialize_user_templates(&custom_templates.global),
     );
-    storage.set_string(CHECKSTYLE_BINARY_KEY, external_tool_paths.checkstyle_binary.clone());
-    storage.set_string(CHECKSTYLE_CONFIG_KEY, external_tool_paths.checkstyle_config.clone());
-    storage.set_string(
-        CHECKSTYLE_INSTALLED_VERSION_KEY,
-        external_tool_paths.checkstyle_installed_version.clone(),
-    );
-    storage.set_string(PMD_BINARY_KEY, external_tool_paths.pmd_binary.clone());
-    storage.set_string(PMD_RULESET_KEY, external_tool_paths.pmd_ruleset.clone());
-    storage.set_string(
-        PMD_INSTALLED_VERSION_KEY,
-        external_tool_paths.pmd_installed_version.clone(),
-    );
-    storage.set_string(SPOTBUGS_BINARY_KEY, external_tool_paths.spotbugs_binary.clone());
-    storage.set_string(
-        SPOTBUGS_INSTALLED_VERSION_KEY,
-        external_tool_paths.spotbugs_installed_version.clone(),
-    );
+    external_tool_paths.persist(storage, analyzer_ids);
     storage.set_string(AUTO_SAVE_ENABLED_KEY, auto_save_settings.enabled.to_string());
     storage.set_string(
         AUTO_SAVE_MODE_KEY,
@@ -1331,6 +1286,8 @@ impl FoxGardenApp {
                 recent_projects = stored.lines().map(PathBuf::from).filter(|path| path.is_dir()).collect();
             }
             restore_session(storage, &mut state, &mut parsers, &mut last_error);
+            let analyzers = state.languages.analyzers();
+            let analyzer_ids: Vec<&str> = analyzers.iter().map(|a| a.id()).collect();
             restore_settings(
                 storage,
                 &mut editor_font,
@@ -1345,6 +1302,7 @@ impl FoxGardenApp {
                 &mut source_control_visible,
                 &mut custom_templates,
                 &mut external_tool_paths,
+                &analyzer_ids,
                 &mut auto_save_settings,
                 &mut trim_trailing_whitespace_on_save,
                 &mut lsp_settings,
@@ -1627,14 +1585,76 @@ impl FoxGardenApp {
             Command::Build => menu_outcome.build_request = true,
             Command::RunProject => menu_outcome.run_project_request = true,
             Command::RunTests => menu_outcome.run_tests_request = true,
-            Command::RunCheckstyle => menu_outcome.run_checkstyle_request = true,
-            Command::RunPmd => menu_outcome.run_pmd_request = true,
-            Command::RunSpotBugs => menu_outcome.run_spotbugs_request = true,
             Command::FoldAll => menu_outcome.fold_all_request = true,
             Command::ExpandAll => menu_outcome.expand_all_request = true,
             Command::SortLines => menu_outcome.sort_lines_request = true,
             Command::UniqueLines => menu_outcome.unique_lines_request = true,
         }
+    }
+
+    /// The display name of analyzer `analyzer_id`, for messages. Falls back
+    /// to the id itself for one no longer registered (it cannot happen in a
+    /// build whose extensions never change, but a message beats a panic).
+    fn analyzer_name(&self, analyzer_id: &str) -> String {
+        self.state
+            .languages
+            .analyzers()
+            .iter()
+            .find(|analyzer| analyzer.id() == analyzer_id)
+            .map_or_else(|| analyzer_id.to_string(), |analyzer| analyzer.display_name().to_string())
+    }
+
+    /// Tools > Run <analyzer>: checks it is configured, works out what it
+    /// analyzes, and starts the scan on a background thread. Every way this
+    /// can refuse is reported to the user rather than silently doing
+    /// nothing.
+    fn run_analyzer(&mut self, analyzer: fg_extension::AnalyzerHandle, project_root: PathBuf) {
+        let settings = self.external_tool_paths.get(analyzer.id()).cloned().unwrap_or_default();
+        let binary = settings.binary.trim();
+        let config = settings.config.trim();
+        let needs_config = analyzer.contribution.config_label.is_some();
+        if binary.is_empty() || (needs_config && config.is_empty()) {
+            let name = analyzer.display_name();
+            crate::errors::report(
+                &mut self.last_error,
+                if needs_config {
+                    msg::analyzer_not_configured(name)
+                } else {
+                    msg::analyzer_binary_not_configured(name)
+                },
+            );
+            return;
+        }
+
+        let classes_dir = match analyzer.contribution.input {
+            fg_extension::AnalyzerInput::Sources => None,
+            fg_extension::AnalyzerInput::BuildOutput => {
+                match self
+                    .state
+                    .languages
+                    .detect_build_tool(&project_root)
+                    .and_then(|tool| tool.classes_dir(&project_root))
+                {
+                    Some(dir) if dir.is_dir() => Some(dir),
+                    Some(_) => {
+                        crate::errors::report(&mut self.last_error, t().errors.no_compiled_classes.to_string());
+                        return;
+                    }
+                    None => {
+                        crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string());
+                        return;
+                    }
+                }
+            }
+        };
+
+        let run = fg_extension::AnalyzerRun {
+            binary: PathBuf::from(binary),
+            config: config.to_string(),
+            project_root,
+            classes_dir,
+        };
+        self.static_analysis.run(analyzer, run);
     }
 
     fn document_status(&self, ctx: &egui::Context) -> Option<status_bar::DocumentStatus> {
@@ -1647,9 +1667,7 @@ impl FoxGardenApp {
         let diagnostics = doc
             .diagnostics
             .iter()
-            .chain(doc.checkstyle_diagnostics.iter())
-            .chain(doc.pmd_diagnostics.iter())
-            .chain(doc.spotbugs_diagnostics.iter())
+            .chain(doc.analyzer_diagnostics.values().flatten())
             .chain(doc.lsp_diagnostics.iter());
         let (mut errors, mut warnings) = (0, 0);
         for diagnostic in diagnostics {
@@ -1955,8 +1973,16 @@ impl eframe::App for FoxGardenApp {
         // Drawn before the panels so a command picked this frame is acted
         // on by the very same code paths the menus feed, rather than a
         // frame later.
-        if let Some(command) = crate::panels::command_palette::show(ui, &mut self.command_palette) {
-            self.run_command(ui.ctx(), command, &mut menu_outcome);
+        let analyzers = self.state.languages.analyzers();
+        let analyzer_names: Vec<String> = analyzers.iter().map(|a| a.display_name().to_string()).collect();
+        match crate::panels::command_palette::show(ui, &mut self.command_palette, &analyzer_names) {
+            Some(crate::panels::command_palette::Picked::Command(command)) => {
+                self.run_command(ui.ctx(), command, &mut menu_outcome);
+            }
+            Some(crate::panels::command_palette::Picked::Analyzer(index)) => {
+                menu_outcome.run_analyzer_request = Some(index);
+            }
+            None => {}
         }
 
         // Compared against `self.ui_scale` right after `menu_bar::show`
@@ -1988,9 +2014,13 @@ impl eframe::App for FoxGardenApp {
                         &mut self.source_control_visible,
                         &mut self.last_error,
                         &mut self.custom_templates,
-                        self.static_analysis.checkstyle_running(),
-                        self.static_analysis.pmd_running(),
-                        self.static_analysis.spotbugs_running(),
+                        &analyzers
+                            .iter()
+                            .map(|analyzer| menu_bar::AnalyzerEntry {
+                                name: analyzer.display_name().to_string(),
+                                running: self.static_analysis.running(analyzer.id()),
+                            })
+                            .collect::<Vec<_>>(),
                         self.build_state.is_build_running(),
                         self.build_state.is_run_running(),
                         self.build_state.is_test_running(),
@@ -2047,6 +2077,7 @@ impl eframe::App for FoxGardenApp {
                 &self.lsp,
                 &self.lsp_servers,
                 &self.static_analysis,
+                &analyzers,
                 &self.spring_config,
                 &self.git_stage,
                 &self.diff,
@@ -2471,74 +2502,19 @@ impl eframe::App for FoxGardenApp {
         if menu_outcome.open_new_project_wizard_request {
             self.new_project_wizard.open(&self.state.languages);
         }
-        if menu_outcome.run_checkstyle_request
+        if let Some(index) = menu_outcome.run_analyzer_request
+            && let Some(analyzer) = self.state.languages.analyzers().into_iter().nth(index)
             && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
         {
-            let binary = self.external_tool_paths.checkstyle_binary.trim();
-            let config = self.external_tool_paths.checkstyle_config.trim();
-            if binary.is_empty() || config.is_empty() {
-                crate::errors::report(&mut self.last_error, t().errors.checkstyle_not_configured.to_string());
-            } else {
-                self.static_analysis
-                    .run_checkstyle(PathBuf::from(binary), PathBuf::from(config), root);
-            }
+            self.run_analyzer(analyzer, root);
         }
-        if menu_outcome.run_pmd_request
-            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
-        {
-            let binary = self.external_tool_paths.pmd_binary.trim();
-            let ruleset = self.external_tool_paths.pmd_ruleset.trim();
-            if binary.is_empty() || ruleset.is_empty() {
-                crate::errors::report(&mut self.last_error, t().errors.pmd_not_configured.to_string());
-            } else {
-                self.static_analysis
-                    .run_pmd(PathBuf::from(binary), ruleset.to_string(), root);
-            }
-        }
-        if menu_outcome.run_spotbugs_request
-            && let Some(root) = self.state.project.as_ref().map(|p| p.root.clone())
-        {
-            let binary = self.external_tool_paths.spotbugs_binary.trim();
-            if binary.is_empty() {
-                crate::errors::report(&mut self.last_error, t().errors.spotbugs_not_configured.to_string());
-            } else {
-                match self
-                    .state
-                    .languages
-                    .detect_build_tool(&root)
-                    .and_then(|tool| tool.classes_dir(&root))
-                {
-                    Some(classes_dir) => {
-                        if classes_dir.is_dir() {
-                            self.static_analysis
-                                .run_spotbugs(PathBuf::from(binary), classes_dir, root);
-                        } else {
-                            crate::errors::report(
-                                &mut self.last_error,
-                                t().errors.spotbugs_no_compiled_classes.to_string(),
-                            );
-                        }
-                    }
-                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+        for (analyzer_id, result) in self.static_analysis.poll() {
+            match result {
+                Ok(diagnostics) => static_analysis::apply_results(&mut self.state, &analyzer_id, &diagnostics),
+                Err(err) => {
+                    let name = self.analyzer_name(&analyzer_id);
+                    crate::errors::report(&mut self.last_error, msg::analyzer_failed(&name, &err));
                 }
-            }
-        }
-        if let Some(result) = self.static_analysis.poll_checkstyle() {
-            match result {
-                Ok(diagnostics) => static_analysis::apply_checkstyle_results(&mut self.state, &diagnostics),
-                Err(err) => crate::errors::report(&mut self.last_error, msg::checkstyle_failed(&err.to_string())),
-            }
-        }
-        if let Some(result) = self.static_analysis.poll_pmd() {
-            match result {
-                Ok(diagnostics) => static_analysis::apply_pmd_results(&mut self.state, &diagnostics),
-                Err(err) => crate::errors::report(&mut self.last_error, msg::pmd_failed(&err.to_string())),
-            }
-        }
-        if let Some(result) = self.static_analysis.poll_spotbugs() {
-            match result {
-                Ok(diagnostics) => static_analysis::apply_spotbugs_results(&mut self.state, &diagnostics),
-                Err(err) => crate::errors::report(&mut self.last_error, msg::spotbugs_failed(&err.to_string())),
             }
         }
         self.spring_config
@@ -2549,17 +2525,17 @@ impl eframe::App for FoxGardenApp {
         if let Some(err) = self.debug_state.take_failure() {
             crate::errors::report(&mut self.last_error, err);
         }
-        for (tool, result) in self.static_analysis.tool_manager.poll_installs() {
+        for (analyzer_id, result) in self.static_analysis.tool_manager.poll_installs() {
             match result {
                 Ok(installed) => self.external_tool_paths.apply_installed(&installed),
-                Err(err) => crate::errors::report(
-                    &mut self.last_error,
-                    msg::install_failed(tool.display_name(), &err.to_string()),
-                ),
+                Err(err) => {
+                    let name = self.analyzer_name(&analyzer_id);
+                    crate::errors::report(&mut self.last_error, msg::install_failed(&name, &err));
+                }
             }
         }
-        for (tool, result) in self.static_analysis.tool_manager.poll_checks() {
-            self.static_analysis.record_latest_version(tool, result);
+        for (analyzer_id, result) in self.static_analysis.tool_manager.poll_checks() {
+            self.static_analysis.record_latest_version(analyzer_id, result);
         }
         // A language-server install runs for minutes (jdt.ls is built from
         // source — see `lsp_manager`'s own header), reporting progress from
@@ -2915,7 +2891,12 @@ impl eframe::App for FoxGardenApp {
         if let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) {
             run_configs::show(ui, &root, &mut self.run_configs_dialog, &mut self.last_error);
         }
-        static_analysis::show_settings(ui, &mut self.static_analysis, &mut self.external_tool_paths);
+        static_analysis::show_settings(
+            ui,
+            &mut self.static_analysis,
+            &mut self.external_tool_paths,
+            &self.state.languages.analyzers(),
+        );
         lsp_servers::show_settings(ui, &mut self.lsp_servers, &mut self.lsp_settings);
         jdk_registry_ui::show_settings(ui, &mut self.jdk_registry_ui, &mut self.jdk_registry);
         new_project::show(ui, &mut self.new_project_wizard, &mut self.state);
@@ -2927,6 +2908,8 @@ impl eframe::App for FoxGardenApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         persist_session(storage, &self.state, &self.recent_projects);
+        let analyzers = self.state.languages.analyzers();
+        let analyzer_ids: Vec<&str> = analyzers.iter().map(|a| a.id()).collect();
         persist_settings(
             storage,
             self.editor_font,
@@ -2941,6 +2924,7 @@ impl eframe::App for FoxGardenApp {
             self.source_control_visible,
             &self.custom_templates,
             &self.external_tool_paths,
+            &analyzer_ids,
             self.auto_save_settings,
             self.trim_trailing_whitespace_on_save,
             &self.lsp_settings,
