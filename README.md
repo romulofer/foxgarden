@@ -48,6 +48,7 @@ all wired into one fast UI. 🚀
 | 🔀 **Git built in** | Diff gutter, inline blame, stage / commit / push, per-hunk staging |
 | 🔎 **Static analysis** | Checkstyle, PMD & SpotBugs — installable from inside the app |
 | ✂️ **Split-pane editing** | Two editor panes side by side over one project, each with its own tabs |
+| 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle are one extension behind a small API — the editor core is language-agnostic |
 | ⚡ **Fast by design** | Incremental parsing, per-tab galley cache, near-release-speed debug builds |
 
 <details>
@@ -72,7 +73,7 @@ all wired into one fast UI. 🚀
 - LSP (jdt.ls / kotlin-language-server), Maven/Gradle awareness, DAP debugger
 - Build / run / test, code-coverage overlay, Docker run, JDK registry
 - New-project scaffolding (Maven or Gradle, **Java or Kotlin**)
-- Java code generation: getters/setters, constructor, `toString`, `equals`/`hashCode`, `@Override`
+- Code generation: getters/setters, constructor, `toString`, `equals`/`hashCode`, `@Override`, **Javadoc / KDoc skeletons**
 
 **Look & feel**
 - Light/dark themes, selectable font, zen mode (`F11`), sticky scroll
@@ -88,6 +89,18 @@ all wired into one fast UI. 🚀
 Split the editor with **View ▸ Split Editor** (or `Ctrl+\`). Both panes share the
 one project and tab pool, but each keeps its own active tab — edit two files, or
 two parts of one file, side by side.
+
+### 🧩 Extensions
+
+The editor core knows nothing about any one language. What a language *is* —
+its grammar and highlight query, language servers, build tools, project
+scaffolds, run markers, type model and code generation, imports, live
+templates, doc comments, debugger support and static-analysis tools — is
+**contributed** by an extension through the small `fg-extension` API
+(`crates/extension`). Java, Kotlin, Spring, Maven, Gradle, Checkstyle, PMD and
+SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
+compiled in today; loading extensions from outside the binary is the next
+milestone.
 
 ### 🛠️ Build & run
 
@@ -106,17 +119,19 @@ cargo test --workspace
 
 **Requirements:** a recent Rust toolchain (edition 2024). Java, Kotlin and
 Spring support comes from the `spring-foxgarden` add-on, which the build
-expects at `../spring-foxgarden` — the editor itself knows nothing about the
-JVM and reaches it only through its extension API. Java language features
+expects at `../spring-foxgarden`. The editor reaches it only through its
+extension API; a few JVM-specific pieces (the language-server installers, the
+JDK registry panels) have not moved across yet. Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
 
 ### 📈 Status
 
-Actively developed on the `ide-henshin` branch. The editor core and the JVM
-tooling above are shipped and working; ongoing work is deepening LSP coverage,
-split-pane polish, and profiler integration. Contributions and issues welcome. 🙌
+Actively developed on `main`. The editor core and the JVM tooling above are
+shipped and working. The language-agnostic extension seam is in place; ongoing
+work is moving the last JVM specifics out of the app crate and then loading
+extensions from outside the binary. Contributions and issues welcome. 🙌
 
 ### 📄 License
 
@@ -151,6 +166,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 | 🔀 **Git embutido** | Marcadores de diff, blame na linha, stage / commit / push, stage por hunk |
 | 🔎 **Análise estática** | Checkstyle, PMD & SpotBugs — instaláveis de dentro do app |
 | ✂️ **Edição em painéis** | Dois painéis lado a lado sobre um projeto, cada um com suas abas |
+| 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle são uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
 | ⚡ **Rápido por projeto** | Parsing incremental, cache de galley por aba, builds de debug em velocidade quase-release |
 
 <details>
@@ -175,7 +191,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 - LSP (jdt.ls / kotlin-language-server), consciência Maven/Gradle, depurador DAP
 - Compilar / executar / testar, cobertura de código, execução Docker, registro de JDKs
 - Scaffolding de novo projeto (Maven ou Gradle, **Java ou Kotlin**)
-- Geração de código Java: getters/setters, construtor, `toString`, `equals`/`hashCode`, `@Override`
+- Geração de código: getters/setters, construtor, `toString`, `equals`/`hashCode`, `@Override`, **esqueletos de Javadoc / KDoc**
 
 **Aparência**
 - Temas claro/escuro, fonte selecionável, modo zen (`F11`), rolagem fixa
@@ -191,6 +207,19 @@ git e análise estática, tudo em uma UI rápida. 🚀
 Divida o editor com **Exibir ▸ Dividir Editor** (ou `Ctrl+\`). Os dois painéis
 compartilham o mesmo projeto e conjunto de abas, mas cada um mantém sua aba ativa
 — edite dois arquivos, ou duas partes do mesmo arquivo, lado a lado.
+
+### 🧩 Extensões
+
+O núcleo do editor não sabe nada sobre uma linguagem específica. O que uma
+linguagem *é* — gramática e query de realce, language servers, ferramentas de
+build, scaffolds de projeto, marcadores de execução, modelo de tipos e geração
+de código, imports, live templates, comentários de documentação, suporte a
+depurador e ferramentas de análise estática — é **contribuído** por uma
+extensão através da pequena API `fg-extension` (`crates/extension`). Java,
+Kotlin, Spring, Maven, Gradle, Checkstyle, PMD e SpotBugs são uma única
+extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
+compilada junto por enquanto; carregar extensões de fora do binário é o próximo
+marco.
 
 ### 🛠️ Compilar & executar
 
@@ -209,18 +238,20 @@ cargo test --workspace
 
 **Requisitos:** uma toolchain Rust recente (edição 2024). O suporte a Java,
 Kotlin e Spring vem do add-on `spring-foxgarden`, que o build espera em
-`../spring-foxgarden` — o editor em si não sabe nada sobre a JVM e só a
-alcança pela API de extensões. Recursos de Java exigem
+`../spring-foxgarden`. O editor só a alcança pela API de extensões; algumas
+peças específicas da JVM (instaladores de language server, painéis do registro
+de JDKs) ainda não foram movidas. Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.
 
 ### 📈 Status
 
-Em desenvolvimento ativo na branch `ide-henshin`. O núcleo do editor e o
-ferramental JVM acima já estão prontos e funcionando; o trabalho atual aprofunda
-a cobertura de LSP, o polimento dos painéis e a integração de profiler.
-Contribuições e issues são bem-vindas. 🙌
+Em desenvolvimento ativo na `main`. O núcleo do editor e o ferramental JVM acima
+já estão prontos e funcionando. A costura de extensões independente de linguagem
+está pronta; o trabalho atual move as últimas peças específicas da JVM para fora
+do crate do app e depois carrega extensões de fora do binário. Contribuições e
+issues são bem-vindas. 🙌
 
 ### 📄 Licença
 
