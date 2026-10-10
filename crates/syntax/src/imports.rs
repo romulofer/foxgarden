@@ -8,7 +8,7 @@
 //! tree the caller already parsed, first extension that answers wins.
 
 use fg_core::Language;
-use fg_extension::{ImportCandidate, ImportEdit};
+use fg_extension::{DocStub, ImportCandidate, ImportEdit};
 use tree_sitter::Tree;
 
 use crate::providers::providers;
@@ -31,6 +31,15 @@ pub fn import_edit(tree: &Tree, source: &str, language: Language, qualified_name
         .extensions
         .iter()
         .find_map(|extension| extension.import_edit(language.id(), tree, source, qualified_name))
+}
+
+/// A documentation-comment skeleton for the declaration at `byte`. `None`
+/// when there is nothing to document there, or it already is documented.
+pub fn doc_stub(tree: &Tree, source: &str, language: Language, byte: usize) -> Option<DocStub> {
+    providers()
+        .extensions
+        .iter()
+        .find_map(|extension| extension.doc_stub(language.id(), tree, source, byte))
 }
 
 #[cfg(test)]

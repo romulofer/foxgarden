@@ -41,7 +41,7 @@ pub use analyzers::{
 pub use code_model::{
     CodeGeneration, MemberKind, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember,
 };
-pub use imports::{ImportCandidate, ImportEdit};
+pub use imports::{DocStub, ImportCandidate, ImportEdit};
 pub use registry::{RegisterError, Registry};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
@@ -540,6 +540,21 @@ pub trait Extension: Send + Sync {
     /// nothing.
     fn run_analyzer(&self, _analyzer_id: &str, _run: &AnalyzerRun) -> Result<Vec<AnalyzerFinding>, String> {
         Err("this extension does not run that analyzer".to_string())
+    }
+
+    /// A documentation-comment skeleton for the declaration `byte` sits in:
+    /// the innermost type or method, with a line per parameter, return value
+    /// and declared exception to fill in. `None` when `byte` is in no
+    /// declaration, when that declaration is already documented, and for
+    /// languages this extension does not own.
+    fn doc_stub(
+        &self,
+        _language_id: &str,
+        _tree: &tree_sitter::Tree,
+        _source: &str,
+        _byte: usize,
+    ) -> Option<DocStub> {
+        None
     }
 
     /// The annotations offered after an `@` in a `language_id` file, each

@@ -478,6 +478,17 @@ impl ExtensionHandle {
         self.extension.import_edit(language_id, tree, source, qualified_name)
     }
 
+    /// A documentation-comment skeleton for the declaration at `byte`.
+    pub fn doc_stub(
+        &self,
+        language_id: &str,
+        tree: &tree_sitter::Tree,
+        source: &str,
+        byte: usize,
+    ) -> Option<crate::DocStub> {
+        self.extension.doc_stub(language_id, tree, source, byte)
+    }
+
     /// Every configuration key this extension can offer for `project_root`.
     /// Resolving these can be slow (it may resolve a classpath), so callers
     /// run it off the UI thread.

@@ -27,3 +27,12 @@ pub struct ImportEdit {
     /// The text to insert there, separators included.
     pub text: String,
 }
+
+/// A documentation comment to splice in above a declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocStub {
+    /// Byte offset in the file as it is now.
+    pub byte: usize,
+    /// The comment, indentation and trailing separator included.
+    pub text: String,
+}

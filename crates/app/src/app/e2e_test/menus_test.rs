@@ -320,6 +320,35 @@ fn tools_generate_getters_inserts_one_for_the_only_class() {
     );
 }
 
+#[test]
+fn tools_generate_javadoc_documents_the_method_at_the_caret() {
+    let source = "class Calc {\n    int add(int a, int b) {\n        return a + b;\n    }\n}\n";
+    let mut app = E2e::launch(&[("Calc.java", source)]);
+    app.click_tree("Calc.java");
+
+    // The caret inside the method body.
+    app.select_in_active_tab(source.find("return").unwrap(), 0);
+    app.menu(t().menu.tools, t().menu.generate_javadoc);
+
+    assert_eq!(
+        app.active_tab_text(),
+        "class Calc {\n    /**\n     * \n     *\n     * @param a\n     * @param b\n     * @return\n     */\n    int add(int a, int b) {\n        return a + b;\n    }\n}\n"
+    );
+}
+
+#[test]
+fn tools_generate_javadoc_says_so_when_the_declaration_is_already_documented() {
+    let source = "class Calc {\n    /** Adds. */\n    int add(int a) {\n        return a;\n    }\n}\n";
+    let mut app = E2e::launch(&[("Calc.java", source)]);
+    app.click_tree("Calc.java");
+
+    app.select_in_active_tab(source.find("return").unwrap(), 0);
+    app.menu(t().menu.tools, t().menu.generate_javadoc);
+
+    assert_eq!(app.active_tab_text(), source, "nothing is inserted");
+    assert!(app.shows_containing(t().errors.no_doc_target));
+}
+
 /// The palette is how an action is found by name rather than by knowing
 /// which menu holds it — including one whose own shortcut this app spells
 /// differently from other editors.

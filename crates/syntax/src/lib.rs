@@ -22,12 +22,12 @@ pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use folding::{FoldRange, foldable_ranges};
 pub use fg_extension::{
-    CodeGeneration, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunTarget, TypeDeclaration, TypeFields, TypeMember,
+    CodeGeneration, DocStub, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunTarget, TypeDeclaration, TypeFields, TypeMember,
 };
 pub use grammars::{GrammarError, install as install_grammars};
 pub use highlight::{Scope, highlight_spans, highlight_spans_in};
 pub use http_routes::http_routes;
-pub use imports::{annotation_candidates, import_edit};
+pub use imports::{annotation_candidates, doc_stub, import_edit};
 pub use providers::install as install_extension_providers;
 pub use run_targets::{RunMarker, main_entries};
 pub use selection::expand_selection;

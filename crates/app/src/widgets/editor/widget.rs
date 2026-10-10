@@ -62,6 +62,8 @@ pub struct EditorRequests {
     pub case_conversion: Option<CaseConversion>,
     pub sort_lines: bool,
     pub unique_lines: bool,
+    /// Tools > Generate Javadoc.
+    pub javadoc: bool,
     pub fold_all: bool,
     pub expand_all: bool,
 }
@@ -599,6 +601,7 @@ pub fn show(
     let case_conversion_request = if doc.read_only { None } else { requests.case_conversion };
     let sort_lines_request = requests.sort_lines;
     let unique_lines_request = requests.unique_lines;
+    let javadoc_request = !doc.read_only && requests.javadoc;
     let fold_all_request = requests.fold_all;
     let expand_all_request = requests.expand_all;
 
@@ -1255,6 +1258,30 @@ pub fn show(
                 anchor: sel_start,
             });
             old_text = transformed;
+        }
+    }
+
+    // A Tools menu click (`javadoc_request`) inserts the extension's doc
+    // comment skeleton above the declaration at the caret. Same pre-apply,
+    // persisted-caret-reading shape as sort/unique lines above; nothing to
+    // insert (no declaration, already documented, a language no extension
+    // documents) is reported rather than silently ignored.
+    if javadoc_request && !multi_cursor_active_at_start {
+        let stub = doc.language.zip(parser.as_ref().and_then(|p| p.tree())).and_then(|(language, tree)| {
+            let caret = text_area::peek_caret(ui.ctx(), widget_id)?;
+            syntax::doc_stub(tree, &old_text, language, char_to_byte(&old_text, caret.primary))
+        });
+        match stub {
+            Some(stub) => {
+                let mut transformed = old_text.clone();
+                transformed.insert_str(stub.byte, &stub.text);
+                apply_edit(doc, parser, &old_text, &transformed);
+                // The caret lands on the empty summary line of the new comment.
+                let summary_byte = stub.byte + stub.text.find("* ").map_or(0, |i| i + 2);
+                manual_caret = Some(Caret::at(byte_to_char(&transformed, summary_byte)));
+                old_text = transformed;
+            }
+            None => crate::errors::report(last_error, t().errors.no_doc_target.to_string()),
         }
     }
 

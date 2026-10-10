@@ -96,6 +96,7 @@ pub struct Menu {
     pub generate_to_string: &'static str,
     pub generate_equals_and_hash_code: &'static str,
     pub override_method: &'static str,
+    pub generate_javadoc: &'static str,
     pub convert_to_uppercase: &'static str,
     pub convert_to_lowercase: &'static str,
     pub convert_to_title_case: &'static str,
@@ -407,6 +408,7 @@ pub struct StatusBar {
 pub struct Errors {
     pub select_text_first: &'static str,
     pub accessors_unsupported: &'static str,
+    pub no_doc_target: &'static str,
     pub no_class_fields: &'static str,
     pub every_field_is_final: &'static str,
     pub accessors_no_tree: &'static str,
@@ -548,6 +550,7 @@ pub const PT_BR: Strings = Strings {
         generate_to_string: "Gerar toString()",
         generate_equals_and_hash_code: "Gerar equals() e hashCode()",
         override_method: "Sobrescrever Método",
+        generate_javadoc: "Gerar Javadoc",
         convert_to_uppercase: "Converter para MAIÚSCULAS",
         convert_to_lowercase: "Converter para minúsculas",
         convert_to_title_case: "Converter para Iniciais Maiúsculas",
@@ -793,6 +796,7 @@ pub const PT_BR: Strings = Strings {
     errors: Errors {
         select_text_first: "Selecione algum texto primeiro e tente de novo.",
         accessors_unsupported: "Gerar getters/setters não está disponível para este tipo de arquivo.",
+        no_doc_target: "Nada para documentar aqui: o cursor está fora de uma declaração, ou ela já tem um comentário de documentação.",
         no_class_fields: "Nenhum campo de classe encontrado neste arquivo.",
         every_field_is_final: "Nada a gerar: todos os campos aqui são somente leitura.",
         accessors_no_tree: "Não foi possível gerar os acessores: ainda não há árvore sintática.",
@@ -913,6 +917,7 @@ pub const EN_US: Strings = Strings {
         generate_to_string: "Generate toString()",
         generate_equals_and_hash_code: "Generate equals() and hashCode()",
         override_method: "Override Method",
+        generate_javadoc: "Generate Javadoc",
         convert_to_uppercase: "Convert to UPPERCASE",
         convert_to_lowercase: "Convert to lowercase",
         convert_to_title_case: "Convert to Title Case",
@@ -1158,6 +1163,7 @@ pub const EN_US: Strings = Strings {
     errors: Errors {
         select_text_first: "Select some text first, then try again.",
         accessors_unsupported: "Generate getters/setters isn't available for this file type.",
+        no_doc_target: "Nothing to document here: the cursor is outside a declaration, or it already has a doc comment.",
         no_class_fields: "No class fields found in this file.",
         every_field_is_final: "Nothing to generate: every field here is read-only.",
         accessors_no_tree: "Couldn't generate accessors: no syntax tree available yet.",
