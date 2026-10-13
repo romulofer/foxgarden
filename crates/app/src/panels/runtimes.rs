@@ -4,8 +4,8 @@
 //! machine at once, remove one, see what's registered. What counts as an
 //! install, and where to look for them, is the extension's answer
 //! (`RuntimeHandle::detect`/`discover`). Deliberately separate from the
-//! Language Servers dialog (`panels::lsp_servers`): `LspSettings::
-//! jdtls_java_home` is "which JVM runs jdt.ls itself" (always 21+), where
+//! Language Servers dialog (`panels::lsp_servers`): a server's
+//! `LspSettings::runtime_home_for` is "which install runs the server itself", where
 //! this is "which installs exist on this machine to *target*" (any version)
 //! — different concerns.
 

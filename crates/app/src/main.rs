@@ -6,7 +6,6 @@ mod errors;
 mod file_watch;
 mod folder_picker;
 mod goto_definition;
-mod jdk;
 mod lsp_client;
 mod lsp_manager;
 mod lsp_settings;

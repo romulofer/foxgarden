@@ -303,11 +303,24 @@ fn persisted_settings_round_trip() {
     };
     let saved_lsp = LspSettings {
         enabled: true,
-        jdtls_binary: "/usr/bin/jdtls".to_string(),
-        jdtls_installed_version: "1.60.0".to_string(),
-        jdtls_java_home: "/usr/lib/jvm/java-21".to_string(),
-        kotlin_language_server_binary: "/usr/bin/kotlin-language-server".to_string(),
-        kotlin_language_server_installed_version: "1.3.13".to_string(),
+        servers: std::collections::BTreeMap::from([
+            (
+                "jdtls".to_string(),
+                ServerSettings {
+                    binary: "/usr/bin/jdtls".to_string(),
+                    installed_version: "1.60.0".to_string(),
+                    runtime_home: "/usr/lib/jvm/java-21".to_string(),
+                },
+            ),
+            (
+                "kotlin-language-server".to_string(),
+                ServerSettings {
+                    binary: "/usr/bin/kotlin-language-server".to_string(),
+                    installed_version: "1.3.13".to_string(),
+                    runtime_home: String::new(),
+                },
+            ),
+        ]),
     };
     let saved_runtimes = RuntimeInventories::from([(
         "jdk".to_string(),

@@ -13,6 +13,8 @@ use crate::file_watch::{self, ReconcileOutcome};
 use crate::goto_definition::{GotoDefinitionState, Target as GotoDefinitionTarget};
 use crate::runtime_inventory::{self, RuntimeInventories};
 use crate::lsp_settings::LspSettings;
+#[cfg(test)]
+use crate::lsp_settings::ServerSettings;
 use crate::lsp_state::LspState;
 use crate::panels::bottom_dock::{self, BottomDock, BottomTab};
 use crate::panels::build_panel;
@@ -104,11 +106,6 @@ const TRIM_TRAILING_WHITESPACE_KEY: &str = "trim_trailing_whitespace_on_save";
 const AUTO_SAVE_MODE_ON_FOCUS_LOSS: &str = "on_focus_loss";
 const AUTO_SAVE_MODE_AFTER_IDLE: &str = "after_idle";
 const LSP_ENABLED_KEY: &str = "lsp_enabled";
-const LSP_JDTLS_BINARY_KEY: &str = "lsp_jdtls_binary";
-const LSP_JDTLS_INSTALLED_VERSION_KEY: &str = "lsp_jdtls_installed_version";
-const LSP_JDTLS_JAVA_HOME_KEY: &str = "lsp_jdtls_java_home";
-const LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY: &str = "lsp_kotlin_language_server_binary";
-const LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY: &str = "lsp_kotlin_language_server_installed_version";
 
 /// The editor's default code-font point size, before any Settings > Font
 /// Size adjustment.
@@ -1121,23 +1118,42 @@ fn restore_settings(
     if let Some(enabled) = storage.get_string(LSP_ENABLED_KEY) {
         lsp_settings.enabled = enabled == "true";
     }
-    if let Some(path) = storage.get_string(LSP_JDTLS_BINARY_KEY) {
-        lsp_settings.jdtls_binary = path;
-    }
-    if let Some(version) = storage.get_string(LSP_JDTLS_INSTALLED_VERSION_KEY) {
-        lsp_settings.jdtls_installed_version = version;
-    }
-    if let Some(home) = storage.get_string(LSP_JDTLS_JAVA_HOME_KEY) {
-        lsp_settings.jdtls_java_home = home;
-    }
-    if let Some(path) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY) {
-        lsp_settings.kotlin_language_server_binary = path;
-    }
-    if let Some(version) = storage.get_string(LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY) {
-        lsp_settings.kotlin_language_server_installed_version = version;
+    for server in languages.language_servers() {
+        let keys = lsp_server_keys(&server.id);
+        let (binary, installed_version) = lsp_settings.fields_for(&server.id);
+        if let Some(path) = storage.get_string(&keys.binary) {
+            *binary = path;
+        }
+        if let Some(version) = storage.get_string(&keys.installed_version) {
+            *installed_version = version;
+        }
+        if server.host_runtime.is_some()
+            && let Some(home) = storage.get_string(&keys.runtime_home)
+        {
+            *lsp_settings.runtime_home_mut(&server.id) = home;
+        }
     }
     for handle in languages.runtimes() {
         runtimes.insert(handle.id().to_string(), runtime_inventory::restore(storage, handle.id()));
+    }
+}
+
+/// The storage keys of one language server's settings: `lsp_<id>_binary` and
+/// friends with `-` as `_`, which spells exactly the keys the two JVM servers
+/// always used. The runtime home keeps its original `_java_home` suffix so
+/// an existing install's choice survives the move to per-server settings.
+struct LspServerKeys {
+    binary: String,
+    installed_version: String,
+    runtime_home: String,
+}
+
+fn lsp_server_keys(server_id: &str) -> LspServerKeys {
+    let stem = format!("lsp_{}", server_id.replace('-', "_"));
+    LspServerKeys {
+        binary: format!("{stem}_binary"),
+        installed_version: format!("{stem}_installed_version"),
+        runtime_home: format!("{stem}_java_home"),
     }
 }
 
@@ -1216,20 +1232,15 @@ fn persist_settings(
         trim_trailing_whitespace_on_save.to_string(),
     );
     storage.set_string(LSP_ENABLED_KEY, lsp_settings.enabled.to_string());
-    storage.set_string(LSP_JDTLS_BINARY_KEY, lsp_settings.jdtls_binary.clone());
-    storage.set_string(
-        LSP_JDTLS_INSTALLED_VERSION_KEY,
-        lsp_settings.jdtls_installed_version.clone(),
-    );
-    storage.set_string(LSP_JDTLS_JAVA_HOME_KEY, lsp_settings.jdtls_java_home.clone());
-    storage.set_string(
-        LSP_KOTLIN_LANGUAGE_SERVER_BINARY_KEY,
-        lsp_settings.kotlin_language_server_binary.clone(),
-    );
-    storage.set_string(
-        LSP_KOTLIN_LANGUAGE_SERVER_INSTALLED_VERSION_KEY,
-        lsp_settings.kotlin_language_server_installed_version.clone(),
-    );
+    for server in languages.language_servers() {
+        let keys = lsp_server_keys(&server.id);
+        let configured = lsp_settings.servers.get(&server.id).cloned().unwrap_or_default();
+        storage.set_string(&keys.binary, configured.binary);
+        storage.set_string(&keys.installed_version, configured.installed_version);
+        if server.host_runtime.is_some() {
+            storage.set_string(&keys.runtime_home, configured.runtime_home);
+        }
+    }
     for (kind, inventory) in runtimes {
         runtime_inventory::persist(storage, kind, inventory);
     }
@@ -2566,32 +2577,40 @@ impl eframe::App for FoxGardenApp {
         // a background thread with no input event to ride in on, so its
         // dialog needs repaints requested for it the same way `lsp_state`'s
         // own background replies do.
-        for (server, result) in self.lsp_servers.manager.poll_installs() {
+        for (server_id, result) in self.lsp_servers.manager.poll_installs() {
             match result {
                 Ok(installed) => self.lsp_settings.apply_installed(&installed),
-                Err(err) => crate::errors::report(
-                    &mut self.last_error,
-                    msg::language_server_install_failed(server.display_name(), &err.to_string()),
-                ),
+                Err(err) => {
+                    let name = self
+                        .lsp_servers
+                        .installers()
+                        .iter()
+                        .find(|server| server.id() == server_id)
+                        .map_or(server_id.as_str(), |server| server.display_name());
+                    crate::errors::report(
+                        &mut self.last_error,
+                        msg::language_server_install_failed(name, &err.to_string()),
+                    );
+                }
             }
         }
         for (server, result) in self.lsp_servers.manager.poll_checks() {
             self.lsp_servers.record_latest_version(server, result);
         }
-        // A finished JDK scan always wins over what's in the field: it only
-        // ever runs because the field was empty when the dialog opened, or
-        // because Detect was clicked — which is a direct request to replace
-        // whatever is there. A machine with no JDK 21+ leaves it empty, so
-        // jdt.ls still falls back to JAVA_HOME/PATH.
-        if let Some(found) = self.lsp_servers.manager.poll_java_home_detection() {
+        // A finished runtime scan always wins over what's in the field: it
+        // only ever runs because the field was empty when the dialog opened,
+        // or because Detect was clicked — which is a direct request to
+        // replace whatever is there. A machine with no qualifying install
+        // leaves it empty, so the server falls back to its own lookup.
+        for (server_id, found) in self.lsp_servers.manager.poll_runtime_detections() {
             if let Some(home) = &found {
-                self.lsp_settings.jdtls_java_home = home.display().to_string();
+                *self.lsp_settings.runtime_home_mut(&server_id) = home.display().to_string();
             }
-            // A machine with no JDK 21+ is reported inside the dialog next
-            // to the field itself, not as an app-wide error: the scan runs
-            // unprompted whenever the dialog opens empty, and a modal error
-            // over the dialog the user just opened would be noise.
-            self.lsp_servers.record_java_home_detection(found.is_some());
+            // A machine with no qualifying install is reported inside the
+            // dialog next to the field itself, not as an app-wide error: the
+            // scan runs unprompted whenever the dialog opens empty, and a
+            // modal error over the dialog the user just opened would be noise.
+            self.lsp_servers.record_runtime_detection(server_id, found.is_some());
         }
         if self.lsp_servers.manager.busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));

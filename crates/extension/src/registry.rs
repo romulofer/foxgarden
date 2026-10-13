@@ -6,7 +6,7 @@ use crate::{
     AnalyzerContribution, AnalyzerHandle, BuildToolContribution, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
     ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
-    RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerStartContext,
+    RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerInstallHandle, ServerStartContext,
     CURRENT_SCHEMA_VERSION,
 };
 
@@ -632,6 +632,19 @@ impl Registry {
         self.analyzers
             .iter()
             .map(|(analyzer, idx)| AnalyzerHandle::new(analyzer.clone(), self.extensions[*idx].clone()))
+            .collect()
+    }
+
+    /// Every language server with an installer, in registration order — what
+    /// Settings > Language Servers lists a section for.
+    pub fn server_installs(&self) -> Vec<ServerInstallHandle> {
+        self.language_servers
+            .iter()
+            .filter_map(|server| {
+                let install = server.install.clone()?;
+                let idx = *self.server_extension.get(&server.id)?;
+                Some(ServerInstallHandle::new(server.clone(), install, self.extensions[idx].clone()))
+            })
             .collect()
     }
 

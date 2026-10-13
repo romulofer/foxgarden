@@ -28,7 +28,6 @@ use lsp_types::{
 };
 
 use crate::lsp_client::{LspSession, ResponseError, Waker};
-use crate::lsp_manager;
 use crate::lsp_settings::LspSettings;
 
 fn slot_display_name(slot: &Slot) -> &str {
@@ -156,18 +155,14 @@ impl LspState {
             .map(|lang| lang.id())
             .collect();
 
-        // Convert lsp_manager runtimes to fg_extension::JdkRuntime for the context.
-        let jdk_runtimes: Vec<fg_extension::JdkRuntime> = lsp_manager::runtimes_snapshot()
-            .into_iter()
-            .map(|r| fg_extension::JdkRuntime { major: r.major, name: r.name, path: r.path })
-            .collect();
+        let jdk_runtimes = registry.jdk_runtimes();
 
         for server in registry.language_servers() {
             let needed = server.language_ids.iter().any(|id| open_language_ids.contains(id.as_str()));
             let java_release = project_root.and_then(|root| self.java_release.release_for(root, registry));
             let ctx = ServerStartContext {
                 configured_binary: settings.binary_for(&server.id).to_string(),
-                java_home: settings.java_home_for(&server.id).to_string(),
+                runtime_home: settings.runtime_home_for(&server.id).to_string(),
                 java_release,
                 jdk_runtimes: jdk_runtimes.clone(),
             };

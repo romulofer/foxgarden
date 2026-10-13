@@ -5,6 +5,7 @@ use fg_extension::{
 };
 
 use super::*;
+use crate::lsp_manager;
 
 /// A `Waker` for tests that don't assert on wakeups — nothing here runs a
 /// UI event loop, so there is nothing to wake.
@@ -60,6 +61,8 @@ impl Extension for AlwaysOkExtension {
                 binary_name: String::new(),
                 args: Vec::new(),
                 initialization_options: None,
+                install: None,
+                host_runtime: None,
             }],
             ..Default::default()
         }
@@ -97,6 +100,8 @@ fn test_server(server_id: &str, language_id: &str) -> LanguageServerContribution
         binary_name: String::new(),
         args: Vec::new(),
         initialization_options: None,
+        install: None,
+        host_runtime: None,
     }
 }
 
@@ -105,9 +110,9 @@ fn desired_config_requires_opt_in_root_language_and_binary() {
     let registry = test_registry("jdtls", "java");
     let settings = LspSettings {
         enabled: true,
-        jdtls_binary: "jdtls".to_string(),
         ..Default::default()
-    };
+    }
+    .with_binary("jdtls", "jdtls");
     let root = Path::new(".");
     let ctx = ServerStartContext {
         configured_binary: "jdtls".to_string(),
@@ -143,9 +148,9 @@ fn desired_config_carries_the_projects_declared_java_release_in_restart_key() {
     let registry = test_registry("jdtls", "java");
     let settings = LspSettings {
         enabled: true,
-        jdtls_binary: "jdtls".to_string(),
         ..Default::default()
-    };
+    }
+    .with_binary("jdtls", "jdtls");
 
     let mut cache = JavaReleaseCache::default();
     // The real registry, not this test's fake one: reading a release out of
@@ -688,12 +693,12 @@ fn java_hover_against_a_real_server_documents_a_project_owned_symbol() {
     let dir = test_support::tempdir();
     let path = test_support::write_file(dir.path(), "Sample.java", source);
     let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
-    let settings = LspSettings {
+    let mut settings = LspSettings {
         enabled: true,
-        jdtls_binary: binary.display().to_string(),
-        jdtls_java_home: std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default(),
         ..Default::default()
-    };
+    }
+    .with_binary("jdtls", &binary.display().to_string());
+    *settings.runtime_home_mut("jdtls") = std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default();
 
     let mut state = LspState::default();
     sync_until_java_ready(&mut state, &settings, dir.path(), &mut doc, test_support::languages());
@@ -792,12 +797,12 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     assert!(compile.success(), "real mvn compile of the fixture project failed");
 
     let mut doc = Document::open(main_dir.join("Main.java"), test_support::languages()).expect("open the fixture");
-    let settings = LspSettings {
+    let mut settings = LspSettings {
         enabled: true,
-        jdtls_binary: binary.display().to_string(),
-        jdtls_java_home: std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default(),
         ..Default::default()
-    };
+    }
+    .with_binary("jdtls", &binary.display().to_string());
+    *settings.runtime_home_mut("jdtls") = std::env::var("FOXGARDEN_JDTLS_JAVA_HOME").unwrap_or_default();
     let mut state = LspState::default();
     sync_until_java_ready(&mut state, &settings, root, &mut doc, test_support::languages());
 
@@ -964,9 +969,9 @@ fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
     let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
     let settings = LspSettings {
         enabled: true,
-        kotlin_language_server_binary: binary.display().to_string(),
         ..Default::default()
-    };
+    }
+    .with_binary("kotlin-language-server", &binary.display().to_string());
 
     let mut state = LspState::default();
     // The handshake (and the `didOpen` `sync` sends with it) completes

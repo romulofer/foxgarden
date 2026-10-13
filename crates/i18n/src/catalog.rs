@@ -277,9 +277,7 @@ pub struct Lsp {
     /// Placeholder in the empty binary-path field — points at what to do
     /// when nothing is configured yet.
     pub binary_hint: &'static str,
-    pub java_home: &'static str,
     /// Hover on the Java Home label — why it exists and what blank means.
-    pub java_home_hover: &'static str,
     pub detect: &'static str,
     pub detect_hint: &'static str,
     pub project_java: &'static str,
@@ -409,7 +407,7 @@ pub struct StatusBar {
     /// Shown when nothing at all is running, so the bar keeps its height
     /// (and its meaning: "the app is not busy", not "the bar is broken").
     pub ready: &'static str,
-    pub detecting_java_home: &'static str,
+    pub detecting_runtime: &'static str,
     pub scanning_classpath: &'static str,
     pub running_git: &'static str,
 }
@@ -715,12 +713,8 @@ pub const PT_BR: Strings = Strings {
         up_to_date: "Atualizado",
         binary: "Binário",
         binary_hint: "caminho do executável, ou use Instalar",
-        java_home: "Java Home",
-        java_home_hover: "O jdt.ls precisa de um JDK 21+ para rodar. Preenchido automaticamente com o JDK 21+ mais novo \
-                          encontrado nesta máquina; edite para apontar para outro (ex.: \
-                          ~/.sdkman/candidates/java/21.0.11-zulu). Vazio usa JAVA_HOME/PATH.",
         detect: "Detectar",
-        detect_hint: "Procura um JDK 21 ou mais novo em JAVA_HOME, no PATH e nos diretórios de instalação usuais.",
+        detect_hint: "Procura nesta máquina uma instalação em que o servidor consiga rodar.",
         project_java: "Java do Projeto",
         project_java_hover: "Lido dos arquivos de build do projeto (pom.xml, build.gradle, .java-version). Fontes Java e \
                              Kotlin são diagnosticadas neste release, usando o JDK correspondente da lista encontrada \
@@ -803,7 +797,7 @@ pub const PT_BR: Strings = Strings {
         plain_text: "Texto",
         diagnostics_hint: "Erros e avisos neste arquivo",
         ready: "Pronto",
-        detecting_java_home: "Procurando um JDK…",
+        detecting_runtime: "Procurando um runtime…",
         scanning_classpath: "Lendo o classpath do projeto…",
         running_git: "Consultando o git…",
     },
@@ -1089,12 +1083,8 @@ pub const EN_US: Strings = Strings {
         up_to_date: "Up to date",
         binary: "Binary",
         binary_hint: "path to the executable, or use Install",
-        java_home: "Java Home",
-        java_home_hover: "jdt.ls requires a JDK 21+ to run. Filled in automatically from the newest JDK 21+ found on \
-                          this machine; edit it to point at a different one (e.g. ~/.sdkman/candidates/java/21.0.11-zulu). \
-                          Blank falls back to JAVA_HOME/PATH.",
         detect: "Detect",
-        detect_hint: "Scans JAVA_HOME, PATH and the usual JDK install directories for a JDK 21 or newer.",
+        detect_hint: "Scans this machine for an install the server can run on.",
         project_java: "Project Java",
         project_java_hover: "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and \
                              Kotlin sources are diagnosed at this release, using the matching JDK from the list found \
@@ -1177,7 +1167,7 @@ pub const EN_US: Strings = Strings {
         plain_text: "Plain Text",
         diagnostics_hint: "Errors and warnings in this file",
         ready: "Ready",
-        detecting_java_home: "Looking for a JDK…",
+        detecting_runtime: "Looking for a runtime…",
         scanning_classpath: "Reading the project classpath…",
         running_git: "Running git…",
     },

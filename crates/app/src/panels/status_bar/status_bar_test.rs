@@ -82,7 +82,7 @@ fn every_flag_produces_its_own_line() {
         running_analyzers: vec!["Checkstyle".to_string(), "PMD".to_string()],
         scanning_classpath: true,
         running_git: true,
-        detecting_java_home: true,
+        detecting_runtime: true,
         checking_versions: vec!["Checkstyle".to_string()],
         ..BackgroundWork::default()
     };
@@ -94,7 +94,7 @@ fn every_flag_produces_its_own_line() {
             "Lendo o classpath do projeto…",
             "Consultando o git…",
             "Verificando atualizações de Checkstyle…",
-            "Procurando um JDK…",
+            "Procurando um runtime…",
         ]
     );
 }
@@ -107,7 +107,7 @@ fn a_starting_server_outranks_every_other_running_job() {
     let work = BackgroundWork {
         starting_servers: vec!["Kotlin Language Server".to_string()],
         checking_versions: vec!["PMD".to_string()],
-        detecting_java_home: true,
+        detecting_runtime: true,
         running_git: true,
         ..BackgroundWork::default()
     };

@@ -36,6 +36,7 @@ mod imports;
 mod info;
 mod registry;
 mod runtimes;
+mod servers;
 mod tooling;
 
 pub use analyzers::{
@@ -49,6 +50,7 @@ pub use imports::{DocStub, ImportCandidate, ImportEdit};
 pub use info::ExtensionInfo;
 pub use registry::{RegisterError, Registry};
 pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
+pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
     CoverageReport, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
@@ -240,6 +242,29 @@ pub struct LanguageServerContribution {
     pub args: Vec<String>,
     /// LSP `initializationOptions`, as unparsed JSON. `None` sends none.
     pub initialization_options: Option<String>,
+    /// How to install the server from bytes the extension carries. `None`
+    /// for a server the user provides themselves.
+    pub install: Option<ServerInstall>,
+    /// The runtime the server itself runs on (a JVM, say), when it has one
+    /// the user may need to point it at. `None` for a self-contained binary.
+    pub host_runtime: Option<HostRuntime>,
+}
+
+/// The runtime a language server runs on, and the oldest version it accepts.
+/// The settings dialog offers a home-directory field for it, filled in from
+/// the matching [`RuntimeContribution`]'s discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRuntime {
+    /// The id of the [`RuntimeContribution`] whose installs can host it.
+    pub runtime_id: String,
+    /// The oldest `RuntimeInstall::major_version` the server runs on.
+    pub minimum_major_version: u32,
+    /// The field's label: `"Java Home"`.
+    pub home_label: String,
+    /// Explains the requirement, shown as the field's tooltip.
+    pub note: String,
+    /// Shown under the field when a scan found no install that qualifies.
+    pub none_found: String,
 }
 
 /// One JDK installation, for extensions that need to communicate which JVMs
@@ -265,9 +290,10 @@ pub struct ServerStartContext {
     /// (jdt.ls cannot be found on `PATH` by a bare name); a server started
     /// as declared falls back to its `binary_name`, looked up on `PATH`.
     pub configured_binary: String,
-    /// A JVM home hint from settings (empty = auto-detect). Only meaningful
-    /// for servers that run on the JVM themselves.
-    pub java_home: String,
+    /// The home of the runtime the server runs on, from settings (empty =
+    /// auto-detect). Only meaningful for servers that declare a
+    /// `LanguageServerContribution::host_runtime`.
+    pub runtime_home: String,
     /// The Java release the current project declares, if any.
     pub java_release: Option<u32>,
     /// Every JDK found on this machine, for servers that need to tell the
@@ -357,6 +383,20 @@ pub trait Extension: Send + Sync {
     /// on every call just to find one server, which is per-frame work.
     fn resolve_server_start(&self, _server_id: &str, _context: &ServerStartContext) -> Option<Result<ResolvedServerStart, String>> {
         None
+    }
+
+    /// The bundled archive of server `server_id`, described by its
+    /// `LanguageServerContribution::install`. `None` — the default — for a
+    /// server this extension does not carry.
+    fn server_archive(&self, _server_id: &str) -> Option<&'static [u8]> {
+        None
+    }
+
+    /// Whether this machine can run server `server_id` (a missing or too-old
+    /// runtime, say), checked before its archive is extracted. `Err` is a
+    /// message for the user. Blocking: called off the UI thread.
+    fn check_server_prerequisites(&self, _server_id: &str) -> Result<(), String> {
+        Ok(())
     }
 
     /// The process that performs `task` for build tool `tool_id`, or `None`

@@ -1,13 +1,26 @@
 
 use super::*;
 
+fn server(id: &str) -> ServerInstallHandle {
+    test_support::languages()
+        .server_installs()
+        .into_iter()
+        .find(|server| server.id() == id)
+        .unwrap_or_else(|| panic!("no installable server {id}"))
+}
+
+fn all_servers() -> Vec<ServerInstallHandle> {
+    test_support::languages().server_installs()
+}
+
 #[test]
 fn launcher_paths_match_each_artifacts_real_layout() {
+    let launcher = |id: &str| server(id).install.launcher.iter().collect::<PathBuf>();
     assert_eq!(
-        Server::KotlinLanguageServer.launcher_path(),
+        launcher("kotlin-language-server"),
         Path::new("server").join("bin").join("kotlin-language-server")
     );
-    assert_eq!(Server::Jdtls.launcher_path(), Path::new("bin").join("jdtls"));
+    assert_eq!(launcher("jdtls"), Path::new("bin").join("jdtls"));
 }
 
 /// Only the vendored version can actually be installed — asking for
@@ -15,11 +28,11 @@ fn launcher_paths_match_each_artifacts_real_layout() {
 /// wrong bytes under the requested version's label.
 #[test]
 fn install_sync_rejects_a_version_that_is_not_the_bundled_one() {
-    let error = install_sync(Server::Jdtls, "1.59.0", &|_| {}).expect_err("not vendored");
-    assert!(error.contains("1.60.0"), "{error}");
-    assert!(error.contains("1.59.0"), "{error}");
+    let jdtls = server("jdtls");
+    let error = install_sync(&jdtls, "0.0.1", &|_| {}).expect_err("not vendored");
+    assert!(error.contains(&jdtls.install.version), "{error}");
+    assert!(error.contains("0.0.1"), "{error}");
 }
-
 
 #[test]
 fn latest_tag_reads_a_release_response() {
@@ -51,18 +64,9 @@ fn latest_tag_on_an_unusable_response_is_none() {
 /// install is currently being run out of.
 #[test]
 fn install_dirs_are_per_server_and_per_version() {
-    assert_ne!(
-        install_dir_name(Server::Jdtls, "1.60.0"),
-        install_dir_name(Server::Jdtls, "1.59.0")
-    );
-    assert_ne!(
-        install_dir_name(Server::Jdtls, "1.60.0"),
-        install_dir_name(Server::KotlinLanguageServer, "1.60.0")
-    );
+    assert_ne!(install_dir("jdtls", "1.60.0"), install_dir("jdtls", "1.59.0"));
+    assert_ne!(install_dir("jdtls", "1.60.0"), install_dir("kotlin-language-server", "1.60.0"));
 }
-
-// `java_major_version`'s own tests now live in `crate::jdk` (Track 29
-// Phase 1) — `lsp_manager` no longer defines that function itself.
 
 /// Whether this build actually has the vendored archives, rather than
 /// the Git LFS pointer files a clone without `git lfs` leaves in their
@@ -77,12 +81,11 @@ fn install_dirs_are_per_server_and_per_version() {
 /// still loud — `reject_lfs_pointer` refuses the install at runtime
 /// with an instruction to run `git lfs pull`.
 fn vendored_archives_present() -> bool {
-    let missing = ALL_SERVERS
+    let missing = all_servers()
         .iter()
-        .any(|server| reject_lfs_pointer(server.bundled_archive()).is_err())
-;
+        .any(|server| server.archive().is_none_or(|archive| reject_lfs_pointer(archive).is_err()));
     if missing {
-        eprintln!("skipping: vendor/lsp-servers/ holds Git LFS pointers, not the real archives — run `git lfs pull`");
+        eprintln!("skipping: the extension's vendored archives are Git LFS pointers, not the real archives — run `git lfs pull`");
     }
     !missing
 }
@@ -90,7 +93,7 @@ fn vendored_archives_present() -> bool {
 /// End-to-end against the real vendored archives — no network, no
 /// `#[ignore]` needed, since the bytes are already embedded in the test
 /// binary: extracts each server's bundled archive and proves the
-/// launcher lands exactly where `launcher_path` claims, executable.
+/// launcher lands exactly where the contribution claims, executable.
 /// Goes through `extract_zip`/`extract_tar_gz` directly rather than
 /// `install_bundled` — this proves the *archive layout*, which doesn't
 /// depend on this machine happening to have a JDK 21 on it (a separate
@@ -101,15 +104,16 @@ fn bundled_archives_extract_with_the_launcher_at_its_documented_path() {
     if !vendored_archives_present() {
         return;
     }
-    for server in ALL_SERVERS {
+    for server in all_servers() {
         let dir = test_support::tempdir();
-        match server {
-            Server::Jdtls => extract_tar_gz(server.bundled_archive(), dir.path()),
-            Server::KotlinLanguageServer => extract_zip(server.bundled_archive(), dir.path()),
+        let archive = server.archive().expect("bundled");
+        match server.install.archive {
+            ArchiveKind::TarGz => extract_tar_gz(archive, dir.path()),
+            ArchiveKind::Zip => extract_zip(archive, dir.path()),
         }
         .expect("extracts");
 
-        let launcher = dir.path().join(server.launcher_path());
+        let launcher = dir.path().join(server.install.launcher.iter().collect::<PathBuf>());
         assert!(launcher.is_file(), "{}", launcher.display());
         #[cfg(unix)]
         {
@@ -139,87 +143,14 @@ fn an_lfs_pointer_is_reported_as_itself_rather_than_as_a_broken_archive() {
     }
 }
 
-/// Ordering is the whole point of the candidate list: a machine with
-/// several JDKs installed must be offered its newest one, and plain
-/// lexicographic order would rank `java-8` above `java-21`.
-#[test]
-fn java_home_candidates_rank_a_search_roots_installs_newest_first() {
-    let root = test_support::tempdir();
-    for name in ["java-8-openjdk", "java-21-openjdk", "java-17-openjdk"] {
-        let bin = root.path().join(name).join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("java"), b"#!/bin/sh\n").unwrap();
-    }
-
-    let candidates = java_home_candidates(None, None, &[root.path().to_path_buf()]);
-
-    let names: Vec<_> = candidates
-        .iter()
-        .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert_eq!(names, ["java-21-openjdk", "java-17-openjdk", "java-8-openjdk"]);
-}
-
-/// `JAVA_HOME` and `PATH` are what jdt.ls' own launcher would pick, so
-/// detection agrees with the machine's configured default whenever that
-/// default is new enough — and never offers the same home twice.
-#[test]
-fn java_home_candidates_lead_with_java_home_then_path_and_never_repeat_one() {
-    let root = test_support::tempdir();
-    let configured = root.path().join("configured");
-    let on_path = root.path().join("on-path");
-    for home in [&configured, &on_path] {
-        std::fs::create_dir_all(home.join("bin")).unwrap();
-        std::fs::write(home.join("bin").join("java"), b"#!/bin/sh\n").unwrap();
-    }
-
-    let candidates = java_home_candidates(
-        Some(configured.clone()),
-        Some(on_path.join("bin").join("java")),
-        // The same two homes again, as a search root would find them.
-        &[root.path().to_path_buf()],
-    );
-
-    assert_eq!(candidates, [configured, on_path]);
-}
-
-/// A directory that isn't a JDK at all can't be a candidate, however
-/// promising its name — `bin/java` has to actually be there.
-#[test]
-fn java_home_candidates_skip_a_directory_with_no_java_in_it() {
-    let root = test_support::tempdir();
-    std::fs::create_dir_all(root.path().join("java-21-not-really")).unwrap();
-    assert!(java_home_candidates(None, None, &[root.path().to_path_buf()]).is_empty());
-}
-
-/// macOS ships JDKs as bundles, where the home is `Contents/Home` under
-/// the install directory rather than the directory itself.
-#[test]
-fn java_home_candidates_understand_the_macos_bundle_layout() {
-    let root = test_support::tempdir();
-    let home = root.path().join("temurin-21.jdk").join("Contents").join("Home");
-    std::fs::create_dir_all(home.join("bin")).unwrap();
-    std::fs::write(home.join("bin").join("java"), b"#!/bin/sh\n").unwrap();
-
-    assert_eq!(java_home_candidates(None, None, &[root.path().to_path_buf()]), [home]);
-}
-
-#[test]
-fn version_hint_reads_the_major_version_out_of_a_jdk_directory_name() {
-    assert_eq!(version_hint("java-21-openjdk-amd64"), 21);
-    assert_eq!(version_hint("21.0.11-zulu"), 21);
-    assert_eq!(version_hint("temurin-17.jdk"), 17);
-    assert_eq!(version_hint("openjdk"), 0);
-}
-
 #[test]
 fn state_starts_idle() {
     let state = LspManagerState::default();
     assert!(!state.busy());
-    for server in ALL_SERVERS {
-        assert!(!state.installing(server));
-        assert!(!state.checking(server));
-        assert!(state.status(server).is_none());
+    for server in all_servers() {
+        assert!(!state.installing(server.id()));
+        assert!(!state.checking(server.id()));
+        assert!(state.status(server.id()).is_none());
     }
 }
 
@@ -233,17 +164,17 @@ fn install_ignores_a_second_click_while_one_is_already_running() {
     let mut state = LspManagerState::default();
     let (tx, rx) = channel::<InstallEvent>();
     state.installs.insert(
-        Server::Jdtls,
+        "jdtls".to_string(),
         InstallJob {
             rx,
             status: "Building…".to_string(),
         },
     );
 
-    state.install(Server::Jdtls, "1.60.0".to_string());
+    state.install(server("jdtls"), "1.60.0".to_string());
 
     assert_eq!(state.installs.len(), 1);
-    assert_eq!(state.status(Server::Jdtls), Some("Building…"));
+    assert_eq!(state.status("jdtls"), Some("Building…"));
     drop(tx);
 }
 
@@ -252,7 +183,7 @@ fn poll_installs_reports_progress_in_place_and_only_removes_a_finished_job() {
     let mut state = LspManagerState::default();
     let (tx, rx) = channel();
     state.installs.insert(
-        Server::Jdtls,
+        "jdtls".to_string(),
         InstallJob {
             rx,
             status: "Starting…".to_string(),
@@ -261,17 +192,17 @@ fn poll_installs_reports_progress_in_place_and_only_removes_a_finished_job() {
 
     tx.send(InstallEvent::Progress("Cloning…".to_string())).unwrap();
     assert!(state.poll_installs().is_empty());
-    assert_eq!(state.status(Server::Jdtls), Some("Cloning…"));
+    assert_eq!(state.status("jdtls"), Some("Cloning…"));
 
     let installed = Installed {
-        server: Server::Jdtls,
+        server: "jdtls".to_string(),
         version: "1.60.0".to_string(),
         binary: PathBuf::from("/tmp/jdtls"),
     };
     tx.send(InstallEvent::Progress("Building…".to_string())).unwrap();
     tx.send(InstallEvent::Finished(Ok(installed.clone()))).unwrap();
 
-    assert_eq!(state.poll_installs(), vec![(Server::Jdtls, Ok(installed))]);
-    assert!(!state.installing(Server::Jdtls));
+    assert_eq!(state.poll_installs(), vec![("jdtls".to_string(), Ok(installed))]);
+    assert!(!state.installing("jdtls"));
     assert!(!state.busy());
 }

@@ -23,7 +23,6 @@ use crate::style::icons;
 use crate::style::indent::IndentSettings;
 
 use crate::debug_state::{DebugState, DebugStatus};
-use crate::lsp_manager::{ALL_SERVERS, LspManagerState};
 use crate::lsp_state::LspState;
 use crate::panels::git_diff::DiffState;
 use crate::panels::git_stage::GitStageState;
@@ -59,8 +58,8 @@ pub struct BackgroundWork {
     /// Display names of the servers/tools whose "Check for Updates" is
     /// still waiting on the GitHub API.
     pub checking_versions: Vec<String>,
-    /// A `detect_java_home` scan of this machine's JDK installs.
-    pub detecting_java_home: bool,
+    /// A `detect_runtime_home` scan of this machine's runtime installs.
+    pub detecting_runtime: bool,
     /// Display names of the analyzers with a scan in flight.
     pub running_analyzers: Vec<String>,
     /// A `mvn`/`gradle` classpath resolution feeding config
@@ -98,14 +97,13 @@ impl BackgroundWork {
         diff: &DiffState,
         debug: &DebugState,
     ) -> Self {
-        let servers = &lsp_servers.manager;
-        let tools = &static_analysis.tool_manager;
+                let tools = &static_analysis.tool_manager;
         Self {
             starting_servers: lsp.starting_servers(),
             indexing_servers: lsp.indexing_servers(),
-            installing: installing_servers(servers).chain(installing_tools(tools, analyzers)).collect(),
-            checking_versions: checking_servers(servers).chain(checking_tools(tools, analyzers)).collect(),
-            detecting_java_home: servers.detecting_java_home(),
+            installing: installing_servers(lsp_servers).chain(installing_tools(tools, analyzers)).collect(),
+            checking_versions: checking_servers(lsp_servers).chain(checking_tools(tools, analyzers)).collect(),
+            detecting_runtime: lsp_servers.manager.detecting_any_runtime_home(),
             running_analyzers: analyzers
                 .iter()
                 .filter(|analyzer| static_analysis.running(analyzer.id()))
@@ -122,11 +120,17 @@ impl BackgroundWork {
     }
 }
 
-fn installing_servers(servers: &LspManagerState) -> impl Iterator<Item = (String, Option<String>)> {
-    ALL_SERVERS
-        .into_iter()
-        .filter(|&server| servers.installing(server))
-        .map(|server| (server.display_name().to_string(), servers.status(server).map(str::to_string)))
+fn installing_servers(servers: &LspServersState) -> impl Iterator<Item = (String, Option<String>)> {
+    servers
+        .installers()
+        .iter()
+        .filter(|server| servers.manager.installing(server.id()))
+        .map(|server| {
+            (
+                server.display_name().to_string(),
+                servers.manager.status(server.id()).map(str::to_string),
+            )
+        })
 }
 
 fn installing_tools<'a>(
@@ -139,10 +143,11 @@ fn installing_tools<'a>(
         .map(|analyzer| (analyzer.display_name().to_string(), None))
 }
 
-fn checking_servers(servers: &LspManagerState) -> impl Iterator<Item = String> {
-    ALL_SERVERS
-        .into_iter()
-        .filter(|&server| servers.checking(server))
+fn checking_servers(servers: &LspServersState) -> impl Iterator<Item = String> {
+    servers
+        .installers()
+        .iter()
+        .filter(|server| servers.manager.checking(server.id()))
         .map(|server| server.display_name().to_string())
 }
 
@@ -217,8 +222,8 @@ pub fn activities(work: &BackgroundWork) -> Vec<Activity> {
     for name in &work.checking_versions {
         activities.push(Activity::new(msg::checking_for_updates_to(name)));
     }
-    if work.detecting_java_home {
-        activities.push(Activity::new(t().status_bar.detecting_java_home.to_string()));
+    if work.detecting_runtime {
+        activities.push(Activity::new(t().status_bar.detecting_runtime.to_string()));
     }
     if work.debug_starting {
         activities.push(Activity::new(t().common.running_debug.to_string()));

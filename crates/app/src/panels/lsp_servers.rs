@@ -1,5 +1,5 @@
 //! Settings > Language Servers… — the modal that owns everything about the
-//! two opt-in language servers: the master on/off switch, each server's
+//! opt-in language servers: the master on/off switch, each server's
 //! binary path, and installing/updating the servers themselves through
 //! `crate::lsp_manager`.
 //!
@@ -10,9 +10,10 @@
 //! `widgets::modal::show_modal` skeleton Settings > External Tools… already
 //! uses for exactly this shape of dialog) can.
 
-use crate::lsp_manager::{ALL_SERVERS, LatestVersionResult, LspManagerState, Server};
+use crate::lsp_manager::{LatestVersionResult, LspManagerState};
 use crate::lsp_settings::LspSettings;
 use crate::widgets::modal::show_modal;
+use fg_extension::ServerInstallHandle;
 use fg_i18n::{msg, t};
 
 /// Dialog-open flag plus the background install/update-check machinery it
@@ -26,24 +27,32 @@ pub struct LspServersState {
     /// The last "Check for Updates" answer per server, for display only —
     /// session-only and never persisted, since Install always installs a
     /// specific chosen version rather than silently tracking whatever is
-    /// newest (see `lsp_manager::Server::recommended_version`).
-    latest_versions: std::collections::HashMap<Server, LatestVersionResult>,
-    /// Whether the last finished JDK scan came up empty — shown beside the
-    /// Java Home field, since that's the field it's about. `false` before
-    /// any scan has finished, so nothing is claimed until one has.
-    no_java_home_found: bool,
+    /// newest (see `ServerInstall::version`).
+    latest_versions: std::collections::HashMap<String, LatestVersionResult>,
+    /// Every server with an installer, kept from `open_settings` so the
+    /// dialog and the status bar can name them without the registry.
+    installers: Vec<ServerInstallHandle>,
+    /// Servers whose last finished runtime scan came up empty — shown beside
+    /// the runtime home field, since that's the field it's about. A server
+    /// is absent before any scan has finished, so nothing is claimed until
+    /// one has.
+    no_runtime_found: std::collections::HashSet<String>,
     /// The open project's own declared Java release, read when the dialog
     /// opens. Display only — `lsp_state` detects this itself for the session
     /// it configures; showing it here is what makes "why is this linted as
     /// Java 8?" answerable without guessing.
     project_release: Option<fg_core::ProjectRelease>,
+    /// The registry's runtime inventories, kept from `open_settings` so the
+    /// "Detect" button can scan on a background thread without the registry.
+    runtimes: Vec<fg_extension::RuntimeHandle>,
 }
 
 impl LspServersState {
-    /// Opens the dialog, and — when no Java Home is configured yet — starts
-    /// the background JDK scan that fills that field in, so it's already
-    /// populated by the time the user reads down to it instead of sitting
-    /// empty with jdt.ls' Java 21 requirement stated above it.
+    /// Opens the dialog, and — for each server whose runtime home isn't
+    /// configured yet — starts the background scan that fills that field in,
+    /// so it's already populated by the time the user reads down to it
+    /// instead of sitting empty with the server's requirement stated above
+    /// it.
     pub fn open_settings(
         &mut self,
         settings: &LspSettings,
@@ -51,27 +60,43 @@ impl LspServersState {
         languages: &fg_extension::Registry,
     ) {
         self.settings_open = true;
-        if settings.jdtls_java_home.trim().is_empty() {
-            self.manager.detect_java_home();
+        self.runtimes = languages.runtimes();
+        self.installers = languages.server_installs();
+        for installer in &self.installers {
+            if let Some(host) = &installer.server.host_runtime
+                && settings.runtime_home_for(installer.id()).trim().is_empty()
+            {
+                self.manager.detect_runtime_home(installer.id(), host.clone(), self.runtimes.clone());
+            }
         }
         self.project_release = project_root.and_then(|root| languages.project_release(root));
     }
 
     /// Records a finished update check — called from `FoxGardenApp::ui`'s
     /// own per-frame poll of `self.lsp_servers.manager`.
-    pub fn record_latest_version(&mut self, server: Server, result: LatestVersionResult) {
-        self.latest_versions.insert(server, result);
+    pub fn record_latest_version(&mut self, server_id: String, result: LatestVersionResult) {
+        self.latest_versions.insert(server_id, result);
     }
 
-    /// Records a finished JDK scan — `FoxGardenApp::ui` writes the found
-    /// path into `LspSettings::jdtls_java_home` itself and passes on only
-    /// whether there was one.
-    pub fn record_java_home_detection(&mut self, found: bool) {
-        self.no_java_home_found = !found;
+    /// The servers the dialog offers to install; empty until it has been
+    /// opened once.
+    pub fn installers(&self) -> &[ServerInstallHandle] {
+        &self.installers
     }
 
-    fn latest_version(&self, server: Server) -> Option<&LatestVersionResult> {
-        self.latest_versions.get(&server)
+    /// Records a finished runtime scan — `FoxGardenApp::ui` writes the found
+    /// path into the server's `LspSettings` runtime home itself and passes
+    /// on only whether there was one.
+    pub fn record_runtime_detection(&mut self, server_id: String, found: bool) {
+        if found {
+            self.no_runtime_found.remove(&server_id);
+        } else {
+            self.no_runtime_found.insert(server_id);
+        }
+    }
+
+    fn latest_version(&self, server_id: &str) -> Option<&LatestVersionResult> {
+        self.latest_versions.get(server_id)
     }
 }
 
@@ -95,8 +120,8 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
         ui.checkbox(&mut settings.enabled, "Enabled");
         ui.add_space(4.0);
 
-        for server in ALL_SERVERS {
-            show_server_section(ui, state, settings, server);
+        for server in state.installers.clone() {
+            show_server_section(ui, state, settings, &server);
         }
 
         ui.separator();
@@ -114,14 +139,14 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
 /// to show depends on the installed version, which update button to show
 /// depends on the last check's result, and both are disabled by the same
 /// in-flight job.
-fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings: &mut LspSettings, server: Server) {
+fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings: &mut LspSettings, server: &ServerInstallHandle) {
     ui.add_space(8.0);
     ui.strong(server.display_name());
-    ui.label(egui::RichText::new(server.install_note()).weak());
+    ui.label(egui::RichText::new(&server.install.note).weak());
 
     // Copied out before the rows below borrow `settings` mutably for the
     // path field — the buttons only need to *read* these.
-    let installed_version = settings.fields_for(server).1.clone();
+    let installed_version = settings.fields_for(server.id()).1.clone();
 
     ui.horizontal(|ui| {
         if installed_version.is_empty() {
@@ -130,7 +155,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             ui.label(msg::installed_version(&installed_version));
         }
 
-        let installing = state.manager.installing(server);
+        let installing = state.manager.installing(server.id());
         let install_label = if installed_version.is_empty() {
             t().install.install
         } else {
@@ -140,15 +165,15 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             .add_enabled(!installing, egui::Button::new(install_label))
             .on_hover_text(msg::installs_from(
                 server.display_name(),
-                server.recommended_version(),
-                server.github_repo(),
+                &server.install.version,
+                &server.install.github_repo,
             ))
             .clicked()
         {
-            state.manager.install(server, server.recommended_version().to_string());
+            state.manager.install(server.clone(), server.install.version.clone());
         }
 
-        let checking = state.manager.checking(server);
+        let checking = state.manager.checking(server.id());
         if ui
             .add_enabled(
                 !checking,
@@ -160,15 +185,15 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             )
             .clicked()
         {
-            state.manager.check_latest(server);
+            state.manager.check_latest(server.clone());
         }
 
         // `install` can only ever install the version bundled with this
-        // FoxGarden build (`lsp_manager::Server::recommended_version`'s own
+        // FoxGarden build (`ServerInstall::version`'s own
         // doc comment) — so a newer upstream version is reported for
         // awareness only, never as a clickable update that would just fail.
-        match state.latest_version(server) {
-            Some(Ok(latest)) if *latest == server.recommended_version() => {
+        match state.latest_version(server.id()) {
+            Some(Ok(latest)) if *latest == server.install.version => {
                 ui.label(egui::RichText::new(t().lsp.up_to_date).weak());
             }
             Some(Ok(latest)) => {
@@ -184,7 +209,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     // A jdt.ls build runs for minutes; a bare "Installing…" would look
     // indistinguishable from a hang, so whatever step it's on gets its own
     // line, with a spinner beside it as the "still moving" signal.
-    if let Some(status) = state.manager.status(server) {
+    if let Some(status) = state.manager.status(server.id()) {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(status);
@@ -194,46 +219,44 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
     ui.horizontal(|ui| {
         ui.label(t().lsp.binary);
         ui.add(
-            egui::TextEdit::singleline(settings.fields_for(server).0)
-                .id_salt(match server {
-                    Server::Jdtls => "jdtls_binary_path",
-                    Server::KotlinLanguageServer => "kotlin_language_server_binary_path",
-                })
+            egui::TextEdit::singleline(settings.fields_for(server.id()).0)
+                .id_salt(("lsp_binary_path", server.id()))
                 .hint_text(t().lsp.binary_hint)
                 .desired_width(380.0),
         );
     });
 
-    // jdt.ls hard-requires Java 21 *to run* (not just to build) — on a
-    // machine whose default `java` isn't 21 (an sdkman/asdf-managed install
-    // that isn't the active one, say), this is how to point jdt.ls at one
-    // without changing the system default. Empty auto-detects from
-    // `JAVA_HOME`/`PATH`, same as leaving it unset.
-    if let Server::Jdtls = server {
+    // A server that runs on a runtime of its own (a JVM, say) may need
+    // pointing at one that isn't the machine's default — an sdkman/asdf-
+    // managed install that isn't the active one. Empty auto-detects, same as
+    // leaving it unset.
+    if let Some(host) = &server.server.host_runtime {
         ui.horizontal(|ui| {
-            ui.label(t().lsp.java_home).on_hover_text(t().lsp.java_home_hover);
+            ui.label(&host.home_label).on_hover_text(&host.note);
             ui.add(
-                egui::TextEdit::singleline(&mut settings.jdtls_java_home)
-                    .id_salt("jdtls_java_home")
+                egui::TextEdit::singleline(settings.runtime_home_mut(server.id()))
+                    .id_salt(("lsp_runtime_home", server.id()))
                     .desired_width(300.0),
             );
-            let detecting = state.manager.detecting_java_home();
+            let detecting = state.manager.detecting_runtime_home(server.id());
             if ui
                 .add_enabled(!detecting, egui::Button::new(t().lsp.detect))
                 .on_hover_text(t().lsp.detect_hint)
                 .clicked()
             {
-                state.manager.detect_java_home();
+                state
+                    .manager
+                    .detect_runtime_home(server.id(), host.clone(), state.runtimes.clone());
             }
             if detecting {
                 ui.spinner();
             }
         });
         // What the project itself targets, which is a different question
-        // from which JVM jdt.ls runs on: jdt.ls needs 21, the code may be
-        // Java 8. `lsp_state` hands jdt.ls every installed JDK and marks
-        // this one its default, so diagnostics match the project's own
-        // compiler rather than jdt.ls' JVM.
+        // from which runtime the server runs on: the server may need 21
+        // while the code targets 8. `lsp_state` hands the server every
+        // installed JDK and marks this one its default, so diagnostics
+        // match the project's own compiler rather than the server's runtime.
         ui.horizontal(|ui| {
             ui.label(t().lsp.project_java).on_hover_text(t().lsp.project_java_hover);
             match &state.project_release {
@@ -249,14 +272,8 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             }
         });
 
-        if state.no_java_home_found && settings.jdtls_java_home.trim().is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "No JDK 21 or newer found on this machine — install one, or type its path above. jdt.ls won't \
-                     start without it.",
-                )
-                .weak(),
-            );
+        if state.no_runtime_found.contains(server.id()) && settings.runtime_home_for(server.id()).trim().is_empty() {
+            ui.label(egui::RichText::new(&host.none_found).weak());
         }
     }
 }

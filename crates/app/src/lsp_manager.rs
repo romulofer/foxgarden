@@ -1,148 +1,21 @@
-//! Installs and updates the two language servers Settings > Language
+//! Installs and updates the language servers Settings > Language
 //! Servers… configures (`PLAN.md` Track 20) into a per-user cache directory
-//! — so neither has to be found, downloaded and unpacked by hand before
+//! — so none has to be found, downloaded and unpacked by hand before
 //! FoxGarden can use it.
 //!
-//! Both servers' archives are bundled straight into the FoxGarden binary
-//! (`vendor/lsp-servers/`, tracked via Git LFS — see `include_bytes!` below),
-//! not fetched over the network at install time:
-//!
-//! * **Kotlin Language Server** (`fwcd/kotlin-language-server`) publishes a
-//!   ready-to-run `server.zip` on every GitHub release — vendored verbatim.
-//!   Extract, point at `server/bin/kotlin-language-server`. Same shape as
-//!   `tool_manager`'s own PMD/SpotBugs installs.
-//! * **Eclipse JDT Language Server** (`eclipse-jdtls/eclipse.jdt.ls`) does
-//!   not publish build artifacts on GitHub at all — its releases page holds
-//!   exactly one unrelated 2016 hackathon `.vsix` (verified against the real
-//!   API this session). The real prebuilt distribution instead lives on
-//!   `download.eclipse.org/jdtls/milestones/<version>/`, as a self-contained
-//!   tarball (`bin/jdtls`, a Python launcher, plus the Equinox jars and
-//!   per-platform `config_*` dirs it needs) — vendored from there rather
-//!   than built from source. Building it from source instead (the previous
-//!   approach here) meant a `git clone` plus the project's own Maven/Tycho
-//!   build, which resolves its target-platform dependencies straight off
-//!   Maven Central; behind a corporate mirror that doesn't proxy every
-//!   artifact that build touches, it fails outright (e.g. `com.jetbrains.
-//!   intellij.java:java-decompiler-engine` unresolvable) — a failure mode
-//!   that has nothing to do with FoxGarden and no fix on this end. Vendoring
-//!   the official prebuilt tarball sidesteps that whole class of failure:
-//!   no Maven, no git, no network at install time at all.
-//!
-//! jdt.ls' own README states its **runtime** minimum is Java 21 (not just a
-//! build-time requirement) — `resolve_jdtls_java` resolves and verifies that
-//! JVM once, and `lsp_state` pins every jdt.ls spawn to that exact
-//! executable via `bin/jdtls`'s own `--java-executable` flag, rather than
-//! letting its launcher fall back to whatever `java` PATH happens to resolve
-//! to at that later moment.
-//!
-//! Every archive layout and version in this file was checked against the
-//! real vendored artifacts this session rather than assumed — see each
-//! function's own doc comment.
+//! Which servers there are, how their archives are packed, where each
+//! launcher sits inside and what the machine needs to run them is the
+//! contributing extension's (`fg_extension::ServerInstall`); the archives'
+//! bytes ride in the extension too, so an install needs no network, `git`
+//! or build. This module only extracts them into the cache and runs the
+//! update check against GitHub.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use directories::ProjectDirs;
-
-/// The two servers' own release archives, embedded directly into the
-/// FoxGarden binary at compile time — every build carries a working
-/// language server with it, so installing one never depends on network
-/// access, `git`, or a JDK capable of building jdt.ls' own Tycho product.
-/// Tracked via Git LFS (`vendor/lsp-servers/.gitattributes`) so the plain
-/// git history stays small despite the ~135 MB combined size.
-const JDTLS_ARCHIVE: &[u8] = include_bytes!("../../../vendor/lsp-servers/jdtls-1.60.0.tar.gz");
-const KOTLIN_LANGUAGE_SERVER_ARCHIVE: &[u8] =
-    include_bytes!("../../../vendor/lsp-servers/kotlin-language-server-1.3.13.zip");
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Server {
-    Jdtls,
-    KotlinLanguageServer,
-}
-
-/// Every server this manager knows how to install, in the order the
-/// settings dialog lists them.
-pub const ALL_SERVERS: [Server; 2] = [Server::Jdtls, Server::KotlinLanguageServer];
-
-/// The JVM jdt.ls itself requires to *run* — its README states this
-/// explicitly as a runtime minimum, not just a build-time one.
-const JDTLS_MINIMUM_JDK: u32 = 21;
-
-impl Server {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Server::Jdtls => "Eclipse JDT Language Server",
-            Server::KotlinLanguageServer => "Kotlin Language Server",
-        }
-    }
-
-    pub fn github_repo(self) -> &'static str {
-        match self {
-            Server::Jdtls => "eclipse-jdtls/eclipse.jdt.ls",
-            Server::KotlinLanguageServer => "fwcd/kotlin-language-server",
-        }
-    }
-
-    /// The version bundled with this build of FoxGarden — the only one
-    /// `install` can actually install (see `vendor/lsp-servers/` and the
-    /// `include_bytes!` constants above). `check_latest` separately reports
-    /// what upstream currently publishes, purely as an FYI: a newer version
-    /// isn't installable until it's vendored into a FoxGarden release.
-    pub fn recommended_version(self) -> &'static str {
-        match self {
-            Server::Jdtls => "1.60.0",
-            Server::KotlinLanguageServer => "1.3.13",
-        }
-    }
-
-    /// What this server costs to install, for the dialog to show.
-    pub fn install_note(self) -> &'static str {
-        match self {
-            Server::Jdtls => {
-                "Bundled with FoxGarden (Eclipse's own prebuilt distribution) — installs instantly, no network or \
-                 build required. Needs a JDK 21+ on PATH or JAVA_HOME to run (jdt.ls' own stated minimum)."
-            }
-            Server::KotlinLanguageServer => {
-                "Bundled with FoxGarden — installs instantly, no network required. Needs a JDK on PATH to run."
-            }
-        }
-    }
-
-    /// This server's own archive bytes, embedded at compile time.
-    fn bundled_archive(self) -> &'static [u8] {
-        match self {
-            Server::Jdtls => JDTLS_ARCHIVE,
-            Server::KotlinLanguageServer => KOTLIN_LANGUAGE_SERVER_ARCHIVE,
-        }
-    }
-
-    /// Where the installed launcher ends up, relative to this server's own
-    /// directory under the cache — the path inside the extracted archive.
-    /// Both are real paths verified against the actual vendored artifact:
-    /// `server/bin/kotlin-language-server` read out of the release zip's own
-    /// central directory, `bin/jdtls` (a Python launcher) out of the
-    /// official jdt.ls milestone tarball.
-    fn launcher_path(self) -> PathBuf {
-        match self {
-            Server::Jdtls => ["bin", "jdtls"].iter().collect(),
-            Server::KotlinLanguageServer => ["server", "bin", "kotlin-language-server"].iter().collect(),
-        }
-    }
-
-    /// Where `check_latest` looks. kotlin-language-server publishes real
-    /// GitHub releases; jdt.ls publishes none at all (see this module's own
-    /// header), so its newest version has to come from the tag list.
-    fn latest_version_api_url(self) -> String {
-        match self {
-            Server::Jdtls => format!("https://api.github.com/repos/{}/tags?per_page=10", self.github_repo()),
-            Server::KotlinLanguageServer => {
-                format!("https://api.github.com/repos/{}/releases/latest", self.github_repo())
-            }
-        }
-    }
-}
+use fg_extension::{ArchiveKind, HostRuntime, LatestVersionSource, ServerInstallHandle};
 
 /// Where a completed install landed. `binary` is exactly what the matching
 /// `LspSettings` binary field should be set to — a launcher script that
@@ -152,7 +25,8 @@ impl Server {
 /// sets to the project root).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    pub server: Server,
+    /// The registered id of the server that was installed.
+    pub server: String,
     pub version: String,
     pub binary: PathBuf,
 }
@@ -181,17 +55,10 @@ pub(crate) fn cache_dir() -> Result<PathBuf, String> {
 
 /// This server's own directory name — one per server *per version*, so
 /// installing an update never half-overwrites a working install: the new
-/// version builds/extracts somewhere else entirely, and the settings'
-/// binary path only moves once it succeeds.
-fn install_dir_name(server: Server, version: &str) -> String {
-    match server {
-        Server::Jdtls => format!("jdtls-{version}"),
-        Server::KotlinLanguageServer => format!("kotlin-language-server-{version}"),
-    }
-}
-
-fn install_dir(server: Server, version: &str) -> Result<PathBuf, String> {
-    Ok(cache_dir()?.join(install_dir_name(server, version)))
+/// version extracts somewhere else entirely, and the settings' binary path
+/// only moves once it succeeds.
+fn install_dir(server_id: &str, version: &str) -> Result<PathBuf, String> {
+    Ok(cache_dir()?.join(format!("{server_id}-{version}")))
 }
 
 /// Marks `path` executable on Unix. Both launchers *should* already carry
@@ -214,7 +81,7 @@ fn ensure_executable(path: &Path) -> Result<(), String> {
 }
 
 /// Catches the one way `include_bytes!` can embed something that isn't the
-/// archive at all: `vendor/lsp-servers/` is tracked via Git LFS, and a clone
+/// archive at all: the vendored archives are tracked via Git LFS, and a clone
 /// made without `git-lfs` installed leaves a ~130-byte text *pointer* at
 /// each of those paths instead of the real bytes. That compiles perfectly
 /// happily, and only fails at install time — as an unreadable `failed to
@@ -224,7 +91,7 @@ fn reject_lfs_pointer(bytes: &[u8]) -> Result<(), String> {
     if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
         return Err(
             "this FoxGarden build embedded a Git LFS pointer instead of the server's archive — the \
-             vendor/lsp-servers/ files weren't fetched. Install git-lfs, run `git lfs pull`, and rebuild"
+             vendored files weren't fetched. Install git-lfs, run `git lfs pull`, and rebuild"
                 .to_string(),
         );
     }
@@ -251,273 +118,38 @@ fn extract_tar_gz(bytes: &[u8], dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to extract archive: {e}"))
 }
 
-/// Verifies the JVM `crate::jdk::java_command(java_home)` resolves to is at
-/// least `minimum_major` — called both at install time (fail fast with one
-/// plain sentence, rather than a confusing crash the first time a session
-/// tries to start) and by `resolve_jdtls_java` (to pin every jdt.ls spawn to
-/// a verified JVM rather than trusting whatever `java` PATH resolves to
-/// later). `crate::jdk::detect_major_version` (Track 29 Phase 1) does the
-/// actual "run `java -version`, parse it" work generically; this function is
-/// just that generic result plus jdt.ls's own minimum and wording on top.
-fn check_java(minimum_major: u32, java_home: &str) -> Result<(), String> {
-    match crate::jdk::detect_major_version(java_home) {
-        Ok(major) if major >= minimum_major => Ok(()),
-        Ok(major) => Err(format!(
-            "jdt.ls needs a JDK {minimum_major} or newer to run, but {} is Java {major} — install a newer JDK, or \
-             point Settings > Language Servers… at one",
-            crate::jdk::java_command(java_home).display()
-        )),
-        Err(e) => Err(format!(
-            "{e} — install a JDK {minimum_major}+, or set it in Settings > Language Servers…"
-        )),
-    }
-}
-
-
-/// The `java` on `PATH`, resolved through every symlink to the real
-/// executable — on a distro-packaged JDK that's the whole point: `/usr/bin/
-/// java` is an alternatives symlink, and only the resolved target names the
-/// JDK home the launcher actually lives under.
-fn java_on_path() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("java"))
-        .find(|candidate| candidate.is_file())
-        .and_then(|candidate| std::fs::canonicalize(candidate).ok())
-}
-
-/// Where whole JDKs get installed on the platforms FoxGarden runs on, as
-/// directories full of one-JDK-each subdirectories. Deliberately includes
-/// the version-manager layouts (sdkman, asdf, jenv/jabba), since a machine
-/// whose *default* `java` isn't 21 is exactly the case this detection has to
-/// answer for — see `LspSettings::jdtls_java_home`. Windows roots are one
-/// per major-vendor installer under each of `%ProgramFiles%`/
-/// `%ProgramFiles(x86)%` (Oracle's own installer, Eclipse Temurin, Amazon
-/// Corretto, Microsoft Build of OpenJDK, and Azul Zulu all default to a
-/// vendor-named directory directly under Program Files) — **not verified
-/// against a real Windows install**, only against each vendor's own
-/// published installer documentation, unlike every other root in this list;
-/// flag and correct if a real Windows run finds a different actual default.
-fn jdk_search_roots() -> Vec<PathBuf> {
-    let mut roots = vec![
-        PathBuf::from("/usr/lib/jvm"),
-        PathBuf::from("/usr/lib64/jvm"),
-        PathBuf::from("/opt/java"),
-        PathBuf::from("/Library/Java/JavaVirtualMachines"),
-    ];
-    if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
-        roots.push(home.join(".sdkman/candidates/java"));
-        roots.push(home.join(".asdf/installs/java"));
-        roots.push(home.join(".jdks"));
-        roots.push(home.join("Library/Java/JavaVirtualMachines"));
-    }
-    #[cfg(windows)]
-    {
-        for program_files in [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")]
-            .into_iter()
-            .flatten()
-        {
-            let base = PathBuf::from(program_files);
-            roots.push(base.join("Java"));
-            roots.push(base.join("Eclipse Adoptium"));
-            roots.push(base.join("Amazon Corretto"));
-            roots.push(base.join("Microsoft"));
-            roots.push(base.join("Zulu"));
-        }
-    }
-    roots
-}
-
-/// A directory's own JDK home, if it is one: either directly (`bin/java`
-/// under it) or through macOS' bundle layout (`Contents/Home/bin/java`).
-fn java_home_at(dir: &Path) -> Option<PathBuf> {
-    [dir.to_path_buf(), dir.join("Contents").join("Home")]
-        .into_iter()
-        .find(|home| home.join("bin").join("java").is_file())
-}
-
-/// The number a JDK directory name leads with, for ordering candidates
-/// newest-first: `java-21-openjdk-amd64` and `21.0.11-zulu` both read as 21,
-/// `jdk1.8.0_401` as 1. Plain lexicographic order would put `java-8` ahead
-/// of `java-21` and hand back a JVM jdt.ls can't run under.
-fn version_hint(name: &str) -> u32 {
-    name.split(|c: char| !c.is_ascii_digit())
-        .find(|part| !part.is_empty())
-        .and_then(|part| part.parse().ok())
-        .unwrap_or(0)
-}
-
-/// Every plausible JDK home on this machine, most-likely-usable first:
-/// whatever `JAVA_HOME` and `PATH` already point at (what jdt.ls' own
-/// launcher would have picked, so preferring it keeps detection agreeing
-/// with the machine's configured default whenever that default is new
-/// enough), then each search root's own installs, newest-looking first.
-/// Split from `detect_java_home` so the ordering is testable without
-/// spawning a JVM per candidate.
-fn java_home_candidates(env_home: Option<PathBuf>, path_java: Option<PathBuf>, roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.extend(env_home);
-    // `<home>/bin/java` — two levels up from the executable is the home.
-    candidates.extend(path_java.and_then(|java| java.parent()?.parent().map(Path::to_path_buf)));
-
-    for root in roots {
-        let Ok(entries) = std::fs::read_dir(root) else {
-            continue;
-        };
-        let mut installs: Vec<_> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
-        installs.sort_by(|a, b| {
-            let hint = |path: &Path| version_hint(&path.file_name().unwrap_or_default().to_string_lossy());
-            hint(b).cmp(&hint(a)).then_with(|| b.file_name().cmp(&a.file_name()))
-        });
-        candidates.extend(installs);
-    }
-
-    let mut seen = std::collections::HashSet::new();
-    candidates
+/// The install a server should run on: the first one of its host runtime the
+/// extension discovers on this machine that satisfies the server's minimum
+/// version, or `None` if there is none. Runs on a background thread
+/// (`LspManagerState::detect_runtime_home`) — discovery spawns a process per
+/// installed runtime, far too slow for the UI thread.
+fn detect_runtime_home(host: &HostRuntime, runtimes: &[fg_extension::RuntimeHandle]) -> Option<PathBuf> {
+    runtimes
         .iter()
-        .filter_map(|candidate| java_home_at(candidate))
-        .filter(|home| seen.insert(std::fs::canonicalize(home).unwrap_or_else(|_| home.clone())))
-        .collect()
+        .filter(|runtime| runtime.id() == host.runtime_id)
+        .flat_map(|runtime| runtime.discover())
+        .find(|install| install.major_version >= host.minimum_major_version)
+        .map(|install| install.home)
 }
 
-/// One JDK found on this machine. `name` is the Eclipse execution
-/// environment jdt.ls identifies it by — the vocabulary its own
-/// `java.configuration.runtimes` setting speaks (see `lsp_state`'s Java
-/// initialization options), which is how a project targeting Java 8 or 11
-/// gets compiled and linted against *that* release even though jdt.ls
-/// itself only runs on 21.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JavaRuntime {
-    pub major: u32,
-    pub name: String,
-    pub path: PathBuf,
-}
-
-/// Eclipse's own name for a Java release. The old `1.x` spelling is not
-/// cosmetic — jdt.ls rejects an unknown execution environment name, and
-/// Java 8 is `JavaSE-1.8` there, never `JavaSE-8`. Anything older than 5
-/// collapses onto `J2SE-1.5`, the oldest environment current JDTLS still
-/// knows.
-pub fn execution_environment_name(major: u32) -> String {
-    match major {
-        0..=5 => "J2SE-1.5".to_string(),
-        6..=8 => format!("JavaSE-1.{major}"),
-        _ => format!("JavaSE-{major}"),
-    }
-}
-
-/// The major version of the JVM installed at `home`, by running it — a
-/// directory called `java-21-openjdk` that actually holds a JRE, or a half-
-/// deleted install, has to be rejected here rather than believed. Delegates
-/// to `crate::jdk::detect_major_version` (Track 29 Phase 1) rather than
-/// running `java -version` a second, independent way.
-fn java_major_at(home: &Path) -> Option<u32> {
-    crate::jdk::detect_major_version(&home.to_string_lossy()).ok()
-}
-
-/// Every JDK on this machine, one per release, in `java_home_candidates`'
-/// own preference order — so the entry kept for a release is the one the
-/// machine is already configured around (`JAVA_HOME`/`PATH`) when that's the
-/// release in question, and the newest-looking install otherwise. Costs one
-/// `java -version` spawn per candidate, so it is only ever called off the UI
-/// thread (`runtimes_snapshot`).
-pub fn installed_runtimes() -> Vec<JavaRuntime> {
-    let candidates = java_home_candidates(
-        std::env::var_os("JAVA_HOME").map(PathBuf::from),
-        java_on_path(),
-        &jdk_search_roots(),
-    );
-    let mut runtimes: Vec<JavaRuntime> = Vec::new();
-    for home in candidates {
-        let Some(major) = java_major_at(&home) else { continue };
-        if runtimes.iter().any(|runtime| runtime.major == major) {
-            continue;
-        }
-        runtimes.push(JavaRuntime {
-            major,
-            name: execution_environment_name(major),
-            path: home,
-        });
-    }
-    runtimes
-}
-
-/// The scan's one process-wide result, plus whether a scan has been started
-/// at all. Cached because both callers want the same answer repeatedly:
-/// `detect_java_home` (once per dialog open) and `runtimes_snapshot` (once
-/// per `LspState::sync`, i.e. every frame).
-static INSTALLED_RUNTIMES: std::sync::OnceLock<std::sync::Mutex<Option<Vec<JavaRuntime>>>> = std::sync::OnceLock::new();
-static RUNTIME_SCAN_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn runtimes_cache() -> &'static std::sync::Mutex<Option<Vec<JavaRuntime>>> {
-    INSTALLED_RUNTIMES.get_or_init(|| std::sync::Mutex::new(None))
-}
-
-/// What the JDK scan currently knows, without ever blocking: the finished
-/// scan's runtimes, or an empty list while the first one is still running
-/// (started here, on a background thread, the first time anything asks).
-/// Empty is a safe answer for the caller — `lsp_state` then configures
-/// jdt.ls with no explicit runtimes and it falls back to its own JVM, and
-/// the moment the scan lands the session's config differs and it restarts
-/// with the real list.
-pub fn runtimes_snapshot() -> Vec<JavaRuntime> {
-    if let Some(found) = runtimes_cache().lock().ok().and_then(|cached| cached.clone()) {
-        return found;
-    }
-    if !RUNTIME_SCAN_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        std::thread::spawn(|| {
-            let found = installed_runtimes();
-            if let Ok(mut cached) = runtimes_cache().lock() {
-                *cached = Some(found);
-            }
-        });
-    }
-    Vec::new()
-}
-
-/// The JDK jdt.ls itself should run under: the first one this machine
-/// offers that satisfies jdt.ls' own Java 21 runtime minimum, or `None` if
-/// it has none. Runs on a background thread
-/// (`LspManagerState::detect_java_home`) — a `java -version` spawn per
-/// installed JDK is far too slow for the UI thread.
-pub fn detect_java_home() -> Option<PathBuf> {
-    let runtimes = installed_runtimes();
-    if let Ok(mut cached) = runtimes_cache().lock() {
-        *cached = Some(runtimes.clone());
-        RUNTIME_SCAN_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-    runtimes
-        .into_iter()
-        .find(|runtime| runtime.major >= JDTLS_MINIMUM_JDK)
-        .map(|runtime| runtime.path)
-}
-
-/// Extracts `server`'s bundled archive into `dir` and returns the launcher's
-/// path — the only install path there is now (see this module's own
-/// header): both servers' bytes are embedded in the FoxGarden binary itself.
-fn install_bundled(server: Server, dir: &Path, report: &dyn Fn(String)) -> Result<PathBuf, String> {
-    if matches!(server, Server::Jdtls) {
-        // Ambient `JAVA_HOME`/`PATH` only — a soft pre-flight sanity check,
-        // not the exact JVM a session actually runs under later (that's
-        // `resolve_jdtls_java`, which honors `LspSettings::jdtls_java_home`
-        // too). Extraction doesn't otherwise need Java at all; this exists
-        // purely so a missing/too-old JDK surfaces here in one sentence
-        // instead of only once a session tries and fails to start.
-        report("Checking prerequisites…".to_string());
-        check_java(JDTLS_MINIMUM_JDK, "")?;
-    }
+/// Extracts the server's bundled archive into `dir` and returns the
+/// launcher's path — the only install path there is: the bytes are embedded
+/// in the FoxGarden binary itself, by the extension that contributes the
+/// server.
+fn install_bundled(server: &ServerInstallHandle, dir: &Path, report: &dyn Fn(String)) -> Result<PathBuf, String> {
+    report("Checking prerequisites…".to_string());
+    server.check_prerequisites()?;
 
     report(format!("Extracting bundled {}…", server.display_name()));
-    match server {
-        Server::Jdtls => extract_tar_gz(server.bundled_archive(), dir)?,
-        Server::KotlinLanguageServer => extract_zip(server.bundled_archive(), dir)?,
+    let archive = server
+        .archive()
+        .ok_or_else(|| format!("{} carries no archive for this server", server.display_name()))?;
+    match server.install.archive {
+        ArchiveKind::TarGz => extract_tar_gz(archive, dir)?,
+        ArchiveKind::Zip => extract_zip(archive, dir)?,
     }
 
-    let launcher = dir.join(server.launcher_path());
+    let launcher = dir.join(server.install.launcher.iter().collect::<PathBuf>());
     if !launcher.exists() {
         return Err(format!(
             "{}'s bundled archive didn't contain the expected launcher at {}",
@@ -532,36 +164,45 @@ fn install_bundled(server: Server, dir: &Path, report: &dyn Fn(String)) -> Resul
 /// Installs one specific `version` of `server`, reporting each step through
 /// `report`. Runs entirely on a background thread (see
 /// `LspManagerState::install`) so extraction never blocks the UI thread.
-/// Only the bundled version can actually be installed — see
-/// `Server::recommended_version`'s own doc comment.
-fn install_sync(server: Server, version: &str, report: &dyn Fn(String)) -> InstallResult {
-    if version != server.recommended_version() {
+/// Only the bundled version can actually be installed.
+fn install_sync(server: &ServerInstallHandle, version: &str, report: &dyn Fn(String)) -> InstallResult {
+    if version != server.install.version {
         return Err(format!(
             "only the version bundled with this FoxGarden build ({}) can be installed — {version} isn't vendored",
-            server.recommended_version()
+            server.install.version
         ));
     }
 
-    let dir = install_dir(server, version)?;
+    let dir = install_dir(server.id(), version)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {}: {e}", dir.display()))?;
 
     let binary = install_bundled(server, &dir, report)?;
 
     Ok(Installed {
-        server,
+        server: server.id().to_string(),
         version: version.to_string(),
         binary,
     })
 }
 
-/// Reads `server`'s newest published version off the GitHub API. Two
-/// response shapes, because the two repos genuinely differ (see
-/// `Server::latest_version_api_url`): a release object with a `tag_name`,
-/// or a tag array to take the first entry of. Either way the returned
-/// string is a bare version, directly comparable against
-/// `recommended_version` and an `Installed::version`.
-fn check_latest_sync(server: Server) -> LatestVersionResult {
-    let mut response = ureq::get(server.latest_version_api_url())
+/// Where `check_latest_sync` looks. A repository that cuts real GitHub
+/// releases answers with the latest one; one that only tags has its newest
+/// version come from the tag list.
+fn latest_version_api_url(server: &ServerInstallHandle) -> String {
+    let repo = &server.install.github_repo;
+    match server.install.latest_version_source {
+        LatestVersionSource::Tags => format!("https://api.github.com/repos/{repo}/tags?per_page=10"),
+        LatestVersionSource::Releases => format!("https://api.github.com/repos/{repo}/releases/latest"),
+    }
+}
+
+/// Reads the server's newest published version off the GitHub API. Two
+/// response shapes (see `latest_version_api_url`): a release object with a
+/// `tag_name`, or a tag array to take the first entry of. Either way the
+/// returned string is a bare version, directly comparable against
+/// `ServerInstall::version` and an `Installed::version`.
+fn check_latest_sync(server: &ServerInstallHandle) -> LatestVersionResult {
+    let mut response = ureq::get(latest_version_api_url(server))
         .header("User-Agent", "foxgarden")
         .call()
         .map_err(|e| format!("update check failed: {e}"))?;
@@ -598,120 +239,133 @@ struct InstallJob {
 /// Background install/update-check state — the same two-independent-slots-
 /// per-item shape `tool_manager::ToolManagerState` already uses (an install
 /// and a version check can be in flight at once, for either server), keyed
-/// by `Server`.
+/// by server id.
 #[derive(Default)]
 pub struct LspManagerState {
-    installs: HashMap<Server, InstallJob>,
-    checks: HashMap<Server, Receiver<LatestVersionResult>>,
-    /// A running JDK scan (`detect_java_home`), if any — at most one, since
-    /// its answer is a property of the machine rather than of any one
-    /// server.
-    java_home_detection: Option<Receiver<Option<PathBuf>>>,
+    installs: HashMap<String, InstallJob>,
+    checks: HashMap<String, Receiver<LatestVersionResult>>,
+    /// Running scans for a server's host runtime (`detect_runtime_home`),
+    /// keyed by server id — at most one per server.
+    runtime_detections: HashMap<String, Receiver<Option<PathBuf>>>,
 }
 
 impl LspManagerState {
-    pub fn installing(&self, server: Server) -> bool {
-        self.installs.contains_key(&server)
+    pub fn installing(&self, server_id: &str) -> bool {
+        self.installs.contains_key(server_id)
     }
 
-    pub fn checking(&self, server: Server) -> bool {
-        self.checks.contains_key(&server)
+    pub fn checking(&self, server_id: &str) -> bool {
+        self.checks.contains_key(server_id)
     }
 
     /// The latest progress line for a running install, for the dialog to
     /// display — `None` when nothing is running for `server`.
-    pub fn status(&self, server: Server) -> Option<&str> {
-        self.installs.get(&server).map(|job| job.status.as_str())
+    pub fn status(&self, server_id: &str) -> Option<&str> {
+        self.installs.get(server_id).map(|job| job.status.as_str())
     }
 
     /// Whether any install is still running — the app's own update loop
     /// uses this to keep requesting repaints, since progress lands on a
     /// background thread with no input event to piggyback on.
     pub fn busy(&self) -> bool {
-        !self.installs.is_empty() || !self.checks.is_empty() || self.java_home_detection.is_some()
+        !self.installs.is_empty() || !self.checks.is_empty() || !self.runtime_detections.is_empty()
     }
 
-    /// Starts scanning this machine for a JDK 21+ on a background thread —
-    /// the dialog fires this when it opens with an empty Java Home, so the
-    /// field arrives already filled in rather than leaving the user to go
-    /// find a JDK path by hand. A scan already in flight is left alone.
-    pub fn detect_java_home(&mut self) {
-        if self.java_home_detection.is_some() {
+    /// Starts scanning this machine for an install `server` can run on, on a
+    /// background thread — the dialog fires this when it opens with an empty
+    /// runtime home, so the field arrives already filled in rather than
+    /// leaving the user to go find a path by hand. A scan already in flight
+    /// for `server_id` is left alone.
+    pub fn detect_runtime_home(
+        &mut self,
+        server_id: &str,
+        host: HostRuntime,
+        runtimes: Vec<fg_extension::RuntimeHandle>,
+    ) {
+        if self.runtime_detections.contains_key(server_id) {
             return;
         }
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let _ = tx.send(detect_java_home());
+            let _ = tx.send(detect_runtime_home(&host, &runtimes));
         });
-        self.java_home_detection = Some(rx);
+        self.runtime_detections.insert(server_id.to_string(), rx);
     }
 
-    pub fn detecting_java_home(&self) -> bool {
-        self.java_home_detection.is_some()
+    pub fn detecting_runtime_home(&self, server_id: &str) -> bool {
+        self.runtime_detections.contains_key(server_id)
     }
 
-    /// The finished scan's answer, once: `Some(Some(home))` when a JDK 21+
-    /// was found, `Some(None)` when the machine has none. Called once a
-    /// frame alongside the other polls.
-    pub fn poll_java_home_detection(&mut self) -> Option<Option<PathBuf>> {
-        let detection = self.java_home_detection.as_ref()?;
-        match detection.try_recv() {
+    /// Whether any runtime scan is running, for the status bar.
+    pub fn detecting_any_runtime_home(&self) -> bool {
+        !self.runtime_detections.is_empty()
+    }
+
+    /// The finished scans' answers, once each: `(server id, Some(home))` when
+    /// a qualifying install was found, `(server id, None)` when the machine
+    /// has none. Called once a frame alongside the other polls.
+    pub fn poll_runtime_detections(&mut self) -> Vec<(String, Option<PathBuf>)> {
+        let mut finished = Vec::new();
+        self.runtime_detections.retain(|server_id, detection| match detection.try_recv() {
             Ok(found) => {
-                self.java_home_detection = None;
-                Some(found)
+                finished.push((server_id.clone(), found));
+                false
             }
-            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Empty) => true,
             // The scanning thread died without answering — nothing left to
-            // wait for, and no JDK to report either.
+            // wait for, and no install to report either.
             Err(TryRecvError::Disconnected) => {
-                self.java_home_detection = None;
-                Some(None)
+                finished.push((server_id.clone(), None));
+                false
             }
-        }
+        });
+        finished
     }
 
     /// Starts installing `version` of `server` on a background thread.
     /// A second click while one is already running is ignored rather than
     /// starting a competing job over the same directory.
-    pub fn install(&mut self, server: Server, version: String) {
-        if self.installing(server) {
+    pub fn install(&mut self, server: ServerInstallHandle, version: String) {
+        if self.installing(server.id()) {
             return;
         }
         let (tx, rx) = channel();
         let status = format!("Starting {} install…", server.display_name());
+        let id = server.id().to_string();
         std::thread::spawn(move || {
             let report_tx = tx.clone();
             let report = move |message: String| {
                 let _ = report_tx.send(InstallEvent::Progress(message));
             };
-            let result = install_sync(server, &version, &report);
+            let result = install_sync(&server, &version, &report);
             let _ = tx.send(InstallEvent::Finished(result));
         });
-        self.installs.insert(server, InstallJob { rx, status });
+        self.installs.insert(id, InstallJob { rx, status });
     }
 
-    pub fn check_latest(&mut self, server: Server) {
-        if self.checking(server) {
+    pub fn check_latest(&mut self, server: ServerInstallHandle) {
+        if self.checking(server.id()) {
             return;
         }
         let (tx, rx) = channel();
+        let id = server.id().to_string();
         std::thread::spawn(move || {
-            let _ = tx.send(check_latest_sync(server));
+            let _ = tx.send(check_latest_sync(&server));
         });
-        self.checks.insert(server, rx);
+        self.checks.insert(id, rx);
     }
 
     /// Drains every install's event stream: progress lines update that
     /// job's status in place, and a finished job is removed and its result
     /// returned. Called once a frame.
-    pub fn poll_installs(&mut self) -> Vec<(Server, InstallResult)> {
+    pub fn poll_installs(&mut self) -> Vec<(String, InstallResult)> {
         let mut done = Vec::new();
-        self.installs.retain(|&server, job| {
+        self.installs.retain(|server, job| {
             loop {
                 match job.rx.try_recv() {
                     Ok(InstallEvent::Progress(message)) => job.status = message,
                     Ok(InstallEvent::Finished(result)) => {
-                        done.push((server, result));
+                        done.push((server.clone(), result));
                         return false;
                     }
                     Err(TryRecvError::Empty) => return true,
@@ -725,11 +379,11 @@ impl LspManagerState {
         done
     }
 
-    pub fn poll_checks(&mut self) -> Vec<(Server, LatestVersionResult)> {
+    pub fn poll_checks(&mut self) -> Vec<(String, LatestVersionResult)> {
         let mut done = Vec::new();
-        self.checks.retain(|&server, rx| match rx.try_recv() {
+        self.checks.retain(|server, rx| match rx.try_recv() {
             Ok(result) => {
-                done.push((server, result));
+                done.push((server.clone(), result));
                 false
             }
             Err(TryRecvError::Empty) => true,

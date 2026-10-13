@@ -2,9 +2,9 @@
 //! for the JVM extension) — `PLAN.md` Track 29 Phase 1. What a runtime is
 //! and how an install is recognized belongs to the extension
 //! (`fg_extension::RuntimeHandle`); this is only the list the user has
-//! registered. Separate from `LspSettings::jdtls_java_home`, which is
-//! "which JVM runs jdt.ls itself" (always 21+, `lsp_manager::
-//! resolve_jdtls_java`), where this is "which installs exist on this machine
+//! registered. Separate from a server's `HostRuntime` home
+//! (`LspSettings::runtime_home_for`), which is "which install runs the
+//! language server itself", where this is "which installs exist on this machine
 //! to *target*" (any version). Persisted globally via `eframe::Storage`,
 //! same as `LspSettings` — an install is a fact about the machine, not any
 //! one project.

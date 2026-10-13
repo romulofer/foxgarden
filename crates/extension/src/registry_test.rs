@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
-    RuntimeContribution, RuntimeInstall,
+    ArchiveKind, LatestVersionSource, RuntimeContribution, RuntimeInstall, ServerInstall,
     GrammarSource, LanguageContribution, NodeKinds, ProblemSeverity,
 };
 
@@ -146,6 +146,8 @@ fn a_language_server_is_findable_by_the_language_it_serves() {
                 binary_name: "elvish-language-server".to_string(),
                 args: Vec::new(),
                 initialization_options: Some(r#"{"verbose":true}"#.to_string()),
+                install: None,
+                host_runtime: None,
             }],
             ..Default::default()
         })))
@@ -156,6 +158,51 @@ fn a_language_server_is_findable_by_the_language_it_serves() {
     assert_eq!(registry.language_servers_for("elvish").len(), 1);
     assert_eq!(registry.language_servers_for("khuzdul").len(), 1);
     assert!(registry.language_servers_for("westron").is_empty());
+}
+
+fn elvish_servers() -> Contributions {
+    let server = |id: &str, install: Option<ServerInstall>| LanguageServerContribution {
+        id: id.to_string(),
+        display_name: format!("{id} server"),
+        language_ids: vec!["elvish".to_string()],
+        binary_name: String::new(),
+        args: Vec::new(),
+        initialization_options: None,
+        install,
+        host_runtime: None,
+    };
+    Contributions {
+        languages: vec![lang("elvish", &["elv"])],
+        language_servers: vec![
+            server("hand-installed", None),
+            server(
+                "bundled",
+                Some(ServerInstall {
+                    version: "1.0.0".to_string(),
+                    archive: ArchiveKind::TarGz,
+                    launcher: vec!["bin".to_string(), "bundled".to_string()],
+                    github_repo: "rivendell/bundled".to_string(),
+                    latest_version_source: LatestVersionSource::Releases,
+                    note: String::new(),
+                }),
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn only_a_server_with_an_installer_is_offered_for_installation() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeExtension::new("rivendell", elvish_servers))).unwrap();
+
+    let installs = registry.server_installs();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0].id(), "bundled");
+    // The fake carries no bytes, and an extension that does not override the
+    // prerequisite check has none.
+    assert!(installs[0].archive().is_none());
+    assert_eq!(installs[0].check_prerequisites(), Ok(()));
 }
 
 #[test]
@@ -806,6 +853,8 @@ fn a_server_with_no_custom_start_starts_as_declared() {
             binary_name: "elvish-ls".to_string(),
             args: vec!["--stdio".to_string()],
             initialization_options: Some("{}".to_string()),
+            install: None,
+            host_runtime: None,
         }],
         ..Default::default()
     };

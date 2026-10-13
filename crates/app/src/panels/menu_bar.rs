@@ -61,8 +61,8 @@ pub struct MenuBarOutcome {
     /// Settings > <runtime kind>…: the index, into the runtime kinds the menu
     /// was shown with, of the one picked — opens `panels::runtimes`' dialog
     /// (`PLAN.md` Track 29 Phase 1). Deliberately separate from Language
-    /// Servers…: `LspSettings::jdtls_java_home` is "which JVM runs jdt.ls
-    /// itself" (always 21+), this is "which installs exist to *target*" (any
+    /// Servers…: a server's `LspSettings::runtime_home_for` is "which
+    /// install runs the server itself", this is "which installs exist to *target*" (any
     /// version).
     pub open_runtime_request: Option<usize>,
     /// File > New Project… — opens `panels::new_project`'s wizard
