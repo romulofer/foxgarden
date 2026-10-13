@@ -357,6 +357,25 @@ pub struct Contributions {
     /// How the editor debugs a language — what decides which files get a
     /// breakpoint gutter and how a session is started.
     pub debug_adapters: Vec<DebugAdapterContribution>,
+    /// Directory names that mark a source root (`java`, `kotlin`): everything
+    /// single-child beneath one is package structure, which the project tree
+    /// shows joined with `.` instead of `/`.
+    pub source_root_dir_names: Vec<String>,
+    /// The glyph the project tree and tabs draw beside a language's files.
+    pub file_icons: Vec<FileIcon>,
+    /// Language-server command names whose first argument is a
+    /// `WorkspaceEdit` for the client to apply (what jdtls sends for
+    /// "Organize imports" in place of a `CodeAction` with an `edit`).
+    pub workspace_edit_commands: Vec<String>,
+}
+
+/// The icon drawn beside the files of one language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileIcon {
+    pub language_id: LanguageId,
+    /// A Nerd Fonts codepoint: the app embeds that symbols font, so the glyph
+    /// looks the same on every machine.
+    pub glyph: char,
 }
 
 /// A debugger for one language, reached through that language's server.

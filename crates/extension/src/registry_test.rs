@@ -1201,3 +1201,41 @@ fn a_runtime_id_claimed_twice_is_refused_whole() {
         Err(RegisterError::DuplicateRuntime { .. })
     ));
 }
+
+#[test]
+fn workspace_edit_commands_are_gathered_once_across_extensions() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeExtension::new("rivendell", || Contributions {
+            workspace_edit_commands: vec!["elf.apply".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+    registry
+        .register(Box::new(FakeExtension::new("lothlorien", || Contributions {
+            workspace_edit_commands: vec!["elf.apply".to_string(), "ent.apply".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+
+    assert_eq!(registry.workspace_edit_commands(), ["elf.apply", "ent.apply"]);
+}
+
+#[test]
+fn source_root_dir_names_are_gathered_once_across_extensions() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeExtension::new("rivendell", || Contributions {
+            source_root_dir_names: vec!["src".to_string(), "lib".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+    registry
+        .register(Box::new(FakeExtension::new("lothlorien", || Contributions {
+            source_root_dir_names: vec!["lib".to_string(), "mallorn".to_string()],
+            ..Default::default()
+        })))
+        .unwrap();
+
+    assert_eq!(registry.source_root_dir_names(), ["src", "lib", "mallorn"]);
+}

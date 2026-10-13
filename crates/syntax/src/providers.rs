@@ -28,6 +28,15 @@ pub(crate) struct Providers {
     pub(crate) keywords: HashMap<String, Vec<String>>,
     /// Languages a breakpoint gutter is drawn for.
     pub(crate) debuggable: std::collections::HashSet<String>,
+    /// Directory names the project tree treats as source roots.
+    pub(crate) source_root_dir_names: Vec<String>,
+    /// Server commands that carry a `WorkspaceEdit` for the client to apply.
+    pub(crate) workspace_edit_commands: Vec<String>,
+    /// File icon glyphs by lowercase file extension, and by whole-filename
+    /// pattern for files with no usable extension (checked second, as
+    /// `Registry::language_for_path` does).
+    pub(crate) icons_by_extension: HashMap<String, char>,
+    pub(crate) icons_by_filename: Vec<(fg_extension::FilenamePattern, char)>,
 }
 
 impl Providers {
@@ -37,8 +46,26 @@ impl Providers {
                 self.extensions.push(handle);
             }
         }
+        for command in registry.workspace_edit_commands() {
+            if !self.workspace_edit_commands.contains(command) {
+                self.workspace_edit_commands.push(command.clone());
+            }
+        }
+        for name in registry.source_root_dir_names() {
+            if !self.source_root_dir_names.contains(name) {
+                self.source_root_dir_names.push(name.clone());
+            }
+        }
         for registered in registry.languages() {
             let id = &registered.language.id;
+            if let Some(glyph) = registry.file_icon(id) {
+                for ext in &registered.language.file_extensions {
+                    self.icons_by_extension.entry(ext.to_lowercase()).or_insert(glyph);
+                }
+                for pattern in &registered.language.filename_patterns {
+                    self.icons_by_filename.push((pattern.clone(), glyph));
+                }
+            }
             if registry.is_debuggable(id) {
                 self.debuggable.insert(id.clone());
             }

@@ -15,7 +15,7 @@
 //! rather than in a `match` in the middle of the editor.
 
 use fg_extension::{
-    Contributions, Extension, ExtensionInfo, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
+    Contributions, Extension, ExtensionInfo, FileIcon, ExtensionManifest, FilenamePattern, GrammarContribution, GrammarSource,
     LanguageContribution, NodeKinds, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
 };
 
@@ -27,6 +27,14 @@ fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContri
         display_name: display_name.to_string(),
         file_extensions: extensions.iter().map(|e| (*e).to_string()).collect(),
         filename_patterns: Vec::new(),
+    }
+}
+
+/// Glyphs are Nerd Fonts codepoints, drawn from the symbols font the app embeds.
+fn file_icon(language_id: &str, glyph: char) -> FileIcon {
+    FileIcon {
+        language_id: language_id.to_string(),
+        glyph,
     }
 }
 
@@ -102,6 +110,12 @@ impl Extension for FileTypesExtension {
                     GrammarSource::Builtin(tree_sitter_containerfile::LANGUAGE),
                     include_str!("../queries/highlights_dockerfile.scm"),
                 ),
+            ],
+            file_icons: vec![
+                file_icon("properties", '\u{f013}'),
+                file_icon("yaml", '\u{f0219}'),
+                file_icon("xml", '\u{e619}'),
+                file_icon("dockerfile", '\u{f308}'),
             ],
             ..Default::default()
         }

@@ -105,6 +105,44 @@ pub fn is_debuggable(language: Language) -> bool {
     providers().debuggable.contains(language.id())
 }
 
+/// Whether an extension treats directories named `name` as source roots.
+pub fn is_source_root_dir(name: &str) -> bool {
+    providers().source_root_dir_names.iter().any(|root| root == name)
+}
+
+/// Whether `command` is a server command whose first argument is a
+/// `WorkspaceEdit` for the client to apply.
+pub fn is_workspace_edit_command(command: &str) -> bool {
+    providers().workspace_edit_commands.iter().any(|known| known == command)
+}
+
+/// The icon glyph an extension gave the language of `path`: the extension
+/// match first, then the bare-file-name patterns, the order
+/// `Registry::language_for_path` uses.
+pub fn file_icon(path: &std::path::Path) -> Option<char> {
+    let providers = providers();
+    let by_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| {
+            // Drawn for every visible tree row every frame: only allocate
+            // for the rare upper-case extension.
+            if ext.bytes().any(|b| b.is_ascii_uppercase()) {
+                providers.icons_by_extension.get(&ext.to_lowercase()).copied()
+            } else {
+                providers.icons_by_extension.get(ext).copied()
+            }
+        });
+    by_extension.or_else(|| {
+        let name = path.file_name()?.to_str()?;
+        providers
+            .icons_by_filename
+            .iter()
+            .find(|(pattern, _)| pattern.matches(name))
+            .map(|(_, glyph)| *glyph)
+    })
+}
+
 /// The words installed extensions reserve in `language`, for completion.
 pub fn language_keywords(language: Language) -> Vec<String> {
     providers().keywords.get(language.id()).cloned().unwrap_or_default()

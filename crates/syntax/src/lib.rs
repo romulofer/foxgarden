@@ -15,7 +15,7 @@ mod sticky;
 
 pub use brackets::bracket_match;
 pub use code_model::{
-    enclosing_type, generate_code, generates_code, is_debuggable, language_keywords, language_snippets, receiver_type,
+    enclosing_type, file_icon, generate_code, generates_code, is_debuggable, is_source_root_dir, is_workspace_edit_command, language_keywords, language_snippets, receiver_type,
     source_file_extensions, supertype, type_members, types_with_fields,
 };
 pub use diagnostics::syntax_errors;

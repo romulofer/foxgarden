@@ -804,18 +804,6 @@ fn show_rename_field(ui: &mut egui::Ui, name: &mut String, should_focus: bool, a
     });
 }
 
-/// Directory names that mark a Java/Kotlin source root (`src/main/java`,
-/// `src/test/kotlin`, a multi-module project's own nested equivalents, …).
-/// Everything single-child *beneath* one of these is package structure, so
-/// `render_node`/`collapse_chain` join it with `.` instead of the generic
-/// `/` every other single-child directory chain uses — matching IntelliJ's
-/// own "Compact Middle Packages" convention. The source-root directory
-/// itself is never folded into a chain (see `collapse_chain`) — it's
-/// always its own row, exactly like the real screenshot this feature was
-/// built from: a "java" row, then "com.example.app.backend" as its own
-/// single child row below it.
-const SOURCE_ROOT_DIR_NAMES: &[&str] = &["java", "kotlin"];
-
 /// One or more consecutive single-child directories collapsed into a
 /// single visual tree row — most real Java/Kotlin package hierarchies are
 /// otherwise a long, mostly-empty scroll of one folder per row before
@@ -832,16 +820,28 @@ struct CollapsedDir<'a> {
     terminal: &'a FileNode,
 }
 
+/// A source root is a directory an extension names as one
+/// (`syntax::is_source_root_dir`): `src/main/java`, `src/test/kotlin`, a
+/// multi-module project's own nested equivalents, ….
+/// Everything single-child *beneath* one of these is package structure, so
+/// `render_node`/`collapse_chain` join it with `.` instead of the generic
+/// `/` every other single-child directory chain uses — matching IntelliJ's
+/// own "Compact Middle Packages" convention. The source-root directory
+/// itself is never folded into a chain (see `collapse_chain`) — it's
+/// always its own row, exactly like the real screenshot this feature was
+/// built from: a "java" row, then "com.example.app.backend" as its own
+/// single child row below it.
+///
 /// Walks forward from `start` through single-child directory descendants,
 /// joining each segment's name with `sep`, stopping at the first node with
 /// zero or 2+ children, whose only child is a file, or whose only child is
-/// itself a source root (`SOURCE_ROOT_DIR_NAMES`) — a source root always
+/// itself a source root (`syntax::is_source_root_dir`) — a source root always
 /// starts its own row, never gets folded into a generic parent chain.
 /// `start` itself is also never folded into a chain if it's a source root:
 /// it's a boundary all on its own, so `render_node` can restart compaction
 /// with `.` for everything beneath it (see that function's `child_sep`).
 fn collapse_chain<'a>(start: &'a FileNode, sep: &str) -> CollapsedDir<'a> {
-    if SOURCE_ROOT_DIR_NAMES.contains(&start.name.as_str()) {
+    if syntax::is_source_root_dir(&start.name) {
         return CollapsedDir {
             label: start.name.clone(),
             terminal: start,
@@ -851,7 +851,7 @@ fn collapse_chain<'a>(start: &'a FileNode, sep: &str) -> CollapsedDir<'a> {
     let mut terminal = start;
     while let [only] = terminal.children.as_slice()
         && only.kind == FileKind::Dir
-        && !SOURCE_ROOT_DIR_NAMES.contains(&only.name.as_str())
+        && !syntax::is_source_root_dir(&only.name)
     {
         label.push_str(sep);
         label.push_str(&only.name);
@@ -897,7 +897,7 @@ fn render_node(
             // that subtree — `.` from here on, never reverting to `/`
             // (package structure never "un-nests" back into arbitrary
             // folders beneath a source root).
-            let child_sep = if SOURCE_ROOT_DIR_NAMES.contains(&terminal.name.as_str()) {
+            let child_sep = if syntax::is_source_root_dir(&terminal.name) {
                 "."
             } else {
                 sep

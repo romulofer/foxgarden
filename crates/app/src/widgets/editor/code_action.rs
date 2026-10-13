@@ -284,7 +284,8 @@ fn offers_from_response(value: serde_json::Value) -> Vec<Offer> {
 /// `CodeActionLiteralSupport` capability was written for), and — what
 /// jdtls actually sends for "Organize imports"/"Remove unused import"/etc,
 /// found by *reading the real reply* rather than assuming spec-shaped
-/// data — a bare `Command` named `java.apply.workspaceEdit` whose sole
+/// data — a bare `Command` an extension declares as a client-applied
+/// workspace edit (jdtls: `java.apply.workspaceEdit`) whose sole
 /// argument *is* the `WorkspaceEdit` to apply, client-side, with nothing
 /// further sent back to the server. Every other `Command` name is a real
 /// server-side action (`workspace/executeCommand`) this app doesn't
@@ -296,7 +297,7 @@ fn offer_from_item(item: lsp_types::CodeActionOrCommand) -> Option<Offer> {
             title: action.title,
             edit,
         }),
-        lsp_types::CodeActionOrCommand::Command(command) if command.command == "java.apply.workspaceEdit" => {
+        lsp_types::CodeActionOrCommand::Command(command) if syntax::is_workspace_edit_command(&command.command) => {
             let edit = command
                 .arguments?
                 .into_iter()

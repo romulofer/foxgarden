@@ -88,3 +88,16 @@ fn only_java_is_debuggable() {
     assert!(!is_debuggable(Language::Kotlin));
     assert!(!is_debuggable(Language::Yaml));
 }
+
+#[test]
+fn workspace_edit_commands_come_from_the_installed_extensions() {
+    assert!(is_workspace_edit_command("java.apply.workspaceEdit"));
+    assert!(!is_workspace_edit_command("java.edit.organizeImports"));
+}
+
+#[test]
+fn source_root_dirs_come_from_the_installed_extensions() {
+    assert!(is_source_root_dir("java"));
+    assert!(is_source_root_dir("kotlin"));
+    assert!(!is_source_root_dir("src"));
+}

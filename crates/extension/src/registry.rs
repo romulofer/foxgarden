@@ -239,6 +239,12 @@ pub struct Registry {
     /// Debug adapters with the index of the extension that owns each; a
     /// language is listed once, the first registration winning.
     debug_adapters: Vec<(DebugAdapterContribution, usize)>,
+    /// Source-root directory names from every extension, each once.
+    source_root_dir_names: Vec<String>,
+    /// Icon glyph per language; the first registration wins.
+    file_icons: HashMap<LanguageId, char>,
+    /// Client-applied workspace-edit command names, each once.
+    workspace_edit_commands: Vec<String>,
     index: LanguageIndex,
 }
 
@@ -450,6 +456,7 @@ impl Registry {
             .http_route_languages
             .iter()
             .chain(contributions.debug_adapters.iter().map(|adapter| &adapter.language_id))
+            .chain(contributions.file_icons.iter().map(|icon| &icon.language_id))
         {
             if !known(language_id) {
                 return Err(RegisterError::UnknownLanguage {
@@ -510,6 +517,19 @@ impl Registry {
         for language_id in contributions.http_route_languages {
             if !self.http_route_languages.contains(&language_id) {
                 self.http_route_languages.push(language_id);
+            }
+        }
+        for command in contributions.workspace_edit_commands {
+            if !self.workspace_edit_commands.contains(&command) {
+                self.workspace_edit_commands.push(command);
+            }
+        }
+        for icon in contributions.file_icons {
+            self.file_icons.entry(icon.language_id).or_insert(icon.glyph);
+        }
+        for name in contributions.source_root_dir_names {
+            if !self.source_root_dir_names.contains(&name) {
+                self.source_root_dir_names.push(name);
             }
         }
     }
@@ -599,6 +619,22 @@ impl Registry {
     /// files get a breakpoint gutter.
     pub fn is_debuggable(&self, language_id: &str) -> bool {
         self.debug_adapters.iter().any(|(adapter, _)| adapter.language_id == language_id)
+    }
+
+    /// Command names whose first argument is a `WorkspaceEdit` the client
+    /// applies.
+    pub fn workspace_edit_commands(&self) -> &[String] {
+        &self.workspace_edit_commands
+    }
+
+    /// The icon glyph for `language_id`, if an extension gave it one.
+    pub fn file_icon(&self, language_id: &str) -> Option<char> {
+        self.file_icons.get(language_id).copied()
+    }
+
+    /// Directory names any extension treats as a source root.
+    pub fn source_root_dir_names(&self) -> &[String] {
+        &self.source_root_dir_names
     }
 
     /// The debug adapter a session starts: the first registered, since a

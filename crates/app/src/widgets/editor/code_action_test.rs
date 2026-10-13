@@ -98,6 +98,7 @@ fn open_picker_is_a_no_op_with_no_offer_to_show() {
 /// reply parsed to zero offers — a real gap this test pins down.
 #[test]
 fn offers_from_response_reads_jdtls_own_java_apply_workspace_edit_command() {
+    test_support::install_grammars();
     let value = serde_json::json!([
         {
             "title": "Organize imports",
