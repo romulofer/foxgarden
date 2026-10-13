@@ -1,5 +1,5 @@
-//! `PLAN.md` Track 23: orchestrates one Java debug session end to end —
-//! request a port from jdt.ls (`LspState::request_start_debug_session`),
+//! `PLAN.md` Track 23: orchestrates one debug session end to end — request
+//! a port from the language server (`LspState::request_start_debug_session`),
 //! connect `dap_client::DapSession` to it, and drive the DAP `initialize` /
 //! `launch` / `configurationDone` handshake through to a real attached
 //! process (Phase 1). Phase 2 adds breakpoints (sent both up front, before
@@ -9,15 +9,16 @@
 //!
 //! Every step here is non-blocking (`poll` advances whatever's in flight,
 //! called once a frame the same way `LspState::sync` already is) for the
-//! same reason every other background op in this app is: jdt.ls indexing a
-//! real project, or java-debug itself resolving/launching a real JVM, both
-//! take real wall-clock time no UI thread should ever wait on directly.
+//! same reason every other background op in this app is: a language server
+//! indexing a real project, or the adapter itself resolving/launching a real
+//! process, both take real wall-clock time no UI thread should ever wait on directly.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use fg_core::{BuildToolHandle, Document, RunConfig};
+use fg_extension::{DebugAdapterContribution, DebugLaunch, Registry};
 use serde_json::{Value, json};
 
 use crate::dap_client::{DapResult, DapSession};
@@ -41,8 +42,8 @@ pub enum DebugStatus {
 /// already uses.
 enum Phase {
     Idle,
-    /// Waiting on `vscode.java.startDebugSession`'s own response (the port
-    /// to connect to). Carries the launch arguments assembled at `start`
+    /// Waiting on the response to the adapter's start command
+    /// (`DebugAdapterContribution::start_command`): the port to connect to. Carries the launch arguments assembled at `start`
     /// time so they're ready the instant the socket connects, plus the
     /// snapshot of every open document's breakpoints taken at that same
     /// moment (`PLAN.md` Track 23 Phase 2) — sent once the adapter's own
@@ -50,6 +51,7 @@ enum Phase {
     /// `Launching`'s own doc comment for why that ordering matters).
     RequestingPort {
         rx: Receiver<Result<Value, ResponseError>>,
+        adapter: DebugAdapterContribution,
         launch_args: Value,
         initial_breakpoints: Vec<(PathBuf, HashSet<usize>)>,
     },
@@ -178,47 +180,6 @@ enum VarFetch {
     },
 }
 
-/// The DAP `launch` request's own `arguments` object — every field here is
-/// `com.microsoft.java.debug.plugin`'s real, documented (or, for the ones
-/// undocumented in user-facing `Configuration.md`, decompiled straight out
-/// of `vscjava.vscode-java-debug`'s own bundled client code rather than
-/// guessed) launch-config shape: `mainClass`/`projectName`/`vmArgs` per that
-/// extension's own `Configuration.md`; `classPaths`/`modulePaths`/`args`/
-/// `env`/`cwd`/`console` confirmed against its `dist/extension.js`, which
-/// resolves and forwards each verbatim. `classPaths` is handed real
-/// already-resolved absolute paths (`BuildToolHandle::runtime_classpath`, the same
-/// Track 21 resolution `Run`/`Track 22` already use) rather than the
-/// `"$Auto"` sentinel the real extension supports for its own jdt.ls-side
-/// resolution — this app resolves it client-side already, no reason to ask
-/// jdt.ls to redo it.
-fn build_launch_args(project_root: &Path, run_config: &RunConfig, classpath: &[PathBuf]) -> Value {
-    let project_name = project_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("FoxGarden project")
-        .to_string();
-    let cwd = run_config
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| project_root.to_path_buf());
-    let env: HashMap<&str, &str> = run_config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    json!({
-        "type": "java",
-        "request": "launch",
-        "name": run_config.name,
-        "mainClass": run_config.main_class,
-        "projectName": project_name,
-        "cwd": cwd.display().to_string(),
-        "classPaths": classpath.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-        "modulePaths": Vec::<String>::new(),
-        "args": run_config.program_args,
-        "vmArgs": run_config.vm_args,
-        "env": env,
-        "console": "internalConsole",
-        "stopOnEntry": false,
-    })
-}
-
 pub struct DebugState {
     phase: Phase,
     /// The last `breakpoints` set actually sent to the adapter for each
@@ -289,13 +250,14 @@ impl DebugState {
     }
 
     /// Kicks off a new debug session for `run_config` against `tool`'s own
-    /// resolved classpath. `lsp` must have a `Ready` Java session — the
-    /// same precondition `LspState::request_start_debug_session` already
-    /// enforces, surfaced here as a real error message instead of a silent
-    /// no-op.
+    /// resolved classpath. `lsp` must have a `Ready` session for the debug
+    /// adapter's language — the same precondition `LspState::
+    /// request_start_debug_session` already enforces, surfaced here as a
+    /// real error message instead of a silent no-op.
     pub fn start(
         &mut self,
         lsp: &mut LspState,
+        registry: &Registry,
         project_root: &Path,
         tool: &BuildToolHandle,
         run_config: &RunConfig,
@@ -307,13 +269,36 @@ impl DebugState {
         let classpath = tool
             .runtime_classpath(project_root)
             .unwrap_or_else(|| Err(format!("{} cannot resolve a classpath", tool.display_name)))?;
-        let launch_args = build_launch_args(project_root, run_config, &classpath);
+        let adapter = registry
+            .debug_adapter()
+            .cloned()
+            .ok_or_else(|| "no installed extension can debug".to_string())?;
+        let launch = DebugLaunch {
+            name: run_config.name.clone(),
+            project_name: project_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("FoxGarden project")
+                .to_string(),
+            run: run_config.to_run_spec(),
+            working_dir: run_config
+                .working_dir
+                .clone()
+                .unwrap_or_else(|| project_root.to_path_buf()),
+            classpath,
+        };
+        let launch_args = registry
+            .debug_launch_arguments(&adapter.adapter_id, &launch)
+            .ok_or_else(|| format!("the {} debug adapter gave no launch arguments", adapter.adapter_id))?;
+        let launch_args: Value =
+            serde_json::from_str(&launch_args).map_err(|error| format!("unusable debug launch arguments: {error}"))?;
         let rx = lsp
-            .request_start_debug_session()
-            .ok_or_else(|| "the Java language server isn't ready yet".to_string())?;
+            .request_start_debug_session(&adapter.language_id, &adapter.start_command)
+            .ok_or_else(|| format!("the {} language server isn't ready yet", adapter.language_id))?;
         self.last_sent_breakpoints.clear();
         self.phase = Phase::RequestingPort {
             rx,
+            adapter,
             launch_args,
             initial_breakpoints,
         };
@@ -344,9 +329,10 @@ impl DebugState {
         self.phase = match std::mem::replace(&mut self.phase, Phase::Idle) {
             Phase::RequestingPort {
                 rx,
+                adapter,
                 launch_args,
                 initial_breakpoints,
-            } => poll_requesting_port(rx, launch_args, initial_breakpoints),
+            } => poll_requesting_port(rx, adapter, launch_args, initial_breakpoints),
             Phase::AwaitingInitializeResponse {
                 session,
                 rx,
@@ -533,12 +519,13 @@ fn breakpoints_to_resend<'a>(
 
 fn poll_requesting_port(
     rx: Receiver<Result<Value, ResponseError>>,
+    adapter: DebugAdapterContribution,
     launch_args: Value,
     initial_breakpoints: Vec<(PathBuf, HashSet<usize>)>,
 ) -> Phase {
     match rx.try_recv() {
         // Verified live against a real jdt.ls 1.60.0 + java-debug 0.53.2:
-        // `vscode.java.startDebugSession`'s response body is a bare JSON
+        // `vscode.java.startDebugSession`'s (the Java adapter's start command) response body is a bare JSON
         // number (`33267`), not the quoted string the real `vscode-java-
         // debug` extension's own TypeScript types (`Promise<string>`)
         // implied before this was actually run — `as_u64` first, `as_str`
@@ -548,18 +535,18 @@ fn poll_requesting_port(
             Some(port) => match DapSession::connect(port) {
                 Ok(mut session) => match session.send_request(
                     "initialize",
-                    json!({ "clientID": "foxgarden", "adapterID": "java", "linesStartAt1": true, "columnsStartAt1": true, "pathFormat": "path" }),
+                    json!({ "clientID": "foxgarden", "adapterID": adapter.adapter_id, "linesStartAt1": true, "columnsStartAt1": true, "pathFormat": "path" }),
                 ) {
                     Ok(rx) => Phase::AwaitingInitializeResponse { session, rx, launch_args, initial_breakpoints },
                     Err(error) => Phase::Failed(format!("failed to send the DAP initialize request: {error}")),
                 },
                 Err(error) => Phase::Failed(format!("failed to connect to the debug adapter on port {port}: {error}")),
             },
-            None => Phase::Failed(format!("jdt.ls returned an unusable debug port: {body}")),
+            None => Phase::Failed(format!("the language server returned an unusable debug port: {body}")),
         },
-        Ok(Err(error)) => Phase::Failed(format!("vscode.java.startDebugSession failed: {}", error.message)),
-        Err(TryRecvError::Empty) => Phase::RequestingPort { rx, launch_args, initial_breakpoints },
-        Err(TryRecvError::Disconnected) => Phase::Failed("the Java language server session ended".to_string()),
+        Ok(Err(error)) => Phase::Failed(format!("{} failed: {}", adapter.start_command, error.message)),
+        Err(TryRecvError::Empty) => Phase::RequestingPort { rx, adapter, launch_args, initial_breakpoints },
+        Err(TryRecvError::Disconnected) => Phase::Failed("the language server session ended".to_string()),
     }
 }
 

@@ -113,6 +113,14 @@ enum Slot {
     },
 }
 
+/// Where a URI scheme's documents come from: which server, which request,
+/// and the extension their text is saved under.
+struct VirtualDocumentRoute {
+    server_id: String,
+    method: String,
+    file_extension: String,
+}
+
 /// One session per registered server for FoxGarden's one project.
 /// Failed configurations stay failed until their project/binary setting
 /// changes, preventing an invalid executable from being spawned every frame.
@@ -124,6 +132,8 @@ pub struct LspState {
     java_release: JavaReleaseCache,
     /// Maps language id → server id, rebuilt each `sync` call.
     lang_to_server: HashMap<String, String>,
+    /// URI scheme → the server that serves it, rebuilt each `sync` call.
+    virtual_documents: HashMap<String, VirtualDocumentRoute>,
 }
 
 impl LspState {
@@ -143,7 +153,18 @@ impl LspState {
 
         // Rebuild the language → server_id cache used by request methods.
         self.lang_to_server.clear();
+        self.virtual_documents.clear();
         for server in registry.language_servers() {
+            if let Some(documents) = &server.virtual_documents {
+                self.virtual_documents.insert(
+                    documents.uri_scheme.clone(),
+                    VirtualDocumentRoute {
+                        server_id: server.id.clone(),
+                        method: documents.request_method.clone(),
+                        file_extension: documents.file_extension.clone(),
+                    },
+                );
+            }
             for lang_id in &server.language_ids {
                 self.lang_to_server.insert(lang_id.clone(), server.id.clone());
             }
@@ -473,48 +494,45 @@ impl LspState {
             .ok()
     }
 
-    /// Sends jdt.ls' own `java/classFileContents` extension request — the
-    /// only way to read a JDK/library type's decompiled source, since a
-    /// `jdt://` URI (what a `textDocument/definition` reply points a
-    /// project-external Java symbol at) names no real file on disk.
-    /// Java-only: `kotlin-language-server` never emits this scheme, and
-    /// jdt.ls is the only server this app declares `classFileContentsSupport`
-    /// to (`ServerKind::initialization_options`). `None` whenever the Java
-    /// session isn't `Ready` — same best-effort degrade every other LSP path
-    /// here already has.
-    pub fn request_class_file_contents(
-        &mut self,
-        uri: &str,
-    ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let server_id = self.lang_to_server.get("java").cloned()?;
-        let Slot::Ready { session, .. } = self.servers.get_mut(&server_id)? else {
-            return None;
-        };
-        session
-            .send_request("java/classFileContents", json!({ "uri": uri }))
-            .ok()
+    /// The file extension for documents under `scheme`, when a server
+    /// answers for that scheme — a definition pointing at one names no file
+    /// on disk, so its text has to be fetched with `request_virtual_document`.
+    pub fn virtual_document_extension(&self, scheme: &str) -> Option<String> {
+        self.virtual_documents.get(scheme).map(|route| route.file_extension.clone())
     }
 
-    /// `vscode.java.startDebugSession` (`PLAN.md` Track 23) — a jdt.ls
-    /// workspace command `com.microsoft.java.debug.plugin` registers once
-    /// loaded as a bundle (`SessionConfig::debug_bundles`), not a real LSP
-    /// method. Starts the plugin's own DAP server *inside* the running
-    /// jdt.ls JVM and hands back the TCP port it's listening on — verified
-    /// concretely against the real `vscode-java-debug` extension's own
-    /// client code, `dap_client`'s own header comment. No document/
-    /// byte-offset to flush first (unlike every `request_*` above), same
-    /// "just needs the session `Ready`" shape `request_class_file_contents`
-    /// already uses. `None` with no debug bundle loaded (`SessionConfig::
-    /// debug_bundles` empty) is possible in principle but not special-cased
-    /// here — jdt.ls' own "unknown command" error response covers that case
-    /// with a real, inspectable message rather than a client-side guess.
-    pub fn request_start_debug_session(&mut self) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
-        let server_id = self.lang_to_server.get("java").cloned()?;
+    /// Asks the server that serves `uri`'s scheme for the document's text
+    /// (`VirtualDocuments::request_method`). `None` whenever no server serves
+    /// the scheme or its session isn't `Ready` — same best-effort degrade
+    /// every other LSP path here already has.
+    pub fn request_virtual_document(&mut self, uri: &str) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let scheme = uri.split_once(':')?.0;
+        let route = self.virtual_documents.get(scheme)?;
+        let Slot::Ready { session, .. } = self.servers.get_mut(&route.server_id)? else {
+            return None;
+        };
+        session.send_request(&route.method, json!({ "uri": uri })).ok()
+    }
+
+    /// Runs `command` (`DebugAdapterContribution::start_command`) on the
+    /// server of `language_id` — a workspace command the server's debug
+    /// plugin registers, not a real LSP method. It starts the plugin's own
+    /// DAP server inside the running server and answers with the TCP port
+    /// it's listening on. No document/byte-offset to flush first (unlike
+    /// every `request_*` above); it just needs the session `Ready`. A
+    /// server without the plugin answers with its own "unknown command"
+    /// error, a real inspectable message rather than a client-side guess.
+    pub fn request_start_debug_session(
+        &mut self,
+        language_id: &str,
+        command: &str,
+    ) -> Option<Receiver<Result<serde_json::Value, ResponseError>>> {
+        let server_id = self.lang_to_server.get(language_id).cloned()?;
         let Slot::Ready { session, .. } = self.servers.get_mut(&server_id)? else {
             return None;
         };
         let params = lsp_types::ExecuteCommandParams {
-            command: "vscode.java.startDebugSession".to_string(),
+            command: command.to_string(),
             arguments: Vec::new(),
             work_done_progress_params: Default::default(),
         };
@@ -1263,9 +1281,10 @@ fn resolve_file_uri(path: &Path) -> Result<Uri, String> {
 
 /// `file_uri`'s own reverse direction — decodes a `file`-scheme URI (as a
 /// real server's `textDocument/definition` reply carries) back to a
-/// filesystem `PathBuf`. `None` for anything not `file`-scheme: a `jdt://`
-/// decompiled-class reference is `goto_definition`'s own job to resolve via
-/// `request_class_file_contents` instead, never a real path here.
+/// filesystem `PathBuf`. `None` for anything not `file`-scheme: a server's
+/// own virtual document (`VirtualDocuments`, a decompiled class say) is
+/// `goto_definition`'s job to resolve via `request_virtual_document`
+/// instead, never a real path here.
 pub(crate) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let text = uri.as_str();
     let rest = text.strip_prefix("file://")?;

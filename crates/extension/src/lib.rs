@@ -223,10 +223,7 @@ impl std::fmt::Debug for GrammarSource {
 ///
 /// `initialization_options` is a plain JSON string rather than a parsed
 /// value specifically so this crate needs no JSON dependency: the core
-/// parses it when it builds the `initialize` request. That matters because
-/// it is the field that currently lives as a hardcoded `match` on
-/// `ServerKind` inside `lsp_state`, carrying jdt.ls-specific settings in
-/// core code; moving it here is Phase 4's main job.
+/// parses it when it builds the `initialize` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguageServerContribution {
     pub id: String,
@@ -245,9 +242,24 @@ pub struct LanguageServerContribution {
     /// How to install the server from bytes the extension carries. `None`
     /// for a server the user provides themselves.
     pub install: Option<ServerInstall>,
+    /// Documents the server serves under a URI scheme of its own (a
+    /// decompiled library class, say) rather than from a file on disk.
+    pub virtual_documents: Option<VirtualDocuments>,
     /// The runtime the server itself runs on (a JVM, say), when it has one
     /// the user may need to point it at. `None` for a self-contained binary.
     pub host_runtime: Option<HostRuntime>,
+}
+
+/// A server's non-file documents: definitions can point at `uri_scheme`
+/// URIs, whose text is fetched by sending `request_method` with `{"uri": ..}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualDocuments {
+    /// Without the colon: `"jdt"`.
+    pub uri_scheme: String,
+    pub request_method: String,
+    /// The extension the text is saved under to open it, without the dot:
+    /// `"java"`.
+    pub file_extension: String,
 }
 
 /// The runtime a language server runs on, and the oldest version it accepts.
@@ -342,9 +354,34 @@ pub struct Contributions {
     /// has a grammar for. Several extensions may name the same language —
     /// two web frameworks on one language is ordinary — and each is asked.
     pub http_route_languages: Vec<LanguageId>,
-    /// Languages the editor can set breakpoints in and debug — what decides
-    /// which files get a breakpoint gutter.
-    pub debug_languages: Vec<LanguageId>,
+    /// How the editor debugs a language — what decides which files get a
+    /// breakpoint gutter and how a session is started.
+    pub debug_adapters: Vec<DebugAdapterContribution>,
+}
+
+/// A debugger for one language, reached through that language's server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugAdapterContribution {
+    pub language_id: LanguageId,
+    /// The `adapterID` sent in the DAP `initialize` request.
+    pub adapter_id: String,
+    /// The `workspace/executeCommand` the language server answers with the
+    /// TCP port its debug adapter listens on, once started.
+    pub start_command: String,
+}
+
+/// Everything an extension needs to write the DAP `launch` arguments for one
+/// run configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugLaunch {
+    /// The run configuration's own name.
+    pub name: String,
+    pub project_name: String,
+    pub run: RunSpec,
+    /// Where the debuggee runs: the run configuration's directory, else the
+    /// project root.
+    pub working_dir: PathBuf,
+    pub classpath: Vec<PathBuf>,
 }
 
 /// One extension.
@@ -397,6 +434,13 @@ pub trait Extension: Send + Sync {
     /// message for the user. Blocking: called off the UI thread.
     fn check_server_prerequisites(&self, _server_id: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    /// The DAP `launch` arguments, as unparsed JSON, for debug adapter
+    /// `adapter_id`. `None` — the default — for an adapter this extension
+    /// does not own.
+    fn debug_launch_arguments(&self, _adapter_id: &str, _launch: &DebugLaunch) -> Option<String> {
+        None
     }
 
     /// The process that performs `task` for build tool `tool_id`, or `None`

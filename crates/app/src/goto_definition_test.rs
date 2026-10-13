@@ -47,26 +47,26 @@ fn first_location_an_empty_array_is_none() {
 }
 
 #[test]
-fn jdt_cache_path_names_the_file_from_the_uris_trailing_class_segment() {
-    let path = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
+fn virtual_cache_path_names_the_file_from_the_uris_trailing_class_segment() {
+    let path = virtual_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x", "java").unwrap();
     let name = path.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("String-"), "unexpected cache file name: {name}");
     assert!(name.ends_with(".java"));
 }
 
 #[test]
-fn jdt_cache_path_is_stable_across_calls_for_the_same_uri() {
-    let a = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-    let b = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
+fn virtual_cache_path_is_stable_across_calls_for_the_same_uri() {
+    let a = virtual_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x", "java").unwrap();
+    let b = virtual_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x", "java").unwrap();
     assert_eq!(a, b);
 }
 
 #[test]
-fn jdt_cache_path_differs_for_two_uris_with_the_same_trailing_class_name() {
+fn virtual_cache_path_differs_for_two_uris_with_the_same_trailing_class_name() {
     // Two different JARs can each contain a same-named class — the
     // human-readable name alone must never be what dedupes the cache.
-    let a = jdt_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x").unwrap();
-    let b = jdt_cache_path("jdt://contents/other.jar/some.pkg/String.class?=y").unwrap();
+    let a = virtual_cache_path("jdt://contents/rt.jar/java.lang/String.class?=x", "java").unwrap();
+    let b = virtual_cache_path("jdt://contents/other.jar/some.pkg/String.class?=y", "java").unwrap();
     assert_ne!(a, b);
 }
 
@@ -78,7 +78,7 @@ fn handle_source_writes_the_reply_text_and_resolves_the_byte_offset() {
         end: lsp_types::Position { line: 0, character: 6 },
     };
     let value = serde_json::json!("class String {}");
-    let target = handle_source(&uri, range, value).expect("decodes a plain string reply");
+    let target = handle_source(&uri, range, "java", value).expect("decodes a plain string reply");
     let Target::Ready { path, byte_offset } = target else {
         panic!("expected Target::Ready")
     };

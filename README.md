@@ -124,8 +124,8 @@ cargo test --workspace
 **Requirements:** a recent Rust toolchain (edition 2024). Java, Kotlin and
 Spring support comes from the `spring-foxgarden` extension, which the build
 expects at `../spring-foxgarden`. The editor reaches it only through its
-extension API; a few JVM-specific pieces (the language-server installers and their
-protocol details) have not moved across yet. Java language features
+extension API (language-server installers, debug adapters and runtimes included);
+a handful of small JVM-specific UI details have not moved across yet. Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
@@ -246,9 +246,9 @@ cargo test --workspace
 
 **Requisitos:** uma toolchain Rust recente (edição 2024). O suporte a Java,
 Kotlin e Spring vem do extension `spring-foxgarden`, que o build espera em
-`../spring-foxgarden`. O editor só a alcança pela API de extensões; algumas
-peças específicas da JVM (instaladores de language server e detalhes de
-protocolo) ainda não foram movidas. Recursos de Java exigem
+`../spring-foxgarden`. O editor só a alcança pela API de extensões (inclusive
+instaladores de language server, adaptadores de depuração e runtimes); alguns
+pequenos detalhes de interface específicos da JVM ainda não foram movidos. Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::{
-    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
+    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, DebugAdapterContribution, DebugLaunch, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
     ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerInstallHandle, ServerStartContext,
@@ -236,8 +236,9 @@ pub struct Registry {
     scaffolds: Vec<(ScaffoldContribution, usize)>,
     /// Languages at least one extension finds HTTP routes in, each once.
     http_route_languages: Vec<LanguageId>,
-    /// Languages at least one extension can debug, each once.
-    debug_languages: Vec<LanguageId>,
+    /// Debug adapters with the index of the extension that owns each; a
+    /// language is listed once, the first registration winning.
+    debug_adapters: Vec<(DebugAdapterContribution, usize)>,
     index: LanguageIndex,
 }
 
@@ -445,7 +446,11 @@ impl Registry {
             }
         }
 
-        for language_id in contributions.http_route_languages.iter().chain(&contributions.debug_languages) {
+        for language_id in contributions
+            .http_route_languages
+            .iter()
+            .chain(contributions.debug_adapters.iter().map(|adapter| &adapter.language_id))
+        {
             if !known(language_id) {
                 return Err(RegisterError::UnknownLanguage {
                     language_id: language_id.clone(),
@@ -497,9 +502,9 @@ impl Registry {
         for scaffold in contributions.scaffolds {
             self.scaffolds.push((scaffold, extension_index));
         }
-        for language_id in contributions.debug_languages {
-            if !self.debug_languages.contains(&language_id) {
-                self.debug_languages.push(language_id);
+        for adapter in contributions.debug_adapters {
+            if !self.debug_adapters.iter().any(|(existing, _)| existing.language_id == adapter.language_id) {
+                self.debug_adapters.push((adapter, extension_index));
             }
         }
         for language_id in contributions.http_route_languages {
@@ -593,7 +598,21 @@ impl Registry {
     /// Whether any extension can debug `language_id` — what decides which
     /// files get a breakpoint gutter.
     pub fn is_debuggable(&self, language_id: &str) -> bool {
-        self.debug_languages.iter().any(|id| id == language_id)
+        self.debug_adapters.iter().any(|(adapter, _)| adapter.language_id == language_id)
+    }
+
+    /// The debug adapter a session starts: the first registered, since a
+    /// project has one language server session per language and the run
+    /// configuration does not name a language.
+    pub fn debug_adapter(&self) -> Option<&DebugAdapterContribution> {
+        self.debug_adapters.first().map(|(adapter, _)| adapter)
+    }
+
+    /// The DAP `launch` arguments for `adapter_id`, from the extension that
+    /// owns it.
+    pub fn debug_launch_arguments(&self, adapter_id: &str, launch: &DebugLaunch) -> Option<String> {
+        let (_, owner) = self.debug_adapters.iter().find(|(adapter, _)| adapter.adapter_id == adapter_id)?;
+        self.extensions[*owner].debug_launch_arguments(adapter_id, launch)
     }
 
     pub fn grammar(&self, language_id: &str) -> Option<&GrammarContribution> {

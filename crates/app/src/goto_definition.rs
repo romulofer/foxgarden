@@ -6,10 +6,10 @@
 //! poll once a frame, the same shape every other async LSP op in this app
 //! already has.
 //!
-//! A JDK/library type (no real file in the open project) resolves to a
-//! `jdt://` URI instead of a real path — that needs a second async
-//! round-trip, jdt.ls' own `java/classFileContents` extension request, to
-//! fetch the decompiled source before there's anywhere to jump *to* at all.
+//! A library type (no real file in the open project) can resolve to a URI in
+//! a server's own scheme (`VirtualDocuments`) instead of a real path — that
+//! needs a second async round-trip, the server's virtual-document request,
+//! to fetch the source before there's anywhere to jump *to* at all.
 //! `Stage` tracks which of those two requests is currently in flight.
 
 use std::collections::hash_map::DefaultHasher;
@@ -47,6 +47,9 @@ enum Stage {
     FetchingSource {
         uri: Uri,
         range: lsp_types::Range,
+        /// The file extension the fetched text is saved under, so it opens
+        /// in the right language.
+        extension: String,
         rx: Receiver<Result<serde_json::Value, ResponseError>>,
     },
 }
@@ -82,8 +85,8 @@ impl GotoDefinitionState {
     }
 
     /// Polls whatever's in flight. Returns `Some(Target)` once a request
-    /// (the location lookup, and — only for a `jdt://` result — the
-    /// decompiled-source fetch that follows it) has actually resolved;
+    /// (the location lookup, and — only for a virtual-document result — the
+    /// source fetch that follows it) has actually resolved;
     /// `None` on every other frame, including a still-pending one (which
     /// stays tracked for the next poll) and a failed/rejected one (dropped
     /// silently, the same best-effort degrade every other LSP path here
@@ -98,29 +101,30 @@ impl GotoDefinitionState {
                     None
                 }
             },
-            Stage::FetchingSource { uri, range, rx } => match rx.try_recv() {
-                Ok(Ok(value)) => handle_source(&uri, range, value),
+            Stage::FetchingSource { uri, range, extension, rx } => match rx.try_recv() {
+                Ok(Ok(value)) => handle_source(&uri, range, &extension, value),
                 Ok(Err(_)) | Err(TryRecvError::Disconnected) => None,
                 Err(TryRecvError::Empty) => {
-                    self.stage = Some(Stage::FetchingSource { uri, range, rx });
+                    self.stage = Some(Stage::FetchingSource { uri, range, extension, rx });
                     None
                 }
             },
         }
     }
 
-    /// A `jdt://` location has no real path to resolve yet — fires the
-    /// follow-up `java/classFileContents` request and stays pending another
-    /// stage rather than returning a `Target` this frame. Any other scheme
-    /// is assumed `file://` (the only other kind a real server here ever
-    /// sends); `uri_to_path` itself degrades to `None`, dropped the same
-    /// best-effort way as everything else in this module, if that
-    /// assumption is ever wrong.
+    /// A location under a server's own URI scheme (a decompiled library
+    /// class) has no real path to resolve yet — fires the follow-up
+    /// virtual-document request and stays pending another stage rather than
+    /// returning a `Target` this frame. Any other scheme is assumed
+    /// `file://` (the only other kind a real server here ever sends);
+    /// `uri_to_path` itself degrades to `None`, dropped the same best-effort
+    /// way as everything else in this module, if that assumption is ever
+    /// wrong.
     fn handle_location(&mut self, value: serde_json::Value, lsp: &mut LspState) -> Option<Target> {
         let (uri, range) = first_location(value)?;
-        if uri.as_str().starts_with("jdt:") {
-            let rx = lsp.request_class_file_contents(uri.as_str())?;
-            self.stage = Some(Stage::FetchingSource { uri, range, rx });
+        if let Some(extension) = lsp.virtual_document_extension(uri.scheme()?.as_str()) {
+            let rx = lsp.request_virtual_document(uri.as_str())?;
+            self.stage = Some(Stage::FetchingSource { uri, range, extension, rx });
             None
         } else {
             Some(Target::File {
@@ -160,15 +164,15 @@ fn first_location(value: serde_json::Value) -> Option<(Uri, lsp_types::Range)> {
     }
 }
 
-/// A `java/classFileContents` reply's decompiled text, written to a stable
+/// A virtual-document reply's text (a decompiled class, say), written to a stable
 /// local cache file and opened like any other. `range` (still UTF-16, the
 /// same shape `handle_location` left it in) is resolved against that exact
 /// text right here — unlike the `Target::File` case, there's no separate
 /// buffer to wait on, since the text this converts against *is* what gets
 /// written to disk.
-fn handle_source(uri: &Uri, range: lsp_types::Range, value: serde_json::Value) -> Option<Target> {
+fn handle_source(uri: &Uri, range: lsp_types::Range, extension: &str, value: serde_json::Value) -> Option<Target> {
     let content = value.as_str()?;
-    let path = jdt_cache_path(uri.as_str()).ok()?;
+    let path = virtual_cache_path(uri.as_str(), extension).ok()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok()?;
     }
@@ -180,15 +184,15 @@ fn handle_source(uri: &Uri, range: lsp_types::Range, value: serde_json::Value) -
 /// A stable filesystem path for `uri`'s decompiled source — the same URI
 /// always maps to the same path, so re-visiting a type already looked up
 /// this run (or a previous one) reuses the cached file instead of asking
-/// jdt.ls to redecompile it. Named from the URI's own trailing `.class`
-/// segment (falls back to `"Source"` if that can't be found) purely for a
+/// the server to produce it again. Named from the URI's own trailing
+/// segment, minus its extension (falls back to `"Source"` if that can't be found) purely for a
 /// human glancing at the cache directory or an editor tab title; the hash
 /// suffix — not the name — is what actually guarantees no two distinct URIs
 /// collide (two different JARs can each contain a class of the same simple
 /// name).
-fn jdt_cache_path(uri: &str) -> Result<PathBuf, String> {
+fn virtual_cache_path(uri: &str, extension: &str) -> Result<PathBuf, String> {
     let dir = ProjectDirs::from("", "", "foxgarden")
-        .map(|dirs| dirs.cache_dir().join("jdt-classes"))
+        .map(|dirs| dirs.cache_dir().join("virtual-documents"))
         .ok_or_else(|| "couldn't determine a cache directory for this platform".to_string())?;
     let mut hasher = DefaultHasher::new();
     uri.hash(&mut hasher);
@@ -197,10 +201,10 @@ fn jdt_cache_path(uri: &str) -> Result<PathBuf, String> {
         .rsplit('/')
         .next()
         .map(|segment| segment.split(['?', '#']).next().unwrap_or(segment))
-        .map(|segment| segment.strip_suffix(".class").unwrap_or(segment))
+        .map(|segment| segment.rsplit_once('.').map_or(segment, |(stem, _)| stem))
         .filter(|segment| !segment.is_empty())
         .unwrap_or("Source");
-    Ok(dir.join(format!("{name}-{hash:016x}.java")))
+    Ok(dir.join(format!("{name}-{hash:016x}.{extension}")))
 }
 
 #[cfg(test)]

@@ -2434,7 +2434,7 @@ impl eframe::App for FoxGardenApp {
                                 .collect();
                             if let Err(err) =
                                 self.debug_state
-                                    .start(&mut self.lsp, &root, &tool, &config, initial_breakpoints)
+                                    .start(&mut self.lsp, &self.state.languages, &root, &tool, &config, initial_breakpoints)
                             {
                                 crate::errors::report(&mut self.last_error, err);
                             }

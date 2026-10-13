@@ -1,49 +1,6 @@
 
 use super::*;
 
-fn config(main_class: &str) -> RunConfig {
-    RunConfig {
-        name: "test".to_string(),
-        main_class: main_class.to_string(),
-        vm_args: "-Xmx128m".to_string(),
-        program_args: "foo".to_string(),
-        env: vec![("MY_ENV".to_string(), "hello".to_string())],
-        working_dir: None,
-    }
-}
-
-#[test]
-fn build_launch_args_carries_every_field_the_real_extension_forwards() {
-    let root = Path::new("/projects/demo-app");
-    let classpath = vec![
-        PathBuf::from("/projects/demo-app/target/classes"),
-        PathBuf::from("/home/.m2/x.jar"),
-    ];
-    let args = build_launch_args(root, &config("com.example.Main"), &classpath);
-
-    assert_eq!(args["mainClass"], "com.example.Main");
-    assert_eq!(args["projectName"], "demo-app");
-    assert_eq!(args["cwd"], "/projects/demo-app");
-    assert_eq!(
-        args["classPaths"],
-        serde_json::json!(["/projects/demo-app/target/classes", "/home/.m2/x.jar"])
-    );
-    assert_eq!(args["modulePaths"], serde_json::json!([]));
-    assert_eq!(args["args"], "foo");
-    assert_eq!(args["vmArgs"], "-Xmx128m");
-    assert_eq!(args["env"]["MY_ENV"], "hello");
-    assert_eq!(args["console"], "internalConsole");
-}
-
-#[test]
-fn build_launch_args_prefers_working_dir_over_project_root() {
-    let root = Path::new("/projects/demo-app");
-    let mut cfg = config("com.example.Main");
-    cfg.working_dir = Some(PathBuf::from("/projects/demo-app/sub"));
-    let args = build_launch_args(root, &cfg, &[]);
-    assert_eq!(args["cwd"], "/projects/demo-app/sub");
-}
-
 #[test]
 fn debug_state_starts_idle_and_reports_attached_status_correctly() {
     let state = DebugState::default();

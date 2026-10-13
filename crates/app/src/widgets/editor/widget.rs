@@ -1398,7 +1398,7 @@ pub fn show(
     // only once a breakpoint already exists — its whole point is to give
     // the user somewhere to click to create the first one. Which
     // languages are debuggable is the extensions' call
-    // (`Contributions::debug_languages`), so a gutter that can never
+    // (`Contributions::debug_adapters`), so a gutter that can never
     // actually pause anything isn't drawn.
     let breakpoint_gutter_width = if doc.language.is_some_and(syntax::is_debuggable) {
         breakpoint_gutter::BREAKPOINT_GUTTER_WIDTH

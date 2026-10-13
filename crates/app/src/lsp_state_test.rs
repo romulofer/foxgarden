@@ -63,6 +63,7 @@ impl Extension for AlwaysOkExtension {
                 initialization_options: None,
                 install: None,
                 host_runtime: None,
+                virtual_documents: None,
             }],
             ..Default::default()
         }
@@ -102,6 +103,7 @@ fn test_server(server_id: &str, language_id: &str) -> LanguageServerContribution
         initialization_options: None,
         install: None,
         host_runtime: None,
+        virtual_documents: None,
     }
 }
 
@@ -485,6 +487,7 @@ sys.stdin.buffer.read()
         lang_to_server: HashMap::from([("java".to_string(), "jdtls".to_string())]),
         retiring: Vec::new(),
         java_release: JavaReleaseCache::default(),
+        virtual_documents: HashMap::new(),
     };
 
     let rx = state
@@ -826,6 +829,7 @@ fn java_debug_launch_against_a_real_server_attaches_to_a_real_process() {
     debug
         .start(
             &mut state,
+            test_support::languages(),
             root,
             &test_support::languages().build_tool("maven").expect("the spring extension contributes maven"),
             &run_config,

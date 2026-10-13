@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
-    ArchiveKind, LatestVersionSource, RuntimeContribution, RuntimeInstall, ServerInstall,
+    ArchiveKind, DebugAdapterContribution, DebugLaunch, LatestVersionSource, RunSpec, RuntimeContribution, RuntimeInstall, ServerInstall,
     GrammarSource, LanguageContribution, NodeKinds, ProblemSeverity,
 };
 
@@ -148,6 +148,7 @@ fn a_language_server_is_findable_by_the_language_it_serves() {
                 initialization_options: Some(r#"{"verbose":true}"#.to_string()),
                 install: None,
                 host_runtime: None,
+                virtual_documents: None,
             }],
             ..Default::default()
         })))
@@ -170,6 +171,7 @@ fn elvish_servers() -> Contributions {
         initialization_options: None,
         install,
         host_runtime: None,
+        virtual_documents: None,
     };
     Contributions {
         languages: vec![lang("elvish", &["elv"])],
@@ -855,6 +857,7 @@ fn a_server_with_no_custom_start_starts_as_declared() {
             initialization_options: Some("{}".to_string()),
             install: None,
             host_runtime: None,
+            virtual_documents: None,
         }],
         ..Default::default()
     };
@@ -1029,7 +1032,7 @@ fn debuggable_languages_are_the_ones_an_extension_declares_and_must_be_registere
     registry
         .register(Box::new(FakeExtension::new("elves", || Contributions {
             languages: vec![lang("elvish", &["elv"]), lang("orcish", &["orc"])],
-            debug_languages: vec!["elvish".to_string()],
+            debug_adapters: vec![adapter("elvish")],
             ..Default::default()
         })))
         .unwrap();
@@ -1039,11 +1042,57 @@ fn debuggable_languages_are_the_ones_an_extension_declares_and_must_be_registere
     let mut other = Registry::new();
     assert!(matches!(
         other.register(Box::new(FakeExtension::new("ghosts", || Contributions {
-            debug_languages: vec!["nowhere".to_string()],
+            debug_adapters: vec![adapter("nowhere")],
             ..Default::default()
         }))),
         Err(RegisterError::UnknownLanguage { .. })
     ));
+}
+
+fn adapter(language_id: &str) -> DebugAdapterContribution {
+    DebugAdapterContribution {
+        language_id: language_id.to_string(),
+        adapter_id: format!("{language_id}-dap"),
+        start_command: format!("{language_id}.startDebugging"),
+    }
+}
+
+#[test]
+fn the_first_registered_debug_adapter_starts_sessions_and_its_owner_writes_the_launch() {
+    struct Launcher;
+    impl Extension for Launcher {
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "launcher".to_string(),
+                name: "launcher".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            Contributions {
+                languages: vec![lang("elvish", &["elv"])],
+                debug_adapters: vec![adapter("elvish")],
+                ..Default::default()
+            }
+        }
+        fn debug_launch_arguments(&self, adapter_id: &str, launch: &DebugLaunch) -> Option<String> {
+            (adapter_id == "elvish-dap").then(|| format!("{{\"entry\":\"{}\"}}", launch.run.entry_point))
+        }
+    }
+    let mut registry = Registry::new();
+    registry.register(Box::new(Launcher)).unwrap();
+    let launch = DebugLaunch {
+        name: "run".to_string(),
+        project_name: "p".to_string(),
+        run: RunSpec { entry_point: "main".to_string(), ..Default::default() },
+        working_dir: PathBuf::from("/p"),
+        classpath: Vec::new(),
+    };
+
+    assert_eq!(registry.debug_adapter().unwrap().adapter_id, "elvish-dap");
+    assert_eq!(registry.debug_launch_arguments("elvish-dap", &launch).as_deref(), Some("{\"entry\":\"main\"}"));
+    assert!(registry.debug_launch_arguments("other", &launch).is_none());
 }
 
 fn runtime(id: &str) -> RuntimeContribution {
