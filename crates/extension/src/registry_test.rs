@@ -29,6 +29,9 @@ impl FakeExtension {
 }
 
 impl Extension for FakeExtension {
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![Capability::ProcessExec, Capability::DownloadFile]
+    }
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: self.id.to_string(),
@@ -362,6 +365,9 @@ fn one_extension_declaring_a_language_twice_is_refused() {
 struct FakeToolchain;
 
 impl Extension for FakeToolchain {
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![Capability::ProcessExec, Capability::DownloadFile]
+    }
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: "khazad".to_string(),
@@ -458,6 +464,9 @@ fn a_directory_whose_marker_name_is_a_directory_is_not_a_project() {
 fn two_extensions_cannot_claim_the_same_build_tool_id() {
     struct Impostor;
     impl Extension for Impostor {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
         fn manifest(&self) -> ExtensionManifest {
             ExtensionManifest {
                 id: "moria".to_string(),
@@ -501,6 +510,9 @@ fn two_extensions_cannot_claim_the_same_build_tool_id() {
 struct FakeForge;
 
 impl Extension for FakeForge {
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![Capability::ProcessExec, Capability::DownloadFile]
+    }
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: "forge".to_string(),
@@ -591,6 +603,9 @@ fn a_contributed_scaffold_is_listed_and_generates_through_its_own_extension() {
 fn a_scaffold_for_an_unregistered_build_tool_is_refused() {
     struct Dwarfless;
     impl Extension for Dwarfless {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
         fn manifest(&self) -> ExtensionManifest {
             ExtensionManifest {
                 id: "dwarfless".to_string(),
@@ -664,6 +679,9 @@ fn an_extension_handle_answers_project_questions_away_from_the_registry() {
 fn two_scaffolds_for_the_same_pair_are_refused() {
     struct Copycat;
     impl Extension for Copycat {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
         fn manifest(&self) -> ExtensionManifest {
             ExtensionManifest {
                 id: "copycat".to_string(),
@@ -701,6 +719,9 @@ fn two_scaffolds_for_the_same_pair_are_refused() {
 fn one_extension_cannot_scaffold_the_same_pair_twice() {
     struct Stutter;
     impl Extension for Stutter {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
         fn manifest(&self) -> ExtensionManifest {
             ExtensionManifest {
                 id: "stutter".to_string(),
@@ -933,6 +954,9 @@ struct FakeLinter {
 }
 
 impl Extension for FakeLinter {
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![Capability::ProcessExec, Capability::DownloadFile]
+    }
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: self.extension_id.to_string(),
@@ -1061,6 +1085,9 @@ fn adapter(language_id: &str) -> DebugAdapterContribution {
 fn the_first_registered_debug_adapter_starts_sessions_and_its_owner_writes_the_launch() {
     struct Launcher;
     impl Extension for Launcher {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
         fn manifest(&self) -> ExtensionManifest {
             ExtensionManifest {
                 id: "launcher".to_string(),
@@ -1110,6 +1137,9 @@ struct FakeRuntimes {
 }
 
 impl Extension for FakeRuntimes {
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![Capability::ProcessExec, Capability::DownloadFile]
+    }
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: self.extension_id.to_string(),
@@ -1238,4 +1268,100 @@ fn source_root_dir_names_are_gathered_once_across_extensions() {
         .unwrap();
 
     assert_eq!(registry.source_root_dir_names(), ["src", "lib", "mallorn"]);
+}
+
+/// An extension that declares exactly `declared`, whatever it contributes.
+struct Declaring {
+    declared: Vec<Capability>,
+    contributions: fn() -> Contributions,
+}
+
+impl Extension for Declaring {
+    fn capabilities(&self) -> Vec<Capability> {
+        self.declared.clone()
+    }
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: "declaring".to_string(),
+            name: "declaring".to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+    fn contributions(&self) -> Contributions {
+        (self.contributions)()
+    }
+}
+
+fn downloaded_linter() -> Contributions {
+    let mut analyzer = linter("lint", AnalyzerInput::Sources);
+    analyzer.install = Some(crate::AnalyzerInstall {
+        version: "1".to_string(),
+        download_url: "https://example.invalid/lint.jar".to_string(),
+        sha256: "00".repeat(32),
+        packaging: crate::AnalyzerPackaging::File { name: "lint.jar".to_string() },
+        default_config: None,
+        latest_release: None,
+    });
+    Contributions {
+        analyzers: vec![analyzer],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_data_only_extension_needs_no_capability() {
+    let mut registry = Registry::new();
+    let bare = Declaring {
+        declared: Vec::new(),
+        contributions: elvish,
+    };
+    assert_eq!(registry.register(Box::new(bare)), Ok(()));
+}
+
+#[test]
+fn a_server_without_process_exec_is_refused_naming_the_capability() {
+    let mut registry = Registry::new();
+    let ext = Declaring {
+        declared: vec![Capability::DownloadFile],
+        contributions: elvish_servers,
+    };
+    assert_eq!(
+        registry.register(Box::new(ext)),
+        Err(RegisterError::UndeclaredCapability {
+            extension_id: "declaring".to_string(),
+            capability: Capability::ProcessExec,
+            needed_by: "a language server",
+        })
+    );
+    assert!(registry.language("elvish").is_none(), "a refused extension leaves nothing behind");
+}
+
+#[test]
+fn an_analyzer_install_needs_download_file_on_top_of_process_exec() {
+    let mut registry = Registry::new();
+    let ext = Declaring {
+        declared: vec![Capability::ProcessExec],
+        contributions: downloaded_linter,
+    };
+    assert!(matches!(
+        registry.register(Box::new(ext)),
+        Err(RegisterError::UndeclaredCapability {
+            capability: Capability::DownloadFile,
+            ..
+        })
+    ));
+    let both = Declaring {
+        declared: vec![Capability::ProcessExec, Capability::DownloadFile],
+        contributions: downloaded_linter,
+    };
+    assert_eq!(registry.register(Box::new(both)), Ok(()));
+}
+
+#[test]
+fn capability_names_round_trip() {
+    for capability in [Capability::ProcessExec, Capability::DownloadFile] {
+        assert_eq!(Capability::from_id(capability.id()), Some(capability));
+    }
+    assert_eq!(Capability::from_id("root"), None);
 }

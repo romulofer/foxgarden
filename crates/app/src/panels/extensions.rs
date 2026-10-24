@@ -95,6 +95,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut ExtensionsState) {
                         ui.weak(format!("{heading}: {}", names.join(", ")));
                     }
                 }
+                if !info.capabilities.is_empty() {
+                    let names: Vec<&str> = info.capabilities.iter().map(|c| c.id()).collect();
+                    ui.weak(format!("{}: {}", t().extensions.permissions, names.join(", ")));
+                }
             });
         }
         if state.restart_required() {

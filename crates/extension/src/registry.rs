@@ -7,8 +7,23 @@ use crate::{
     ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerInstallHandle, ServerStartContext,
-    CURRENT_SCHEMA_VERSION,
+    Capability, CURRENT_SCHEMA_VERSION,
 };
+
+fn check_capabilities(
+    manifest: &ExtensionManifest,
+    contributions: &Contributions,
+    declared: &[Capability],
+) -> Result<(), RegisterError> {
+    match crate::required_capabilities(contributions).into_iter().find(|(c, _)| !declared.contains(c)) {
+        Some((capability, needed_by)) => Err(RegisterError::UndeclaredCapability {
+            extension_id: manifest.id.clone(),
+            capability,
+            needed_by,
+        }),
+        None => Ok(()),
+    }
+}
 
 /// Why a registration was refused.
 ///
@@ -23,6 +38,12 @@ pub enum RegisterError {
         extension_id: String,
         found: u32,
         expected: u32,
+    },
+    /// A contribution needs a capability the extension did not declare.
+    UndeclaredCapability {
+        extension_id: String,
+        capability: Capability,
+        needed_by: &'static str,
     },
     /// Two extensions claim the same extension id.
     DuplicateExtension { extension_id: String },
@@ -103,6 +124,14 @@ impl std::fmt::Display for RegisterError {
             } => write!(
                 f,
                 "extension {extension_id} declares schema version {found}, but this build speaks {expected}"
+            ),
+            Self::UndeclaredCapability {
+                extension_id,
+                capability,
+                needed_by,
+            } => write!(
+                f,
+                "extension {extension_id} contributes {needed_by} but does not declare the {capability} capability"
             ),
             Self::DuplicateExtension { extension_id } => {
                 write!(f, "extension {extension_id} is already registered")
@@ -270,6 +299,7 @@ impl Registry {
     pub fn register(&mut self, extension: Box<dyn Extension>) -> Result<(), RegisterError> {
         let manifest = extension.manifest();
         let contributions = extension.contributions();
+        check_capabilities(&manifest, &contributions, &extension.capabilities())?;
         self.validate(&manifest, &contributions)?;
         let idx = self.extensions.len();
         for server in &contributions.language_servers {

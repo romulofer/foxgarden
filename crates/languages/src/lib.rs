@@ -21,6 +21,9 @@ use fg_extension::{
 
 pub use foxgarden_spring::SpringExtension;
 
+mod installed;
+pub use installed::{InstalledExtension, LoadError, MANIFEST_FILE};
+
 fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContribution {
     LanguageContribution {
         id: id.to_string(),
@@ -147,6 +150,31 @@ pub fn register_builtins(registry: &mut Registry, disabled: &[String]) -> Result
         }
     }
     Ok(())
+}
+
+/// Registers the extensions installed under `root` (see [`installed`]), after
+/// the built-in ones so a clash is the installed extension's to lose. One that
+/// cannot be loaded or registered is skipped and reported, never fatal: it is
+/// somebody else's file. Returns a message per skipped extension.
+pub fn register_installed(registry: &mut Registry, root: &std::path::Path, disabled: &[String]) -> Vec<String> {
+    let (loaded, load_errors) = installed::load_all(root);
+    let mut problems: Vec<String> = load_errors.iter().map(ToString::to_string).collect();
+    for extension in loaded {
+        let id = extension.manifest().id;
+        if disabled.contains(&id) {
+            continue;
+        }
+        if let Err(error) = registry.register(Box::new(extension)) {
+            problems.push(error.to_string());
+        }
+    }
+    problems
+}
+
+/// What each extension installed under `root` brings, for the extension
+/// manager. Unloadable ones are left out; `register_installed` reports them.
+pub fn installed_extension_infos(root: &std::path::Path) -> Vec<ExtensionInfo> {
+    installed::load_all(root).0.iter().map(|e| ExtensionInfo::of(e)).collect()
 }
 
 /// A registry with exactly this build's own languages in it.

@@ -49,6 +49,7 @@ pub struct Extensions {
     pub language_servers: &'static str,
     pub build_tools: &'static str,
     pub analyzers: &'static str,
+    pub permissions: &'static str,
 }
 
 /// The bottom dock's own tab strip (`panels::bottom_dock`). Deliberately
@@ -886,6 +887,7 @@ pub const PT_BR: Strings = Strings {
         language_servers: "Servidores de linguagem",
         build_tools: "Ferramentas de build",
         analyzers: "Analisadores",
+        permissions: "Permissões",
     },
 };
 
@@ -1256,5 +1258,6 @@ pub const EN_US: Strings = Strings {
         language_servers: "Language servers",
         build_tools: "Build tools",
         analyzers: "Analyzers",
+        permissions: "Permissions",
     },
 };

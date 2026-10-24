@@ -99,8 +99,13 @@ templates, doc comments, debugger support and static-analysis tools — is
 **contributed** by an extension through the small `fg-extension` API
 (`crates/extension`). Java, Kotlin, Spring, Maven, Gradle, Checkstyle, PMD and
 SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compiled in today; loading extensions from outside the binary is the next
-milestone.
+compiled in today. Declarative extensions (languages, grammars, file icons,
+snippets, keywords, and language servers the host starts) load from outside the binary: put a directory holding an
+`extension.toml` under `~/.local/share/foxgarden/extensions/` (the platform's
+data directory on other systems). An extension that starts processes or
+downloads files must declare the `process_exec` / `download_file` capability,
+or it is refused. Only install extensions you trust: a grammar is a native
+library.
 
 Manage them from the **Extensions** menu: *Manage Extensions…* lists each
 extension with what it contributes and lets you switch it off (applies on the
@@ -222,8 +227,13 @@ depurador e ferramentas de análise estática — é **contribuído** por uma
 extensão através da pequena API `fg-extension` (`crates/extension`). Java,
 Kotlin, Spring, Maven, Gradle, Checkstyle, PMD e SpotBugs são uma única
 extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compilada junto por enquanto; carregar extensões de fora do binário é o próximo
-marco.
+compilada junto por enquanto. Extensões declarativas (linguagens, gramáticas,
+ícones, snippets, palavras-chave e language servers que o editor inicia) carregam de fora do binário: coloque um
+diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
+diretório de dados da plataforma em outros sistemas). Uma extensão que inicia
+processos ou baixa arquivos precisa declarar a capacidade `process_exec` /
+`download_file`, senão é recusada. Instale só extensões confiáveis: uma
+gramática é uma biblioteca nativa.
 
 Gerencie-as no menu **Extensões**: *Gerenciar Extensões…* lista cada extensão
 com o que ela contribui e permite desativá-la (vale a partir da próxima

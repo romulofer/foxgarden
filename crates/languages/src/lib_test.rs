@@ -142,3 +142,14 @@ fn an_unknown_disabled_id_is_ignored() {
     let registry = builtin_registry_without(&["nope".to_string()]);
     assert_eq!(registry.extensions().len(), 2);
 }
+
+#[test]
+fn the_jvm_extension_declares_what_it_runs_and_the_file_types_extension_needs_nothing() {
+    let infos = shipped_extensions();
+    let capabilities = |id: &str| infos.iter().find(|i| i.manifest.id == id).unwrap().capabilities.clone();
+    assert_eq!(
+        capabilities("spring"),
+        vec![fg_extension::Capability::ProcessExec, fg_extension::Capability::DownloadFile]
+    );
+    assert!(capabilities("file-types").is_empty());
+}

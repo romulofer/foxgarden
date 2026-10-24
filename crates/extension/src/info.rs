@@ -1,4 +1,4 @@
-use crate::{Contributions, Extension, ExtensionManifest};
+use crate::{Capability, Contributions, Extension, ExtensionManifest};
 
 /// What one extension brings, in the words the UI shows for it: the
 /// extension manager lists this without needing the extension to be
@@ -11,6 +11,7 @@ pub struct ExtensionInfo {
     pub language_servers: Vec<String>,
     pub build_tools: Vec<String>,
     pub analyzers: Vec<String>,
+    pub capabilities: Vec<Capability>,
 }
 
 impl ExtensionInfo {
@@ -24,6 +25,7 @@ impl ExtensionInfo {
             ..
         } = extension.contributions();
         Self {
+            capabilities: extension.capabilities(),
             manifest,
             languages: languages.into_iter().map(|l| l.display_name).collect(),
             language_servers: language_servers.into_iter().map(|s| s.display_name).collect(),

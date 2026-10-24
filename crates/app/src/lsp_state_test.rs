@@ -37,6 +37,10 @@ struct AlwaysOkExtension {
 }
 
 impl Extension for AlwaysOkExtension {
+    fn capabilities(&self) -> Vec<fg_extension::Capability> {
+        vec![fg_extension::Capability::ProcessExec]
+    }
+
     fn manifest(&self) -> ExtensionManifest {
         ExtensionManifest {
             id: format!("{}-ext", self.server_id),

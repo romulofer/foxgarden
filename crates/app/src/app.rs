@@ -1246,6 +1246,12 @@ fn persist_settings(
     }
 }
 
+/// Where extensions the user installed live: one directory each, holding an
+/// `extension.toml`.
+fn installed_extensions_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "foxgarden").map(|dirs| dirs.data_dir().join("extensions"))
+}
+
 impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Registering the shipped extensions is what gives this editor any
@@ -1254,9 +1260,18 @@ impl FoxGardenApp {
         // anything restores a session below, since a restored tab's
         // language is resolved as it is opened.
         let disabled_extensions = extensions_ui::stored_disabled(cc.storage);
-        let mut state = EditorState::with_languages(fg_languages::builtin_registry_without(&disabled_extensions));
+        let mut registry = fg_languages::builtin_registry_without(&disabled_extensions);
+        let installed_dir = installed_extensions_dir();
+        let installed_problems = match &installed_dir {
+            Some(dir) => fg_languages::register_installed(&mut registry, dir, &disabled_extensions),
+            None => Vec::new(),
+        };
+        let mut state = EditorState::with_languages(registry);
         let mut parsers: Vec<Option<IncrementalParser>> = Vec::new();
         let mut last_error = None;
+        for problem in installed_problems {
+            crate::errors::report(&mut last_error, problem);
+        }
         // Declaring a language and being able to parse it are two separate
         // things since Track 24 Phase 3: an extension contributes a
         // grammar, and this is where the editor actually loads the ones it
@@ -1410,7 +1425,13 @@ impl FoxGardenApp {
             lsp_servers: LspServersState::default(),
             runtimes,
             runtimes_ui: RuntimesState::default(),
-            extensions_ui: ExtensionsState::new(fg_languages::shipped_extensions(), disabled_extensions),
+            extensions_ui: ExtensionsState::new(
+                fg_languages::shipped_extensions()
+                    .into_iter()
+                    .chain(installed_dir.iter().flat_map(|dir| fg_languages::installed_extension_infos(dir)))
+                    .collect(),
+                disabled_extensions,
+            ),
             new_project_wizard: NewProjectWizardState::default(),
             auto_save_state: AutoSaveState::default(),
             diff: DiffState::default(),

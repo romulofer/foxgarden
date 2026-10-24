@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use tree_sitter_language::LanguageFn;
 
 mod analyzers;
+mod capability;
 mod code_model;
 mod editing;
 mod imports;
@@ -42,6 +43,7 @@ mod tooling;
 pub use analyzers::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerInstall, AnalyzerPackaging, AnalyzerRun, LatestRelease,
 };
+pub use capability::{Capability, required as required_capabilities};
 pub use code_model::{
     CodeGeneration, MemberKind, MemberView, ReceiverType, TypeDeclaration, TypeFields, TypeMember,
 };
@@ -413,6 +415,13 @@ pub struct DebugLaunch {
 pub trait Extension: Send + Sync {
     fn manifest(&self) -> ExtensionManifest;
     fn contributions(&self) -> Contributions;
+
+    /// What this extension needs to be allowed to do. The registry refuses
+    /// contributions that need more than is declared here, so the default —
+    /// nothing — is right for a purely declarative extension.
+    fn capabilities(&self) -> Vec<Capability> {
+        Vec::new()
+    }
 
     /// Every JDK this extension knows about on this machine — populated by
     /// extensions that know how to scan for JDKs (the spring extension is
