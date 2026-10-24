@@ -14,6 +14,7 @@ fn walk_errors(node: Node, out: &mut Vec<Diagnostic>) {
             range: node.byte_range(),
             severity: Severity::Error,
             message: format!("missing {}", node.kind()),
+            server: None,
         });
         return;
     }
@@ -23,6 +24,7 @@ fn walk_errors(node: Node, out: &mut Vec<Diagnostic>) {
             range: node.byte_range(),
             severity: Severity::Error,
             message: "syntax error".to_string(),
+            server: None,
         });
         return;
     }

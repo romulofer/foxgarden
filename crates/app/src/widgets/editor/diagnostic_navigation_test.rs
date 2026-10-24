@@ -6,6 +6,7 @@ fn diagnostic_at(start: usize) -> Diagnostic {
         range: start..start + 1,
         message: "boom".to_string(),
         severity: fg_core::Severity::Error,
+        server: None,
     }
 }
 

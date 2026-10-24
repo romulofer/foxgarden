@@ -30,7 +30,7 @@ pub use fg_extension::{
     ProblemSeverity, ProjectRelease, RunSpec, ScaffoldSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
-pub use diagnostic::{Diagnostic, Severity};
+pub use diagnostic::{Diagnostic, ServerDiagnostic, Severity};
 pub use diff::{
     DiffHunk, DiffLineKind, FileDiff, GitDiffError, RawHunk, git_diff_hunks, git_file_diff, git_file_diff_cached,
     git_show_head, hunk_patch, parse_file_diff, parse_unified_diff,

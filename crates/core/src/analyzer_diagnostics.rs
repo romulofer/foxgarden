@@ -53,6 +53,7 @@ fn to_diagnostic(buffer: &Rope, finding: &AnalyzerFinding) -> Diagnostic {
             ProblemSeverity::Warning => Severity::Warning,
         },
         message: finding.message.clone(),
+        server: None,
     }
 }
 

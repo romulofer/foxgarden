@@ -5,6 +5,7 @@ fn diag(msg: &str) -> Diagnostic {
         range: 0..1,
         severity: fg_core::Severity::Warning,
         message: msg.to_string(),
+        server: None,
     }
 }
 

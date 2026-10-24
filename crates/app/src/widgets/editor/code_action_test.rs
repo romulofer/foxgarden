@@ -8,6 +8,7 @@ fn diagnostic_on_line_finds_a_diagnostic_starting_on_that_line() {
         range: 14..19, // "int x" on line 1
         severity: fg_core::Severity::Warning,
         message: "unused variable".to_string(),
+        server: None,
     }];
     let found = diagnostic_on_line(&doc, 1).expect("a diagnostic starts on line 1");
     assert_eq!(found.message, "unused variable");
@@ -20,6 +21,7 @@ fn diagnostic_on_line_is_none_when_no_diagnostic_starts_there() {
         range: 14..19,
         severity: fg_core::Severity::Warning,
         message: "unused variable".to_string(),
+        server: None,
     }];
     assert!(diagnostic_on_line(&doc, 0).is_none());
 }

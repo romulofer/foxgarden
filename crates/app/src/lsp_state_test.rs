@@ -191,6 +191,17 @@ fn initialize_params_prefers_plain_text_hover_content() {
     );
 }
 
+/// jdtls reads the kinds it may offer from the client's own
+/// `codeActionLiteralSupport`; a client that declares none gets an empty
+/// reply to every `textDocument/codeAction`, so quick fixes need it.
+#[test]
+fn initialize_params_declare_code_action_literal_support() {
+    let params = initialize_params("TestServer", &test_config(Path::new("."))).unwrap();
+    let code_action = params.capabilities.text_document.unwrap().code_action.unwrap();
+    let kinds = code_action.code_action_literal_support.unwrap().code_action_kind.value_set;
+    assert!(kinds.iter().any(|kind| kind == "quickfix"));
+}
+
 #[test]
 fn file_uri_percent_encodes_a_space() {
     let dir = tempfile::tempdir().unwrap();
@@ -1037,4 +1048,41 @@ fn utf16_range_to_bytes_rejects_a_column_past_an_lf_lines_end() {
         end: lsp_types::Position { line: 0, character: 3 },
     };
     assert_eq!(utf16_range_to_bytes(text, at_end), Some(3..3));
+}
+
+/// jdtls finds a diagnostic's quick fixes by its `code` and answers a
+/// `codeAction` request with nothing when it is missing, so what the server
+/// published has to survive the trip through the editor's own `Diagnostic`.
+#[test]
+fn server_diagnostic_fields_round_trip_through_the_editor_diagnostic() {
+    let published: lsp_types::Diagnostic = serde_json::from_value(serde_json::json!({
+        "range": { "start": { "line": 0, "character": 7 }, "end": { "line": 0, "character": 21 } },
+        "severity": 2,
+        "code": "268435844",
+        "source": "Java",
+        "data": { "id": 7 },
+        "message": "The import java.util.List is never used"
+    }))
+    .unwrap();
+
+    let kept = server_fields(&published);
+    let sent = with_server_fields(lsp_types::Diagnostic::default(), &kept);
+
+    assert_eq!(sent.code, published.code);
+    assert_eq!(sent.source, published.source);
+    assert_eq!(sent.data, published.data);
+}
+
+#[test]
+fn numeric_diagnostic_codes_round_trip_as_numbers() {
+    let published: lsp_types::Diagnostic = serde_json::from_value(serde_json::json!({
+        "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+        "code": 42,
+        "message": "m"
+    }))
+    .unwrap();
+
+    let sent = with_server_fields(lsp_types::Diagnostic::default(), &server_fields(&published));
+
+    assert_eq!(sent.code, Some(lsp_types::NumberOrString::Number(42)));
 }

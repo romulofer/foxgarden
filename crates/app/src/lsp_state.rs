@@ -478,6 +478,10 @@ impl LspState {
             message: diagnostic.message.clone(),
             ..Default::default()
         };
+        let lsp_diagnostic = match &diagnostic.server {
+            Some(server) => with_server_fields(lsp_diagnostic, server),
+            None => lsp_diagnostic,
+        };
         let params = lsp_types::CodeActionParams {
             text_document: TextDocumentIdentifier { uri },
             range,
@@ -989,6 +993,24 @@ struct LanguageStatusParams {
     message: String,
 }
 
+/// What the server attached to `diagnostic` beyond range, severity and
+/// message, kept on the editor's diagnostic for a later `codeAction` request.
+fn server_fields(diagnostic: &lsp_types::Diagnostic) -> fg_core::ServerDiagnostic {
+    fg_core::ServerDiagnostic {
+        code: diagnostic.code.as_ref().and_then(|code| serde_json::to_string(code).ok()),
+        source: diagnostic.source.clone(),
+        data: diagnostic.data.as_ref().map(|data| data.to_string()),
+    }
+}
+
+/// Puts the fields `server_fields` kept back on `diagnostic`.
+fn with_server_fields(mut diagnostic: lsp_types::Diagnostic, server: &fg_core::ServerDiagnostic) -> lsp_types::Diagnostic {
+    diagnostic.code = server.code.as_deref().and_then(|code| serde_json::from_str(code).ok());
+    diagnostic.source = server.source.clone();
+    diagnostic.data = server.data.as_deref().and_then(|data| serde_json::from_str(data).ok());
+    diagnostic
+}
+
 fn apply_server_messages(slot: &mut Slot, display_name: &str, documents: &mut [Document], errors: &mut Vec<String>) {
     let Slot::Ready {
         session,
@@ -1025,6 +1047,7 @@ fn apply_server_messages(slot: &mut Slot, display_name: &str, documents: &mut [D
                                 Some(lsp_types::DiagnosticSeverity::ERROR) => Severity::Error,
                                 _ => Severity::Warning,
                             },
+                            server: Some(server_fields(&diagnostic)),
                             message: diagnostic.message,
                         })
                     })
@@ -1197,6 +1220,18 @@ fn initialize_params(display_name: &str, config: &SessionConfig) -> Result<Initi
                     completion_item: Some(lsp_types::CompletionItemCapability {
                         snippet_support: Some(false),
                         ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                code_action: Some(lsp_types::CodeActionClientCapabilities {
+                    code_action_literal_support: Some(lsp_types::CodeActionLiteralSupport {
+                        code_action_kind: lsp_types::CodeActionKindLiteralSupport {
+                            value_set: vec![
+                                lsp_types::CodeActionKind::QUICKFIX.as_str().to_string(),
+                                lsp_types::CodeActionKind::REFACTOR.as_str().to_string(),
+                                lsp_types::CodeActionKind::SOURCE.as_str().to_string(),
+                            ],
+                        },
                     }),
                     ..Default::default()
                 }),
