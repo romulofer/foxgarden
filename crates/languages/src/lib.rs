@@ -1,10 +1,11 @@
 //! Which extensions this build ships with, and the one place that knows
 //! it (`PLAN.md` Track 24 Phases 2 and 3).
 //!
-//! Two extensions, and they no longer sit side by side in this file: the
+//! Three extensions, and they no longer sit side by side in this file: the
 //! JVM half is `foxgarden-spring`, a separate project under
 //! `../spring-foxgarden` that reaches the editor only through
-//! `fg-extension`, while `file-types` below is general file-type support
+//! `fg-extension`, `foxgarden-kmp` (`../kmp-foxgarden`) adds Kotlin
+//! Multiplatform on top, and `file-types` below is general file-type support
 //! with nothing to do with the JVM. That split is the whole point of the
 //! track — a YAML file is not a JVM concept, and someone running this
 //! editor on a project with no JVM in it should still get YAML.
@@ -19,9 +20,11 @@ use fg_extension::{
     LanguageContribution, NodeKinds, RegisterError, Registry, CURRENT_SCHEMA_VERSION,
 };
 
+pub use foxgarden_kmp::KmpExtension;
 pub use foxgarden_spring::SpringExtension;
 
 mod installed;
+mod process;
 pub use installed::{InstalledExtension, LoadError, MANIFEST_FILE};
 
 fn language(id: &str, display_name: &str, extensions: &[&str]) -> LanguageContribution {
@@ -127,7 +130,7 @@ impl Extension for FileTypesExtension {
 
 /// Every extension this build ships with, in registration order.
 fn shipped() -> Vec<Box<dyn Extension>> {
-    vec![Box::new(SpringExtension), Box::new(FileTypesExtension)]
+    vec![Box::new(SpringExtension), Box::new(KmpExtension), Box::new(FileTypesExtension)]
 }
 
 /// What each shipped extension brings, whether or not it is enabled: the

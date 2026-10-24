@@ -773,6 +773,12 @@ impl Registry {
         self.extensions.iter().find_map(|e| e.project_release(project_root))
     }
 
+    /// The source set `file` belongs to, as the first extension that has one
+    /// for it reports it.
+    pub fn source_set(&self, project_root: &Path, file: &Path) -> Option<String> {
+        self.extensions.iter().find_map(|e| e.source_set(project_root, file))
+    }
+
     /// Every registered build tool, in registration order — what a UI that
     /// asks the user to pick one (the new-project wizard) lists.
     pub fn build_tools(&self) -> Vec<BuildToolHandle> {

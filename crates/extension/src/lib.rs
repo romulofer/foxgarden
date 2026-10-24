@@ -561,6 +561,16 @@ pub trait Extension: Send + Sync {
         None
     }
 
+    /// The named group of sources `file` belongs to in a project that splits
+    /// its code by platform or role (`commonMain`, `jvmTest`), as shown beside
+    /// the file's language. `None` — the default — for a file this extension
+    /// has no such notion for, including every file of an ordinary project.
+    /// Reads the project's build files, so ask once per file opened, not per
+    /// frame.
+    fn source_set(&self, _project_root: &Path, _file: &Path) -> Option<String> {
+        None
+    }
+
     /// Every runnable entry point in `source`, whose parse `tree` the editor
     /// already built — in source order.
     ///

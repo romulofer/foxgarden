@@ -99,13 +99,14 @@ templates, doc comments, debugger support and static-analysis tools — is
 **contributed** by an extension through the small `fg-extension` API
 (`crates/extension`). Java, Kotlin, Spring, Maven, Gradle, Checkstyle, PMD and
 SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compiled in today. Declarative extensions (languages, grammars, file icons,
-snippets, keywords, and language servers the host starts) load from outside the binary: put a directory holding an
-`extension.toml` under `~/.local/share/foxgarden/extensions/` (the platform's
-data directory on other systems). An extension that starts processes or
-downloads files must declare the `process_exec` / `download_file` capability,
-or it is refused. Only install extensions you trust: a grammar is a native
-library.
+compiled in today. Others load from outside the binary: put a directory
+holding an `extension.toml` under `~/.local/share/foxgarden/extensions/` (the
+platform's data directory on other systems). It can contribute languages,
+grammars, file icons, snippets, keywords, language servers the editor starts,
+and analyzers run by a program the extension ships. An extension that starts
+processes or downloads files must declare the `process_exec` / `download_file`
+capability, or it is refused. Only install extensions you trust: a grammar is
+a native library and an extension's program runs with your permissions.
 
 Manage them from the **Extensions** menu: *Manage Extensions…* lists each
 extension with what it contributes and lets you switch it off (applies on the
@@ -114,9 +115,10 @@ next launch).
 ### 🛠️ Build & run
 
 ```bash
-# clone — the JVM support is a separate project and has to sit beside this one
+# clone — the JVM and Kotlin Multiplatform support are separate projects and have to sit beside this one
 git clone https://github.com/romulofer/foxgarden.git
 git clone https://github.com/legendaryredfox/spring-foxgarden.git
+git clone https://github.com/legendaryredfox/kmp-foxgarden.git
 cd foxgarden
 
 # run (debug builds are near-release speed for dependencies)
@@ -130,7 +132,9 @@ cargo test --workspace
 Spring support comes from the `spring-foxgarden` extension, which the build
 expects at `../spring-foxgarden`. The editor reaches it only through its
 extension API (language-server installers, debug adapters and runtimes included);
-a handful of small JVM-specific UI details have not moved across yet. Java language features
+a handful of small JVM-specific UI details have not moved across yet.
+Kotlin Multiplatform support is the `kmp-foxgarden` extension, expected at
+`../kmp-foxgarden` (the status bar names a multiplatform file's source set). Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
@@ -227,13 +231,15 @@ depurador e ferramentas de análise estática — é **contribuído** por uma
 extensão através da pequena API `fg-extension` (`crates/extension`). Java,
 Kotlin, Spring, Maven, Gradle, Checkstyle, PMD e SpotBugs são uma única
 extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compilada junto por enquanto. Extensões declarativas (linguagens, gramáticas,
-ícones, snippets, palavras-chave e language servers que o editor inicia) carregam de fora do binário: coloque um
+compilada junto por enquanto. Outras carregam de fora do binário: coloque um
 diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
-diretório de dados da plataforma em outros sistemas). Uma extensão que inicia
-processos ou baixa arquivos precisa declarar a capacidade `process_exec` /
-`download_file`, senão é recusada. Instale só extensões confiáveis: uma
-gramática é uma biblioteca nativa.
+diretório de dados da plataforma em outros sistemas). Ele pode contribuir
+linguagens, gramáticas, ícones, snippets, palavras-chave, language servers que
+o editor inicia e analisadores executados por um programa que a extensão traz.
+Uma extensão que inicia processos ou baixa arquivos precisa declarar a
+capacidade `process_exec` / `download_file`, senão é recusada. Instale só
+extensões confiáveis: uma gramática é uma biblioteca nativa e o programa de uma
+extensão roda com as suas permissões.
 
 Gerencie-as no menu **Extensões**: *Gerenciar Extensões…* lista cada extensão
 com o que ela contribui e permite desativá-la (vale a partir da próxima
@@ -242,9 +248,10 @@ inicialização).
 ### 🛠️ Compilar & executar
 
 ```bash
-# clonar — o suporte JVM é um projeto à parte e precisa ficar ao lado deste
+# clonar — o suporte JVM e o de Kotlin Multiplatform são projetos à parte e precisam ficar ao lado deste
 git clone https://github.com/romulofer/foxgarden.git
 git clone https://github.com/legendaryredfox/spring-foxgarden.git
+git clone https://github.com/legendaryredfox/kmp-foxgarden.git
 cd foxgarden
 
 # executar (builds de debug rodam dependências em velocidade quase-release)
@@ -258,7 +265,9 @@ cargo test --workspace
 Kotlin e Spring vem do extension `spring-foxgarden`, que o build espera em
 `../spring-foxgarden`. O editor só a alcança pela API de extensões (inclusive
 instaladores de language server, adaptadores de depuração e runtimes); alguns
-pequenos detalhes de interface específicos da JVM ainda não foram movidos. Recursos de Java exigem
+pequenos detalhes de interface específicos da JVM ainda não foram movidos.
+O suporte a Kotlin Multiplatform é a extensão `kmp-foxgarden`, esperada em
+`../kmp-foxgarden` (a barra de status mostra o source set de um arquivo multiplataforma). Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.

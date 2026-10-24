@@ -152,6 +152,7 @@ fn activity_text_stays_inside_the_bar_while_a_file_is_open() {
         line: 1,
         column: 1,
         language_name: Some("Java".to_string()),
+        source_set: None,
         indent: IndentSettings::default(),
         errors: 0,
         warnings: 0,

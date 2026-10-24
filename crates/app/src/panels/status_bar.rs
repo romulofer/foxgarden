@@ -297,6 +297,8 @@ pub struct DocumentStatus {
     /// Track 24 Phase 2), and the status bar has no business holding a
     /// registry just to render one word.
     pub language_name: Option<String>,
+    /// The file's source set (`commonMain`), when its project has them.
+    pub source_set: Option<String>,
     pub indent: IndentSettings,
     pub errors: usize,
     pub warnings: usize,
@@ -315,6 +317,10 @@ fn show_document_status(ui: &mut egui::Ui, document: &DocumentStatus) {
         Some(name) => name.clone(),
         None => t().status_bar.plain_text.to_string(),
     });
+    if let Some(source_set) = &document.source_set {
+        ui.weak("·");
+        ui.weak(source_set);
+    }
     ui.weak("·");
     ui.weak(msg::status_line_column(document.line, document.column));
 

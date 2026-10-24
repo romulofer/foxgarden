@@ -1222,8 +1222,10 @@ name = "fg-languages"
 version = "0.2.0"
 dependencies = [
  "fg-extension",
+ "foxgarden-kmp",
  "foxgarden-spring",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
  "tree-sitter-containerfile",
@@ -1368,6 +1370,13 @@ dependencies = [
  "ureq",
  "vt100",
  "zip",
+]
+
+[[package]]
+name = "foxgarden-kmp"
+version = "0.1.0"
+dependencies = [
+ "fg-extension",
 ]
 
 [[package]]

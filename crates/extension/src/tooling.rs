@@ -391,6 +391,11 @@ impl ExtensionHandle {
         self.extension.project_release(project_root)
     }
 
+    /// The source set `file` belongs to, if this extension has one for it.
+    pub fn source_set(&self, project_root: &Path, file: &Path) -> Option<String> {
+        self.extension.source_set(project_root, file)
+    }
+
     /// Every runnable entry point in an already-parsed file.
     pub fn run_targets(
         &self,

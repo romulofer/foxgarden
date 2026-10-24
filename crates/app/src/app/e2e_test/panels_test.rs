@@ -116,3 +116,32 @@ fn the_status_bar_reports_the_active_file_s_position_and_language() {
     assert!(app.shows_containing("Java"), "and says what language it is");
     assert!(app.shows_containing("Espaços: 4"), "and what a Tab inserts");
 }
+
+/// A file in a Kotlin Multiplatform module says which source set it is in,
+/// next to its language; the same file in an ordinary module does not.
+#[test]
+fn the_status_bar_names_the_source_set_of_a_multiplatform_file() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", "plugins { kotlin(\"multiplatform\") }\n"),
+        ("src/commonMain/kotlin/Greeter.kt", "class Greeter\n"),
+    ]);
+    app.click_containing("src/commonMain");
+    app.click(&E2e::folder_row("kotlin"));
+    app.click_tree("Greeter.kt");
+
+    assert!(app.shows("commonMain"), "the source set is shown beside the language");
+}
+
+#[test]
+fn an_ordinary_module_shows_no_source_set() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", "plugins { kotlin(\"jvm\") }\n"),
+        ("src/commonMain/kotlin/Greeter.kt", "class Greeter\n"),
+    ]);
+    app.click_containing("src/commonMain");
+    app.click(&E2e::folder_row("kotlin"));
+    app.click_tree("Greeter.kt");
+
+    assert!(app.shows_containing("Kotlin"), "the file is open");
+    assert!(!app.shows("commonMain"));
+}

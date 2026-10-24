@@ -238,3 +238,92 @@ fn a_declared_language_server_needs_the_process_exec_capability() {
     assert_eq!(servers[0].binary_name, "taplo");
     assert_eq!(servers[0].args, vec!["lsp", "stdio"]);
 }
+
+#[cfg(unix)]
+mod analyzers {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    const MANIFEST: &str = r#"
+id = "lint-ext"
+name = "Lint"
+version = "0.1.0"
+schema_version = 0
+capabilities = ["process_exec"]
+
+[process]
+command = "run.sh"
+
+[[analyzers]]
+id = "lint"
+display_name = "Lint"
+input = "sources"
+config_label = "Rules"
+"#;
+
+    fn install_lint(root: &Path, manifest: &str) -> PathBuf {
+        let dir = install(root, "lint-ext", manifest);
+        let program = dir.join("run.sh");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nread line\necho '{\"result\":[{\"file\":\"/p/A.txt\",\"line\":3,\"column\":2,\"end\":[3,5],\"severity\":\"error\",\"message\":\"bad\"},{\"file\":\"/p/B.txt\",\"line\":1,\"severity\":\"note\",\"message\":\"hm\"}]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    fn run(binary: &str) -> AnalyzerRun {
+        AnalyzerRun {
+            binary: PathBuf::from(binary),
+            config: String::new(),
+            project_root: PathBuf::from("/p"),
+            classes_dir: None,
+        }
+    }
+
+    #[test]
+    fn an_analyzer_runs_through_the_extensions_process() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_lint(root.path(), MANIFEST);
+        let extension = InstalledExtension::load(&dir).unwrap();
+
+        let analyzer = &extension.contributions().analyzers[0];
+        assert_eq!((analyzer.id.as_str(), analyzer.config_label.as_deref()), ("lint", Some("Rules")));
+
+        let findings = extension.run_analyzer("lint", &run("/usr/bin/lint")).unwrap();
+        assert_eq!(findings.len(), 2);
+        assert_eq!((findings[0].line, findings[0].column, findings[0].end), (3, Some(2), Some((3, 5))));
+        assert_eq!(findings[0].severity, ProblemSeverity::Error);
+        assert_eq!((findings[1].column, findings[1].severity), (None, ProblemSeverity::Warning), "an unknown severity is a warning");
+    }
+
+    #[test]
+    fn the_analyzer_registers_only_with_process_exec() {
+        let root = tempfile::tempdir().unwrap();
+        install_lint(root.path(), &MANIFEST.replace("capabilities = [\"process_exec\"]", ""));
+        let mut registry = Registry::new();
+        let problems = crate::register_installed(&mut registry, root.path(), &[]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("an analyzer"), "{problems:?}");
+    }
+
+    #[test]
+    fn an_analyzer_without_a_process_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_lint(root.path(), &MANIFEST.replace("[process]\ncommand = \"run.sh\"\n", ""));
+        let error = InstalledExtension::load(&dir).err().unwrap();
+        assert!(error.message.contains("[process]"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_or_escaping_process_program_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_lint(root.path(), &MANIFEST.replace("run.sh", "gone.sh"));
+        assert!(InstalledExtension::load(&dir).err().unwrap().message.contains("not a file"));
+
+        let dir = install_lint(root.path(), &MANIFEST.replace("run.sh", "../run.sh"));
+        assert!(InstalledExtension::load(&dir).err().unwrap().message.contains("inside the extension directory"));
+    }
+}

@@ -425,6 +425,10 @@ pub struct FoxGardenApp {
     /// switched off. Persisted; applies on the next launch, since the
     /// registry is built once, before the session restores.
     extensions_ui: ExtensionsState,
+    /// The active file's source set (`Extension::source_set`), asked once per
+    /// (project, file) because it reads build files and the status bar paints
+    /// every frame.
+    source_set_cache: std::cell::RefCell<Option<(SourceSetKey, Option<String>)>>,
     /// File > New Project… — `PLAN.md` Track 29 Phase 3. Runtime-only, same
     /// reasoning as `lsp_servers`/`runtimes_ui` above: nothing here is
     /// meaningful to resume across a restart.
@@ -1252,6 +1256,9 @@ fn installed_extensions_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "foxgarden").map(|dirs| dirs.data_dir().join("extensions"))
 }
 
+/// The (project root, file) a cached source set was asked for.
+type SourceSetKey = (PathBuf, PathBuf);
+
 impl FoxGardenApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Registering the shipped extensions is what gives this editor any
@@ -1425,6 +1432,7 @@ impl FoxGardenApp {
             lsp_servers: LspServersState::default(),
             runtimes,
             runtimes_ui: RuntimesState::default(),
+            source_set_cache: std::cell::RefCell::new(None),
             extensions_ui: ExtensionsState::new(
                 fg_languages::shipped_extensions()
                     .into_iter()
@@ -1720,7 +1728,18 @@ impl FoxGardenApp {
             }
         }
 
+        let source_set = self.state.project.as_ref().and_then(|project| {
+            let key = (project.root.clone(), doc.path.clone());
+            let mut cache = self.source_set_cache.borrow_mut();
+            if cache.as_ref().is_none_or(|(cached, _)| *cached != key) {
+                let found = self.state.languages.source_set(&key.0, &key.1);
+                *cache = Some((key, found));
+            }
+            cache.as_ref().and_then(|(_, found)| found.clone())
+        });
+
         Some(status_bar::DocumentStatus {
+            source_set,
             line: line + 1,
             column: column + 1,
             language_name: doc

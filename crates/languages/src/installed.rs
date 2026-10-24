@@ -13,16 +13,21 @@
 //! and its arguments, the host starts it (when the user opts in), and the
 //! extension runs no code of its own. Starting a program is why such a
 //! manifest must declare `process_exec`; the registry refuses it otherwise.
-//! Build tools and analyzers need extension code to interpret their output
-//! and are deliberately not parseable here yet.
+//!
+//! An analyzer needs the extension's own code to read the tool's report, so a
+//! manifest that declares one also names a `[process]`: a program inside the
+//! extension directory that the host starts once per question (see
+//! [`crate::process`]). Build tools are not parseable here yet.
 
 use std::path::{Path, PathBuf};
 
 use fg_extension::{
-    Capability, Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
+    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, Capability, ProblemSeverity, Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
     LanguageContribution, LanguageServerContribution, NodeKinds, Snippet,
 };
 use serde::Deserialize;
+
+use crate::process::{ProcessCommand, inside};
 
 /// The manifest file name inside an extension directory.
 pub const MANIFEST_FILE: &str = "extension.toml";
@@ -60,6 +65,9 @@ struct Manifest {
     grammars: Vec<GrammarTable>,
     #[serde(default)]
     language_servers: Vec<LanguageServerTable>,
+    process: Option<ProcessTable>,
+    #[serde(default)]
+    analyzers: Vec<AnalyzerTable>,
     #[serde(default)]
     file_icons: Vec<FileIconTable>,
     #[serde(default)]
@@ -129,6 +137,25 @@ struct LanguageServerTable {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ProcessTable {
+    /// The program, relative to the extension directory.
+    command: PathBuf,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnalyzerTable {
+    id: String,
+    display_name: String,
+    /// `"sources"`, or `"build_output"` for a tool that reads compiled output.
+    input: String,
+    config_label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileIconTable {
     language_id: String,
     glyph: char,
@@ -157,6 +184,8 @@ pub struct InstalledExtension {
     languages: Vec<LanguageContribution>,
     grammars: Vec<GrammarContribution>,
     language_servers: Vec<LanguageServerContribution>,
+    analyzers: Vec<AnalyzerContribution>,
+    process: Option<ProcessCommand>,
     file_icons: Vec<FileIcon>,
     capabilities: Vec<Capability>,
     snippets: Vec<(String, Snippet)>,
@@ -250,6 +279,46 @@ impl InstalledExtension {
                 host_runtime: None,
             })
             .collect();
+        let process = manifest
+            .process
+            .map(|p| {
+                let program = inside(dir, &p.command).map_err(|e| fail(format!("process: {e}")))?;
+                if !program.is_file() {
+                    return Err(fail(format!("process: {} is not a file", program.display())));
+                }
+                Ok(ProcessCommand {
+                    program,
+                    args: p.args,
+                    dir: dir.to_path_buf(),
+                })
+            })
+            .transpose()?;
+        let analyzers = manifest
+            .analyzers
+            .into_iter()
+            .map(|a| {
+                let input = match a.input.as_str() {
+                    "sources" => AnalyzerInput::Sources,
+                    "build_output" => AnalyzerInput::BuildOutput,
+                    other => {
+                        return Err(fail(format!(
+                            "analyzer {}: input must be \"sources\" or \"build_output\", not \"{other}\"",
+                            a.id
+                        )));
+                    }
+                };
+                Ok(AnalyzerContribution {
+                    id: a.id,
+                    display_name: a.display_name,
+                    input,
+                    config_label: a.config_label,
+                    install: None,
+                })
+            })
+            .collect::<Result<Vec<_>, LoadError>>()?;
+        if !analyzers.is_empty() && process.is_none() {
+            return Err(fail("analyzers need a [process] to run them".to_string()));
+        }
         let file_icons = manifest
             .file_icons
             .into_iter()
@@ -268,6 +337,8 @@ impl InstalledExtension {
             languages,
             grammars,
             language_servers,
+            analyzers,
+            process,
             file_icons,
             capabilities,
             snippets: manifest
@@ -280,18 +351,39 @@ impl InstalledExtension {
     }
 }
 
-/// `relative` resolved against `dir`, refusing anything that leaves it: a
-/// manifest is someone else's text, and `../../etc/passwd` or an absolute
-/// path is not a file the extension has any business naming.
-fn inside(dir: &Path, relative: &Path) -> Result<PathBuf, String> {
-    let escapes = relative.is_absolute()
-        || relative
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_)));
-    if escapes {
-        return Err(format!("{} must be a path inside the extension directory", relative.display()));
+/// One finding as an extension's process spells it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FindingReply {
+    file: PathBuf,
+    /// 1-based.
+    line: usize,
+    /// 1-based; absent for a whole-line finding.
+    column: Option<usize>,
+    /// Inclusive 1-based `[line, column]`; absent for a point.
+    end: Option<(usize, usize)>,
+    /// `"error"` or `"warning"`.
+    severity: String,
+    message: String,
+}
+
+impl FindingReply {
+    fn into_finding(self) -> AnalyzerFinding {
+        AnalyzerFinding {
+            file: self.file,
+            line: self.line,
+            column: self.column,
+            end: self.end,
+            // Anything but "error" is shown as a warning: a finding worth
+            // reporting is not worth losing over an unfamiliar severity.
+            severity: if self.severity == "error" {
+                ProblemSeverity::Error
+            } else {
+                ProblemSeverity::Warning
+            },
+            message: self.message,
+        }
     }
-    Ok(dir.join(relative))
 }
 
 impl Extension for InstalledExtension {
@@ -308,9 +400,26 @@ impl Extension for InstalledExtension {
             languages: self.languages.clone(),
             grammars: self.grammars.clone(),
             language_servers: self.language_servers.clone(),
+            analyzers: self.analyzers.clone(),
             file_icons: self.file_icons.clone(),
             ..Default::default()
         }
+    }
+
+    fn run_analyzer(&self, analyzer_id: &str, run: &AnalyzerRun) -> Result<Vec<AnalyzerFinding>, String> {
+        let process = self
+            .process
+            .as_ref()
+            .ok_or_else(|| format!("{analyzer_id}: this extension has no process"))?;
+        let params = serde_json::json!({
+            "analyzer": analyzer_id,
+            "binary": run.binary,
+            "config": run.config,
+            "project_root": run.project_root,
+            "classes_dir": run.classes_dir,
+        });
+        let findings: Vec<FindingReply> = process.call("run_analyzer", &params)?;
+        Ok(findings.into_iter().map(FindingReply::into_finding).collect())
     }
 
     fn snippets(&self, language_id: &str) -> Vec<Snippet> {
