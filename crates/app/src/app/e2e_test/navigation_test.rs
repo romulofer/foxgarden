@@ -1,6 +1,6 @@
 //! Getting somewhere without the tree: the `Ctrl+P` fuzzy file opener, the
 //! `Ctrl+E` recent-files switcher, and the `Ctrl+Shift+E` HTTP route
-//! map.
+//! map, plus Go to expect/actual.
 
 use super::common_test::{E2e, MAIN_JAVA};
 use fg_i18n::t;
@@ -102,4 +102,73 @@ class UserController {
         "picking one opens its file"
     );
     assert!(!app.shows(t().palettes.http_routes));
+}
+
+const BUILD_KMP: &str = "plugins { kotlin(\"multiplatform\") }\n";
+
+fn open_by_search(app: &mut E2e, query: &str) {
+    app.press(egui::Modifiers::COMMAND, egui::Key::P);
+    app.type_text(query);
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+}
+
+fn go_to_counterpart_from_the_palette(app: &mut E2e) {
+    app.press(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P);
+    app.type_text(t().palettes.go_to_counterpart);
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+}
+
+/// An `actual` leads straight back to its only `expect`, and the caret lands
+/// on the declaration's name.
+#[test]
+fn go_to_expect_actual_jumps_from_an_actual_to_its_expect() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "expect fun greet(): String\n"),
+        ("src/jvmMain/kotlin/GreeterJvm.kt", "actual fun greet(): String = \"jvm\"\n"),
+    ]);
+    open_by_search(&mut app, "GreeterJvm");
+    app.type_into_active_tab(0, "");
+
+    go_to_counterpart_from_the_palette(&mut app);
+
+    assert_eq!(app.active_tab_name().as_deref(), Some("Greeter.kt"));
+}
+
+/// An `expect` with an `actual` per platform asks which one.
+#[test]
+fn go_to_expect_actual_asks_when_an_expect_has_several_actuals() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "expect fun greet(): String\n"),
+        ("src/jvmMain/kotlin/GreeterJvm.kt", "actual fun greet(): String = \"jvm\"\n"),
+        ("src/iosMain/kotlin/GreeterIos.kt", "actual fun greet(): String = \"ios\"\n"),
+    ]);
+    open_by_search(&mut app, "Greeter.kt");
+    app.type_into_active_tab(0, "");
+
+    go_to_counterpart_from_the_palette(&mut app);
+    assert!(app.shows_containing("iosMain"), "every source set with an actual is offered");
+    assert!(app.shows_containing("jvmMain"));
+
+    app.click_containing("jvmMain");
+
+    assert_eq!(app.active_tab_name().as_deref(), Some("GreeterJvm.kt"));
+    assert!(!app.shows_containing("iosMain"), "choosing closes the picker");
+}
+
+/// A line that declares neither says so instead of doing nothing.
+#[test]
+fn go_to_expect_actual_says_when_the_line_has_no_counterpart() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "val x = 1\n"),
+    ]);
+    open_by_search(&mut app, "Greeter.kt");
+    app.type_into_active_tab(0, "");
+
+    go_to_counterpart_from_the_palette(&mut app);
+
+    assert!(app.shows(t().palettes.no_counterpart));
+    assert_eq!(app.active_tab_name().as_deref(), Some("Greeter.kt"));
 }

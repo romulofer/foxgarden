@@ -55,7 +55,7 @@ pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -569,6 +569,15 @@ pub trait Extension: Send + Sync {
     /// frame.
     fn source_set(&self, _project_root: &Path, _file: &Path) -> Option<String> {
         None
+    }
+
+    /// The declarations that stand for the one at `byte` in `file`, whose text
+    /// is `source`: the `actual`s of an `expect`, or the `expect` of an
+    /// `actual`. Empty — the default — when `byte` is not on such a
+    /// declaration. Scans the project's sources, so it answers an explicit
+    /// request (a command), never a frame.
+    fn counterparts(&self, _project_root: &Path, _file: &Path, _source: &str, _byte: usize) -> Vec<Counterpart> {
+        Vec::new()
     }
 
     /// Every runnable entry point in `source`, whose parse `tree` the editor

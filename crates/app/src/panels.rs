@@ -5,6 +5,7 @@
 pub mod bottom_dock;
 pub mod build_panel;
 pub mod command_palette;
+pub mod counterparts;
 pub mod debug_panel;
 pub mod debug_toolbar;
 pub mod extensions;

@@ -301,6 +301,9 @@ pub struct FoxGardenApp {
     quick_switcher: QuickSwitcherState,
     /// `Ctrl+P`'s fuzzy-file-open popup.
     go_to_file: GoToFileState,
+    /// The picker for a declaration with several `expect`/`actual`
+    /// counterparts (`Command::GoToCounterpart`).
+    counterparts: crate::panels::counterparts::CounterpartsState,
     /// `Ctrl+Shift+E`'s HTTP route map popup.
     http_routes: HttpRoutesState,
     /// Run > Edit Configurations… — see `panels::run_configs`.
@@ -1405,6 +1408,7 @@ impl FoxGardenApp {
             menu_bar: MenuBarState::default(),
             quick_switcher: QuickSwitcherState::default(),
             go_to_file: GoToFileState::default(),
+            counterparts: Default::default(),
             http_routes: HttpRoutesState::default(),
             run_configs_dialog: RunConfigsDialogState::default(),
             editor_font,
@@ -1576,6 +1580,39 @@ impl FoxGardenApp {
         }
     }
 
+    /// Jumps from the `expect`/`actual` declaration on the caret's line to its
+    /// counterpart: straight there when there is one, a picker when there are
+    /// several, a toast when there are none.
+    fn go_to_counterpart(&mut self, ctx: &egui::Context) {
+        let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        let Some(doc) = self.state.active_tab.and_then(|index| self.state.open_tabs.get(index)) else {
+            return;
+        };
+        let caret = crate::widgets::editor::peek_caret(ctx, egui::Id::new(doc.path.to_string_lossy().into_owned()));
+        let char_offset = caret.map_or(0, |caret| caret.primary).min(doc.buffer.len_chars());
+        let byte = doc.buffer.char_to_byte(char_offset);
+        let found = syntax::counterparts(&root, &doc.path, &doc.buffer.to_string(), byte);
+        match found.len() {
+            0 => self.toasts.push(t().palettes.no_counterpart.to_string()),
+            1 => self.open_counterpart(root, found[0].path.clone(), found[0].byte_offset),
+            _ => self.counterparts.open(&root, found),
+        }
+    }
+
+    fn open_counterpart(&mut self, root: PathBuf, path: PathBuf, byte: usize) {
+        open_path(
+            &mut self.state,
+            &mut self.parsers,
+            &mut self.last_error,
+            &mut self.diff,
+            Some(root),
+            path.clone(),
+        );
+        self.pending_navigation = Some((path, byte));
+    }
+
     fn run_command(
         &mut self,
         ctx: &egui::Context,
@@ -1624,6 +1661,7 @@ impl FoxGardenApp {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             }),
+            Command::GoToCounterpart => self.go_to_counterpart(ctx),
             Command::ToggleSidePanel => self.side_panel_visible = !self.side_panel_visible,
             Command::ToggleTerminal => self.bottom_dock.toggle(BottomTab::Terminal),
             Command::ToggleSourceControl => self.source_control_visible = !self.source_control_visible,
@@ -2950,6 +2988,11 @@ impl eframe::App for FoxGardenApp {
                 diff_root.clone(),
                 path,
             );
+        }
+        if let Some((path, byte)) = crate::panels::counterparts::show(ui, &mut self.counterparts)
+            && let Some(root) = diff_root.clone()
+        {
+            self.open_counterpart(root, path, byte);
         }
         if let Some(path) = go_to_file::show(ui, &self.state, &mut self.go_to_file) {
             open_path(

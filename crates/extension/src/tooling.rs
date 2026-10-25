@@ -305,6 +305,19 @@ pub struct RunTarget {
     pub label: String,
 }
 
+/// Another declaration that stands for the one under the caret: an `actual`
+/// for an `expect`, or the `expect` an `actual` fulfils. A jump target, and
+/// the row a picker shows when there are several.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Counterpart {
+    pub path: PathBuf,
+    /// Byte offset of the declaration's name, where a jump lands the caret.
+    pub byte_offset: usize,
+    /// What tells this one from its siblings: the source set it sits in
+    /// (`jvmMain`), say.
+    pub label: String,
+}
+
 /// One HTTP route an extension found declared in a file — a row in the
 /// route map, and where picking it jumps to.
 ///
@@ -394,6 +407,11 @@ impl ExtensionHandle {
     /// The source set `file` belongs to, if this extension has one for it.
     pub fn source_set(&self, project_root: &Path, file: &Path) -> Option<String> {
         self.extension.source_set(project_root, file)
+    }
+
+    /// The declarations that stand for the one at `byte` in `file`.
+    pub fn counterparts(&self, project_root: &Path, file: &Path, source: &str, byte: usize) -> Vec<Counterpart> {
+        self.extension.counterparts(project_root, file, source, byte)
     }
 
     /// Every runnable entry point in an already-parsed file.

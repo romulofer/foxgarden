@@ -28,6 +28,7 @@ pub enum Command {
     GoToFile,
     RecentFiles,
     NextDiagnostic,
+    GoToCounterpart,
     ToggleSidePanel,
     ToggleTerminal,
     ToggleSourceControl,
@@ -47,7 +48,7 @@ impl Command {
     /// Every command, in the order the palette lists them with an empty
     /// query: the file/editing ones first, then panels, then the
     /// build/analysis actions.
-    pub const ALL: [Command; 23] = [
+    pub const ALL: [Command; 24] = [
         Command::Save,
         Command::SaveAll,
         Command::CloseTab,
@@ -55,6 +56,7 @@ impl Command {
         Command::GoToFile,
         Command::RecentFiles,
         Command::NextDiagnostic,
+        Command::GoToCounterpart,
         Command::NewFile,
         Command::OpenFolder,
         Command::NewProject,
@@ -89,6 +91,7 @@ impl Command {
             Command::GoToFile => strings.palettes.go_to_file,
             Command::RecentFiles => strings.palettes.go_to_recent_file,
             Command::NextDiagnostic => strings.palettes.next_diagnostic,
+            Command::GoToCounterpart => strings.palettes.go_to_counterpart,
             Command::ToggleSidePanel => strings.menu.side_panel,
             Command::ToggleTerminal => strings.menu.terminal_panel,
             Command::ToggleSourceControl => strings.menu.source_control,

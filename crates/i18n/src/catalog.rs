@@ -358,6 +358,8 @@ pub struct Palettes {
     /// that has no menu item to borrow wording from.
     pub run_a_command: &'static str,
     pub next_diagnostic: &'static str,
+    pub go_to_counterpart: &'static str,
+    pub no_counterpart: &'static str,
     pub go_to_file: &'static str,
     pub go_to_recent_file: &'static str,
     pub http_routes: &'static str,
@@ -766,6 +768,8 @@ pub const PT_BR: Strings = Strings {
     palettes: Palettes {
         run_a_command: "Executar comando",
         next_diagnostic: "Próximo problema",
+        go_to_counterpart: "Ir para expect/actual",
+        no_counterpart: "Nenhum expect/actual correspondente nesta linha",
         go_to_file: "Ir para arquivo",
         go_to_recent_file: "Ir para arquivo recente",
         http_routes: "Rotas HTTP",
@@ -1137,6 +1141,8 @@ pub const EN_US: Strings = Strings {
     palettes: Palettes {
         run_a_command: "Run a command",
         next_diagnostic: "Next problem",
+        go_to_counterpart: "Go to expect/actual",
+        no_counterpart: "No matching expect/actual for this line",
         go_to_file: "Go to file",
         go_to_recent_file: "Go to recent file",
         http_routes: "HTTP routes",
