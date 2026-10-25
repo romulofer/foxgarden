@@ -227,6 +227,17 @@ impl BuildState {
         Ok(())
     }
 
+    /// Starts one of the project's extra tasks (`Registry::project_tasks`) as a
+    /// plain build: its output streams into the panel, read for problems by
+    /// `tool`, and nothing chains after it.
+    pub fn start_task(&mut self, tool: &BuildToolHandle, command: &fg_extension::CommandSpec) -> std::io::Result<()> {
+        self.reset();
+        self.output_tool = Some(tool.clone());
+        self.spawn_process(command.to_command())?;
+        self.stage = Some(Stage::Build);
+        Ok(())
+    }
+
     /// Starts a Run: the same compile command `start_build` uses, but
     /// `poll`'s own `Finished` handling chains into launching `config` via
     /// the tool's own launch command once (and only if) that compile succeeds —

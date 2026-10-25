@@ -3,6 +3,7 @@
 //! (Tools > Run Checkstyle/PMD) behind it.
 
 use super::common_test::{E2e, MAIN_JAVA};
+use crate::panels::bottom_dock::BottomTab;
 use fg_i18n::t;
 
 #[test]
@@ -419,4 +420,52 @@ fn the_command_palette_runs_an_action_by_name() {
         !app.shows(t().palettes.run_a_command),
         "picking a command closes the palette"
     );
+}
+
+const KMP_BUILD: &str = "plugins { kotlin(\"multiplatform\") }\nkotlin { jvm(); iosArm64() }\n";
+
+fn open_palette_and_type(app: &mut E2e, query: &str) {
+    app.press(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P);
+    app.type_text(query);
+}
+
+/// A multiplatform project's palette lists one Gradle task per target, found
+/// by name like any other command.
+#[test]
+fn the_command_palette_lists_the_gradle_tasks_of_each_target() {
+    let mut app = E2e::launch(&[("build.gradle.kts", KMP_BUILD)]);
+
+    open_palette_and_type(&mut app, "Gradle:");
+
+    for task in ["allTests", "jvmTest", "iosArm64Test", "linkDebugExecutableIosArm64"] {
+        assert!(app.shows(&format!("Gradle: {task}")), "{task} is offered");
+    }
+}
+
+#[test]
+fn an_ordinary_project_lists_no_gradle_tasks() {
+    let mut app = E2e::launch(&[("build.gradle.kts", "plugins { kotlin(\"jvm\") }\n")]);
+
+    open_palette_and_type(&mut app, "Gradle:");
+
+    assert!(!app.shows_containing("Gradle: "));
+}
+
+/// Picking a task starts it through the project's wrapper and shows the build
+/// panel. The wrapper here is a script that does nothing, so the test needs a
+/// shell.
+#[cfg(unix)]
+#[test]
+fn picking_a_gradle_task_runs_it_in_the_build_panel() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut app = E2e::launch(&[("build.gradle.kts", KMP_BUILD), ("gradlew", "#!/bin/sh\nexit 0\n")]);
+    let wrapper = app.path("gradlew");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!app.app().bottom_dock.shows(BottomTab::Build), "the build panel starts closed");
+
+    open_palette_and_type(&mut app, "Gradle: jvmTest");
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+
+    assert!(app.app().bottom_dock.shows(BottomTab::Build), "the task opens the build panel");
 }

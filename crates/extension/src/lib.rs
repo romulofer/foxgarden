@@ -55,7 +55,7 @@ pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -569,6 +569,14 @@ pub trait Extension: Send + Sync {
     /// frame.
     fn source_set(&self, _project_root: &Path, _file: &Path) -> Option<String> {
         None
+    }
+
+    /// The extra jobs this extension offers for the project at `project_root`
+    /// (a Gradle task per target). Empty — the default — when it recognizes
+    /// nothing. Reads build files, so ask when a list is about to be shown,
+    /// not per frame.
+    fn project_tasks(&self, _project_root: &Path) -> Vec<ProjectTask> {
+        Vec::new()
     }
 
     /// Problems in `file`, whose text is `source`, that need the project

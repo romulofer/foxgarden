@@ -149,6 +149,9 @@ pub struct FoxGardenApp {
     toasts: crate::toasts::Toasts,
     /// `Ctrl+Shift+P` — every common action by name, with its shortcut.
     command_palette: crate::panels::command_palette::CommandPaletteState,
+    /// The project's extra tasks, read when the palette opens and dropped when
+    /// it closes: listing them reads build files, which a frame must not do.
+    palette_tasks: Option<Vec<fg_extension::ProjectTask>>,
     /// When unsaved buffers were last copied to `.foxgarden/drafts/` — see
     /// `DRAFT_INTERVAL_SECONDS`.
     drafts_written_at: f64,
@@ -1373,6 +1376,7 @@ impl FoxGardenApp {
             pending_close: Vec::new(),
             toasts: crate::toasts::Toasts::default(),
             command_palette: crate::panels::command_palette::CommandPaletteState::default(),
+            palette_tasks: None,
             drafts_written_at: 0.0,
             pending_drafts: Vec::new(),
             drafts_checked_for: None,
@@ -1598,6 +1602,22 @@ impl FoxGardenApp {
             0 => self.toasts.push(t().palettes.no_counterpart.to_string()),
             1 => self.open_counterpart(root, found[0].path.clone(), found[0].byte_offset),
             _ => self.counterparts.open(&root, found),
+        }
+    }
+
+    /// Runs one of the project's extra tasks in the build panel, its output
+    /// read by the project's build tool.
+    fn run_project_task(&mut self, task: &fg_extension::ProjectTask) {
+        let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        let Some(tool) = self.state.languages.detect_build_tool(&root) else {
+            crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string());
+            return;
+        };
+        match self.build_state.start_task(&tool, &task.command) {
+            Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
+            Err(err) => crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string())),
         }
     }
 
@@ -2082,12 +2102,34 @@ impl eframe::App for FoxGardenApp {
             .map(|runtime| runtime.display_name().to_string())
             .collect();
         let analyzer_names: Vec<String> = analyzers.iter().map(|a| a.display_name().to_string()).collect();
-        match crate::panels::command_palette::show(ui, &mut self.command_palette, &analyzer_names) {
+        if !self.command_palette.is_open() {
+            self.palette_tasks = None;
+        } else if self.palette_tasks.is_none() {
+            self.palette_tasks = Some(
+                self.state
+                    .project
+                    .as_ref()
+                    .map(|project| self.state.languages.project_tasks(&project.root))
+                    .unwrap_or_default(),
+            );
+        }
+        let task_labels: Vec<String> = self
+            .palette_tasks
+            .iter()
+            .flatten()
+            .map(|task| task.label.clone())
+            .collect();
+        match crate::panels::command_palette::show(ui, &mut self.command_palette, &analyzer_names, &task_labels) {
             Some(crate::panels::command_palette::Picked::Command(command)) => {
                 self.run_command(ui.ctx(), command, &mut menu_outcome);
             }
             Some(crate::panels::command_palette::Picked::Analyzer(index)) => {
                 menu_outcome.run_analyzer_request = Some(index);
+            }
+            Some(crate::panels::command_palette::Picked::Task(index)) => {
+                if let Some(task) = self.palette_tasks.as_ref().and_then(|tasks| tasks.get(index)).cloned() {
+                    self.run_project_task(&task);
+                }
             }
             None => {}
         }

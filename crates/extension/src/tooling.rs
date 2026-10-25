@@ -318,6 +318,17 @@ pub struct Counterpart {
     pub label: String,
 }
 
+/// A named job an extension offers for the open project beyond the build
+/// tool's standard compile, test and run: one Gradle task per Kotlin
+/// Multiplatform target, say. Plain data like [`CommandSpec`], so the editor
+/// can run it without knowing what it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectTask {
+    /// What the command palette lists it as.
+    pub label: String,
+    pub command: CommandSpec,
+}
+
 /// A problem an extension found in one file from the project around it, which
 /// no parse of the file alone shows: an `expect` nothing fulfils, say.
 #[derive(Debug, Clone, PartialEq, Eq)]

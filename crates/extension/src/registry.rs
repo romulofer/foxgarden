@@ -779,6 +779,14 @@ impl Registry {
         self.extensions.iter().find_map(|e| e.source_set(project_root, file))
     }
 
+    /// Every extra job the extensions offer for the project at `project_root`.
+    pub fn project_tasks(&self, project_root: &Path) -> Vec<crate::ProjectTask> {
+        self.extensions
+            .iter()
+            .flat_map(|extension| extension.project_tasks(project_root))
+            .collect()
+    }
+
     /// Every registered build tool, in registration order — what a UI that
     /// asks the user to pick one (the new-project wizard) lists.
     pub fn build_tools(&self) -> Vec<BuildToolHandle> {

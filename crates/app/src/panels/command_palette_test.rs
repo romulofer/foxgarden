@@ -43,7 +43,7 @@ fn toggle_opens_and_resets_the_query() {
 #[test]
 fn analyzers_are_listed_right_after_run_tests() {
     let analyzers = vec!["Checkstyle".to_string(), "PMD".to_string()];
-    let entries = entries(&analyzers);
+    let entries = entries(&analyzers, &[]);
     let tests = entries
         .iter()
         .position(|(picked, ..)| *picked == Picked::Command(Command::RunTests))
@@ -57,5 +57,22 @@ fn analyzers_are_listed_right_after_run_tests() {
 
 #[test]
 fn with_no_analyzers_the_list_is_just_the_fixed_commands() {
-    assert_eq!(entries(&[]).len(), Command::ALL.len());
+    assert_eq!(entries(&[], &[]).len(), Command::ALL.len());
+}
+
+#[test]
+fn project_tasks_follow_the_analyzers() {
+    let analyzers = vec!["PMD".to_string()];
+    let tasks = vec!["Gradle: jvmTest".to_string(), "Gradle: allTests".to_string()];
+    let entries = entries(&analyzers, &tasks);
+    let tests = entries
+        .iter()
+        .position(|(picked, ..)| *picked == Picked::Command(Command::RunTests))
+        .unwrap();
+
+    assert_eq!(entries[tests + 1].0, Picked::Analyzer(0));
+    assert_eq!(entries[tests + 2].0, Picked::Task(0));
+    assert_eq!(entries[tests + 2].1, "Gradle: jvmTest");
+    assert_eq!(entries[tests + 3].0, Picked::Task(1));
+    assert_eq!(entries.len(), Command::ALL.len() + 3);
 }

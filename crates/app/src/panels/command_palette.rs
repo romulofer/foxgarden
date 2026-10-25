@@ -141,6 +141,10 @@ impl CommandPaletteState {
         self.query.clear();
         self.selected = 0;
     }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
 }
 
 /// What the palette can pick: a fixed command, or one of the analyzers an
@@ -150,6 +154,9 @@ impl CommandPaletteState {
 pub enum Picked {
     Command(Command),
     Analyzer(usize),
+    /// One of the project's extra tasks (`Registry::project_tasks`), by
+    /// index into the list `show` was given.
+    Task(usize),
 }
 
 /// Case-insensitive substring match on the command's own name, the same
@@ -159,9 +166,10 @@ fn matches(label: &str, query: &str) -> bool {
 }
 
 /// Every entry in listing order, with its name and shortcut: the fixed
-/// commands, with the analyzers' "Run <analyzer>" entries where the build and
-/// analysis actions sit — right after Run Tests.
-fn entries(analyzers: &[String]) -> Vec<(Picked, String, &'static str)> {
+/// commands, with the analyzers' "Run <analyzer>" entries and then the
+/// project's task labels where the build and analysis actions sit — right
+/// after Run Tests.
+fn entries(analyzers: &[String], tasks: &[String]) -> Vec<(Picked, String, &'static str)> {
     let mut entries = Vec::new();
     for command in Command::ALL {
         entries.push((Picked::Command(command), command.label().to_string(), command.shortcut()));
@@ -169,19 +177,23 @@ fn entries(analyzers: &[String]) -> Vec<(Picked, String, &'static str)> {
             for (index, name) in analyzers.iter().enumerate() {
                 entries.push((Picked::Analyzer(index), fg_i18n::msg::run_analyzer(name), ""));
             }
+            for (index, label) in tasks.iter().enumerate() {
+                entries.push((Picked::Task(index), label.clone(), ""));
+            }
         }
     }
     entries
 }
 
 /// Draws the palette, returning whichever entry was picked this frame.
-/// `analyzers` are the display names of the contributed analyzers.
-pub fn show(ui: &egui::Ui, state: &mut CommandPaletteState, analyzers: &[String]) -> Option<Picked> {
+/// `analyzers` are the display names of the contributed analyzers, `tasks`
+/// the labels of the project's extra tasks.
+pub fn show(ui: &egui::Ui, state: &mut CommandPaletteState, analyzers: &[String], tasks: &[String]) -> Option<Picked> {
     if !state.open {
         return None;
     }
 
-    let candidates: Vec<(Picked, String, &'static str)> = entries(analyzers)
+    let candidates: Vec<(Picked, String, &'static str)> = entries(analyzers, tasks)
         .into_iter()
         .filter(|(_, label, _)| matches(label, &state.query))
         .collect();
