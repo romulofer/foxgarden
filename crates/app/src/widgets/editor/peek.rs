@@ -9,7 +9,7 @@
 //! `Target` resolves differs: a line window gets painted here instead of
 //! `open_path` and a real cross-tab jump running.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fg_core::Document;
 
@@ -99,8 +99,8 @@ impl PeekState {
     /// effort limitation rather than threading every open document through
     /// just for this, matching how every other cross-file LSP path in this
     /// app already degrades on a source it doesn't have a live buffer for.
-    pub(super) fn update(&mut self, lsp: &mut LspState, current_doc: &Document) {
-        if let Some(target) = self.goto.poll(lsp, None) {
+    pub(super) fn update(&mut self, lsp: &mut LspState, current_doc: &Document, project_root: Option<&Path>) {
+        if let Some(target) = self.goto.poll(lsp, project_root) {
             self.panel = resolve_panel(target, current_doc);
         }
     }

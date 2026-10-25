@@ -2416,7 +2416,7 @@ pub fn show(
         let text = doc.buffer.to_string();
         peek.request(doc, caret.primary, char_to_byte(&text, caret.primary), lsp);
     }
-    peek.update(lsp, doc);
+    peek.update(lsp, doc, project.map(|p| p.root.as_path()));
     peek.paint(
         ui,
         egui::Id::new(("peek_popup", widget_id)),

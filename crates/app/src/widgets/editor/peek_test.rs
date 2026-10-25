@@ -53,3 +53,15 @@ fn visible_window_clamps_at_the_start_of_the_stored_window() {
     assert_eq!(first_line, 1);
     assert_eq!(lines.len(), 5);
 }
+
+#[test]
+fn a_source_target_found_by_an_extension_peeks_its_declaration_from_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Platform.kt");
+    std::fs::write(&path, "package a\n\nexpect fun platformName(): String\n").unwrap();
+    let (_open_dir, open) = test_support::temp_document("Use.kt", "fun use() = platformName()\n");
+    let byte_offset = std::fs::read_to_string(&path).unwrap().find("platformName").unwrap();
+    let content = resolve_panel(Target::Source { path: path.clone(), byte_offset }, &open).unwrap();
+    assert_eq!(content.path, path);
+    assert_eq!(content.lines[content.target_line - content.first_line], "expect fun platformName(): String");
+}
