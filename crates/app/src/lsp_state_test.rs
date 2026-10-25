@@ -1090,3 +1090,12 @@ fn numeric_diagnostic_codes_round_trip_as_numbers() {
 
     assert_eq!(sent.code, Some(lsp_types::NumberOrString::Number(42)));
 }
+
+/// The lightbulb column is reserved on this answer, so a document no server
+/// serves must not get one.
+#[test]
+fn no_server_serves_a_document_before_one_is_ready() {
+    let state = LspState::default();
+    let (_dir, doc) = test_support::temp_document("A.java", "class A {}");
+    assert!(!state.serves(&doc));
+}

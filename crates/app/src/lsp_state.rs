@@ -438,6 +438,16 @@ impl LspState {
             .ok()
     }
 
+    /// Whether a language server that is up and running answers for `doc`'s
+    /// language — the condition under which a quick fix can ever be offered
+    /// on one of its lines. Two map lookups, cheap enough to ask every frame.
+    pub fn serves(&self, doc: &Document) -> bool {
+        doc.language
+            .and_then(|lang| self.lang_to_server.get(lang.id()))
+            .and_then(|server_id| self.servers.get(server_id))
+            .is_some_and(|slot| matches!(slot, Slot::Ready { .. }))
+    }
+
     /// Sends a `textDocument/codeAction` request for `diagnostic`'s own
     /// range in `doc` — same session-lookup/flush-then-send shape as
     /// `request_rename` above. `context.diagnostics` carries `diagnostic`

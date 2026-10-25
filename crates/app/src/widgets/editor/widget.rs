@@ -1463,16 +1463,13 @@ pub fn show(
     } else {
         coverage_gutter::COVERAGE_GUTTER_WIDTH
     };
-    // Same "only reserve it when there's something to show" rule again —
-    // whether *this* frame has an offer to show is read from whatever
-    // `code_action_gutter` already resolved as of an earlier frame (the
-    // request itself fires later below, once `doc`/the caret are both in
-    // scope for this frame); see `CodeActionGutter::has_offer`'s own doc
-    // comment for why that ordering is deliberate rather than a mistake.
-    let code_action_width = text_area::peek_caret(ui.ctx(), widget_id)
-        .map(|c| doc.buffer.char_to_line(c.primary.min(doc.buffer.len_chars())))
-        .filter(|&line| code_action_gutter.has_offer(&doc.path, line))
-        .map_or(0.0, |_| code_action::GUTTER_WIDTH);
+    // Reserved whenever a language server serves this document, not only on
+    // the caret line that has an offer: the lightbulb comes and goes as the
+    // caret moves and as diagnostics resolve, and a column that came and went
+    // with it shifted the whole text sideways each time. The cost is one blank
+    // column in a file a server is attached to, the same trade the breakpoint
+    // column makes.
+    let code_action_width = if lsp.serves(doc) { code_action::GUTTER_WIDTH } else { 0.0 };
     // Same "only reserve it when there's something to show" rule again: a
     // file with no `main` in it — the overwhelming majority of a project's
     // files — keeps exactly the gutter width it had before the run marker

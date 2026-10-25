@@ -28,7 +28,7 @@
 //! resolved by the initial reply), so there's no app.rs-level polling
 //! state of its own the way `rename::RenameState` needs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use fg_core::Document;
@@ -39,11 +39,9 @@ use crate::lsp_client::ResponseError;
 use crate::lsp_state::LspState;
 use crate::style::theme;
 
-/// Extra gutter width reserved for the lightbulb column — only added
-/// (`widget.rs`) on a frame where the caret's own line actually has an
-/// offer to show, the same "reserve only when there's something to show"
-/// rule `folding::FOLD_GUTTER_WIDTH`/`diff_gutter::DIFF_GUTTER_WIDTH`
-/// already establish.
+/// Gutter width reserved for the lightbulb column — held for as long as a
+/// language server serves the document (`widget.rs`), so the lightbulb
+/// appearing and disappearing never moves the text.
 pub(super) const GUTTER_WIDTH: f32 = 14.0;
 
 /// One resolved offer: a title to show in the picker, and the edit it
@@ -93,22 +91,6 @@ impl CodeActionGutter {
         self.confirmed.take()
     }
 
-    /// Whether the caret's own current line already has at least one
-    /// resolved offer to show — read by `widget.rs` *before* this frame's
-    /// gutter layout runs, so the lightbulb column's own width is known up
-    /// front instead of shifting the whole editor sideways mid-frame. This
-    /// only inspects whatever `update` already resolved as of an earlier
-    /// frame; `update` itself (which actually fires the network request)
-    /// runs later in the same frame, once `doc`/the caret are in scope for
-    /// it — by design, not an ordering bug: the same one-frame-behind
-    /// approximation `folding`/`diff_gutter`'s own reserved columns already
-    /// accept implicitly (their own inputs can change frame to frame too).
-    pub(super) fn has_offer(&self, doc_path: &Path, line: usize) -> bool {
-        self.tracked
-            .as_ref()
-            .is_some_and(|t| t.doc_path == doc_path && t.line == line && !t.offers.is_empty())
-    }
-
     /// Drops whatever's tracked — used on a tab switch, same "a different
     /// tab's buffer is now on screen" reasoning `HoverState::clear`'s own
     /// call site already has.
@@ -122,8 +104,8 @@ impl CodeActionGutter {
     /// cursor on that line)". A no-op when the caret's line has no resolved
     /// offer yet: nothing to show, exactly as the lightbulb simply isn't
     /// painted in that case. Only inspects offers already resolved as of an
-    /// earlier frame, the same one-frame-behind lifecycle `has_offer`/the
-    /// gutter width already accept.
+    /// earlier frame, the same one-frame-behind lifecycle the
+    /// lightbulb already has.
     pub(super) fn open_picker(&mut self) {
         if let Some(tracked) = self.tracked.as_mut()
             && !tracked.offers.is_empty()
