@@ -38,6 +38,7 @@ pub enum Command {
     Build,
     RunProject,
     RunTests,
+    RunSourceSetTests,
     FoldAll,
     ExpandAll,
     SortLines,
@@ -48,7 +49,7 @@ impl Command {
     /// Every command, in the order the palette lists them with an empty
     /// query: the file/editing ones first, then panels, then the
     /// build/analysis actions.
-    pub const ALL: [Command; 24] = [
+    pub const ALL: [Command; 25] = [
         Command::Save,
         Command::SaveAll,
         Command::CloseTab,
@@ -69,6 +70,7 @@ impl Command {
         Command::Build,
         Command::RunProject,
         Command::RunTests,
+        Command::RunSourceSetTests,
         Command::FoldAll,
         Command::ExpandAll,
         Command::SortLines,
@@ -101,6 +103,7 @@ impl Command {
             Command::Build => strings.menu.build,
             Command::RunProject => strings.menu.run_project,
             Command::RunTests => strings.menu.run_tests,
+            Command::RunSourceSetTests => strings.palettes.run_source_set_tests,
             Command::FoldAll => strings.menu.fold_all,
             Command::ExpandAll => strings.menu.expand_all,
             Command::SortLines => strings.menu.sort_lines,

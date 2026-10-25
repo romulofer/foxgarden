@@ -792,6 +792,16 @@ impl Registry {
             .collect()
     }
 
+    /// The task that runs the tests the source set of `file` covers, as the
+    /// first extension that has one reports it.
+    pub fn file_task(&self, project_root: &Path, file: &Path) -> Option<crate::ProjectTaskHandle> {
+        self.extensions.iter().find_map(|extension| {
+            extension
+                .file_task(project_root, file)
+                .map(|task| crate::ProjectTaskHandle::new(task, extension.clone()))
+        })
+    }
+
     /// Every registered build tool, in registration order — what a UI that
     /// asks the user to pick one (the new-project wizard) lists.
     pub fn build_tools(&self) -> Vec<BuildToolHandle> {

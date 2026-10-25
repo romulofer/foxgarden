@@ -469,3 +469,44 @@ fn picking_a_gradle_task_runs_it_in_the_build_panel() {
 
     assert!(app.app().bottom_dock.shows(BottomTab::Build), "the task opens the build panel");
 }
+
+fn run_source_set_tests_from_the_palette(app: &mut E2e) {
+    open_palette_and_type(app, t().palettes.run_source_set_tests);
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+}
+
+/// From a file of a multiplatform source set, one command runs that source
+/// set's tests without finding the task by name.
+#[cfg(unix)]
+#[test]
+fn the_palette_runs_the_tests_of_the_open_files_source_set() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", KMP_BUILD),
+        ("gradlew", "#!/bin/sh\nexit 0\n"),
+        ("src/jvmMain/kotlin/Greeter.kt", "class Greeter\n"),
+    ]);
+    std::fs::set_permissions(app.path("gradlew"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    app.press(egui::Modifiers::COMMAND, egui::Key::P);
+    app.type_text("Greeter");
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+    assert!(!app.app().bottom_dock.shows(BottomTab::Build));
+
+    run_source_set_tests_from_the_palette(&mut app);
+
+    assert!(app.app().bottom_dock.shows(BottomTab::Build));
+}
+
+#[test]
+fn a_file_outside_any_source_set_says_there_are_no_tests_to_run() {
+    let mut app = E2e::launch(&[("build.gradle.kts", KMP_BUILD), ("README.md", "hi\n")]);
+    app.press(egui::Modifiers::COMMAND, egui::Key::P);
+    app.type_text("README");
+    app.press(egui::Modifiers::NONE, egui::Key::Enter);
+
+    run_source_set_tests_from_the_palette(&mut app);
+
+    assert!(app.shows(t().palettes.no_source_set_tests));
+    assert!(!app.app().bottom_dock.shows(BottomTab::Build));
+}

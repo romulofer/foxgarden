@@ -579,6 +579,13 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// The task that runs the tests `file`'s source set covers (a platform's
+    /// tests for a file of that platform, every target's for common code), if
+    /// this extension has one. Reads build files, so ask on a command.
+    fn file_task(&self, _project_root: &Path, _file: &Path) -> Option<ProjectTask> {
+        None
+    }
+
     /// The tests reported in `report_dirs`, the directories a [`ProjectTask`]
     /// of this extension named. Empty — the default — when there are none.
     fn task_test_results(&self, _report_dirs: &[PathBuf]) -> Vec<TaskTestResult> {

@@ -1605,6 +1605,20 @@ impl FoxGardenApp {
         }
     }
 
+    /// Runs the tests the active file's source set covers.
+    fn run_source_set_tests(&mut self) {
+        let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        let Some(path) = self.state.active_tab.and_then(|i| self.state.open_tabs.get(i)).map(|d| d.path.clone()) else {
+            return;
+        };
+        match self.state.languages.file_task(&root, &path) {
+            Some(task) => self.run_project_task(&task),
+            None => self.toasts.push(t().palettes.no_source_set_tests.to_string()),
+        }
+    }
+
     /// Runs one of the project's extra tasks in the build panel, its output
     /// read by the project's build tool.
     fn run_project_task(&mut self, task: &fg_extension::ProjectTaskHandle) {
@@ -1682,6 +1696,7 @@ impl FoxGardenApp {
                 modifiers: egui::Modifiers::NONE,
             }),
             Command::GoToCounterpart => self.go_to_counterpart(ctx),
+            Command::RunSourceSetTests => self.run_source_set_tests(),
             Command::ToggleSidePanel => self.side_panel_visible = !self.side_panel_visible,
             Command::ToggleTerminal => self.bottom_dock.toggle(BottomTab::Terminal),
             Command::ToggleSourceControl => self.source_control_visible = !self.source_control_visible,
