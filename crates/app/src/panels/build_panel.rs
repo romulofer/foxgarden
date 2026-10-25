@@ -42,6 +42,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use fg_core::{BuildProblem, BuildToolHandle, EditorState, LineCoverage, ProblemSeverity, RunConfig};
+use fg_extension::ProjectTaskHandle;
 use fg_i18n::t;
 
 /// One line of accumulated output, with the `BuildProblem` it parsed to (if
@@ -78,6 +79,12 @@ enum Stage {
     Test {
         project_root: PathBuf,
         tool: BuildToolHandle,
+    },
+    /// An extension's own task that runs tests (`ProjectTaskHandle`): on exit
+    /// the extension reads the reports the task named, the way `Test` asks the
+    /// build tool.
+    TaskTests {
+        task: ProjectTaskHandle,
     },
     /// Run with Coverage (`PLAN.md` Track 13 Phase 1, Maven-only): one
     /// `mvn` process running `prepare-agent`+`test`+`report` back to back
@@ -186,7 +193,7 @@ impl BuildState {
     }
 
     pub fn is_test_running(&self) -> bool {
-        self.running() && matches!(self.stage, Some(Stage::Test { .. }))
+        self.running() && matches!(self.stage, Some(Stage::Test { .. }) | Some(Stage::TaskTests { .. }))
     }
 
     /// The PID of the launched `java` program, once a Run has reached its
@@ -230,11 +237,15 @@ impl BuildState {
     /// Starts one of the project's extra tasks (`Registry::project_tasks`) as a
     /// plain build: its output streams into the panel, read for problems by
     /// `tool`, and nothing chains after it.
-    pub fn start_task(&mut self, tool: &BuildToolHandle, command: &fg_extension::CommandSpec) -> std::io::Result<()> {
+    pub fn start_task(&mut self, tool: &BuildToolHandle, task: &ProjectTaskHandle) -> std::io::Result<()> {
         self.reset();
         self.output_tool = Some(tool.clone());
-        self.spawn_process(command.to_command())?;
-        self.stage = Some(Stage::Build);
+        self.spawn_process(task.task.command.to_command())?;
+        self.stage = Some(if task.task.report_dirs.is_empty() {
+            Stage::Build
+        } else {
+            Stage::TaskTests { task: task.clone() }
+        });
         Ok(())
     }
 
@@ -437,7 +448,19 @@ impl BuildState {
     /// click-to-jump row type just for this.
     fn append_test_summary(&mut self, project_root: &Path, tool: &BuildToolHandle) {
         let cases = tool.test_results(project_root);
-        let summary = fg_core::summarize(&cases);
+        self.push_test_rows(&cases, |case| {
+            tool.test_failure_location(project_root, case).map(|at| (at.path, at.line))
+        });
+    }
+
+    /// Appends the pass/fail summary line and one clickable row per failing
+    /// case. `locate` says where a case's failure lives, when it is known.
+    fn push_test_rows(
+        &mut self,
+        cases: &[fg_core::TestCase],
+        locate: impl Fn(&fg_core::TestCase) -> Option<(PathBuf, usize)>,
+    ) {
+        let summary = fg_core::summarize(cases);
         self.rows.push(BuildRow {
             text: String::new(),
             problem: None,
@@ -458,9 +481,9 @@ impl BuildState {
             .filter(|c| matches!(c.outcome, fg_core::TestOutcome::Failed | fg_core::TestOutcome::Errored))
         {
             let label = format!("{}.{}", case.classname, case.name);
-            let problem = tool.test_failure_location(project_root, case).map(|at| BuildProblem {
-                path: at.path,
-                line: at.line,
+            let problem = locate(case).map(|(path, line)| BuildProblem {
+                path,
+                line,
                 column: 1,
                 severity: ProblemSeverity::Error,
                 message: label.clone(),
@@ -538,6 +561,15 @@ impl BuildState {
                         Some(Stage::Test { project_root, tool }) => {
                             self.last_success = Some(success);
                             self.append_test_summary(&project_root, &tool);
+                        }
+                        Some(Stage::TaskTests { task }) => {
+                            self.last_success = Some(success);
+                            let results = task.test_results();
+                            let cases: Vec<_> = results.iter().map(|r| r.case.clone()).collect();
+                            self.push_test_rows(&cases, |case| {
+                                let at = results.iter().find(|r| r.case == *case)?.at.clone()?;
+                                Some((at.path, at.line))
+                            });
                         }
                         Some(Stage::Coverage { project_root, tool }) => {
                             self.last_success = Some(success);

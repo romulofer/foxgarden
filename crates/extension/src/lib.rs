@@ -55,7 +55,7 @@ pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectTaskHandle, TaskTestResult, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -576,6 +576,12 @@ pub trait Extension: Send + Sync {
     /// nothing. Reads build files, so ask when a list is about to be shown,
     /// not per frame.
     fn project_tasks(&self, _project_root: &Path) -> Vec<ProjectTask> {
+        Vec::new()
+    }
+
+    /// The tests reported in `report_dirs`, the directories a [`ProjectTask`]
+    /// of this extension named. Empty — the default — when there are none.
+    fn task_test_results(&self, _report_dirs: &[PathBuf]) -> Vec<TaskTestResult> {
         Vec::new()
     }
 

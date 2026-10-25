@@ -78,3 +78,49 @@ fn stop_is_immediate_for_a_program_that_closed_its_output_but_keeps_running() {
         started.elapsed()
     );
 }
+
+/// A multiplatform test task that fails one test: when the process ends the
+/// extension's reports are summarized, and the failing row jumps to the test.
+#[cfg(unix)]
+#[test]
+fn a_test_task_ends_with_the_summary_of_the_reports_it_left() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = test_support::tempdir();
+    let root = dir.path().to_path_buf();
+    test_support::write_file(&root, "build.gradle.kts", "plugins { kotlin(\"multiplatform\") }\nkotlin { jvm() }\n");
+    let source = test_support::write_file(&root, "src/jvmTest/kotlin/app/GreeterTest.kt", "class GreeterTest\n");
+    let report = "<testsuite><testcase name=\"ok\" classname=\"app.GreeterTest\"/>\
+        <testcase name=\"bad\" classname=\"app.GreeterTest\"><failure message=\"boom\">at app.GreeterTest.bad(GreeterTest.kt:7)</failure></testcase></testsuite>";
+    // The stand-in wrapper writes the report the way Gradle would.
+    let wrapper = test_support::write_file(
+        &root,
+        "gradlew",
+        &format!(
+            "#!/bin/sh\nmkdir -p build/test-results/jvmTest\ncat > build/test-results/jvmTest/TEST-app.GreeterTest.xml <<'EOF'\n{report}\nEOF\nexit 1\n"
+        ),
+    );
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let registry = test_support::languages();
+    let tool = registry.detect_build_tool(&root).expect("a gradle build");
+    let task = registry
+        .project_tasks(&root)
+        .into_iter()
+        .find(|t| t.task.label == "Gradle: jvmTest")
+        .expect("the jvm target's test task");
+
+    let mut state = BuildState::default();
+    state.start_task(&tool, &task).unwrap();
+    while state.running() {
+        state.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let texts: Vec<&str> = state.rows.iter().map(|r| r.text.as_str()).collect();
+    assert!(texts.contains(&"Tests: 2 total, 1 passed, 1 failed, 0 errored, 0 skipped"), "{texts:?}");
+    let failed = state.rows.iter().find(|r| r.text == "FAILED  app.GreeterTest.bad").expect("the failing test is listed");
+    let problem = failed.problem.as_ref().expect("and can be jumped to");
+    assert_eq!((problem.path.as_path(), problem.line), (source.as_path(), 7));
+    assert_eq!(state.last_success, Some(false));
+}

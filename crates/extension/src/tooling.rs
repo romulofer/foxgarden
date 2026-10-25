@@ -327,6 +327,39 @@ pub struct ProjectTask {
     /// What the command palette lists it as.
     pub label: String,
     pub command: CommandSpec,
+    /// Directories the task leaves JUnit-style test reports in. Empty for a
+    /// task that runs no tests; otherwise the build panel summarizes what the
+    /// extension reads from them ([`ProjectTaskHandle::test_results`]) when the
+    /// task ends.
+    pub report_dirs: Vec<PathBuf>,
+}
+
+/// One test a [`ProjectTask`] reported, with where its failure lives when the
+/// extension can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskTestResult {
+    pub case: TestCase,
+    pub at: Option<TestFailureLocation>,
+}
+
+/// A [`ProjectTask`] together with the extension that listed it, which is
+/// the one that can read its reports. Owns an `Arc` to the extension so the
+/// build panel can keep it for as long as the task runs.
+#[derive(Clone)]
+pub struct ProjectTaskHandle {
+    pub task: ProjectTask,
+    extension: Arc<dyn Extension>,
+}
+
+impl ProjectTaskHandle {
+    pub(crate) fn new(task: ProjectTask, extension: Arc<dyn Extension>) -> Self {
+        Self { task, extension }
+    }
+
+    /// The tests the task's last run reported. Empty when it left no reports.
+    pub fn test_results(&self) -> Vec<TaskTestResult> {
+        self.extension.task_test_results(&self.task.report_dirs)
+    }
 }
 
 /// A problem an extension found in one file from the project around it, which

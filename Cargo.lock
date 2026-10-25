@@ -1377,6 +1377,7 @@ name = "foxgarden-kmp"
 version = "0.1.0"
 dependencies = [
  "fg-extension",
+ "quick-xml",
 ]
 
 [[package]]

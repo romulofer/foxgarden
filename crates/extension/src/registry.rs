@@ -780,10 +780,15 @@ impl Registry {
     }
 
     /// Every extra job the extensions offer for the project at `project_root`.
-    pub fn project_tasks(&self, project_root: &Path) -> Vec<crate::ProjectTask> {
+    pub fn project_tasks(&self, project_root: &Path) -> Vec<crate::ProjectTaskHandle> {
         self.extensions
             .iter()
-            .flat_map(|extension| extension.project_tasks(project_root))
+            .flat_map(|extension| {
+                extension
+                    .project_tasks(project_root)
+                    .into_iter()
+                    .map(|task| crate::ProjectTaskHandle::new(task, extension.clone()))
+            })
             .collect()
     }
 
