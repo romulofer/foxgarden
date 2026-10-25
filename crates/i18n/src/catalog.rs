@@ -409,6 +409,9 @@ pub struct StatusBar {
     pub plain_text: &'static str,
     /// Hover text over the error/warning counts.
     pub diagnostics_hint: &'static str,
+    /// Hover text over a file's source set: the language server reads every
+    /// source set as one module, so its answers there are partial.
+    pub source_set_hint: &'static str,
     /// Shown when nothing at all is running, so the bar keeps its height
     /// (and its meaning: "the app is not busy", not "the bar is broken").
     pub ready: &'static str,
@@ -805,6 +808,7 @@ pub const PT_BR: Strings = Strings {
     status_bar: StatusBar {
         plain_text: "Texto",
         diagnostics_hint: "Erros e avisos neste arquivo",
+        source_set_hint: "Conjunto de fontes. O servidor de linguagem analisa todos como um só módulo: a análise é parcial, e os falsos erros de expect/actual são filtrados.",
         ready: "Pronto",
         detecting_runtime: "Procurando um runtime…",
         scanning_classpath: "Lendo o classpath do projeto…",
@@ -1180,6 +1184,7 @@ pub const EN_US: Strings = Strings {
     status_bar: StatusBar {
         plain_text: "Plain Text",
         diagnostics_hint: "Errors and warnings in this file",
+        source_set_hint: "Source set. The language server reads all of them as one module, so analysis is partial and its false expect/actual errors are filtered out.",
         ready: "Ready",
         detecting_runtime: "Looking for a runtime…",
         scanning_classpath: "Reading the project classpath…",

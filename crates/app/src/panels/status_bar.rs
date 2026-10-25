@@ -319,7 +319,7 @@ fn show_document_status(ui: &mut egui::Ui, document: &DocumentStatus) {
     });
     if let Some(source_set) = &document.source_set {
         ui.weak("·");
-        ui.weak(source_set);
+        ui.weak(source_set).on_hover_text(t().status_bar.source_set_hint);
     }
     ui.weak("·");
     ui.weak(msg::status_line_column(document.line, document.column));
