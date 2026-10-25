@@ -1597,6 +1597,26 @@ impl FoxGardenApp {
         let caret = crate::widgets::editor::peek_caret(ctx, egui::Id::new(doc.path.to_string_lossy().into_owned()));
         let char_offset = caret.map_or(0, |caret| caret.primary).min(doc.buffer.len_chars());
         let byte = doc.buffer.char_to_byte(char_offset);
+        self.go_to_counterpart_of(root, byte);
+    }
+
+    /// `go_to_counterpart` for the declaration on 0-based `line` of the active
+    /// file — what a click on the gutter marker means, wherever the caret is.
+    fn go_to_counterpart_at(&mut self, line: usize) {
+        let Some(root) = self.state.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        let Some(doc) = self.state.active_tab.and_then(|index| self.state.open_tabs.get(index)) else {
+            return;
+        };
+        let byte = doc.buffer.char_to_byte(doc.buffer.line_to_char(line.min(doc.buffer.len_lines().saturating_sub(1))));
+        self.go_to_counterpart_of(root, byte);
+    }
+
+    fn go_to_counterpart_of(&mut self, root: PathBuf, byte: usize) {
+        let Some(doc) = self.state.active_tab.and_then(|index| self.state.open_tabs.get(index)) else {
+            return;
+        };
         let found = syntax::counterparts(&root, &doc.path, &doc.buffer.to_string(), byte);
         match found.len() {
             0 => self.toasts.push(t().palettes.no_counterpart.to_string()),
@@ -2803,6 +2823,9 @@ impl eframe::App for FoxGardenApp {
         // central panel closes, so starting a run borrows `self` freely
         // rather than from inside the editor's own closure.
         let mut run_request: Option<syntax::RunMarker> = None;
+        // Set when an expect/actual gutter marker is clicked, to the line it
+        // is on; acted on below for the same reason.
+        let mut counterpart_request: Option<usize> = None;
         let mut welcome = crate::panels::welcome::WelcomeOutcome::default();
         // Everything but the project already open — reopening that one is
         // not a thing anyone needs offered.
@@ -2865,6 +2888,7 @@ impl eframe::App for FoxGardenApp {
                 &mut reveal_in_tree,
                 &mut welcome,
                 &mut run_request,
+                &mut counterpart_request,
                 &recent_to_offer,
             );
             if welcome.open_folder {
@@ -2905,6 +2929,9 @@ impl eframe::App for FoxGardenApp {
         // tools only: the entry point is in that extension's notation, and
         // another extension's tool claiming the directory first could not
         // launch it.
+        if let Some(line) = counterpart_request.take() {
+            self.go_to_counterpart_at(line);
+        }
         if let Some(entry) = run_request.take() {
             match self.state.project.as_ref().map(|p| p.root.clone()) {
                 Some(root) => match self.state.languages.detect_build_tool_of(&root, &entry.extension_id) {

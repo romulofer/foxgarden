@@ -473,6 +473,11 @@ impl ExtensionHandle {
         self.extension.counterparts(project_root, file, source, byte)
     }
 
+    /// The lines of `source` that declare something with counterparts.
+    pub fn counterpart_lines(&self, source: &str) -> Vec<usize> {
+        self.extension.counterpart_lines(source)
+    }
+
     /// Every runnable entry point in an already-parsed file.
     pub fn run_targets(
         &self,

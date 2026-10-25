@@ -74,6 +74,7 @@ fn sticky_scroll_enabled_renders_without_panicking() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 }
@@ -126,6 +127,7 @@ fn renders_highlighted_valid_file_without_panicking() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -185,6 +187,7 @@ fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
                 &mut CodeActionGutter::default(),
                 &crate::debug_state::DebugState::default(),
                 true,
+                &mut None,
                 &mut None,
             );
         });
@@ -277,6 +280,7 @@ fn renders_squiggles_for_real_syntax_error_without_panicking() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 }
@@ -322,6 +326,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -376,6 +381,7 @@ fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
                 &mut CodeActionGutter::default(),
                 &crate::debug_state::DebugState::default(),
                 true,
+                &mut None,
                 &mut None,
             );
         });
@@ -435,6 +441,7 @@ fn plain_text_file_renders_without_a_parser_and_stays_free_of_diagnostics() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -498,6 +505,7 @@ fn simulated_edit_updates_diagnostics_and_dirty_state() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 }
@@ -547,6 +555,7 @@ fn whitespace_and_indent_guides_render_without_panicking() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });

@@ -91,6 +91,10 @@ const LIGHT_BREAKPOINT: Color32 = Color32::from_rgb(202, 42, 42);
 /// `COVERAGE_COVERED`'s own teal-leaning green, which can share the same
 /// row. Dimmer at rest than on hover, so a file full of entry points
 /// doesn't read as a column of buttons demanding attention.
+const DARK_COUNTERPART_MARKER: Color32 = Color32::from_rgb(110, 160, 220);
+const LIGHT_COUNTERPART_MARKER: Color32 = Color32::from_rgb(40, 100, 170);
+const DARK_COUNTERPART_MARKER_HOVERED: Color32 = Color32::from_rgb(150, 195, 245);
+const LIGHT_COUNTERPART_MARKER_HOVERED: Color32 = Color32::from_rgb(20, 70, 140);
 const DARK_RUN_MARKER: Color32 = Color32::from_rgb(88, 166, 92);
 const LIGHT_RUN_MARKER: Color32 = Color32::from_rgb(56, 132, 60);
 const DARK_RUN_MARKER_HOVERED: Color32 = Color32::from_rgb(124, 214, 128);
@@ -226,6 +230,18 @@ pub fn run_marker_hovered(dark_mode: bool) -> Color32 {
         DARK_RUN_MARKER_HOVERED
     } else {
         LIGHT_RUN_MARKER_HOVERED
+    }
+}
+
+pub fn counterpart_marker(dark_mode: bool) -> Color32 {
+    if dark_mode { DARK_COUNTERPART_MARKER } else { LIGHT_COUNTERPART_MARKER }
+}
+
+pub fn counterpart_marker_hovered(dark_mode: bool) -> Color32 {
+    if dark_mode {
+        DARK_COUNTERPART_MARKER_HOVERED
+    } else {
+        LIGHT_COUNTERPART_MARKER_HOVERED
     }
 }
 

@@ -58,6 +58,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     text_area::set_caret(&ctx, id, Caret { primary: 6, anchor: 6 });
@@ -116,6 +117,7 @@ fn alt_click_adds_a_bare_extra_cursor_without_moving_the_primary_one() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -187,6 +189,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     let widget_rect = ctx
@@ -239,6 +242,7 @@ fn alt_click_on_the_same_position_twice_does_not_duplicate_the_extra_cursor() {
                 &mut CodeActionGutter::default(),
                 &crate::debug_state::DebugState::default(),
                 true,
+                &mut None,
                 &mut None,
             );
         });
@@ -309,6 +313,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     let widget_rect = ctx
@@ -355,6 +360,7 @@ fn double_click_selects_the_whole_word_under_the_click() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -427,6 +433,7 @@ fn triple_click_selects_the_whole_line() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     let widget_rect = ctx
@@ -473,6 +480,7 @@ fn triple_click_selects_the_whole_line() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -537,6 +545,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     let widget_rect = ctx
@@ -590,6 +599,7 @@ fn ctrl_hover_over_an_identifier_sets_the_pointing_hand_cursor() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -650,6 +660,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     let widget_rect = ctx
@@ -696,6 +707,7 @@ fn hover_without_ctrl_leaves_the_default_cursor() {
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });

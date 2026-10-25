@@ -36,6 +36,7 @@ use super::painting::{
 use super::peek::PeekState;
 use super::references::FindReferencesState;
 use super::rename::RenameBox;
+use super::counterpart_gutter;
 use super::run_gutter;
 use super::import_completion;
 use super::config_completion;
@@ -364,6 +365,37 @@ fn main_entries_for(
     entries
 }
 
+#[derive(Clone)]
+struct CachedCounterpartLines {
+    revision: u64,
+    lines: Arc<Vec<usize>>,
+}
+
+/// Cache-checking wrapper around `syntax::counterpart_lines`, keyed on the
+/// buffer revision alone like `main_entries_for`: a scan of the text that
+/// only changes when the text does, read on every frame the gutter is painted.
+fn counterpart_lines_for(ui: &egui::Ui, widget_id: egui::Id, revision: u64, source: &str) -> Arc<Vec<usize>> {
+    let cache_id = egui::Id::new(("widget_counterpart_lines", widget_id));
+
+    if let Some(cached) = ui.ctx().data(|d| d.get_temp::<CachedCounterpartLines>(cache_id))
+        && cached.revision == revision
+    {
+        return cached.lines;
+    }
+
+    let lines = Arc::new(syntax::counterpart_lines(source));
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            cache_id,
+            CachedCounterpartLines {
+                revision,
+                lines: lines.clone(),
+            },
+        )
+    });
+    lines
+}
+
 #[derive(Clone, PartialEq)]
 struct OccurrenceHighlightKey {
     word: String,
@@ -547,6 +579,9 @@ pub fn show(
     // several other "tell the caller what the user did" channels of exactly
     // this shape.
     run_request: &mut Option<syntax::RunMarker>,
+    // Set to the 0-based line whose expect/actual marker was clicked this
+    // frame, for the caller to jump from.
+    counterpart_request: &mut Option<usize>,
 ) {
     // Undo/Redo/Select All from the right-click menu (below) can't be
     // driven directly — they're handled entirely *inside* egui's own
@@ -1455,11 +1490,18 @@ pub fn show(
     } else {
         run_gutter::RUN_GUTTER_WIDTH
     };
+    let counterpart_lines = counterpart_lines_for(ui, widget_id, doc.buffer.revision(), &old_text);
+    let counterpart_gutter_width = if counterpart_lines.is_empty() {
+        0.0
+    } else {
+        counterpart_gutter::COUNTERPART_GUTTER_WIDTH
+    };
     let gutter_width = digit_width * line_count.to_string().len() as f32
         + GUTTER_PADDING * 2.0
         + breakpoint_gutter_width
         + code_action_width
         + run_gutter_width
+        + counterpart_gutter_width
         + fold_gutter_width
         + diff_gutter_width
         + coverage_gutter_width;
@@ -2562,13 +2604,25 @@ pub fn show(
     {
         *run_request = Some(entry);
     }
+    if counterpart_gutter_width > 0.0
+        && let Some(line) = counterpart_gutter::show_counterpart_gutter(
+            ui,
+            &shell_out.base,
+            &counterpart_lines,
+            &id_salt,
+            gutter_left + breakpoint_gutter_width + code_action_width + run_gutter_width,
+            dark_mode,
+        )
+    {
+        *counterpart_request = Some(line);
+    }
     folding::show_fold_gutter(
         ui,
         &shell_out.base,
         &folds,
         &mut doc.folded_lines,
         &id_salt,
-        gutter_left + breakpoint_gutter_width + code_action_width + run_gutter_width,
+        gutter_left + breakpoint_gutter_width + code_action_width + run_gutter_width + counterpart_gutter_width,
         dark_mode,
     );
     folding::paint_collapsed_markers(ui, &shell_out.base, &folds, &doc.folded_lines, dark_mode);

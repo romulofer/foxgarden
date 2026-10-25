@@ -17,6 +17,20 @@ pub fn counterparts(project_root: &Path, file: &Path, source: &str, byte: usize)
         .collect()
 }
 
+/// The 0-based lines of `source` that declare something with counterparts,
+/// from every installed extension. Reads the text only, so it is cheap
+/// enough to ask again after each edit.
+pub fn counterpart_lines(source: &str) -> Vec<usize> {
+    let mut lines: Vec<usize> = crate::providers::providers()
+        .extensions
+        .iter()
+        .flat_map(|extension| extension.counterpart_lines(source))
+        .collect();
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
+
 /// The problems every installed extension finds in `file` (whose text is
 /// `source`) from the project around it. Reads the project's sources: ask on
 /// open and save, off the UI thread.

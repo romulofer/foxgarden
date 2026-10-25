@@ -172,3 +172,32 @@ fn go_to_expect_actual_says_when_the_line_has_no_counterpart() {
     assert!(app.shows(t().palettes.no_counterpart));
     assert_eq!(app.active_tab_name().as_deref(), Some("Greeter.kt"));
 }
+
+/// The gutter marks an `expect` and clicking it jumps, with the caret
+/// nowhere near the declaration.
+#[test]
+fn the_gutter_marker_on_an_expect_jumps_to_its_actual() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "expect fun greet(): String\n"),
+        ("src/jvmMain/kotlin/GreeterJvm.kt", "actual fun greet(): String = \"jvm\"\n"),
+    ]);
+    open_by_search(&mut app, "Greeter.kt");
+
+    assert!(app.shows(t().palettes.go_to_counterpart), "the declaration's line carries a marker");
+    app.click(t().palettes.go_to_counterpart);
+
+    assert_eq!(app.active_tab_name().as_deref(), Some("GreeterJvm.kt"));
+}
+
+/// A file with no `expect`/`actual` keeps its plain gutter.
+#[test]
+fn a_file_without_expect_or_actual_has_no_counterpart_marker() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "fun greet(): String = \"hi\"\n"),
+    ]);
+    open_by_search(&mut app, "Greeter.kt");
+
+    assert!(!app.shows(t().palettes.go_to_counterpart));
+}

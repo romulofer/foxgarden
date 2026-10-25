@@ -162,6 +162,7 @@ pub fn show(
     // Set to the entry point whose run-gutter ▶ was clicked this frame, for
     // the caller to launch — see `editor::show`'s own parameter.
     run_request: &mut Option<syntax::RunMarker>,
+    counterpart_request: &mut Option<usize>,
     recent_projects: &[PathBuf],
 ) {
     let mut focus_request = None;
@@ -505,6 +506,7 @@ pub fn show(
                         debug_state,
                         trim_trailing_whitespace_on_save,
                         run_request,
+                        counterpart_request,
                     );
                 });
         };

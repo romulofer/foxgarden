@@ -609,6 +609,16 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// The 0-based lines of `source` that declare something with
+    /// [`counterparts`](Self::counterparts) — where the gutter puts its marker.
+    /// Empty — the default — when there are none. Reads the text alone, no
+    /// project, because it is asked again after every edit; whether a
+    /// declaration really has a counterpart is `counterparts`' question, asked
+    /// when the marker is clicked.
+    fn counterpart_lines(&self, _source: &str) -> Vec<usize> {
+        Vec::new()
+    }
+
     /// Every runnable entry point in `source`, whose parse `tree` the editor
     /// already built — in source order.
     ///

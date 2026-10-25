@@ -138,6 +138,7 @@ pub(super) fn typing_session(
                 &crate::debug_state::DebugState::default(),
                 true,
                 &mut None,
+                &mut None,
             );
         });
     };
@@ -232,6 +233,7 @@ pub(super) fn focused_frame_with_selection(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 
@@ -296,6 +298,7 @@ pub(super) fn focused_frame_with_selection(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 }
@@ -348,6 +351,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -407,6 +411,7 @@ pub(super) fn focused_frame_with_selection_returning_cursor(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -471,6 +476,7 @@ pub(super) fn focused_frame_with_extra_selections(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 
@@ -522,6 +528,7 @@ pub(super) fn focused_frame_with_extra_selections(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -580,6 +587,7 @@ pub(super) fn focused_frame_with_indent_settings(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 
@@ -629,6 +637,7 @@ pub(super) fn focused_frame_with_indent_settings(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -685,6 +694,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -744,6 +754,7 @@ pub(super) fn focused_frame_with_indent_settings_and_selection(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -855,6 +866,7 @@ pub(super) fn run_frame_reading_selection(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -989,6 +1001,7 @@ pub(super) fn focused_frame_with_generate_request(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     last_error
@@ -1045,6 +1058,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -1109,6 +1123,7 @@ pub(super) fn focused_frame_with_selection_and_case_request(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     last_error
@@ -1165,6 +1180,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
 
@@ -1215,6 +1231,7 @@ pub(super) fn focused_frame_with_selection_and_line_op_request(
             &mut CodeActionGutter::default(),
             &crate::debug_state::DebugState::default(),
             true,
+            &mut None,
             &mut None,
         );
     });
@@ -1297,6 +1314,7 @@ pub(super) fn focused_frame_with_generate_method_request(
             &crate::debug_state::DebugState::default(),
             true,
             &mut None,
+            &mut None,
         );
     });
     last_error
@@ -1337,6 +1355,7 @@ pub(super) fn show_with_defaults(ui: &mut egui::Ui, doc: &mut Document, parser: 
         &mut CodeActionGutter::default(),
         &crate::debug_state::DebugState::default(),
         true,
+        &mut None,
         &mut None,
     );
 }
