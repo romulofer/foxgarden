@@ -473,6 +473,11 @@ impl ExtensionHandle {
         self.extension.counterparts(project_root, file, source, byte)
     }
 
+    /// Whether a language server's diagnostic is known to be wrong for `file`.
+    pub fn is_spurious_server_diagnostic(&self, project_root: &Path, file: &Path, code: &str, message: &str) -> bool {
+        self.extension.is_spurious_server_diagnostic(project_root, file, code, message)
+    }
+
     /// The lines of `source` that declare something with counterparts.
     pub fn counterpart_lines(&self, source: &str) -> Vec<usize> {
         self.extension.counterpart_lines(source)

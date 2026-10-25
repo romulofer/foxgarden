@@ -191,7 +191,7 @@ impl LspState {
             let slot = self.servers.entry(server.id.clone()).or_default();
             reconcile_slot(slot, config, &server.id, server.display_name.as_str(), &mut self.retiring, &mut errors, wake);
             sync_documents(slot, &server.language_ids, server.display_name.as_str(), documents, &mut errors);
-            apply_server_messages(slot, server.display_name.as_str(), documents, &mut errors);
+            apply_server_messages(slot, server.display_name.as_str(), project_root, documents, &mut errors);
         }
         errors
     }
@@ -1003,6 +1003,16 @@ struct LanguageStatusParams {
     message: String,
 }
 
+/// Whether an extension knows `diagnostic` to be a false positive in this
+/// project, as when a server does not understand its source-set layout. Only
+/// a diagnostic carrying a string code is asked about.
+fn is_spurious(project_root: Option<&Path>, file: &Path, diagnostic: &lsp_types::Diagnostic) -> bool {
+    let (Some(root), Some(lsp_types::NumberOrString::String(code))) = (project_root, &diagnostic.code) else {
+        return false;
+    };
+    syntax::is_spurious_server_diagnostic(root, file, code, &diagnostic.message)
+}
+
 /// What the server attached to `diagnostic` beyond range, severity and
 /// message, kept on the editor's diagnostic for a later `codeAction` request.
 fn server_fields(diagnostic: &lsp_types::Diagnostic) -> fg_core::ServerDiagnostic {
@@ -1021,7 +1031,13 @@ fn with_server_fields(mut diagnostic: lsp_types::Diagnostic, server: &fg_core::S
     diagnostic
 }
 
-fn apply_server_messages(slot: &mut Slot, display_name: &str, documents: &mut [Document], errors: &mut Vec<String>) {
+fn apply_server_messages(
+    slot: &mut Slot,
+    display_name: &str,
+    project_root: Option<&Path>,
+    documents: &mut [Document],
+    errors: &mut Vec<String>,
+) {
     let Slot::Ready {
         session,
         status_message,
@@ -1047,9 +1063,11 @@ fn apply_server_messages(slot: &mut Slot, display_name: &str, documents: &mut [D
                     continue;
                 }
                 let text = doc.buffer.to_string();
+                let path = doc.path.clone();
                 doc.lsp_diagnostics = published
                     .diagnostics
                     .into_iter()
+                    .filter(|diagnostic| !is_spurious(project_root, &path, diagnostic))
                     .filter_map(|diagnostic| {
                         utf16_range_to_bytes(&text, diagnostic.range).map(|range| Diagnostic {
                             range,

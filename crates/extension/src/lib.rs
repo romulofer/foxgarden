@@ -609,6 +609,16 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// Whether a language server's diagnostic on `file` is wrong because the
+    /// server does not understand the project's layout, and should be dropped.
+    /// `code` and `message` are the server's own. False — the default — for
+    /// everything, so a server's diagnostics are shown unless an extension
+    /// knows better. Asked once per published diagnostic, so it must return
+    /// without touching the disk for a `code` it has no opinion on.
+    fn is_spurious_server_diagnostic(&self, _project_root: &Path, _file: &Path, _code: &str, _message: &str) -> bool {
+        false
+    }
+
     /// The 0-based lines of `source` that declare something with
     /// [`counterparts`](Self::counterparts) — where the gutter puts its marker.
     /// Empty — the default — when there are none. Reads the text alone, no

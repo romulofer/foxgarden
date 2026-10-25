@@ -1,6 +1,7 @@
 mod brackets;
 mod code_model;
 mod counterparts;
+mod server_diagnostics;
 mod diagnostics;
 mod document_parser;
 mod folding;
@@ -20,6 +21,7 @@ pub use code_model::{
     source_file_extensions, supertype, type_members, types_with_fields,
 };
 pub use counterparts::{counterpart_lines, counterparts, file_diagnostics};
+pub use server_diagnostics::is_spurious_server_diagnostic;
 pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use folding::{FoldRange, foldable_ranges};

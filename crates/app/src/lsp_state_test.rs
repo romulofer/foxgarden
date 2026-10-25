@@ -553,7 +553,7 @@ fn a_language_status_notification_becomes_the_slots_status_message() {
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", None, &mut documents, &mut errors);
         let Slot::Ready { status_message, .. } = &slot else {
             unreachable!()
         };
@@ -587,7 +587,7 @@ fn a_service_ready_status_clears_the_status_message() {
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", None, &mut documents, &mut errors);
         let Slot::Ready { status_message, .. } = &slot else {
             unreachable!()
         };
@@ -614,7 +614,7 @@ fn an_error_status_is_reported_through_errors_too() {
     let mut documents = [];
     let mut errors = Vec::new();
     loop {
-        apply_server_messages(&mut slot, "JDTLS", &mut documents, &mut errors);
+        apply_server_messages(&mut slot, "JDTLS", None, &mut documents, &mut errors);
         if !errors.is_empty() {
             assert_eq!(errors, vec!["JDTLS: Failed to import projects".to_string()]);
             let Slot::Ready { status_message, .. } = &slot else {
@@ -1098,4 +1098,29 @@ fn no_server_serves_a_document_before_one_is_ready() {
     let state = LspState::default();
     let (_dir, doc) = test_support::temp_document("A.java", "class A {}");
     assert!(!state.serves(&doc));
+}
+
+/// A server that analyzes every source set of a multiplatform module as one
+/// compilation reports each `actual` as a conflicting overload; that is
+/// dropped, while the genuine type error beside it is kept.
+#[test]
+fn published_diagnostics_drop_the_ones_an_extension_knows_are_spurious() {
+    test_support::install_grammars();
+    let dir = test_support::tempdir();
+    test_support::write_file(dir.path(), "build.gradle.kts", "plugins { kotlin(\"multiplatform\") }");
+    let file = test_support::write_file(dir.path(), "src/jvmMain/kotlin/A.kt", "actual fun a(): Int = 1\nval b: Int = \"s\"\n");
+    let mut documents = [fg_core::Document::open(file.clone(), test_support::languages()).unwrap()];
+    let uri = file_uri(&file).unwrap();
+    let range = r#"{"start":{"line":0,"character":0},"end":{"line":0,"character":6}}"#;
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{{"uri":"{}","diagnostics":[{{"range":{range},"severity":1,"code":"CONFLICTING_OVERLOADS","message":"Conflicting overloads in /p/src/jvmMain/kotlin/A.kt and /p/src/linuxX64Main/kotlin/B.kt"}},{{"range":{range},"severity":1,"code":"TYPE_MISMATCH","message":"Type mismatch"}}]}}}}"#,
+        uri.as_str()
+    );
+    let mut slot = ready_slot_around(fake_server_sending(&body));
+    let mut errors = Vec::new();
+    while documents[0].lsp_diagnostics.is_empty() {
+        apply_server_messages(&mut slot, "KLS", Some(dir.path()), &mut documents, &mut errors);
+    }
+    let messages: Vec<&str> = documents[0].lsp_diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages, ["Type mismatch"]);
 }
