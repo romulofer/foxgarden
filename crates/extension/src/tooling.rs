@@ -473,6 +473,11 @@ impl ExtensionHandle {
         self.extension.counterparts(project_root, file, source, byte)
     }
 
+    /// Declarations the identifier at `byte` in `file` may refer to.
+    pub fn definitions(&self, project_root: &Path, file: &Path, source: &str, byte: usize) -> Vec<Counterpart> {
+        self.extension.definitions(project_root, file, source, byte)
+    }
+
     /// Whether a language server's diagnostic is known to be wrong for `file`.
     pub fn is_spurious_server_diagnostic(&self, project_root: &Path, file: &Path, code: &str, message: &str) -> bool {
         self.extension.is_spurious_server_diagnostic(project_root, file, code, message)

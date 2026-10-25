@@ -239,6 +239,12 @@ fn a_response_wakes_the_event_loop() {
     let (mut session, wakes) = fake_server_waking(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
     let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
     let _ = rx.recv().expect("the fake server's response arrives");
+    // The reader thread delivers the response and wakes only after that, so
+    // the wake can trail `recv` returning.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while wakes.load(Ordering::SeqCst) < 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(wakes.load(Ordering::SeqCst) >= 1, "the response woke nothing");
 }
 

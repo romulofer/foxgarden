@@ -3024,10 +3024,11 @@ impl eframe::App for FoxGardenApp {
         // exact text just written to it) but still gets marked `read_only`
         // — editing a jdt.ls decompilation and expecting Save to do
         // anything meaningful would be actively misleading.
-        if let Some(target) = self.goto_definition.poll(&mut self.lsp) {
+        if let Some(target) = self.goto_definition.poll(&mut self.lsp, diff_root.as_deref()) {
             let is_decompiled = matches!(target, GotoDefinitionTarget::Ready { .. });
             let (path, byte_offset, range) = match target {
-                GotoDefinitionTarget::Ready { path, byte_offset } => (path, Some(byte_offset), None),
+                GotoDefinitionTarget::Ready { path, byte_offset }
+                | GotoDefinitionTarget::Source { path, byte_offset } => (path, Some(byte_offset), None),
                 GotoDefinitionTarget::File { path, range } => (path, None, Some(range)),
             };
             open_path(

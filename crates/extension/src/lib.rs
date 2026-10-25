@@ -609,6 +609,16 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// Declarations the identifier at `byte` in `file` (whose text is `source`)
+    /// may refer to, for a go-to-definition a language server could not
+    /// answer: a server that misreads the project's layout resolves nothing
+    /// for a call to a Kotlin Multiplatform `expect`, say. Empty — the default
+    /// — when there are none. Reads the project's sources, so it answers an
+    /// explicit request, never a frame.
+    fn definitions(&self, _project_root: &Path, _file: &Path, _source: &str, _byte: usize) -> Vec<Counterpart> {
+        Vec::new()
+    }
+
     /// Whether a language server's diagnostic on `file` is wrong because the
     /// server does not understand the project's layout, and should be dropped.
     /// `code` and `message` are the server's own. False — the default — for

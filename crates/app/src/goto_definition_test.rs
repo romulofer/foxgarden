@@ -86,3 +86,39 @@ fn handle_source_writes_the_reply_text_and_resolves_the_byte_offset() {
     assert_eq!(byte_offset, 6);
     let _ = std::fs::remove_file(&path);
 }
+
+/// With no language server to ask, a call to a Kotlin Multiplatform `expect`
+/// still resolves, through the extension that knows the layout.
+#[test]
+fn a_definition_the_server_cannot_give_falls_back_to_the_extensions() {
+    test_support::install_grammars();
+    let dir = test_support::tempdir();
+    test_support::write_file(dir.path(), "build.gradle.kts", "plugins { kotlin(\"multiplatform\") }");
+    let common = test_support::write_file(dir.path(), "src/commonMain/kotlin/P.kt", "expect fun platformName(): String\n");
+    let user = test_support::write_file(dir.path(), "src/jvmMain/kotlin/U.kt", "fun use() = platformName()\n");
+    let mut doc = fg_core::Document::open(user, test_support::languages()).unwrap();
+    let byte = doc.buffer.to_string().find("platformName").unwrap() + 2;
+
+    let mut state = GotoDefinitionState::default();
+    let mut lsp = LspState::default();
+    state.request(&mut doc, byte, &mut lsp);
+    assert!(state.wants_repaint(), "the fallback is pending until polled");
+
+    let Some(Target::Source { path, byte_offset }) = state.poll(&mut lsp, Some(dir.path())) else {
+        panic!("the expect should have been found");
+    };
+    assert_eq!(path, common);
+    assert_eq!(byte_offset, "expect fun ".len());
+    assert!(!state.wants_repaint());
+    assert!(state.poll(&mut lsp, Some(dir.path())).is_none(), "the fallback is used once");
+}
+
+#[test]
+fn without_a_project_the_fallback_finds_nothing() {
+    let (_dir, mut doc) = test_support::temp_document("U.kt", "fun use() = platformName()\n");
+    let mut state = GotoDefinitionState::default();
+    let mut lsp = LspState::default();
+    state.request(&mut doc, 14, &mut lsp);
+    assert!(state.poll(&mut lsp, None).is_none());
+    assert!(!state.wants_repaint());
+}

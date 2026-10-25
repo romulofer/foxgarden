@@ -14,7 +14,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use directories::ProjectDirs;
@@ -40,6 +40,10 @@ pub enum Target {
     /// directly from the `java/classFileContents` reply text this struct
     /// already had in hand, so there's nothing left to convert.
     Ready { path: PathBuf, byte_offset: usize },
+    /// A declaration an extension found in the project's own sources when
+    /// the language server had no answer, with its byte offset already known.
+    /// An ordinary editable file, unlike `Ready`'s decompiled one.
+    Source { path: PathBuf, byte_offset: usize },
 }
 
 enum Stage {
@@ -62,6 +66,17 @@ enum Stage {
 #[derive(Default)]
 pub struct GotoDefinitionState {
     stage: Option<Stage>,
+    /// What to ask the extensions when the server has no answer (or there is
+    /// no server). Set by each request and used at most once.
+    fallback: Option<Fallback>,
+}
+
+/// The click a request was made for, kept so an extension can answer it from
+/// the project's sources if the server cannot.
+struct Fallback {
+    path: PathBuf,
+    source: String,
+    byte_offset: usize,
 }
 
 impl GotoDefinitionState {
@@ -70,9 +85,8 @@ impl GotoDefinitionState {
     /// Ctrl+Click before the first reply lands means the first one's answer
     /// is no longer what the user is asking about.
     pub fn request(&mut self, doc: &mut Document, byte_offset: usize, lsp: &mut LspState) {
-        if let Some(rx) = lsp.request_definition(doc, byte_offset) {
-            self.stage = Some(Stage::Locating(rx));
-        }
+        self.fallback = Some(Fallback { path: doc.path.clone(), source: doc.buffer.to_string(), byte_offset });
+        self.stage = lsp.request_definition(doc, byte_offset).map(Stage::Locating);
     }
 
     /// Whether a reply (either stage) could still land — same unprompted-
@@ -81,7 +95,7 @@ impl GotoDefinitionState {
     /// events needs its own repaint request, or it sits unread until an
     /// unrelated one comes along.
     pub fn wants_repaint(&self) -> bool {
-        self.stage.is_some()
+        self.stage.is_some() || self.fallback.is_some()
     }
 
     /// Polls whatever's in flight. Returns `Some(Target)` once a request
@@ -91,17 +105,25 @@ impl GotoDefinitionState {
     /// stays tracked for the next poll) and a failed/rejected one (dropped
     /// silently, the same best-effort degrade every other LSP path here
     /// already has — no tooltip, no jump, nothing surfaced as an error).
-    pub fn poll(&mut self, lsp: &mut LspState) -> Option<Target> {
-        match self.stage.take()? {
-            Stage::Locating(rx) => match rx.try_recv() {
-                Ok(Ok(value)) => self.handle_location(value, lsp),
-                Ok(Err(_)) | Err(TryRecvError::Disconnected) => None,
+    pub fn poll(&mut self, lsp: &mut LspState, project_root: Option<&Path>) -> Option<Target> {
+        match self.stage.take() {
+            Some(Stage::Locating(rx)) => match rx.try_recv() {
+                Ok(Ok(value)) => {
+                    let target = self.handle_location(value, lsp);
+                    // A virtual-document fetch is under way: the server did answer.
+                    if target.is_none() && self.stage.is_none() {
+                        return self.resolve_fallback(project_root);
+                    }
+                    self.fallback = None;
+                    target
+                }
+                Ok(Err(_)) | Err(TryRecvError::Disconnected) => self.resolve_fallback(project_root),
                 Err(TryRecvError::Empty) => {
                     self.stage = Some(Stage::Locating(rx));
                     None
                 }
             },
-            Stage::FetchingSource { uri, range, extension, rx } => match rx.try_recv() {
+            Some(Stage::FetchingSource { uri, range, extension, rx }) => match rx.try_recv() {
                 Ok(Ok(value)) => handle_source(&uri, range, &extension, value),
                 Ok(Err(_)) | Err(TryRecvError::Disconnected) => None,
                 Err(TryRecvError::Empty) => {
@@ -109,7 +131,18 @@ impl GotoDefinitionState {
                     None
                 }
             },
+            None => self.resolve_fallback(project_root),
         }
+    }
+
+    /// Asks the extensions where the clicked identifier is declared, once, for
+    /// a request the server left unanswered. A silent no-op without a project
+    /// or an answer, like every other path here.
+    fn resolve_fallback(&mut self, project_root: Option<&Path>) -> Option<Target> {
+        let fallback = self.fallback.take()?;
+        let root = project_root?;
+        let found = syntax::definitions(root, &fallback.path, &fallback.source, fallback.byte_offset);
+        found.into_iter().next().map(|found| Target::Source { path: found.path, byte_offset: found.byte_offset })
     }
 
     /// A location under a server's own URI scheme (a decompiled library

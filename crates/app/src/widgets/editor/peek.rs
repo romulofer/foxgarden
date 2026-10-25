@@ -100,7 +100,7 @@ impl PeekState {
     /// just for this, matching how every other cross-file LSP path in this
     /// app already degrades on a source it doesn't have a live buffer for.
     pub(super) fn update(&mut self, lsp: &mut LspState, current_doc: &Document) {
-        if let Some(target) = self.goto.poll(lsp) {
+        if let Some(target) = self.goto.poll(lsp, None) {
             self.panel = resolve_panel(target, current_doc);
         }
     }
@@ -219,7 +219,7 @@ fn resolve_panel(target: Target, current_doc: &Document) -> Option<PanelContent>
             let byte_offset = utf16_range_to_bytes(&text, range)?.start;
             Some(panel_from_text(path, &text, byte_offset))
         }
-        Target::Ready { path, byte_offset } => {
+        Target::Ready { path, byte_offset } | Target::Source { path, byte_offset } => {
             let text = std::fs::read_to_string(&path).ok()?;
             Some(panel_from_text(path, &text, byte_offset.min(text.len())))
         }
