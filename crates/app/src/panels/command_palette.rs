@@ -122,6 +122,7 @@ impl Command {
             Command::GoToFile => "Ctrl+P",
             Command::RecentFiles => "Ctrl+E",
             Command::NextDiagnostic => "F8",
+            Command::GoToCounterpart => "Ctrl+Alt+B",
             Command::NewFile => "Ctrl+N",
             Command::ToggleSidePanel => "Ctrl+B",
             Command::ToggleTerminal => "Ctrl+`",

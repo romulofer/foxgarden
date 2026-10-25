@@ -201,3 +201,19 @@ fn a_file_without_expect_or_actual_has_no_counterpart_marker() {
 
     assert!(!app.shows(t().palettes.go_to_counterpart));
 }
+
+/// Ctrl+Alt+B does what the palette command does.
+#[test]
+fn ctrl_alt_b_goes_to_the_counterpart() {
+    let mut app = E2e::launch(&[
+        ("build.gradle.kts", BUILD_KMP),
+        ("src/commonMain/kotlin/Greeter.kt", "expect fun greet(): String\n"),
+        ("src/jvmMain/kotlin/GreeterJvm.kt", "actual fun greet(): String = \"jvm\"\n"),
+    ]);
+    open_by_search(&mut app, "GreeterJvm");
+    app.type_into_active_tab(0, "");
+
+    app.press(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::B);
+
+    assert_eq!(app.active_tab_name().as_deref(), Some("Greeter.kt"));
+}

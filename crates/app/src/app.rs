@@ -1917,8 +1917,12 @@ impl eframe::App for FoxGardenApp {
         {
             self.side_panel.begin_new_file(root);
         }
-        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command) {
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command && !i.modifiers.alt) {
             self.side_panel_visible = !self.side_panel_visible;
+        }
+        // Go to expect/actual, Ctrl+Alt+B as IntelliJ's "go to implementation".
+        if !terminal_focused && ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.command && i.modifiers.alt) {
+            self.go_to_counterpart(ui.ctx());
         }
         // Split / unsplit the editor (`PLAN.md` Track 11), Ctrl+\ as in VS
         // Code. A no-op with no tab open — nothing to split into two panes.
