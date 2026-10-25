@@ -55,7 +55,7 @@ pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, Counterpart, ExtensionHandle, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -569,6 +569,14 @@ pub trait Extension: Send + Sync {
     /// frame.
     fn source_set(&self, _project_root: &Path, _file: &Path) -> Option<String> {
         None
+    }
+
+    /// Problems in `file`, whose text is `source`, that need the project
+    /// around it to see (an `expect` with no `actual`). Empty — the default —
+    /// when there are none. Asked when a file opens, reloads or is saved, off
+    /// the UI thread, never per keystroke: it may read many files.
+    fn file_diagnostics(&self, _project_root: &Path, _file: &Path, _source: &str) -> Vec<FileDiagnostic> {
+        Vec::new()
     }
 
     /// The declarations that stand for the one at `byte` in `file`, whose text

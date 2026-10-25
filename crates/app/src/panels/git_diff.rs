@@ -13,6 +13,12 @@
 //! project-wide action at a time, and more than one can legitimately be in
 //! flight at once (e.g. two files saved in quick succession).
 //!
+//! The same thread also asks the extensions for the problems they find in the
+//! file from the project around it (`syntax::file_diagnostics`: an `expect`
+//! with no `actual`), since a file is re-examined at exactly the same three
+//! moments. They land in `Document::analyzer_diagnostics` under
+//! `EXTENSION_DIAGNOSTICS`.
+//!
 //! Unlike Checkstyle/PMD, nothing here is menu-triggered — `PLAN.md`
 //! Phase 1 wants this to run automatically, so `check_for_saves` (see its
 //! own doc comment) detects a save generically, at the frame level, rather
@@ -26,7 +32,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::{BlameLine, DiffHunk, EditorState};
+use fg_core::{BlameLine, Diagnostic, DiffHunk, EditorState, Severity};
+use syntax::FileDiagnostic;
+
+/// The `Document::analyzer_diagnostics` key the extensions' per-file problems
+/// are stored under.
+const EXTENSION_DIAGNOSTICS: &str = "extensions";
 
 /// The diff and blame halves are kept as independent `Result`s, not one
 /// combined `Result<(Vec<DiffHunk>, Vec<BlameLine>), String>` — each of
@@ -35,7 +46,31 @@ use fg_core::{BlameLine, DiffHunk, EditorState};
 /// but keeping them separate means that hypothetical failure on one side
 /// still lets the other side's still-good result land, instead of one
 /// `Err` silently discarding both.
-type ScanResult = (Result<Vec<DiffHunk>, String>, Result<Vec<BlameLine>, String>);
+type ScanResult = (
+    Result<Vec<DiffHunk>, String>,
+    Result<Vec<BlameLine>, String>,
+    Vec<Diagnostic>,
+);
+
+/// What the extensions find in `path`, read from disk (the saved state, which
+/// is what this runs against), as editor diagnostics.
+fn extension_diagnostics(path: &Path, root: &Path) -> Vec<Diagnostic> {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    syntax::file_diagnostics(root, path, &source)
+        .into_iter()
+        .map(|FileDiagnostic { range, severity, message }| Diagnostic {
+            range: range.start.min(source.len())..range.end.min(source.len()),
+            severity: match severity {
+                syntax::ProblemSeverity::Error => Severity::Error,
+                syntax::ProblemSeverity::Warning => Severity::Warning,
+            },
+            message,
+            server: None,
+        })
+        .collect()
+}
 
 #[derive(Default)]
 pub struct DiffState {
@@ -69,7 +104,8 @@ impl DiffState {
         std::thread::spawn(move || {
             let hunks = fg_core::git_diff_hunks(&path_for_thread, &root).map_err(|e| e.to_string());
             let blame = fg_core::git_blame(&path_for_thread, &root).map_err(|e| e.to_string());
-            let _ = tx.send((hunks, blame));
+            let found = extension_diagnostics(&path_for_thread, &root);
+            let _ = tx.send((hunks, blame, found));
         });
         self.scans.insert(path, rx);
     }
@@ -96,13 +132,18 @@ impl DiffState {
         }
         for (path, result) in done {
             self.scans.remove(&path);
-            let Some((hunks, blame)) = result else { continue };
+            let Some((hunks, blame, found)) = result else { continue };
             if let Some(doc) = state.open_tabs.iter_mut().find(|d| d.path == path) {
                 if let Ok(hunks) = hunks {
                     doc.diff_hunks = hunks;
                 }
                 if let Ok(blame) = blame {
                     doc.blame = blame;
+                }
+                if found.is_empty() {
+                    doc.analyzer_diagnostics.remove(EXTENSION_DIAGNOSTICS);
+                } else {
+                    doc.analyzer_diagnostics.insert(EXTENSION_DIAGNOSTICS.to_string(), found);
                 }
             }
         }

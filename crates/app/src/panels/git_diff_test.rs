@@ -151,3 +151,34 @@ fn check_for_saves_is_a_no_op_with_no_project_root() {
 
     assert!(diff.scans.is_empty(), "no project root means nothing to diff against");
 }
+
+#[test]
+fn run_then_poll_stores_what_extensions_find_in_the_file() {
+    test_support::install_grammars();
+    let dir = test_support::tempdir();
+    let root = dir.path().to_path_buf();
+    test_support::write_file(&root, "build.gradle.kts", "plugins { kotlin(\"multiplatform\") }\n");
+    let file = test_support::write_file(&root, "src/commonMain/kotlin/Lonely.kt", "expect class Lonely\n");
+    let mut state = EditorState {
+        open_tabs: vec![fg_core::Document::open(file.clone(), test_support::languages()).unwrap()],
+        ..Default::default()
+    };
+
+    let mut diff = DiffState::default();
+    diff.run(file.clone(), root.clone());
+    while diff.running() {
+        diff.poll(&mut state);
+    }
+    let found = &state.open_tabs[0].analyzer_diagnostics[EXTENSION_DIAGNOSTICS];
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].message, "expect 'Lonely' has no actual declaration");
+    assert_eq!(found[0].range, 13..19);
+
+    // Fulfilling it and scanning again clears the warning.
+    test_support::write_file(&root, "src/jvmMain/kotlin/Lonely.kt", "actual class Lonely\n");
+    diff.run(file, root);
+    while diff.running() {
+        diff.poll(&mut state);
+    }
+    assert!(!state.open_tabs[0].analyzer_diagnostics.contains_key(EXTENSION_DIAGNOSTICS));
+}

@@ -318,6 +318,16 @@ pub struct Counterpart {
     pub label: String,
 }
 
+/// A problem an extension found in one file from the project around it, which
+/// no parse of the file alone shows: an `expect` nothing fulfils, say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDiagnostic {
+    /// Byte range in the file's text the squiggle covers.
+    pub range: std::ops::Range<usize>,
+    pub severity: ProblemSeverity,
+    pub message: String,
+}
+
 /// One HTTP route an extension found declared in a file — a row in the
 /// route map, and where picking it jumps to.
 ///
@@ -407,6 +417,11 @@ impl ExtensionHandle {
     /// The source set `file` belongs to, if this extension has one for it.
     pub fn source_set(&self, project_root: &Path, file: &Path) -> Option<String> {
         self.extension.source_set(project_root, file)
+    }
+
+    /// The problems this extension finds in `file`, whose text is `source`.
+    pub fn file_diagnostics(&self, project_root: &Path, file: &Path, source: &str) -> Vec<FileDiagnostic> {
+        self.extension.file_diagnostics(project_root, file, source)
     }
 
     /// The declarations that stand for the one at `byte` in `file`.
