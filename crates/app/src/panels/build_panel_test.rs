@@ -197,3 +197,34 @@ fn a_run_with_no_compile_step_launches_the_file_through_the_projects_interpreter
     assert!(texts.contains(&expected.as_str()), "{texts:?}");
     assert_eq!(state.last_success, Some(true));
 }
+
+/// A Python test marker runs pytest through the project's interpreter on the
+/// marker's node id, and the run ends without a report summary: pytest prints
+/// its own.
+#[cfg(unix)]
+#[test]
+fn a_python_test_runs_pytest_on_its_node_id_and_adds_no_summary_of_its_own() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = test_support::tempdir();
+    let root = dir.path().to_path_buf();
+    test_support::write_file(&root, "pyproject.toml", "[project]\nname = \"demo\"\n");
+    let python = test_support::write_file(&root, ".venv/bin/python", "#!/bin/sh\necho \"interpreter ran $@\"\n");
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let registry = test_support::languages();
+    let tool = registry.detect_build_tool(&root).expect("a Python project");
+
+    let mut state = BuildState::default();
+    state.start_filtered_test(&root, &tool, "/p/test_calc.py::TestCalc::test_adds").unwrap();
+    while state.running() {
+        state.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    state.poll();
+
+    let texts: Vec<&str> = state.rows.iter().map(|r| r.text.as_str()).collect();
+    assert!(texts.contains(&"interpreter ran -m pytest /p/test_calc.py::TestCalc::test_adds"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.starts_with("Tests:")), "{texts:?}");
+    assert_eq!(state.last_success, Some(true));
+}

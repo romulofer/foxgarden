@@ -2956,7 +2956,7 @@ impl eframe::App for FoxGardenApp {
                         };
                         let started = match entry.target.kind {
                             syntax::RunKind::Main => self.build_state.start_run(&root, &tool, config),
-                            syntax::RunKind::Test => {
+                            syntax::RunKind::Test | syntax::RunKind::SingleTest => {
                                 self.build_state.start_filtered_test(&root, &tool, &entry.target.entry_point)
                             }
                         };

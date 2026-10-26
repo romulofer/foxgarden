@@ -503,6 +503,11 @@ impl BuildState {
         if let Some(filter) = filter {
             cases.retain(|case| matches_filter(case, filter));
         }
+        // A run that left no report (pytest prints its own summary) has
+        // nothing to add to its output.
+        if cases.is_empty() {
+            return;
+        }
         self.push_test_rows(&cases, |case| {
             tool.test_failure_location(project_root, case).map(|at| (at.path, at.line))
         });

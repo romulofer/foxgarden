@@ -302,8 +302,10 @@ pub struct ScaffoldSpec {
 pub enum RunKind {
     /// A program's entry point, launched through the build tool's run.
     Main,
-    /// A test, or a class of them, run through the build tool's test task.
+    /// A class or module of tests, run through the build tool's test task.
     Test,
+    /// One test, run through the build tool's test task.
+    SingleTest,
 }
 
 /// One runnable thing an extension found in a file — what puts the ▶ in the
@@ -321,8 +323,8 @@ pub struct RunTarget {
     pub kind: RunKind,
     /// What a launch actually runs, in the toolchain's own notation — the
     /// same string a [`RunSpec::entry_point`] carries. For a
-    /// [`RunKind::Test`], the filter [`BuildToolHandle::test_command`] takes:
-    /// a class, or `class#method` for one test.
+    /// [`RunKind::Test`] or [`RunKind::SingleTest`], the filter
+    /// [`BuildToolHandle::test_command`] takes, in the toolchain's own notation.
     pub entry_point: String,
     /// The short name to show the user; a tooltip reading `Run Main` beats
     /// one repeating `com.example.deep.package.Main`.

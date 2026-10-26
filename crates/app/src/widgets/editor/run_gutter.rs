@@ -57,7 +57,7 @@ pub(super) fn show_run_gutter(
         let id = egui::Id::new(("run_marker", id_salt, *logical));
         let label = match entry.target.kind {
             RunKind::Main => msg::run_main_class(&entry.target.label),
-            RunKind::Test if entry.target.entry_point.contains('#') => msg::run_test(&entry.target.label),
+            RunKind::SingleTest => msg::run_test(&entry.target.label),
             RunKind::Test => msg::run_test_class(&entry.target.label),
         };
         let response = ui

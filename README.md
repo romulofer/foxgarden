@@ -42,7 +42,7 @@ all wired into one fast UI. 🚀
 | | |
 |---|---|
 | 🧠 **Language intelligence** | Diagnostics, hover, go-to-definition, find-references, rename, **quick-fix (Alt+Enter)** and peek — via jdt.ls & kotlin-language-server, plus Jedi (Python), `typescript-language-server` / TypeScript 7's native `tsc` (JS/TS) and the VS Code HTML and CSS servers |
-| ▶ **Run markers** | A ▶ beside a `main` runs it; beside a test class or a single `@Test` method it runs just that, through Maven or Gradle. A Python file with a main guard runs with the project's virtual environment |
+| ▶ **Run markers** | A ▶ beside a `main` runs it; beside a test class or a single `@Test` method it runs just that, through Maven or Gradle. A Python file with a main guard runs with the project's virtual environment, and a pytest test or test class runs through it |
 | 📦 **Build-tool aware** | Maven & Gradle classpath resolution and project Java-version detection; build / run / test from the Run menu |
 | 🐞 **Debugger** | Breakpoints, call stack, variables and stepping over the Debug Adapter Protocol |
 | 🌱 **Spring-aware** | Endpoint map, `application.properties`/`.yml` autocomplete, annotation completion with auto-import |
@@ -82,7 +82,7 @@ all wired into one fast UI. 🚀
 - Bilingual UI (English / Português)
 
 **Beyond the JVM**
-- **Python**: highlighting, folding, Jedi language server, run a file from its `if __name__ == "__main__":` marker with the project's `.venv`
+- **Python**: highlighting, folding, Jedi language server, run a file from its `if __name__ == "__main__":` marker and pytest tests, with the project's `.venv`
 - **JavaScript / TypeScript / TSX / HTML / CSS**: highlighting, folding, language servers (TypeScript 6 through `typescript-language-server`, TypeScript 7 through its own native `tsc --lsp`)
 - Servers for these languages are not bundled: Settings ▸ Language Servers… shows where each was found, or that it was not
 
@@ -197,7 +197,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 | | |
 |---|---|
 | 🧠 **Inteligência de linguagem** | Diagnósticos, hover, ir-para-definição, referências, renomear, **correção rápida (Alt+Enter)** e espiar — via jdt.ls & kotlin-language-server, mais Jedi (Python), `typescript-language-server` / o `tsc` nativo do TypeScript 7 (JS/TS) e os servidores HTML e CSS do VS Code |
-| ▶ **Marcadores de execução** | Um ▶ ao lado de um `main` o executa; ao lado de uma classe de teste ou de um único método `@Test`, executa só aquele, via Maven ou Gradle. Um arquivo Python com guarda `__main__` roda com o ambiente virtual do projeto |
+| ▶ **Marcadores de execução** | Um ▶ ao lado de um `main` o executa; ao lado de uma classe de teste ou de um único método `@Test`, executa só aquele, via Maven ou Gradle. Um arquivo Python com guarda `__main__` roda com o ambiente virtual do projeto, e um teste ou classe de teste pytest roda por ele |
 | 📦 **Consciente do build** | Resolução de classpath Maven & Gradle e detecção da versão de Java do projeto; compilar / executar / testar pelo menu Executar |
 | 🐞 **Depurador** | Breakpoints, pilha de chamadas, variáveis e stepping via Debug Adapter Protocol |
 | 🌱 **Consciente de Spring** | Mapa de endpoints, autocomplete de `application.properties`/`.yml`, completar anotações com auto-import |
@@ -237,7 +237,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 - Interface bilíngue (English / Português)
 
 **Além da JVM**
-- **Python**: realce, dobramento, language server Jedi, executar um arquivo pelo marcador de `if __name__ == "__main__":` com o `.venv` do projeto
+- **Python**: realce, dobramento, language server Jedi, executar um arquivo pelo marcador de `if __name__ == "__main__":` e testes pytest, com o `.venv` do projeto
 - **JavaScript / TypeScript / TSX / HTML / CSS**: realce, dobramento, language servers (TypeScript 6 via `typescript-language-server`, TypeScript 7 pelo próprio `tsc --lsp` nativo)
 - Os servidores dessas linguagens não vêm embutidos: Configurações ▸ Language Servers… mostra onde cada um foi encontrado, ou que não foi
 
