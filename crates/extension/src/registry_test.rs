@@ -533,6 +533,8 @@ impl Extension for FakeForge {
             scaffolds: vec![crate::ScaffoldContribution {
                 build_tool_id: "anvil".to_string(),
                 language_id: "khuzdul".to_string(),
+                template_id: String::new(),
+                template_name: String::new(),
                 runtime_versions: vec![2, 7],
             }],
             ..Default::default()
@@ -585,6 +587,7 @@ fn a_contributed_scaffold_is_listed_and_generates_through_its_own_extension() {
         namespace: "under.the.mountain".to_string(),
         name: "forge-app".to_string(),
         runtime_version: Some(7),
+        template_id: String::new(),
     };
     let files = registry.scaffold_files(&spec).unwrap();
     assert_eq!(files[0].0, PathBuf::from("anvil.toml"));
@@ -620,6 +623,8 @@ fn a_scaffold_for_an_unregistered_build_tool_is_refused() {
                 scaffolds: vec![crate::ScaffoldContribution {
                     build_tool_id: "anvil".to_string(),
                     language_id: "khuzdul".to_string(),
+                    template_id: String::new(),
+                    template_name: String::new(),
                     runtime_versions: Vec::new(),
                 }],
                 ..Default::default()
@@ -695,6 +700,8 @@ fn two_scaffolds_for_the_same_pair_are_refused() {
                 scaffolds: vec![crate::ScaffoldContribution {
                     build_tool_id: "anvil".to_string(),
                     language_id: "khuzdul".to_string(),
+                    template_id: String::new(),
+                    template_name: String::new(),
                     runtime_versions: Vec::new(),
                 }],
                 ..Default::default()
@@ -709,6 +716,7 @@ fn two_scaffolds_for_the_same_pair_are_refused() {
         Err(RegisterError::DuplicateScaffold {
             tool_id: "anvil".to_string(),
             language_id: "khuzdul".to_string(),
+            template_id: String::new(),
             extension_id: "copycat".to_string(),
         })
     );
@@ -734,6 +742,8 @@ fn one_extension_cannot_scaffold_the_same_pair_twice() {
             let scaffold = crate::ScaffoldContribution {
                 build_tool_id: "kiln".to_string(),
                 language_id: "elvish".to_string(),
+                template_id: String::new(),
+                template_name: String::new(),
                 runtime_versions: Vec::new(),
             };
             Contributions {
@@ -755,6 +765,59 @@ fn one_extension_cannot_scaffold_the_same_pair_twice() {
         Err(RegisterError::DuplicateScaffold { .. })
     ));
     assert!(registry.language("elvish").is_none());
+}
+
+#[test]
+fn one_pair_can_offer_several_templates_each_generating_its_own_files() {
+    struct Templated;
+    impl Extension for Templated {
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![Capability::ProcessExec, Capability::DownloadFile]
+        }
+        fn manifest(&self) -> ExtensionManifest {
+            ExtensionManifest {
+                id: "templated".to_string(),
+                name: "templated".to_string(),
+                version: "1.0.0".to_string(),
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }
+        }
+        fn contributions(&self) -> Contributions {
+            let scaffold = |template_id: &str| crate::ScaffoldContribution {
+                build_tool_id: "kiln".to_string(),
+                language_id: "elvish".to_string(),
+                template_id: template_id.to_string(),
+                template_name: template_id.to_string(),
+                runtime_versions: Vec::new(),
+            };
+            Contributions {
+                languages: vec![lang("elvish", &["elv"])],
+                build_tools: vec![BuildToolContribution {
+                    id: "kiln".to_string(),
+                    display_name: "Kiln".to_string(),
+                    marker_files: vec!["kiln.toml".to_string()],
+                }],
+                scaffolds: vec![scaffold(""), scaffold("grove")],
+                ..Default::default()
+            }
+        }
+        fn scaffold_files(&self, spec: &crate::ScaffoldSpec) -> Option<Vec<(PathBuf, String)>> {
+            Some(vec![(PathBuf::from("template"), spec.template_id.clone())])
+        }
+    }
+
+    let mut registry = Registry::new();
+    registry.register(Box::new(Templated)).unwrap();
+    assert_eq!(registry.scaffolds().len(), 2);
+    let spec = |template_id: &str| crate::ScaffoldSpec {
+        build_tool_id: "kiln".to_string(),
+        language_id: "elvish".to_string(),
+        template_id: template_id.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(registry.scaffold_files(&spec("grove")).unwrap()[0].1, "grove");
+    assert_eq!(registry.scaffold_files(&spec("")).unwrap()[0].1, "");
+    assert!(registry.scaffold_files(&spec("missing")).is_none());
 }
 
 /// A run marker's entry point is in its own extension's notation, so the

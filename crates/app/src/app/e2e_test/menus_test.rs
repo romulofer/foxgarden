@@ -72,6 +72,30 @@ fn file_new_project_dialog_opens_and_cancel_closes_it() {
     assert!(!app.shows(t().new_project.heading), "Cancel must dismiss the dialog");
 }
 
+/// A build tool/language pair that can start more than one way (Gradle +
+/// Kotlin: ordinary, or multiplatform) gets a template picker; one that
+/// cannot (Maven + Java) does not.
+#[test]
+fn file_new_project_dialog_offers_the_multiplatform_template_for_gradle_kotlin_only() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+    app.menu(t().menu.file, t().menu.new_project);
+    assert!(!app.shows(t().new_project.template), "Maven + Java has a single starting point");
+
+    app.open_combo_showing("Maven");
+    app.click("Gradle");
+    assert!(!app.shows(t().new_project.template), "Gradle + Java has a single starting point");
+
+    app.open_combo_showing("Java");
+    app.click("Kotlin");
+    assert!(app.shows(t().new_project.template));
+    assert!(app.combo_shows(t().new_project.standard_template), "the ordinary project is the default");
+
+    app.open_combo_showing(t().new_project.standard_template);
+    app.click("Kotlin Multiplatform");
+    assert!(app.combo_shows("Kotlin Multiplatform"));
+    assert!(!app.combo_shows(t().new_project.standard_template));
+}
+
 /// Same regression as the Cancel test above, via the keyboard rather than a
 /// click — `show_modal`'s `escape_pressed` was equally unused before the
 /// fix.

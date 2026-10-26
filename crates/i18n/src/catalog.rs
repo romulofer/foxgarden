@@ -344,6 +344,11 @@ pub struct NewProject {
     pub java_release: &'static str,
     pub build_tool: &'static str,
     pub language: &'static str,
+    /// The label of the starting-point picker, shown when the build tool and
+    /// language have more than one.
+    pub template: &'static str,
+    /// What an extension's unnamed (ordinary) template is called there.
+    pub standard_template: &'static str,
     pub gradle_no_wrapper_hint: &'static str,
     /// Create was asked for a build tool/language pair no registered
     /// extension generates.
@@ -766,6 +771,8 @@ pub const PT_BR: Strings = Strings {
         java_release: "Versão do Java",
         build_tool: "Ferramenta de Build",
         language: "Linguagem",
+        template: "Modelo",
+        standard_template: "Padrão",
         gradle_no_wrapper_hint: "Nenhum Gradle Wrapper é gerado — use um Gradle já instalado na máquina.",
         no_scaffold_for_target: "nenhuma extensão gera esse tipo de projeto",
         create: "Criar",
@@ -1142,6 +1149,8 @@ pub const EN_US: Strings = Strings {
         java_release: "Java release",
         build_tool: "Build Tool",
         language: "Language",
+        template: "Template",
+        standard_template: "Standard",
         gradle_no_wrapper_hint: "No Gradle Wrapper is generated — use a Gradle already installed on your machine.",
         no_scaffold_for_target: "no extension scaffolds that kind of project",
         create: "Create",

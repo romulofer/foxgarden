@@ -105,11 +105,12 @@ pub enum RegisterError {
         tool_id: String,
         extension_id: String,
     },
-    /// Two scaffolds for one build tool/language pair. A wizard can only
-    /// offer the pair once, so a second contributor would never be asked.
+    /// Two scaffolds for one build tool/language/template. A wizard can only
+    /// offer each once, so a second contributor would never be asked.
     DuplicateScaffold {
         tool_id: String,
         language_id: LanguageId,
+        template_id: String,
         extension_id: String,
     },
 }
@@ -193,10 +194,12 @@ impl std::fmt::Display for RegisterError {
             Self::DuplicateScaffold {
                 tool_id,
                 language_id,
+                template_id,
                 extension_id,
             } => write!(
                 f,
-                "extension {extension_id} declares a scaffold for {tool_id}/{language_id}, which is already registered"
+                "extension {extension_id} declares a scaffold for {tool_id}/{language_id}{}, which is already registered",
+                if template_id.is_empty() { String::new() } else { format!(" ({template_id})") }
             ),
         }
     }
@@ -451,21 +454,22 @@ impl Registry {
             runtimes_seen.push(&runtime.id);
         }
 
-        let mut scaffolds_seen: Vec<(&str, &LanguageId)> = Vec::new();
+        let mut scaffolds_seen: Vec<(&str, &LanguageId, &str)> = Vec::new();
         for scaffold in &contributions.scaffolds {
-            let pair = (scaffold.build_tool_id.as_str(), &scaffold.language_id);
+            let key = (scaffold.build_tool_id.as_str(), &scaffold.language_id, scaffold.template_id.as_str());
             let already_registered = self
                 .scaffolds
                 .iter()
-                .any(|(s, _)| s.build_tool_id == pair.0 && s.language_id == *pair.1);
-            if already_registered || scaffolds_seen.contains(&pair) {
+                .any(|(s, _)| s.build_tool_id == key.0 && s.language_id == *key.1 && s.template_id == key.2);
+            if already_registered || scaffolds_seen.contains(&key) {
                 return Err(RegisterError::DuplicateScaffold {
                     tool_id: scaffold.build_tool_id.clone(),
                     language_id: scaffold.language_id.clone(),
+                    template_id: scaffold.template_id.clone(),
                     extension_id: manifest.id.clone(),
                 });
             }
-            scaffolds_seen.push(pair);
+            scaffolds_seen.push(key);
             if !known(&scaffold.language_id) {
                 return Err(RegisterError::UnknownLanguage {
                     language_id: scaffold.language_id.clone(),
@@ -754,7 +758,9 @@ impl Registry {
         let (_, idx) = self
             .scaffolds
             .iter()
-            .find(|(s, _)| s.build_tool_id == spec.build_tool_id && s.language_id == spec.language_id)?;
+            .find(|(s, _)| {
+                s.build_tool_id == spec.build_tool_id && s.language_id == spec.language_id && s.template_id == spec.template_id
+            })?;
         self.extensions[*idx].scaffold_files(spec)
     }
 

@@ -260,11 +260,19 @@ pub struct TestFailureLocation {
 /// One kind of project an extension can scaffold: a build tool and a
 /// language, together, because a scaffold is written for the pair (a Maven
 /// Kotlin project and a Gradle Kotlin one share neither their build file nor
-/// their plugin configuration).
+/// their plugin configuration), and optionally a template, for a pair that
+/// can start more than one way (a Gradle Kotlin project, or a multiplatform
+/// one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScaffoldContribution {
     pub build_tool_id: BuildToolId,
     pub language_id: crate::LanguageId,
+    /// Which of the pair's starting points this is. Empty for the pair's
+    /// ordinary project, the one the wizard offers first.
+    pub template_id: String,
+    /// What the wizard calls the template. Empty for the ordinary one, which
+    /// the wizard names itself.
+    pub template_name: String,
     /// Runtime versions a wizard offers for this target, in the order they
     /// should be listed. Empty means the target has no version to pick.
     pub runtime_versions: Vec<u32>,
@@ -278,6 +286,9 @@ pub struct ScaffoldContribution {
 pub struct ScaffoldSpec {
     pub build_tool_id: BuildToolId,
     pub language_id: crate::LanguageId,
+    /// The [`ScaffoldContribution::template_id`] asked for; empty for the
+    /// pair's ordinary project.
+    pub template_id: String,
     /// Reverse-DNS-ish grouping — `com.example`. May be empty.
     pub namespace: String,
     pub name: String,

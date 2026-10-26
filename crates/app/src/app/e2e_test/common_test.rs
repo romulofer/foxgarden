@@ -284,6 +284,19 @@ impl E2e {
         self.settle();
     }
 
+    /// Opens the combo box whose selected text is `value` (egui exposes a
+    /// combo box's selection as its value, and gives an unlabelled one no
+    /// label). Panics if none, or two, show it.
+    pub(super) fn open_combo_showing(&mut self, value: &str) {
+        self.harness.get_by_value(value).click();
+        self.settle();
+    }
+
+    /// Whether a combo box currently shows `value` as its selection.
+    pub(super) fn combo_shows(&self, value: &str) -> bool {
+        self.harness.query_by_value(value).is_some()
+    }
+
     pub(super) fn shows(&self, label: &str) -> bool {
         self.harness.query_all_by_label(label).next().is_some()
     }

@@ -128,15 +128,18 @@ impl Extension for FileTypesExtension {
     }
 }
 
-/// Every extension this build ships with, in registration order.
-fn shipped() -> Vec<Box<dyn Extension>> {
-    vec![Box::new(SpringExtension), Box::new(KmpExtension), Box::new(FileTypesExtension)]
+/// Every extension this build ships with, in registration order. The
+/// multiplatform one scaffolds on the JVM extension's Gradle and Kotlin, so it
+/// drops its template when that one is among `disabled`.
+fn shipped(disabled: &[String]) -> Vec<Box<dyn Extension>> {
+    let kmp = if disabled.iter().any(|id| id == "spring") { KmpExtension::without_scaffold() } else { KmpExtension::new() };
+    vec![Box::new(SpringExtension), Box::new(kmp), Box::new(FileTypesExtension)]
 }
 
 /// What each shipped extension brings, whether or not it is enabled: the
 /// extension manager lists these.
 pub fn shipped_extensions() -> Vec<ExtensionInfo> {
-    shipped().iter().map(|e| ExtensionInfo::of(e.as_ref())).collect()
+    shipped(&[]).iter().map(|e| ExtensionInfo::of(e.as_ref())).collect()
 }
 
 /// Registers everything this build ships with, except the extensions whose
@@ -147,7 +150,7 @@ pub fn shipped_extensions() -> Vec<ExtensionInfo> {
 /// registration path that aborts the process on a bad contribution is not
 /// one that can ever be pointed at somebody else's extension.
 pub fn register_builtins(registry: &mut Registry, disabled: &[String]) -> Result<(), RegisterError> {
-    for extension in shipped() {
+    for extension in shipped(disabled) {
         if !disabled.contains(&extension.manifest().id) {
             registry.register(extension)?;
         }

@@ -25,6 +25,8 @@ struct ScaffoldOption {
     build_tool_name: String,
     language_id: String,
     language_name: String,
+    template_id: String,
+    template_name: String,
     runtime_versions: Vec<u32>,
 }
 
@@ -48,6 +50,8 @@ fn scaffold_options(languages: &Registry) -> Vec<ScaffoldOption> {
                 .language(&scaffold.language_id)
                 .map(|language| language.language.display_name.clone())
                 .unwrap_or_else(|| scaffold.language_id.clone()),
+            template_id: scaffold.template_id.clone(),
+            template_name: scaffold.template_name.clone(),
             runtime_versions: scaffold.runtime_versions.clone(),
         })
         .collect()
@@ -70,6 +74,8 @@ pub struct NewProjectWizardState {
     runtime_version: u32,
     build_tool_id: String,
     language_id: String,
+    /// Empty for the build tool/language pair's ordinary project.
+    template_id: String,
     last_error: Option<String>,
     picker: crate::folder_picker::FolderPicker,
 }
@@ -91,11 +97,13 @@ impl NewProjectWizardState {
                 self.runtime_version = option.runtime_versions.last().copied().unwrap_or_default();
                 self.build_tool_id = option.build_tool_id;
                 self.language_id = option.language_id;
+                self.template_id = option.template_id;
             }
             None => {
                 self.runtime_version = 0;
                 self.build_tool_id.clear();
                 self.language_id.clear();
+                self.template_id.clear();
             }
         }
     }
@@ -110,18 +118,33 @@ impl NewProjectWizardState {
     }
 }
 
-/// The runtime versions the chosen build tool/language pair offers — empty
-/// when it offers none, or when no target matches the pair at all.
+/// The runtime versions the chosen build tool/language/template offers —
+/// empty when it offers none, or when no target matches at all.
 fn runtime_versions_for<'a>(
-    scaffolds: impl IntoIterator<Item = (&'a str, &'a str, &'a [u32])>,
+    scaffolds: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a [u32])>,
     build_tool_id: &str,
     language_id: &str,
+    template_id: &str,
 ) -> Vec<u32> {
     scaffolds
         .into_iter()
-        .find(|(tool, language, _)| *tool == build_tool_id && *language == language_id)
-        .map(|(_, _, versions)| versions.to_vec())
+        .find(|(tool, language, template, _)| *tool == build_tool_id && *language == language_id && *template == template_id)
+        .map(|(_, _, _, versions)| versions.to_vec())
         .unwrap_or_default()
+}
+
+/// The templates the chosen build tool/language pair starts from, as `(id,
+/// name)` in registration order. An unnamed one (the ordinary project) takes
+/// `standard_name`.
+fn templates_for(options: &[ScaffoldOption], build_tool_id: &str, language_id: &str, standard_name: &str) -> Vec<(String, String)> {
+    options
+        .iter()
+        .filter(|o| o.build_tool_id == build_tool_id && o.language_id == language_id)
+        .map(|o| {
+            let name = if o.template_name.is_empty() { standard_name } else { &o.template_name };
+            (o.template_id.clone(), name.to_string())
+        })
+        .collect()
 }
 
 /// Keeps `runtime_version` one that `offered` actually lists: the newest
@@ -208,12 +231,17 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
     {
         state.language_id = id.clone();
     }
+    let templates = templates_for(&options, &state.build_tool_id, &state.language_id, t().new_project.standard_template);
+    if !templates.iter().any(|(id, _)| *id == state.template_id)
+        && let Some((id, _)) = templates.first()
+    {
+        state.template_id = id.clone();
+    }
     let runtime_versions = runtime_versions_for(
-        options
-            .iter()
-            .map(|o| (o.build_tool_id.as_str(), o.language_id.as_str(), o.runtime_versions.as_slice())),
+        options.iter().map(|o| (o.build_tool_id.as_str(), o.language_id.as_str(), o.template_id.as_str(), o.runtime_versions.as_slice())),
         &state.build_tool_id,
         &state.language_id,
+        &state.template_id,
     );
     sync_runtime_version(state, &runtime_versions);
 
@@ -284,6 +312,20 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                         }
                     });
                 ui.end_row();
+
+                if templates.len() > 1 {
+                    ui.label(t().new_project.template);
+                    egui::ComboBox::new("new_project_template", "")
+                        .selected_text(
+                            templates.iter().find(|(id, _)| *id == state.template_id).map(|(_, n)| n.clone()).unwrap_or_default(),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (id, name) in &templates {
+                                ui.selectable_value(&mut state.template_id, id.clone(), name);
+                            }
+                        });
+                    ui.end_row();
+                }
             });
 
         // Still keyed by tool id: the hint is localized here, and an
@@ -362,9 +404,10 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
             .languages
             .scaffolds()
             .into_iter()
-            .map(|s| (s.build_tool_id.as_str(), s.language_id.as_str(), s.runtime_versions.as_slice())),
+            .map(|s| (s.build_tool_id.as_str(), s.language_id.as_str(), s.template_id.as_str(), s.runtime_versions.as_slice())),
         &state.build_tool_id,
         &state.language_id,
+        &state.template_id,
     );
     let runtime_version = offered.contains(&state.runtime_version).then_some(state.runtime_version);
     let spec = ScaffoldSpec {
@@ -373,6 +416,7 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
         runtime_version,
         build_tool_id: state.build_tool_id.clone(),
         language_id: state.language_id.clone(),
+        template_id: state.template_id.clone(),
     };
     let files = editor_state
         .languages
