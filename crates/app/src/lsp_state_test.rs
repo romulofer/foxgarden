@@ -1143,6 +1143,84 @@ fn jedi_is_started_from_the_projects_virtual_environment_without_any_setting() {
     assert!(labels.iter().any(|l| l == "path"), "no `path` among {labels:?}");
 }
 
+/// The labels of a completion reply, either shape of it.
+fn completion_labels(value: serde_json::Value) -> Vec<String> {
+    serde_json::from_value::<lsp_types::CompletionResponse>(value)
+        .map(|response| match response {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        })
+        .expect("a well-formed completion response")
+        .into_iter()
+        .map(|item| item.label)
+        .collect()
+}
+
+/// A scratch project whose `node_modules` is the one at
+/// `FOXGARDEN_NODE_MODULES` (an npm install of `typescript`,
+/// `typescript-language-server` and `vscode-langservers-extracted`), so the
+/// servers are found the way a real project finds them: with no setting.
+#[cfg(unix)]
+fn project_with_node_modules() -> tempfile::TempDir {
+    let node_modules = PathBuf::from(std::env::var("FOXGARDEN_NODE_MODULES").expect("FOXGARDEN_NODE_MODULES names an npm install's node_modules"));
+    let dir = test_support::tempdir();
+    std::os::unix::fs::symlink(node_modules, dir.path().join("node_modules")).unwrap();
+    dir
+}
+
+/// Types `text` at the end of `source` in `file`, waits for the server named
+/// `server_id`, and returns the completion labels there.
+#[cfg(unix)]
+fn completions_after_typing(dir: &Path, file: &str, source: &str, server_id: &str) -> Vec<String> {
+    let path = test_support::write_file(dir, file, source);
+    let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
+    let settings = LspSettings {
+        enabled: true,
+        ..Default::default()
+    };
+    let mut state = LspState::default();
+    sync_until_ready(&mut state, server_id, &settings, dir, &mut doc, test_support::languages());
+    let rx = state
+        .request_completion(&mut doc, source.len())
+        .expect("a Ready session accepts the request");
+    let value = rx.recv_timeout(Duration::from_secs(60)).expect("the server answers").expect("the server replies");
+    completion_labels(value)
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs an npm install of the web language servers; set FOXGARDEN_NODE_MODULES and run with --ignored"]
+fn typescript_completion_against_a_real_server_returns_the_receivers_own_members() {
+    let dir = project_with_node_modules();
+    let labels = completions_after_typing(
+        dir.path(),
+        "app.ts",
+        "class Greeter {\n  hello() { return 1; }\n  goodbye() { return 2; }\n}\nconst g = new Greeter();\ng.",
+        "typescript-language-server",
+    );
+    for member in ["hello", "goodbye"] {
+        assert!(labels.iter().any(|l| l == member), "no `{member}` among {labels:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs an npm install of the web language servers; set FOXGARDEN_NODE_MODULES and run with --ignored"]
+fn css_completion_against_a_real_server_offers_properties() {
+    let dir = project_with_node_modules();
+    let labels = completions_after_typing(dir.path(), "style.css", ".card {\n  col", "vscode-css-language-server");
+    assert!(labels.iter().any(|l| l == "color"), "no `color` among {} completions", labels.len());
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs an npm install of the web language servers; set FOXGARDEN_NODE_MODULES and run with --ignored"]
+fn html_completion_against_a_real_server_offers_tags() {
+    let dir = project_with_node_modules();
+    let labels = completions_after_typing(dir.path(), "index.html", "<html>\n  <bo", "vscode-html-language-server");
+    assert!(labels.iter().any(|l| l == "body"), "no `body` among {} completions", labels.len());
+}
+
 /// One past the end of an LF-terminated line is not a column on that line;
 /// it used to resolve to the start of the next one.
 #[test]

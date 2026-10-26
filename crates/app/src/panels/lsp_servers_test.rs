@@ -85,7 +85,10 @@ fn opening_lists_the_servers_that_are_found_rather_than_installed() {
     let mut state = LspServersState::default();
     state.open_settings(&LspSettings::default(), None, test_support::languages());
     let ids: Vec<&str> = state.provided.iter().map(|p| p.server.id.as_str()).collect();
-    assert_eq!(ids, ["jedi"]);
+    assert_eq!(
+        ids,
+        ["jedi", "typescript-language-server", "vscode-html-language-server", "vscode-css-language-server"]
+    );
     assert_eq!(state.provided[0].default_binary, PathBuf::from("jedi-language-server"));
 }
 

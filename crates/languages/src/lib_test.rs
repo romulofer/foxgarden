@@ -117,7 +117,7 @@ fn jvm_languages_and_file_types_come_from_different_extensions() {
     assert_eq!(registry.language("java").unwrap().extension_id, "spring");
     assert_eq!(registry.language("kotlin").unwrap().extension_id, "spring");
     assert_eq!(registry.language("python").unwrap().extension_id, "python");
-    for web in ["javascript", "typescript", "tsx", "html", "css"] {
+    for web in ["javascript", "typescript", "typescriptreact", "html", "css"] {
         assert_eq!(registry.language(web).unwrap().extension_id, "ts", "{web}");
     }
     assert_eq!(registry.language("yaml").unwrap().extension_id, "file-types");

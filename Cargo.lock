@@ -1412,6 +1412,7 @@ name = "foxgarden-ts"
 version = "0.1.0"
 dependencies = [
  "fg-extension",
+ "serde_json",
  "tree-sitter",
  "tree-sitter-css",
  "tree-sitter-html",
