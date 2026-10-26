@@ -49,19 +49,20 @@ enum IncomingMessage {
         id: i64,
         result: Result<Value, ResponseError>,
     },
-    /// A notification (or request) the server itself originated — Phase 1
-    /// has no handler for any of these yet (`textDocument/
-    /// publishDiagnostics` is Phase 2's job), just the plumbing to not
-    /// drop them on the floor unrouted. `id` is `Some` only for a real
+    /// A notification (or request) the server itself originated — handed on
+    /// to the session's poll (`textDocument/publishDiagnostics`, `language/
+    /// status`, ...) so none is dropped unrouted. `id` is `Some` only for a real
     /// server-to-client *request* (e.g. `workspace/configuration`,
     /// `client/registerCapability`) — those carry both `method` and `id`
     /// and need a reply or a real server can stall waiting for one; a
     /// bare notification (`textDocument/publishDiagnostics`) has no `id`
-    /// at all and expects none back.
+    /// at all and expects none back. A JSON-RPC id is a number or a string, and
+    /// the reply must carry it back as it came: TypeScript 7's server
+    /// asks with `"ts1"` and answers nothing else until it gets a reply.
     ServerMessage {
         method: String,
         params: Value,
-        id: Option<i64>,
+        id: Option<Value>,
     },
     /// Neither of the above (missing both `id`+result/error and `method`)
     /// — not a message shape this client expects; dropped by the reader
@@ -77,7 +78,7 @@ fn classify(value: Value) -> IncomingMessage {
     };
     if let Some(method) = obj.get("method").and_then(Value::as_str) {
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
-        let id = obj.get("id").and_then(Value::as_i64);
+        let id = obj.get("id").filter(|id| id.is_number() || id.is_string()).cloned();
         return IncomingMessage::ServerMessage {
             method: method.to_string(),
             params,

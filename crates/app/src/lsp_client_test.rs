@@ -130,9 +130,52 @@ fn classify_reports_a_server_to_client_request_with_its_id() {
         IncomingMessage::ServerMessage {
             method: "workspace/configuration".to_string(),
             params: serde_json::json!({"items": []}),
-            id: Some(9),
+            id: Some(serde_json::json!(9)),
         }
     );
+}
+
+/// A JSON-RPC id may be a string. TypeScript 7's native server asks the client
+/// to `client/registerCapability` with id `"ts1"` and then holds every other
+/// answer until it gets a reply, so a string id read as "no id" (a bare
+/// notification, never answered) left completion waiting forever.
+#[test]
+fn classify_keeps_a_string_id_so_the_reply_can_carry_it_back() {
+    let value = serde_json::json!({"jsonrpc": "2.0", "id": "ts1", "method": "client/registerCapability", "params": {"registrations": []}});
+    assert_eq!(
+        classify(value),
+        IncomingMessage::ServerMessage {
+            method: "client/registerCapability".to_string(),
+            params: serde_json::json!({"registrations": []}),
+            id: Some(serde_json::json!("ts1")),
+        }
+    );
+}
+
+#[test]
+fn a_string_id_request_from_the_server_is_answered_with_that_id() {
+    // A fake server that asks something with a string id, then keeps everything
+    // the client writes in a file.
+    let ask = r#"{"jsonrpc":"2.0","id":"ts1","method":"client/registerCapability","params":{"registrations":[]}}"#;
+    let dir = test_support::tempdir();
+    let received = dir.path().join("received");
+    let script = format!(
+        "printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{ask}'; cat > '{}'",
+        ask.len(),
+        received.display()
+    );
+    let _session = LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None, Arc::new(|| {})).expect("sh is always available");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let text = std::fs::read_to_string(&received).unwrap_or_default();
+        if text.contains(r#""id":"ts1""#) {
+            assert!(text.contains(r#""result":null"#), "the reply is a bare null result: {text}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the client never answered the string-id request: {text:?}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[test]
