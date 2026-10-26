@@ -49,7 +49,7 @@ all wired into one fast UI. 🚀
 | 🔀 **Git built in** | Diff gutter, inline blame, stage / commit / push, per-hunk staging |
 | 🔎 **Static analysis** | Checkstyle, PMD & SpotBugs — installable from inside the app |
 | ✂️ **Split-pane editing** | Two editor panes side by side over one project, each with its own tabs |
-| 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; and JavaScript / TypeScript / HTML / CSS are each an extension behind a small API — the editor core is language-agnostic |
+| 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; JavaScript / TypeScript / HTML / CSS; and Svelte are each an extension behind a small API — the editor core is language-agnostic |
 | ⚡ **Fast by design** | Incremental parsing, per-tab galley cache, near-release-speed debug builds |
 
 <details>
@@ -78,10 +78,11 @@ all wired into one fast UI. 🚀
 
 **Look & feel**
 - Light/dark themes, selectable font, zen mode (`F11`), sticky scroll
-- Syntax highlighting for Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, YAML, XML, `.properties`, Dockerfile
+- Syntax highlighting for Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, Svelte, YAML, XML, `.properties`, Dockerfile
 - Bilingual UI (English / Português)
 
 **Beyond the JVM**
+- **Svelte**: highlighting (with `<script>`, `<style>` and `{...}` highlighted as the languages they hold), folding, `svelte-language-server`
 - **Python**: highlighting, folding, Jedi language server, run a file from its `if __name__ == "__main__":` marker and pytest tests, with the project's `.venv`
 - **JavaScript / TypeScript / TSX / HTML / CSS**: highlighting, folding, language servers (TypeScript 6 through `typescript-language-server`, TypeScript 7 through its own native `tsc --lsp`)
 - Servers for these languages are not bundled: Settings ▸ Language Servers… shows where each was found, or that it was not
@@ -105,7 +106,7 @@ templates, doc comments, debugger support and static-analysis tools — is
 **contributed** by an extension through the small `fg-extension` API
 (`crates/extension`). Java, Kotlin, Spring, Maven, Gradle, Checkstyle, PMD and
 SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compiled in today, as are `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) and `ts-foxgarden` (JavaScript, TypeScript, HTML and CSS). Others load from outside the binary: put a directory
+compiled in today, as are `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) and `ts-foxgarden` (JavaScript, TypeScript, HTML and CSS) and `svelte-foxgarden` (Svelte). Others load from outside the binary: put a directory
 holding an `extension.toml` under `~/.local/share/foxgarden/extensions/` (the
 platform's data directory on other systems). It can contribute languages,
 grammars, file icons, snippets, keywords, language servers the editor starts,
@@ -127,6 +128,7 @@ git clone https://github.com/legendaryredfox/spring-foxgarden.git
 git clone https://github.com/legendaryredfox/kmp-foxgarden.git
 git clone https://github.com/romulofer/python-foxgarden.git
 git clone https://github.com/romulofer/ts-foxgarden.git
+git clone https://github.com/romulofer/svelte-foxgarden.git
 cd foxgarden
 
 # run (debug builds are near-release speed for dependencies)
@@ -144,7 +146,8 @@ a handful of small JVM-specific UI details have not moved across yet.
 Kotlin Multiplatform support is the `kmp-foxgarden` extension, expected at
 `../kmp-foxgarden` (the status bar names a multiplatform file's source set).
 Python is `python-foxgarden` and JavaScript, TypeScript, HTML and CSS are
-`ts-foxgarden`, expected at `../python-foxgarden` and `../ts-foxgarden`. Java language features
+`ts-foxgarden`, expected at `../python-foxgarden` and `../ts-foxgarden`; Svelte is
+`svelte-foxgarden` at `../svelte-foxgarden`. Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
@@ -158,6 +161,7 @@ pip install jedi-language-server                                   # Python
 npm install --save-dev typescript typescript-language-server       # JS/TS on TypeScript 6 or older
 npm install --save-dev typescript                                  # TypeScript 7: its native tsc is the server
 npm install --save-dev vscode-langservers-extracted                # HTML and CSS
+npm install --save-dev svelte-language-server typescript           # Svelte
 ```
 
 TypeScript 7 ships no `tsserver.js`, so `typescript-language-server` cannot run on
@@ -204,7 +208,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 | 🔀 **Git embutido** | Marcadores de diff, blame na linha, stage / commit / push, stage por hunk |
 | 🔎 **Análise estática** | Checkstyle, PMD & SpotBugs — instaláveis de dentro do app |
 | ✂️ **Edição em painéis** | Dois painéis lado a lado sobre um projeto, cada um com suas abas |
-| 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; e JavaScript / TypeScript / HTML / CSS são, cada um, uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
+| 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; JavaScript / TypeScript / HTML / CSS; e Svelte são, cada um, uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
 | ⚡ **Rápido por projeto** | Parsing incremental, cache de galley por aba, builds de debug em velocidade quase-release |
 
 <details>
@@ -233,10 +237,11 @@ git e análise estática, tudo em uma UI rápida. 🚀
 
 **Aparência**
 - Temas claro/escuro, fonte selecionável, modo zen (`F11`), rolagem fixa
-- Realce de sintaxe para Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, YAML, XML, `.properties`, Dockerfile
+- Realce de sintaxe para Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, Svelte, YAML, XML, `.properties`, Dockerfile
 - Interface bilíngue (English / Português)
 
 **Além da JVM**
+- **Svelte**: realce (com `<script>`, `<style>` e `{...}` realçados como a linguagem que contêm), dobramento, `svelte-language-server`
 - **Python**: realce, dobramento, language server Jedi, executar um arquivo pelo marcador de `if __name__ == "__main__":` e testes pytest, com o `.venv` do projeto
 - **JavaScript / TypeScript / TSX / HTML / CSS**: realce, dobramento, language servers (TypeScript 6 via `typescript-language-server`, TypeScript 7 pelo próprio `tsc --lsp` nativo)
 - Os servidores dessas linguagens não vêm embutidos: Configurações ▸ Language Servers… mostra onde cada um foi encontrado, ou que não foi
@@ -261,7 +266,7 @@ depurador e ferramentas de análise estática — é **contribuído** por uma
 extensão através da pequena API `fg-extension` (`crates/extension`). Java,
 Kotlin, Spring, Maven, Gradle, Checkstyle, PMD e SpotBugs são uma única
 extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compilada junto por enquanto, assim como `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) e `ts-foxgarden` (JavaScript, TypeScript, HTML e CSS). Outras carregam de fora do binário: coloque um
+compilada junto por enquanto, assim como `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) e `ts-foxgarden` (JavaScript, TypeScript, HTML e CSS) e `svelte-foxgarden` (Svelte). Outras carregam de fora do binário: coloque um
 diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
 diretório de dados da plataforma em outros sistemas). Ele pode contribuir
 linguagens, gramáticas, ícones, snippets, palavras-chave, language servers que
@@ -301,7 +306,8 @@ pequenos detalhes de interface específicos da JVM ainda não foram movidos.
 O suporte a Kotlin Multiplatform é a extensão `kmp-foxgarden`, esperada em
 `../kmp-foxgarden` (a barra de status mostra o source set de um arquivo multiplataforma).
 Python é o `python-foxgarden` e JavaScript, TypeScript, HTML e CSS são o
-`ts-foxgarden`, esperados em `../python-foxgarden` e `../ts-foxgarden`. Recursos de Java exigem
+`ts-foxgarden`, esperados em `../python-foxgarden` e `../ts-foxgarden`; Svelte é o
+`svelte-foxgarden`, em `../svelte-foxgarden`. Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.
@@ -316,6 +322,7 @@ pip install jedi-language-server                                   # Python
 npm install --save-dev typescript typescript-language-server       # JS/TS no TypeScript 6 ou anterior
 npm install --save-dev typescript                                  # TypeScript 7: o tsc nativo é o servidor
 npm install --save-dev vscode-langservers-extracted                # HTML e CSS
+npm install --save-dev svelte-language-server typescript           # Svelte
 ```
 
 O TypeScript 7 não traz `tsserver.js`, então o `typescript-language-server` não
