@@ -368,10 +368,30 @@ pub struct Contributions {
     pub source_root_dir_names: Vec<String>,
     /// The glyph the project tree and tabs draw beside a language's files.
     pub file_icons: Vec<FileIcon>,
+    /// Where one language's files hold text in another (a `<script>` in a
+    /// Svelte or HTML file).
+    pub injections: Vec<InjectionContribution>,
     /// Language-server command names whose first argument is a
     /// `WorkspaceEdit` for the client to apply (what jdtls sends for
     /// "Organize imports" in place of a `CodeAction` with an `edit`).
     pub workspace_edit_commands: Vec<String>,
+}
+
+/// Where a language's files embed other languages, as a tree-sitter query over
+/// the language's own grammar.
+///
+/// A pattern captures the embedded text as `@injection.content` and names the
+/// language it is written in with `(#set! injection.language "css")`, where
+/// the name is a registered language id. A pattern may test the surrounding
+/// nodes with the usual predicates (`#eq?`, `#any-of?`). Of several patterns
+/// that capture the same text, the last wins, so a general pattern goes first
+/// and the specific ones after it. A name nobody registered injects nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectionContribution {
+    /// The language whose files hold the embedded text — the one the query is
+    /// written against.
+    pub language_id: LanguageId,
+    pub query: String,
 }
 
 /// The icon drawn beside the files of one language.

@@ -1,13 +1,13 @@
 //! Which extensions this build ships with, and the one place that knows
 //! it (`PLAN.md` Track 24 Phases 2 and 3).
 //!
-//! Five extensions, and they no longer sit side by side in this file: the
+//! Six extensions, and they no longer sit side by side in this file: the
 //! JVM half is `foxgarden-spring`, a separate project under
 //! `../spring-foxgarden` that reaches the editor only through
 //! `fg-extension`, `foxgarden-kmp` (`../kmp-foxgarden`) adds Kotlin
 //! Multiplatform on top, `foxgarden-python` (`../python-foxgarden`) brings
 //! Python, `foxgarden-ts` (`../ts-foxgarden`) brings JavaScript, TypeScript,
-//! HTML and CSS, and `file-types` below is general file-type support
+//! HTML and CSS, `foxgarden-svelte` (`../svelte-foxgarden`) brings Svelte, and `file-types` below is general file-type support
 //! with nothing to do with the JVM. That split is the whole point of the
 //! track — a YAML file is not a JVM concept, and someone running this
 //! editor on a project with no JVM in it should still get YAML.
@@ -24,6 +24,7 @@ use fg_extension::{
 
 pub use foxgarden_kmp::KmpExtension;
 pub use foxgarden_python::PythonExtension;
+pub use foxgarden_svelte::SvelteExtension;
 pub use foxgarden_ts::TsExtension;
 pub use foxgarden_spring::SpringExtension;
 
@@ -137,7 +138,7 @@ impl Extension for FileTypesExtension {
 /// drops its template when that one is among `disabled`.
 fn shipped(disabled: &[String]) -> Vec<Box<dyn Extension>> {
     let kmp = if disabled.iter().any(|id| id == "spring") { KmpExtension::without_scaffold() } else { KmpExtension::new() };
-    vec![Box::new(SpringExtension), Box::new(kmp), Box::new(PythonExtension), Box::new(TsExtension), Box::new(FileTypesExtension)]
+    vec![Box::new(SpringExtension), Box::new(kmp), Box::new(PythonExtension), Box::new(TsExtension), Box::new(SvelteExtension), Box::new(FileTypesExtension)]
 }
 
 /// What each shipped extension brings, whether or not it is enabled: the

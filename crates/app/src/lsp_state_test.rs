@@ -1221,6 +1221,15 @@ fn html_completion_against_a_real_server_offers_tags() {
     assert!(labels.iter().any(|l| l == "body"), "no `body` among {} completions", labels.len());
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "needs an npm install of svelte-language-server and typescript; set FOXGARDEN_NODE_MODULES and run with --ignored"]
+fn svelte_completion_against_a_real_server_offers_html_tags() {
+    let dir = project_with_node_modules();
+    let labels = completions_after_typing(dir.path(), "App.svelte", "<script>\n  let n = 0;\n</script>\n\n<di", "svelte-language-server");
+    assert!(labels.iter().any(|l| l == "div"), "no `div` among {} completions", labels.len());
+}
+
 /// One past the end of an LF-terminated line is not a column on that line;
 /// it used to resolve to the start of the next one.
 #[test]

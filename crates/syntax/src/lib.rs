@@ -29,6 +29,7 @@ pub use fg_extension::{
     CodeGeneration, Counterpart, DocStub, FileDiagnostic, ProblemSeverity, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunKind, RunTarget, Snippet, TypeDeclaration, TypeFields, TypeMember,
 };
 pub use grammars::{GrammarError, install as install_grammars};
+mod injection;
 pub use highlight::{Scope, highlight_spans, highlight_spans_in};
 pub use http_routes::http_routes;
 pub use imports::{annotation_candidates, doc_stub, import_edit};

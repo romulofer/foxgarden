@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
     ArchiveKind, DebugAdapterContribution, DebugLaunch, LatestVersionSource, RunSpec, RuntimeContribution, RuntimeInstall, ServerInstall,
-    GrammarSource, LanguageContribution, NodeKinds, ProblemSeverity,
+    GrammarSource, InjectionContribution, LanguageContribution, NodeKinds, ProblemSeverity,
 };
 
 /// A stand-in extension built entirely from its contribution set —
@@ -1427,4 +1427,30 @@ fn capability_names_round_trip() {
         assert_eq!(Capability::from_id(capability.id()), Some(capability));
     }
     assert_eq!(Capability::from_id("root"), None);
+}
+
+#[test]
+fn a_language_keeps_the_injection_query_its_extension_gave_it() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeExtension::new("elvish", || Contributions {
+            languages: vec![lang("elvish", &["elv"])],
+            injections: vec![InjectionContribution { language_id: "elvish".to_string(), query: "(a) @injection.content".to_string() }],
+            ..Default::default()
+        })))
+        .unwrap();
+    assert_eq!(registry.injection_query("elvish"), Some("(a) @injection.content"));
+    assert_eq!(registry.injection_query("westron"), None);
+}
+
+#[test]
+fn an_injection_for_a_language_nobody_registered_is_refused() {
+    let mut registry = Registry::new();
+    assert_eq!(
+        registry.register(Box::new(FakeExtension::new("orphan", || Contributions {
+            injections: vec![InjectionContribution { language_id: "westron".to_string(), query: String::new() }],
+            ..Default::default()
+        }))),
+        Err(RegisterError::UnknownLanguage { language_id: "westron".to_string(), extension_id: "orphan".to_string() })
+    );
 }

@@ -87,7 +87,13 @@ fn opening_lists_the_servers_that_are_found_rather_than_installed() {
     let ids: Vec<&str> = state.provided.iter().map(|p| p.server.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["jedi", "typescript-language-server", "vscode-html-language-server", "vscode-css-language-server"]
+        [
+            "jedi",
+            "typescript-language-server",
+            "vscode-html-language-server",
+            "vscode-css-language-server",
+            "svelte-language-server"
+        ]
     );
     assert_eq!(state.provided[0].default_binary, PathBuf::from("jedi-language-server"));
 }

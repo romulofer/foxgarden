@@ -112,6 +112,9 @@ fn supported_abi() -> RangeInclusive<usize> {
 struct Installed {
     ts: tree_sitter::Language,
     highlight_query: Option<&'static str>,
+    /// Where the language's files hold text in other languages; leaked like the
+    /// highlight query.
+    injection_query: Option<&'static str>,
     /// Leaked for the same reason the query source is, and bounded the same
     /// way: the editor reads these as `&'static [&'static str]` on hot
     /// paths (sticky scroll and folding run per frame), and what is
@@ -197,6 +200,9 @@ fn install_into(installed: &mut HashMap<Language, Installed>, registry: &Registr
                             .highlight_query
                             .clone()
                             .map(|q| &*Box::leak(q.into_boxed_str())),
+                        injection_query: registry
+                            .injection_query(&grammar.language_id)
+                            .map(|q| &*Box::leak(q.to_string().into_boxed_str())),
                         node_kinds: leak_kinds(&grammar.node_kinds),
                     },
                 );
@@ -282,6 +288,19 @@ pub fn ts_language(language: Language) -> Option<tree_sitter::Language> {
 pub fn highlights_query_source(language: Language) -> Option<&'static str> {
     let installed = store().read().expect("grammar store lock");
     installed.get(&language)?.highlight_query
+}
+
+/// The injection query source for `language`, or `None` when its files embed
+/// no other language.
+pub fn injection_query_source(language: Language) -> Option<&'static str> {
+    let installed = store().read().expect("grammar store lock");
+    installed.get(&language)?.injection_query
+}
+
+/// The installed language called `id`, if any.
+pub(crate) fn installed_language(id: &str) -> Option<Language> {
+    let installed = store().read().expect("grammar store lock");
+    installed.keys().copied().find(|language| language.id() == id)
 }
 
 /// Which node kinds mean what for `language`, as its grammar declared.

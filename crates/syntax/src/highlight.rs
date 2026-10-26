@@ -168,6 +168,23 @@ pub fn highlight_spans_in(
     language: Language,
     byte_range: Range<usize>,
 ) -> Vec<(Range<usize>, Scope)> {
+    host_spans(tree, source, language, byte_range, 0)
+}
+
+/// `highlight_spans_in` at embedding depth `depth`: the language's own
+/// highlights, with the languages it embeds highlighted in place.
+pub(crate) fn host_spans(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    byte_range: Range<usize>,
+    depth: usize,
+) -> Vec<(Range<usize>, Scope)> {
+    let spans = own_spans(tree, source, language, byte_range.clone());
+    crate::injection::with_embedded(spans, tree, source, language, byte_range, depth)
+}
+
+fn own_spans(tree: &Tree, source: &str, language: Language, byte_range: Range<usize>) -> Vec<(Range<usize>, Scope)> {
     // No grammar or no query for this language means nothing to highlight
     // — the file still opens and edits, it just paints plain, exactly as
     // an unrecognized file always has.

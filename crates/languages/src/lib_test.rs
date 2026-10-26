@@ -5,8 +5,8 @@ use std::path::Path;
 fn every_shipped_extension_registers_without_conflicting() {
     let registry = builtin_registry();
     let ids: Vec<&str> = registry.extensions().iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(ids, vec!["spring", "kmp", "python", "ts", "file-types"]);
-    assert_eq!(registry.languages().count(), 12);
+    assert_eq!(ids, vec!["spring", "kmp", "python", "ts", "svelte", "file-types"]);
+    assert_eq!(registry.languages().count(), 13);
 }
 
 /// The six languages the closed `fg_core::Language` enum used to hardcode,
@@ -120,6 +120,7 @@ fn jvm_languages_and_file_types_come_from_different_extensions() {
     for web in ["javascript", "typescript", "typescriptreact", "html", "css"] {
         assert_eq!(registry.language(web).unwrap().extension_id, "ts", "{web}");
     }
+    assert_eq!(registry.language("svelte").unwrap().extension_id, "svelte");
     assert_eq!(registry.language("yaml").unwrap().extension_id, "file-types");
     assert_eq!(registry.language("dockerfile").unwrap().extension_id, "file-types");
 }
@@ -127,7 +128,7 @@ fn jvm_languages_and_file_types_come_from_different_extensions() {
 #[test]
 fn shipped_extensions_are_listed_in_registration_order() {
     let ids: Vec<String> = shipped_extensions().into_iter().map(|e| e.manifest.id).collect();
-    assert_eq!(ids, vec!["spring", "kmp", "python", "ts", "file-types"]);
+    assert_eq!(ids, vec!["spring", "kmp", "python", "ts", "svelte", "file-types"]);
 }
 
 #[test]
@@ -135,16 +136,16 @@ fn a_disabled_extension_contributes_nothing_but_stays_listed() {
     let disabled = vec!["spring".to_string()];
     let registry = builtin_registry_without(&disabled);
     let ids: Vec<&str> = registry.extensions().iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(ids, vec!["kmp", "python", "ts", "file-types"]);
+    assert_eq!(ids, vec!["kmp", "python", "ts", "svelte", "file-types"]);
     assert!(registry.language_for_extension("java").is_none());
     assert!(registry.language_for_extension("yaml").is_some());
-    assert_eq!(shipped_extensions().len(), 5);
+    assert_eq!(shipped_extensions().len(), 6);
 }
 
 #[test]
 fn an_unknown_disabled_id_is_ignored() {
     let registry = builtin_registry_without(&["nope".to_string()]);
-    assert_eq!(registry.extensions().len(), 5);
+    assert_eq!(registry.extensions().len(), 6);
 }
 
 #[test]

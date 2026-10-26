@@ -22,6 +22,7 @@ foxgarden-spring = { path = "../../../spring-foxgarden/crates/spring" }
 foxgarden-kmp = { path = "../../../kmp-foxgarden/crates/kmp" }
 foxgarden-python = { path = "../../../python-foxgarden/crates/python" }
 foxgarden-ts = { path = "../../../ts-foxgarden/crates/ts" }
+foxgarden-svelte = { path = "../../../svelte-foxgarden/crates/svelte" }
 tree-sitter-yaml = "0.7.2"
 tree-sitter-xml = "0.7.0"
 tree-sitter-properties = "0.3.0"

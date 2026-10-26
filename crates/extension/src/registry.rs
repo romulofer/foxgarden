@@ -275,6 +275,8 @@ pub struct Registry {
     source_root_dir_names: Vec<String>,
     /// Icon glyph per language; the first registration wins.
     file_icons: HashMap<LanguageId, char>,
+    /// Injection query per language; the first registration wins.
+    injections: HashMap<LanguageId, String>,
     /// Client-applied workspace-edit command names, each once.
     workspace_edit_commands: Vec<String>,
     index: LanguageIndex,
@@ -491,6 +493,7 @@ impl Registry {
             .iter()
             .chain(contributions.debug_adapters.iter().map(|adapter| &adapter.language_id))
             .chain(contributions.file_icons.iter().map(|icon| &icon.language_id))
+            .chain(contributions.injections.iter().map(|injection| &injection.language_id))
         {
             if !known(language_id) {
                 return Err(RegisterError::UnknownLanguage {
@@ -560,6 +563,9 @@ impl Registry {
         }
         for icon in contributions.file_icons {
             self.file_icons.entry(icon.language_id).or_insert(icon.glyph);
+        }
+        for injection in contributions.injections {
+            self.injections.entry(injection.language_id).or_insert(injection.query);
         }
         for name in contributions.source_root_dir_names {
             if !self.source_root_dir_names.contains(&name) {
@@ -664,6 +670,11 @@ impl Registry {
     /// The icon glyph for `language_id`, if an extension gave it one.
     pub fn file_icon(&self, language_id: &str) -> Option<char> {
         self.file_icons.get(language_id).copied()
+    }
+
+    /// The query saying where `language_id`'s files embed other languages.
+    pub fn injection_query(&self, language_id: &str) -> Option<&str> {
+        self.injections.get(language_id).map(String::as_str)
     }
 
     /// Directory names any extension treats as a source root.

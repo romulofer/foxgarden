@@ -473,3 +473,67 @@ fn highlight_spans_in_returns_only_captures_inside_the_requested_range() {
         );
     }
 }
+
+fn scopes_over(spans: &[(std::ops::Range<usize>, Scope)], source: &str, needle: &str) -> Vec<Scope> {
+    let start = source.find(needle).unwrap();
+    let end = start + needle.len();
+    spans
+        .iter()
+        .filter(|(range, _)| range.start <= start && range.end >= end)
+        .map(|(_, scope)| *scope)
+        .collect()
+}
+
+const SVELTE_COMPONENT: &str = "<script lang=\"ts\">\n  let count: number = 0;\n</script>\n\n<button class=\"big\" on:click={() => count++}>{count}</button>\n\n<style>\n  button { color: red; }\n</style>\n";
+
+#[test]
+fn a_svelte_scripts_typescript_and_styles_css_are_highlighted_as_such() {
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(SVELTE_COMPONENT);
+    let spans = highlight_spans(tree, SVELTE_COMPONENT, svelte);
+
+    // TypeScript inside `<script lang="ts">`: the type annotation is a type.
+    assert!(scopes_over(&spans, SVELTE_COMPONENT, "number").contains(&Scope::Type), "{spans:?}");
+    // CSS inside `<style>`.
+    assert!(scopes_over(&spans, SVELTE_COMPONENT, "color").contains(&Scope::Property), "{spans:?}");
+    // The component's own markup is still the host language's.
+    assert!(scopes_over(&spans, SVELTE_COMPONENT, "button").contains(&Scope::Tag), "{spans:?}");
+}
+
+#[test]
+fn a_script_without_a_lang_attribute_is_javascript_and_a_svelte_expression_too() {
+    let source = "<script>\n  const total = 1;\n</script>\n\n<p>{items.map((item) => item.name)}</p>\n";
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, svelte);
+
+    assert!(scopes_over(&spans, source, "const").contains(&Scope::Keyword), "{spans:?}");
+    assert!(scopes_over(&spans, source, "map").contains(&Scope::Function) || scopes_over(&spans, source, "map").contains(&Scope::Property), "{spans:?}");
+}
+
+#[test]
+fn an_html_pages_script_and_style_are_highlighted() {
+    let source = "<html>\n<style>\n  p { color: red; }\n</style>\n<script>\n  function greet() { return \"hi\"; }\n</script>\n</html>\n";
+    let html = Language::new("html");
+    let mut parser = parser(html);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, html);
+
+    assert!(scopes_over(&spans, source, "color").contains(&Scope::Property), "{spans:?}");
+    assert!(scopes_over(&spans, source, "function").contains(&Scope::Keyword), "{spans:?}");
+    assert!(scopes_over(&spans, source, "\"hi\"").contains(&Scope::String), "{spans:?}");
+}
+
+#[test]
+fn only_embedded_text_in_the_requested_window_is_highlighted() {
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(SVELTE_COMPONENT);
+    let style_start = SVELTE_COMPONENT.find("<style>").unwrap();
+    let spans = highlight_spans_in(tree, SVELTE_COMPONENT, svelte, style_start..SVELTE_COMPONENT.len());
+
+    assert!(scopes_over(&spans, SVELTE_COMPONENT, "color").contains(&Scope::Property));
+    assert!(spans.iter().all(|(range, _)| range.end > style_start), "a span from before the window: {spans:?}");
+}
