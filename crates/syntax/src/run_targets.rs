@@ -34,17 +34,17 @@ pub struct RunMarker {
 /// Every runnable entry point in `source`, in source order — the lines the
 /// editor's run gutter marks.
 ///
-/// `file_stem` is the file's name without its extension, which some
-/// toolchains need to name what a file compiles into. An extension that
+/// `file` is the file's path, which some toolchains need to name what a file
+/// compiles into or to run it. An extension that
 /// does not own `language` contributes nothing, so a language nobody claims
 /// simply has no run markers, exactly as before.
-pub fn main_entries(tree: &Tree, source: &str, language: Language, file_stem: &str) -> Vec<RunMarker> {
+pub fn main_entries(tree: &Tree, source: &str, language: Language, file: &std::path::Path) -> Vec<RunMarker> {
     crate::providers::providers()
         .extensions
         .iter()
         .flat_map(|extension| {
             extension
-                .run_targets(language.id(), tree, source, file_stem)
+                .run_targets(language.id(), tree, source, file)
                 .into_iter()
                 .map(|target| RunMarker {
                     extension_id: extension.id.clone(),

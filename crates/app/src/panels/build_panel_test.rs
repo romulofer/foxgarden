@@ -159,3 +159,41 @@ fn a_kotlin_backtick_name_keeps_its_spaces_in_the_filter() {
     assert!(matches_filter(&case("com.example.CalcTest", "subtracts two"), filter));
     assert!(matches_filter(&case("com.example.CalcTest", "subtracts two()"), filter));
 }
+
+/// A Python project has nothing to compile, so a run launches the file at once
+/// with the project's own interpreter. A stand-in `.venv/bin/python` echoes
+/// what it was asked to run.
+#[cfg(unix)]
+#[test]
+fn a_run_with_no_compile_step_launches_the_file_through_the_projects_interpreter() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = test_support::tempdir();
+    let root = dir.path().to_path_buf();
+    test_support::write_file(&root, "pyproject.toml", "[project]\nname = \"demo\"\n");
+    test_support::write_file(&root, "app.py", "print('hi')\n");
+    let python = test_support::write_file(&root, ".venv/bin/python", "#!/bin/sh\necho \"interpreter ran $@\"\n");
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let registry = test_support::languages();
+    let tool = registry.detect_build_tool(&root).expect("a Python project");
+    let config = RunConfig {
+        main_class: root.join("app.py").display().to_string(),
+        program_args: "--fast".to_string(),
+        ..RunConfig::default()
+    };
+
+    let mut state = BuildState::default();
+    state.start_run(&root, &tool, config).unwrap();
+    assert!(state.is_run_running() || state.last_success.is_some());
+    while state.running() {
+        state.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    state.poll();
+
+    let expected = format!("interpreter ran {} --fast", root.join("app.py").display());
+    let texts: Vec<&str> = state.rows.iter().map(|r| r.text.as_str()).collect();
+    assert!(texts.contains(&expected.as_str()), "{texts:?}");
+    assert_eq!(state.last_success, Some(true));
+}

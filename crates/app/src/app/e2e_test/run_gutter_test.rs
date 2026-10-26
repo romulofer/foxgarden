@@ -75,3 +75,34 @@ fn clicking_a_test_marker_reaches_the_real_test_path() {
         "the click must reach the build-tool lookup the test run starts from"
     );
 }
+
+const PYTHON_SCRIPT: &str = "def main():\n    print(\"hi\")\n\n\nif __name__ == \"__main__\":\n    main()\n";
+
+#[test]
+fn a_python_file_with_a_main_guard_gets_a_run_marker_naming_the_file() {
+    let mut app = E2e::launch(&[("tool.py", PYTHON_SCRIPT)]);
+    app.click_tree("tool.py");
+
+    assert!(app.shows(&msg::run_main_class("tool.py")), "the ▶ names the file it would run");
+}
+
+#[test]
+fn a_python_file_without_a_main_guard_gets_no_marker() {
+    let mut app = E2e::launch(&[("lib.py", "def helper():\n    return 1\n")]);
+    app.click_tree("lib.py");
+
+    assert!(!app.shows(&msg::run_main_class("lib.py")), "nothing to run from a module with no guard");
+}
+
+#[test]
+fn clicking_a_python_marker_outside_a_python_project_reports_no_build_tool() {
+    let mut app = E2e::launch(&[("tool.py", PYTHON_SCRIPT)]);
+    app.click_tree("tool.py");
+
+    app.click(&msg::run_main_class("tool.py"));
+
+    assert!(
+        app.shows(t().errors.no_build_tool_detected),
+        "a folder with no pyproject.toml, requirements.txt or main.py is not a Python project"
+    );
+}

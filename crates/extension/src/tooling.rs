@@ -518,9 +518,9 @@ impl ExtensionHandle {
         language_id: &str,
         tree: &tree_sitter::Tree,
         source: &str,
-        file_stem: &str,
+        file: &Path,
     ) -> Vec<RunTarget> {
-        self.extension.run_targets(language_id, tree, source, file_stem)
+        self.extension.run_targets(language_id, tree, source, file)
     }
 
     /// Every HTTP route declared in an already-parsed file.

@@ -339,17 +339,12 @@ fn main_entries_for(
         return cached.entries;
     }
 
-    // The file stem is what a Kotlin top-level `main` compiles into
-    // (`Main.kt` -> `MainKt`), so it has to come from the document's own
-    // path rather than anything in the text.
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    // The path, not the text, says what a file compiles into (a Kotlin
+    // top-level `main` in `Main.kt` is `MainKt`) and what to run.
     let entries = parser
         .and_then(|p| {
             p.tree()
-                .map(|tree| syntax::main_entries(tree, source, p.language(), &stem))
+                .map(|tree| syntax::main_entries(tree, source, p.language(), path))
         })
         .unwrap_or_default();
     let entries = Arc::new(entries);

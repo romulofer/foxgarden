@@ -1,3 +1,4 @@
+use std::path::Path;
 use fg_core::Language;
 use fg_extension::{
     Contributions, Extension, ExtensionManifest, LanguageContribution, Registry, RunKind, RunTarget, CURRENT_SCHEMA_VERSION,
@@ -40,7 +41,7 @@ impl Extension for FakeRunner {
         language_id: &str,
         tree: &tree_sitter::Tree,
         _source: &str,
-        file_stem: &str,
+        file: &std::path::Path,
     ) -> Vec<RunTarget> {
         if language_id != "forge" {
             return Vec::new();
@@ -51,7 +52,7 @@ impl Extension for FakeRunner {
             .map(|node| RunTarget {
                 line: node.start_position().row,
                 kind: RunKind::Main,
-                entry_point: format!("{language_id}:{file_stem}"),
+                entry_point: format!("{language_id}:{}", file.file_stem().unwrap().to_string_lossy()),
                 label: node.kind().to_string(),
             })
             .collect()
@@ -78,7 +79,7 @@ fn the_owning_extension_is_what_finds_a_files_entry_points() {
     let source = "public class App { public static void main(String[] args) { } }\n";
     let tree = java_tree(source);
 
-    let entries = main_entries(&tree, source, Language::Java, "App");
+    let entries = main_entries(&tree, source, Language::Java, Path::new("App.java"));
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].target.entry_point, "App");
     assert_eq!(entries[0].target.label, "App");
@@ -93,13 +94,13 @@ fn an_extensions_own_language_gets_whatever_entry_points_it_reports() {
     let tree = java_tree(source);
     install(&registry_with_fake_runner());
 
-    let invented = main_entries(&tree, source, Language::new("forge"), "App");
+    let invented = main_entries(&tree, source, Language::new("forge"), Path::new("App.forge"));
     assert_eq!(invented.len(), 1, "{invented:?}");
     assert_eq!(invented[0].target.entry_point, "forge:App");
     assert_eq!(invented[0].target.label, "class_declaration");
     assert_eq!(&*invented[0].extension_id, "runner", "a marker names who reported it");
 
-    let java = main_entries(&tree, source, Language::Java, "App");
+    let java = main_entries(&tree, source, Language::Java, Path::new("App.java"));
     assert_eq!(java[0].target.entry_point, "App", "the shipped analysis still answers");
     assert_eq!(&*java[0].extension_id, "spring");
 }
@@ -108,7 +109,7 @@ fn an_extensions_own_language_gets_whatever_entry_points_it_reports() {
 fn a_language_no_extension_claims_has_no_run_markers() {
     let source = "key: value\n";
     let tree = java_tree(source);
-    assert!(main_entries(&tree, source, Language::new("khuzdul"), "notes").is_empty());
+    assert!(main_entries(&tree, source, Language::new("khuzdul"), Path::new("notes.kh")).is_empty());
 }
 
 /// Every app instance installs its registry at startup, and several share
@@ -121,5 +122,5 @@ fn installing_the_same_extensions_twice_reports_each_entry_point_once() {
     install(&fg_languages::builtin_registry());
     install(&fg_languages::builtin_registry());
 
-    assert_eq!(main_entries(&tree, source, Language::Java, "App").len(), 1);
+    assert_eq!(main_entries(&tree, source, Language::Java, Path::new("App.java")).len(), 1);
 }

@@ -652,15 +652,15 @@ pub trait Extension: Send + Sync {
     ///
     /// Takes the tree rather than only the text on purpose: this is asked
     /// again on every edit to a file, and re-parsing it here would put a
-    /// second full parse on the keystroke path. `file_stem` is the file's
-    /// name without its extension, which some toolchains need (a JVM
-    /// top-level function compiles into a class named after the *file*).
+    /// second full parse on the keystroke path. `file` is the file's path,
+    /// which some toolchains need: a JVM top-level function compiles into a
+    /// class named after the *file*, and a script is run by its path.
     fn run_targets(
         &self,
         _language_id: &str,
         _tree: &tree_sitter::Tree,
         _source: &str,
-        _file_stem: &str,
+        _file: &Path,
     ) -> Vec<RunTarget> {
         Vec::new()
     }

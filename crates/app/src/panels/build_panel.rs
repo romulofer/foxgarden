@@ -276,8 +276,20 @@ impl BuildState {
     /// behavior, and matching Track 22's own inter-phase framing (Run
     /// "reusing `RunConfig`" on top of the same Build this phase already
     /// established).
+    ///
+    /// A tool with nothing to compile (an interpreter's) launches at once.
     pub fn start_run(&mut self, project_root: &Path, tool: &BuildToolHandle, config: RunConfig) -> std::io::Result<()> {
         self.reset();
+        if tool.command(project_root, fg_core::BuildTask::Compile).is_none() {
+            let spec = tool
+                .run_command(project_root, &config.to_run_spec())
+                .unwrap_or_else(|| Err(format!("{} cannot launch a program", tool.display_name)))
+                .map_err(std::io::Error::other)?;
+            self.output_tool = Some(tool.clone());
+            self.spawn_process(spec.to_command())?;
+            self.stage = Some(Stage::RunLaunched);
+            return Ok(());
+        }
         self.spawn_task(project_root, tool, fg_core::BuildTask::Compile)?;
         self.stage = Some(Stage::RunCompiling {
             project_root: project_root.to_path_buf(),
