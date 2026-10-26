@@ -186,6 +186,7 @@ impl LspState {
                 runtime_home: settings.runtime_home_for(&server.id).to_string(),
                 java_release,
                 jdk_runtimes: jdk_runtimes.clone(),
+                project_root: project_root.map(Path::to_path_buf),
             };
             let config = desired_config(server, settings, project_root, needed, registry, ctx);
             let slot = self.servers.entry(server.id.clone()).or_default();
@@ -624,7 +625,10 @@ fn desired_config(
     if !settings.enabled || !needed {
         return None;
     }
-    if ctx.configured_binary.trim().is_empty() {
+    // A server with no configured path starts from the `binary_name` it
+    // declares, looked up on `PATH`; one that declares none (the JVM ones, which
+    // are installed) waits for a path.
+    if ctx.configured_binary.trim().is_empty() && server.binary_name.is_empty() {
         return None;
     }
     let root = root?;

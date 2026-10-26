@@ -313,6 +313,9 @@ pub struct ServerStartContext {
     /// Every JDK found on this machine, for servers that need to tell the
     /// language server which runtimes are available.
     pub jdk_runtimes: Vec<JdkRuntime>,
+    /// The open project's root, for a server that is found in, or configured
+    /// from, the project itself (a Python virtual environment, say).
+    pub project_root: Option<PathBuf>,
 }
 
 /// How an extension says to actually start one of its servers, computed from

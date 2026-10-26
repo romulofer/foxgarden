@@ -137,7 +137,14 @@ fn desired_config_requires_opt_in_root_language_and_binary() {
         configured_binary: String::new(),
         ..Default::default()
     };
-    assert!(desired_config(&server, &settings, Some(root), true, &registry, ctx_empty).is_none());
+    assert!(desired_config(&server, &settings, Some(root), true, &registry, ctx_empty.clone()).is_none());
+
+    // ...unless the server declares a binary of its own to look up on `PATH`.
+    let declared = LanguageServerContribution {
+        binary_name: "jdtls-on-path".to_string(),
+        ..server
+    };
+    assert!(desired_config(&declared, &settings, Some(root), true, &registry, ctx_empty).is_some());
 }
 
 /// The project's declared release travels through `restart_key`, so a
@@ -1035,6 +1042,105 @@ fn kotlin_completion_against_a_real_server_returns_the_receivers_own_members() {
             labels.len()
         );
     }
+}
+
+/// Drives `sync` until the session of server `server_id` is `Ready`, with the
+/// same hard-failure stance as `sync_until_kotlin_ready`.
+fn sync_until_ready(state: &mut LspState, server_id: &str, settings: &LspSettings, root: &Path, doc: &mut Document, registry: &fg_extension::Registry) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !state.servers.get(server_id).is_some_and(|s| matches!(s, Slot::Ready { .. })) {
+        let errors = state.sync(settings, Some(root), std::slice::from_mut(doc), registry, &noop_waker());
+        assert!(errors.is_empty(), "language server lifecycle errors: {errors:?}");
+        assert!(Instant::now() < deadline, "{server_id} never finished its handshake");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The Python extension's Jedi server answers a completion on a class instance
+/// with the class's own members. `#[ignore]`d: needs `jedi-language-server`
+/// (`pip install jedi-language-server`); point `FOXGARDEN_JEDI_LANGUAGE_SERVER`
+/// at it and run `cargo test -p foxgarden --bin foxgarden -- --ignored jedi`.
+#[test]
+#[ignore = "needs jedi-language-server; set FOXGARDEN_JEDI_LANGUAGE_SERVER and run with --ignored"]
+fn jedi_completion_against_a_real_server_returns_the_receivers_own_members() {
+    let binary = std::env::var("FOXGARDEN_JEDI_LANGUAGE_SERVER").expect("FOXGARDEN_JEDI_LANGUAGE_SERVER names the server");
+    let before_dot = "class Greeter:\n    def hello(self):\n        return 1\n\n    def goodbye(self):\n        return 2\n\n\ng = Greeter()\ng\n";
+    let dir = test_support::tempdir();
+    let path = test_support::write_file(dir.path(), "app.py", before_dot);
+    let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
+    let settings = LspSettings {
+        enabled: true,
+        ..Default::default()
+    }
+    .with_binary("jedi", &binary);
+
+    let mut state = LspState::default();
+    sync_until_ready(&mut state, "jedi", &settings, dir.path(), &mut doc, test_support::languages());
+
+    let typed = before_dot.replacen("\ng\n", "\ng.\n", 1);
+    doc.buffer.replace(ropey::Rope::from_str(&typed));
+    doc.lsp_version += 1;
+    doc.lsp_sync_pending = true;
+    let anchor = typed.rfind("g.").expect("the fixture contains the receiver") + "g.".len();
+
+    let rx = state
+        .request_completion(&mut doc, anchor)
+        .expect("a Ready Python session should accept the request");
+    let value = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the server answers the completion request")
+        .expect("the server replied successfully");
+    let labels: Vec<String> = serde_json::from_value::<lsp_types::CompletionResponse>(value)
+        .map(|response| match response {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        })
+        .expect("a well-formed completion response")
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    for member in ["hello", "goodbye"] {
+        assert!(labels.iter().any(|l| l == member), "no `{member}` among {labels:?}");
+    }
+}
+
+/// With no path configured, the server is found in the project's own virtual
+/// environment and handed that environment's interpreter, and the handshake
+/// still completes. `#[ignore]`d like the test above: it links the server
+/// named by `FOXGARDEN_JEDI_LANGUAGE_SERVER` and its interpreter into a
+/// `.venv` of a scratch project.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs jedi-language-server; set FOXGARDEN_JEDI_LANGUAGE_SERVER and run with --ignored"]
+fn jedi_is_started_from_the_projects_virtual_environment_without_any_setting() {
+    let server = PathBuf::from(std::env::var("FOXGARDEN_JEDI_LANGUAGE_SERVER").expect("FOXGARDEN_JEDI_LANGUAGE_SERVER names the server"));
+    let dir = test_support::tempdir();
+    let bin = dir.path().join(".venv/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(&server, bin.join("jedi-language-server")).unwrap();
+    std::os::unix::fs::symlink(server.with_file_name("python"), bin.join("python")).unwrap();
+    let path = test_support::write_file(dir.path(), "app.py", "import os\nos.pa\n");
+    let mut doc = Document::open(path, test_support::languages()).expect("open the fixture");
+    let settings = LspSettings {
+        enabled: true,
+        ..Default::default()
+    };
+
+    let mut state = LspState::default();
+    sync_until_ready(&mut state, "jedi", &settings, dir.path(), &mut doc, test_support::languages());
+    let anchor = "import os\nos.pa".len();
+    let rx = state.request_completion(&mut doc, anchor).expect("a Ready Python session accepts the request");
+    let value = rx.recv_timeout(Duration::from_secs(30)).expect("answers").expect("replies");
+    let labels: Vec<String> = serde_json::from_value::<lsp_types::CompletionResponse>(value)
+        .map(|response| match response {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        })
+        .expect("a well-formed completion response")
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert!(labels.iter().any(|l| l == "path"), "no `path` among {labels:?}");
 }
 
 /// One past the end of an LF-terminated line is not a column on that line;

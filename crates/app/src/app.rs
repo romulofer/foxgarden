@@ -1130,12 +1130,14 @@ fn restore_settings(
     }
     for server in languages.language_servers() {
         let keys = lsp_server_keys(&server.id);
-        let (binary, installed_version) = lsp_settings.fields_for(&server.id);
-        if let Some(path) = storage.get_string(&keys.binary) {
-            *binary = path;
-        }
-        if let Some(version) = storage.get_string(&keys.installed_version) {
-            *installed_version = version;
+        // Only a server with something stored gets an entry: one that is found
+        // by itself (on `PATH`) has nothing to remember, and an empty entry
+        // would read back as a setting the user made.
+        let (path, version) = (storage.get_string(&keys.binary), storage.get_string(&keys.installed_version));
+        if path.as_deref().is_some_and(|p| !p.is_empty()) || version.as_deref().is_some_and(|v| !v.is_empty()) {
+            let (binary, installed_version) = lsp_settings.fields_for(&server.id);
+            *binary = path.unwrap_or_default();
+            *installed_version = version.unwrap_or_default();
         }
         if server.host_runtime.is_some()
             && let Some(home) = storage.get_string(&keys.runtime_home)
