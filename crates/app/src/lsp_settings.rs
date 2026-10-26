@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::lsp_manager::Installed;
 
 /// Settings > Language Servers… (`panels::lsp_servers`) — off by default:
-/// spawning an external JVM process per open Java/Kotlin project is real
-/// enough cost that it stays explicit opt-in, the same stance
+/// spawning an external language-server process (a JVM for Java and Kotlin) per
+/// open project is real enough cost that it stays explicit opt-in, the same stance
 /// `AutoSaveSettings` already takes. `lsp_state::LspState` checks `enabled`
 /// before every spawn, so no external process launches until the user turns
 /// this on.

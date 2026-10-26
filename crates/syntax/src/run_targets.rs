@@ -31,8 +31,8 @@ pub struct RunMarker {
     pub target: RunTarget,
 }
 
-/// Every runnable entry point in `source`, in source order — the lines the
-/// editor's run gutter marks.
+/// Every runnable entry point and test in `source`, in source order — the lines
+/// the editor's run gutter marks.
 ///
 /// `file` is the file's path, which some toolchains need to name what a file
 /// compiles into or to run it. An extension that

@@ -61,9 +61,10 @@ enum BuildEvent {
 }
 
 /// What the currently in-flight process (if any) is for. `Build` stops
-/// after that one command; `RunCompiling` chains a second `java` launch
-/// once the compile it's currently streaming succeeds, transitioning to
-/// `RunLaunched` for that second process. `Test` also stops after one
+/// after that one command; `RunCompiling` chains a second launch (`java` on
+/// the JVM) once the compile it's currently streaming succeeds, transitioning
+/// to `RunLaunched` for that second process. A tool with nothing to compile
+/// goes straight to `RunLaunched`. `Test` also stops after one
 /// command (a test task already compiles everything it needs on its own,
 /// unlike Run's separate launch) but its own `Finished` handling
 /// additionally summarizes the tool's own test report once the process exits, appending that summary (and a

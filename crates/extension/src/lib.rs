@@ -650,8 +650,8 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
-    /// Every runnable entry point in `source`, whose parse `tree` the editor
-    /// already built — in source order.
+    /// Every runnable entry point and test in `source`, whose parse `tree` the
+    /// editor already built — in source order.
     ///
     /// Takes the tree rather than only the text on purpose: this is asked
     /// again on every edit to a file, and re-parsing it here would put a

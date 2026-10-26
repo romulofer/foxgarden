@@ -5,8 +5,8 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-legendaryredfox-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/legendaryredfox)
 
 
-**A lightning-fast, native IDE for Java & Kotlin — written entirely in Rust.**
-**Uma IDE nativa e ultrarrápida para Java & Kotlin — escrita inteiramente em Rust.**
+**A lightning-fast, native IDE for Java & Kotlin — and Python and the web stack — written entirely in Rust.**
+**Uma IDE nativa e ultrarrápida para Java & Kotlin — e Python e a stack web — escrita inteiramente em Rust.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-2024-orange.svg?logo=rust)
@@ -41,14 +41,15 @@ all wired into one fast UI. 🚀
 
 | | |
 |---|---|
-| 🧠 **Language intelligence** | Diagnostics, hover, go-to-definition, find-references, rename, **quick-fix (Alt+Enter)** and peek — via jdt.ls & kotlin-language-server |
+| 🧠 **Language intelligence** | Diagnostics, hover, go-to-definition, find-references, rename, **quick-fix (Alt+Enter)** and peek — via jdt.ls & kotlin-language-server, plus Jedi (Python), `typescript-language-server` / TypeScript 7's native `tsc` (JS/TS) and the VS Code HTML and CSS servers |
+| ▶ **Run markers** | A ▶ beside a `main` runs it; beside a test class or a single `@Test` method it runs just that, through Maven or Gradle. A Python file with a main guard runs with the project's virtual environment |
 | 📦 **Build-tool aware** | Maven & Gradle classpath resolution and project Java-version detection; build / run / test from the Run menu |
 | 🐞 **Debugger** | Breakpoints, call stack, variables and stepping over the Debug Adapter Protocol |
 | 🌱 **Spring-aware** | Endpoint map, `application.properties`/`.yml` autocomplete, annotation completion with auto-import |
 | 🔀 **Git built in** | Diff gutter, inline blame, stage / commit / push, per-hunk staging |
 | 🔎 **Static analysis** | Checkstyle, PMD & SpotBugs — installable from inside the app |
 | ✂️ **Split-pane editing** | Two editor panes side by side over one project, each with its own tabs |
-| 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle are one extension behind a small API — the editor core is language-agnostic |
+| 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; and JavaScript / TypeScript / HTML / CSS are each an extension behind a small API — the editor core is language-agnostic |
 | ⚡ **Fast by design** | Incremental parsing, per-tab galley cache, near-release-speed debug builds |
 
 <details>
@@ -71,14 +72,19 @@ all wired into one fast UI. 🚀
 
 **JVM tooling**
 - LSP (jdt.ls / kotlin-language-server), Maven/Gradle awareness, DAP debugger
-- Build / run / test, code-coverage overlay, Docker run, JDK registry
+- Build / run / test, run a single test or test class from the gutter, code-coverage overlay, Docker run, JDK registry
 - New-project scaffolding (Maven or Gradle, **Java or Kotlin**)
 - Code generation: getters/setters, constructor, `toString`, `equals`/`hashCode`, `@Override`, **Javadoc / KDoc skeletons**
 
 **Look & feel**
 - Light/dark themes, selectable font, zen mode (`F11`), sticky scroll
-- Syntax highlighting for Java, Kotlin, YAML, XML, `.properties`, Dockerfile
+- Syntax highlighting for Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, YAML, XML, `.properties`, Dockerfile
 - Bilingual UI (English / Português)
+
+**Beyond the JVM**
+- **Python**: highlighting, folding, Jedi language server, run a file from its `if __name__ == "__main__":` marker with the project's `.venv`
+- **JavaScript / TypeScript / TSX / HTML / CSS**: highlighting, folding, language servers (TypeScript 6 through `typescript-language-server`, TypeScript 7 through its own native `tsc --lsp`)
+- Servers for these languages are not bundled: Settings ▸ Language Servers… shows where each was found, or that it was not
 
 </details>
 
@@ -99,7 +105,7 @@ templates, doc comments, debugger support and static-analysis tools — is
 **contributed** by an extension through the small `fg-extension` API
 (`crates/extension`). Java, Kotlin, Spring, Maven, Gradle, Checkstyle, PMD and
 SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compiled in today. Others load from outside the binary: put a directory
+compiled in today, as are `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) and `ts-foxgarden` (JavaScript, TypeScript, HTML and CSS). Others load from outside the binary: put a directory
 holding an `extension.toml` under `~/.local/share/foxgarden/extensions/` (the
 platform's data directory on other systems). It can contribute languages,
 grammars, file icons, snippets, keywords, language servers the editor starts,
@@ -115,10 +121,12 @@ next launch).
 ### 🛠️ Build & run
 
 ```bash
-# clone — the JVM and Kotlin Multiplatform support are separate projects and have to sit beside this one
+# clone — the language support is in separate projects (JVM, Kotlin Multiplatform, Python, web) that have to sit beside this one
 git clone https://github.com/romulofer/foxgarden.git
 git clone https://github.com/legendaryredfox/spring-foxgarden.git
 git clone https://github.com/legendaryredfox/kmp-foxgarden.git
+git clone https://github.com/romulofer/python-foxgarden.git
+git clone https://github.com/romulofer/ts-foxgarden.git
 cd foxgarden
 
 # run (debug builds are near-release speed for dependencies)
@@ -134,10 +142,26 @@ expects at `../spring-foxgarden`. The editor reaches it only through its
 extension API (language-server installers, debug adapters and runtimes included);
 a handful of small JVM-specific UI details have not moved across yet.
 Kotlin Multiplatform support is the `kmp-foxgarden` extension, expected at
-`../kmp-foxgarden` (the status bar names a multiplatform file's source set). Java language features
+`../kmp-foxgarden` (the status bar names a multiplatform file's source set).
+Python is `python-foxgarden` and JavaScript, TypeScript, HTML and CSS are
+`ts-foxgarden`, expected at `../python-foxgarden` and `../ts-foxgarden`. Java language features
 need a **JDK 21+** for jdt.ls to run against (any JDK can be *targeted* per
 project). Build/run and static-analysis tools are auto-detected or installable
 from inside the app.
+
+**Language servers you install yourself.** The Python and web servers are not
+bundled; FoxGarden looks for each in the project (`.venv/bin`, `node_modules/.bin`)
+and then on `PATH`, and a path set in Settings ▸ Language Servers… wins:
+
+```bash
+pip install jedi-language-server                                   # Python
+npm install --save-dev typescript typescript-language-server       # JS/TS on TypeScript 6 or older
+npm install --save-dev typescript                                  # TypeScript 7: its native tsc is the server
+npm install --save-dev vscode-langservers-extracted                # HTML and CSS
+```
+
+TypeScript 7 ships no `tsserver.js`, so `typescript-language-server` cannot run on
+it; a project on 7 only needs `typescript` installed.
 
 ### 📈 Status
 
@@ -172,14 +196,15 @@ git e análise estática, tudo em uma UI rápida. 🚀
 
 | | |
 |---|---|
-| 🧠 **Inteligência de linguagem** | Diagnósticos, hover, ir-para-definição, referências, renomear, **correção rápida (Alt+Enter)** e espiar — via jdt.ls & kotlin-language-server |
+| 🧠 **Inteligência de linguagem** | Diagnósticos, hover, ir-para-definição, referências, renomear, **correção rápida (Alt+Enter)** e espiar — via jdt.ls & kotlin-language-server, mais Jedi (Python), `typescript-language-server` / o `tsc` nativo do TypeScript 7 (JS/TS) e os servidores HTML e CSS do VS Code |
+| ▶ **Marcadores de execução** | Um ▶ ao lado de um `main` o executa; ao lado de uma classe de teste ou de um único método `@Test`, executa só aquele, via Maven ou Gradle. Um arquivo Python com guarda `__main__` roda com o ambiente virtual do projeto |
 | 📦 **Consciente do build** | Resolução de classpath Maven & Gradle e detecção da versão de Java do projeto; compilar / executar / testar pelo menu Executar |
 | 🐞 **Depurador** | Breakpoints, pilha de chamadas, variáveis e stepping via Debug Adapter Protocol |
 | 🌱 **Consciente de Spring** | Mapa de endpoints, autocomplete de `application.properties`/`.yml`, completar anotações com auto-import |
 | 🔀 **Git embutido** | Marcadores de diff, blame na linha, stage / commit / push, stage por hunk |
 | 🔎 **Análise estática** | Checkstyle, PMD & SpotBugs — instaláveis de dentro do app |
 | ✂️ **Edição em painéis** | Dois painéis lado a lado sobre um projeto, cada um com suas abas |
-| 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle são uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
+| 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; e JavaScript / TypeScript / HTML / CSS são, cada um, uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
 | ⚡ **Rápido por projeto** | Parsing incremental, cache de galley por aba, builds de debug em velocidade quase-release |
 
 <details>
@@ -202,14 +227,19 @@ git e análise estática, tudo em uma UI rápida. 🚀
 
 **Ferramental JVM**
 - LSP (jdt.ls / kotlin-language-server), consciência Maven/Gradle, depurador DAP
-- Compilar / executar / testar, cobertura de código, execução Docker, registro de JDKs
+- Compilar / executar / testar, executar um único teste ou classe de teste pelo gutter, cobertura de código, execução Docker, registro de JDKs
 - Scaffolding de novo projeto (Maven ou Gradle, **Java ou Kotlin**)
 - Geração de código: getters/setters, construtor, `toString`, `equals`/`hashCode`, `@Override`, **esqueletos de Javadoc / KDoc**
 
 **Aparência**
 - Temas claro/escuro, fonte selecionável, modo zen (`F11`), rolagem fixa
-- Realce de sintaxe para Java, Kotlin, YAML, XML, `.properties`, Dockerfile
+- Realce de sintaxe para Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, YAML, XML, `.properties`, Dockerfile
 - Interface bilíngue (English / Português)
+
+**Além da JVM**
+- **Python**: realce, dobramento, language server Jedi, executar um arquivo pelo marcador de `if __name__ == "__main__":` com o `.venv` do projeto
+- **JavaScript / TypeScript / TSX / HTML / CSS**: realce, dobramento, language servers (TypeScript 6 via `typescript-language-server`, TypeScript 7 pelo próprio `tsc --lsp` nativo)
+- Os servidores dessas linguagens não vêm embutidos: Configurações ▸ Language Servers… mostra onde cada um foi encontrado, ou que não foi
 
 </details>
 
@@ -231,7 +261,7 @@ depurador e ferramentas de análise estática — é **contribuído** por uma
 extensão através da pequena API `fg-extension` (`crates/extension`). Java,
 Kotlin, Spring, Maven, Gradle, Checkstyle, PMD e SpotBugs são uma única
 extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxgarden),
-compilada junto por enquanto. Outras carregam de fora do binário: coloque um
+compilada junto por enquanto, assim como `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) e `ts-foxgarden` (JavaScript, TypeScript, HTML e CSS). Outras carregam de fora do binário: coloque um
 diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
 diretório de dados da plataforma em outros sistemas). Ele pode contribuir
 linguagens, gramáticas, ícones, snippets, palavras-chave, language servers que
@@ -248,10 +278,12 @@ inicialização).
 ### 🛠️ Compilar & executar
 
 ```bash
-# clonar — o suporte JVM e o de Kotlin Multiplatform são projetos à parte e precisam ficar ao lado deste
+# clonar — o suporte às linguagens está em projetos à parte (JVM, Kotlin Multiplatform, Python, web) que precisam ficar ao lado deste
 git clone https://github.com/romulofer/foxgarden.git
 git clone https://github.com/legendaryredfox/spring-foxgarden.git
 git clone https://github.com/legendaryredfox/kmp-foxgarden.git
+git clone https://github.com/romulofer/python-foxgarden.git
+git clone https://github.com/romulofer/ts-foxgarden.git
 cd foxgarden
 
 # executar (builds de debug rodam dependências em velocidade quase-release)
@@ -267,10 +299,27 @@ Kotlin e Spring vem do extension `spring-foxgarden`, que o build espera em
 instaladores de language server, adaptadores de depuração e runtimes); alguns
 pequenos detalhes de interface específicos da JVM ainda não foram movidos.
 O suporte a Kotlin Multiplatform é a extensão `kmp-foxgarden`, esperada em
-`../kmp-foxgarden` (a barra de status mostra o source set de um arquivo multiplataforma). Recursos de Java exigem
+`../kmp-foxgarden` (a barra de status mostra o source set de um arquivo multiplataforma).
+Python é o `python-foxgarden` e JavaScript, TypeScript, HTML e CSS são o
+`ts-foxgarden`, esperados em `../python-foxgarden` e `../ts-foxgarden`. Recursos de Java exigem
 um **JDK 21+** para o jdt.ls rodar (qualquer JDK pode ser *alvo* por projeto). As
 ferramentas de build/run e análise estática são detectadas automaticamente ou
 instaláveis de dentro do app.
+
+**Language servers que você instala.** Os servidores de Python e da web não vêm
+embutidos; o FoxGarden procura cada um no projeto (`.venv/bin`,
+`node_modules/.bin`) e depois no `PATH`, e um caminho definido em Configurações ▸
+Language Servers… vale mais que os dois:
+
+```bash
+pip install jedi-language-server                                   # Python
+npm install --save-dev typescript typescript-language-server       # JS/TS no TypeScript 6 ou anterior
+npm install --save-dev typescript                                  # TypeScript 7: o tsc nativo é o servidor
+npm install --save-dev vscode-langservers-extracted                # HTML e CSS
+```
+
+O TypeScript 7 não traz `tsserver.js`, então o `typescript-language-server` não
+roda nele; um projeto no 7 só precisa do `typescript` instalado.
 
 ### 📈 Status
 

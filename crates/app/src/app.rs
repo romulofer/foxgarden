@@ -1151,8 +1151,8 @@ fn restore_settings(
 }
 
 /// The storage keys of one language server's settings: `lsp_<id>_binary` and
-/// friends with `-` as `_`, which spells exactly the keys the two JVM servers
-/// always used. The runtime home keeps its original `_java_home` suffix so
+/// friends with `-` as `_`, which spells exactly the keys the first two
+/// servers (the JVM ones) always used. The runtime home keeps its original `_java_home` suffix so
 /// an existing install's choice survives the move to per-server settings.
 struct LspServerKeys {
     binary: String,

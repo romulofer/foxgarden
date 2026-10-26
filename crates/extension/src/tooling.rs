@@ -306,8 +306,8 @@ pub enum RunKind {
     Test,
 }
 
-/// One runnable entry point an extension found in a file — what puts the ▶
-/// in the gutter beside a `main`.
+/// One runnable thing an extension found in a file — what puts the ▶ in the
+/// gutter beside a `main`, a test class or a single test.
 ///
 /// Found syntactically, from the tree the editor already parsed, rather than
 /// asked of a language server: a run marker has to be there the instant a

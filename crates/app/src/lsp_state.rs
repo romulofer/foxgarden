@@ -247,8 +247,8 @@ impl LspState {
     }
 
     /// Sends a `textDocument/completion` request at `byte_offset` in
-    /// `doc`, for whichever session matches `doc.language` — `None` if
-    /// that's neither Java nor Kotlin, or no session for it is `Ready`.
+    /// `doc`, for whichever session matches `doc.language` — `None` if no
+    /// server serves that language, or no session for it is `Ready`.
     ///
     /// Flushes `doc`'s own pending edit first, via `sync_one_document`
     /// (the same per-document logic `sync`'s own `sync_documents` loop
