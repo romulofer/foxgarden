@@ -448,6 +448,22 @@ msg! {
 }
 
 msg! {
+    /// Settings > Language Servers…, a server the user installs themselves: where it was found.
+    server_found_at(path: &str) {
+        pt: "Encontrado: {path}",
+        en: "Found: {path}",
+    }
+}
+
+msg! {
+    /// The same, when it was not found: `binary` is the program looked for.
+    server_not_found(binary: &str) {
+        pt: "Não encontrado: instale `{binary}` (no PATH ou no ambiente do projeto) ou informe o caminho abaixo.",
+        en: "Not found: install `{binary}` (on PATH or in the project's environment), or set its path below.",
+    }
+}
+
+msg! {
     installed_version(version: &str) {
         pt: "Instalado: {version}",
         en: "Installed: {version}",

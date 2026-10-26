@@ -193,6 +193,22 @@ fn settings_language_servers_dialog_opens() {
     app.click(t().common.close);
 }
 
+/// A server the user installs themselves still gets a row: its name, and
+/// where it was found or that it was not.
+#[test]
+fn settings_language_servers_dialog_lists_the_python_server_found_rather_than_installed() {
+    let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);
+
+    app.menu(t().menu.settings, t().menu.language_servers);
+
+    assert!(app.shows("Jedi Language Server"));
+    assert!(
+        app.shows_containing("Found:") || app.shows_containing("Not found:") || app.shows_containing("Encontrado:") || app.shows_containing("Não encontrado:"),
+        "it says whether jedi-language-server was found"
+    );
+    app.click(t().common.close);
+}
+
 #[test]
 fn view_zen_mode_hides_the_menu_bar_and_f11_brings_it_back() {
     let mut app = E2e::launch(&[("Main.java", MAIN_JAVA)]);

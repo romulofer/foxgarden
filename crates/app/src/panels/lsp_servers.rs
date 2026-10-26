@@ -13,8 +13,20 @@
 use crate::lsp_manager::{LatestVersionResult, LspManagerState};
 use crate::lsp_settings::LspSettings;
 use crate::widgets::modal::show_modal;
-use fg_extension::ServerInstallHandle;
+use std::path::{Path, PathBuf};
+
+use fg_extension::{LanguageServerContribution, ServerInstallHandle, ServerStartContext};
 use fg_i18n::{msg, t};
+
+/// A server the user installs themselves: the dialog can only say where it is
+/// found, and take a path for when it is not.
+struct ProvidedServer {
+    server: LanguageServerContribution,
+    /// What it starts from when no path is configured, as the extension
+    /// resolved it for the project open when the dialog opened: a path inside
+    /// the project's environment, or the bare name to look up on `PATH`.
+    default_binary: PathBuf,
+}
 
 /// Dialog-open flag plus the background install/update-check machinery it
 /// drives. Lives on `FoxGardenApp` (not in `MenuBarState`) for the same
@@ -45,6 +57,8 @@ pub struct LspServersState {
     /// The registry's runtime inventories, kept from `open_settings` so the
     /// "Detect" button can scan on a background thread without the registry.
     runtimes: Vec<fg_extension::RuntimeHandle>,
+    /// Every server without an installer that declares a program to look for.
+    provided: Vec<ProvidedServer>,
 }
 
 impl LspServersState {
@@ -62,6 +76,22 @@ impl LspServersState {
         self.settings_open = true;
         self.runtimes = languages.runtimes();
         self.installers = languages.server_installs();
+        let context = ServerStartContext {
+            project_root: project_root.map(Path::to_path_buf),
+            ..ServerStartContext::default()
+        };
+        self.provided = languages
+            .language_servers()
+            .iter()
+            .filter(|server| server.install.is_none() && !server.binary_name.is_empty())
+            .map(|server| ProvidedServer {
+                default_binary: languages
+                    .resolve_server_start(&server.id, &context)
+                    .and_then(Result::ok)
+                    .map_or_else(|| PathBuf::from(&server.binary_name), |started| started.binary),
+                server: server.clone(),
+            })
+            .collect();
         for installer in &self.installers {
             if let Some(host) = &installer.server.host_runtime
                 && settings.runtime_home_for(installer.id()).trim().is_empty()
@@ -109,9 +139,9 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
         ui.heading(t().lsp.heading);
         ui.label(
             egui::RichText::new(
-                "Semantic diagnostics, completion and hover docs for Java and Kotlin come from an external \
-                 language server. Install one below, or point a field at a server you already have. Nothing \
-                 launches until Enabled is on and a matching file is open.",
+                "Semantic diagnostics, completion and hover docs come from external language servers. Install \
+                 one below, or point a field at a server you already have. Nothing launches until Enabled is \
+                 on and a matching file is open.",
             )
             .weak(),
         );
@@ -122,6 +152,9 @@ pub fn show_settings(ui: &egui::Ui, state: &mut LspServersState, settings: &mut 
 
         for server in state.installers.clone() {
             show_server_section(ui, state, settings, &server);
+        }
+        for provided in &state.provided {
+            show_provided_section(ui, settings, provided);
         }
 
         ui.separator();
@@ -276,6 +309,44 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
             ui.label(egui::RichText::new(&host.none_found).weak());
         }
     }
+}
+
+/// A server found rather than installed: its name, where it was found (or that
+/// it was not), and the path field that overrides the search.
+fn show_provided_section(ui: &mut egui::Ui, settings: &mut LspSettings, provided: &ProvidedServer) {
+    ui.add_space(8.0);
+    ui.strong(&provided.server.display_name);
+    let configured = settings.binary_for(&provided.server.id).trim().to_string();
+    let wanted = if configured.is_empty() { provided.default_binary.clone() } else { PathBuf::from(&configured) };
+    match find_program(&wanted) {
+        Some(found) => ui.label(msg::server_found_at(&found.display().to_string())),
+        None => ui.label(egui::RichText::new(msg::server_not_found(&provided.server.binary_name)).weak()),
+    };
+    ui.horizontal(|ui| {
+        ui.label(t().lsp.binary);
+        ui.add(
+            egui::TextEdit::singleline(settings.fields_for(&provided.server.id).0)
+                .id_salt(("lsp_binary_path", &provided.server.id))
+                .hint_text(&provided.server.binary_name)
+                .desired_width(380.0),
+        );
+    });
+}
+
+/// The file `program` names: itself when it is a path to one, else the first
+/// match on `PATH` (with the executable suffixes Windows adds).
+fn find_program(program: &Path) -> Option<PathBuf> {
+    find_program_in(program, std::env::var_os("PATH").as_deref())
+}
+
+fn find_program_in(program: &Path, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    if program.components().count() > 1 || program.is_absolute() {
+        return program.is_file().then(|| program.to_path_buf());
+    }
+    let suffixes: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
+    std::env::split_paths(path_var?)
+        .flat_map(|dir| suffixes.iter().map(move |suffix| dir.join(format!("{}{suffix}", program.display()))))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
