@@ -1,6 +1,6 @@
-//! The run gutter (IntelliJ's ▶ beside a `main`): a click-to-run triangle
-//! on every line that declares a JVM entry point, as found by
-//! `syntax::main_entries`.
+//! The run gutter (IntelliJ's ▶ beside a `main` or a test): a click-to-run
+//! triangle on every line that declares a runnable entry point or test, as
+//! found by `syntax::main_entries`.
 //!
 //! Built the way `folding::show_fold_gutter` is rather than the way
 //! `breakpoint_gutter` is: only a row that actually *has* an entry point
@@ -10,7 +10,7 @@
 
 use egui::Sense;
 use fg_i18n::msg;
-use syntax::RunMarker;
+use syntax::{RunKind, RunMarker};
 
 use super::text_area::TextAreaOutput;
 use crate::style::theme;
@@ -55,7 +55,11 @@ pub(super) fn show_run_gutter(
         let y = out.content_origin.y + out.row_offsets[i] as f32 * out.row_height;
         let rect = egui::Rect::from_min_size(egui::pos2(gutter_left, y), egui::vec2(RUN_GUTTER_WIDTH, out.row_height));
         let id = egui::Id::new(("run_marker", id_salt, *logical));
-        let label = msg::run_main_class(&entry.target.label);
+        let label = match entry.target.kind {
+            RunKind::Main => msg::run_main_class(&entry.target.label),
+            RunKind::Test if entry.target.entry_point.contains('#') => msg::run_test(&entry.target.label),
+            RunKind::Test => msg::run_test_class(&entry.target.label),
+        };
         let response = ui
             .interact(rect, id, Sense::click())
             .on_hover_text(label.clone())

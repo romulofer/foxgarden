@@ -50,3 +50,28 @@ fn clicking_the_marker_reaches_the_real_run_path() {
         "the click must reach the same Run machinery the menu uses, which is what reports this"
     );
 }
+
+const WITH_TESTS: &str = "class CalcTest {\n    @Test\n    void adds() {}\n\n    void helper() {}\n}\n";
+
+#[test]
+fn a_test_class_and_each_test_method_get_a_marker() {
+    let mut app = E2e::launch(&[("CalcTest.java", WITH_TESTS)]);
+    app.click_tree("CalcTest.java");
+
+    assert!(app.shows(&msg::run_test_class("CalcTest")), "the class marker runs every test in it");
+    assert!(app.shows(&msg::run_test("adds")), "the method marker runs that one test");
+    assert!(!app.shows(&msg::run_test("helper")), "a method with no test annotation has none");
+}
+
+#[test]
+fn clicking_a_test_marker_reaches_the_real_test_path() {
+    let mut app = E2e::launch(&[("CalcTest.java", WITH_TESTS)]);
+    app.click_tree("CalcTest.java");
+
+    app.click(&msg::run_test("adds"));
+
+    assert!(
+        app.shows(t().errors.no_build_tool_detected),
+        "the click must reach the build-tool lookup the test run starts from"
+    );
+}

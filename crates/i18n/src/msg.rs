@@ -322,6 +322,22 @@ msg! {
 }
 
 msg! {
+    /// The run gutter's ▶ tooltip on a test class: runs every test in it.
+    run_test_class(class: &str) {
+        pt: "Executar os testes de {class}",
+        en: "Run tests in {class}",
+    }
+}
+
+msg! {
+    /// The run gutter's ▶ tooltip on one test method.
+    run_test(name: &str) {
+        pt: "Executar o teste {name}",
+        en: "Run test {name}",
+    }
+}
+
+msg! {
     /// The run gutter's ▶ tooltip (`widgets::editor::run_gutter`) —
     /// `class` is the entry point's own simple class name, not its
     /// package-qualified one, which is too long to read in a tooltip.

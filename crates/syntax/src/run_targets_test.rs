@@ -1,6 +1,6 @@
 use fg_core::Language;
 use fg_extension::{
-    Contributions, Extension, ExtensionManifest, LanguageContribution, Registry, RunTarget, CURRENT_SCHEMA_VERSION,
+    Contributions, Extension, ExtensionManifest, LanguageContribution, Registry, RunKind, RunTarget, CURRENT_SCHEMA_VERSION,
 };
 
 use super::main_entries;
@@ -50,6 +50,7 @@ impl Extension for FakeRunner {
             .children(&mut cursor)
             .map(|node| RunTarget {
                 line: node.start_position().row,
+                kind: RunKind::Main,
                 entry_point: format!("{language_id}:{file_stem}"),
                 label: node.kind().to_string(),
             })

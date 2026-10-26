@@ -79,6 +79,10 @@ enum Stage {
     Test {
         project_root: PathBuf,
         tool: BuildToolHandle,
+        /// The class or `class#method` a narrowed run was asked for. The
+        /// build tool's report directory can still hold the results of earlier
+        /// runs of other classes, so the summary keeps only what matches.
+        filter: Option<String>,
     },
     /// An extension's own task that runs tests (`ProjectTaskHandle`): on exit
     /// the extension reads the reports the task named, the way `Test` asks the
@@ -173,6 +177,22 @@ pub struct BuildState {
     /// output but no build tool, and `Stage` would then need the field on
     /// every arm.
     output_tool: Option<BuildToolHandle>,
+}
+
+/// Whether `case` is one a run narrowed to `filter` (`class` or
+/// `class#method`) covers: the class itself or a nested one, and for a method
+/// the test of that name, with the argument list or index a parameterized or
+/// repeated test appends.
+fn matches_filter(case: &fg_core::TestCase, filter: &str) -> bool {
+    let (class, method) = match filter.split_once('#') {
+        Some((class, method)) => (class, Some(method)),
+        None => (filter, None),
+    };
+    let in_class = case.classname == class || case.classname.strip_prefix(class).is_some_and(|rest| rest.starts_with('$'));
+    in_class
+        && method.is_none_or(|method| {
+            case.name.strip_prefix(method).is_some_and(|rest| rest.is_empty() || rest.starts_with(['(', '[', ' ']))
+        })
 }
 
 impl BuildState {
@@ -280,6 +300,25 @@ impl BuildState {
         self.stage = Some(Stage::Test {
             project_root: project_root.to_path_buf(),
             tool: tool.clone(),
+            filter: None,
+        });
+        Ok(())
+    }
+
+    /// Starts a Test narrowed to `filter` (a class, or `class#method`), through
+    /// the tool's own filtered test command. Fails when the tool cannot narrow
+    /// a test run.
+    pub fn start_filtered_test(&mut self, project_root: &Path, tool: &BuildToolHandle, filter: &str) -> std::io::Result<()> {
+        self.reset();
+        let spec = tool
+            .test_command(project_root, filter)
+            .ok_or_else(|| std::io::Error::other(format!("{} cannot run a single test", tool.display_name)))?;
+        self.output_tool = Some(tool.clone());
+        self.spawn_process(spec.to_command())?;
+        self.stage = Some(Stage::Test {
+            project_root: project_root.to_path_buf(),
+            tool: tool.clone(),
+            filter: Some(filter.to_string()),
         });
         Ok(())
     }
@@ -446,8 +485,11 @@ impl BuildState {
     /// "where" is a line, the same as Gradle's own column-less compiler
     /// errors already use) rather than growing a second, parallel
     /// click-to-jump row type just for this.
-    fn append_test_summary(&mut self, project_root: &Path, tool: &BuildToolHandle) {
-        let cases = tool.test_results(project_root);
+    fn append_test_summary(&mut self, project_root: &Path, tool: &BuildToolHandle, filter: Option<&str>) {
+        let mut cases = tool.test_results(project_root);
+        if let Some(filter) = filter {
+            cases.retain(|case| matches_filter(case, filter));
+        }
         self.push_test_rows(&cases, |case| {
             tool.test_failure_location(project_root, case).map(|at| (at.path, at.line))
         });
@@ -558,9 +600,9 @@ impl BuildState {
                                 self.last_success = Some(false);
                             }
                         },
-                        Some(Stage::Test { project_root, tool }) => {
+                        Some(Stage::Test { project_root, tool, filter }) => {
                             self.last_success = Some(success);
-                            self.append_test_summary(&project_root, &tool);
+                            self.append_test_summary(&project_root, &tool, filter.as_deref());
                         }
                         Some(Stage::TaskTests { task }) => {
                             self.last_success = Some(success);

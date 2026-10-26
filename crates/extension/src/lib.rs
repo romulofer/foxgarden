@@ -55,7 +55,7 @@ pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectTaskHandle, TaskTestResult, ProjectRelease, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectTaskHandle, TaskTestResult, ProjectRelease, RunKind, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -478,6 +478,14 @@ pub trait Extension: Send + Sync {
     /// Every build-tool method below is defaulted to "nothing", so an
     /// extension that contributes no build tool implements none of them.
     fn build_command(&self, _tool_id: &str, _project_root: &Path, _task: BuildTask) -> Option<CommandSpec> {
+        None
+    }
+
+    /// The process that runs only the tests `filter` names for build tool
+    /// `tool_id`: a class (`com.example.CalcTest`), or one test in it
+    /// (`com.example.CalcTest#addIsBroken`). `None` when this extension does
+    /// not own that tool or cannot narrow its test run.
+    fn test_command(&self, _tool_id: &str, _project_root: &Path, _filter: &str) -> Option<CommandSpec> {
         None
     }
 

@@ -297,6 +297,15 @@ pub struct ScaffoldSpec {
     pub runtime_version: Option<u32>,
 }
 
+/// What a [`RunTarget`] starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunKind {
+    /// A program's entry point, launched through the build tool's run.
+    Main,
+    /// A test, or a class of them, run through the build tool's test task.
+    Test,
+}
+
 /// One runnable entry point an extension found in a file — what puts the ▶
 /// in the gutter beside a `main`.
 ///
@@ -308,8 +317,12 @@ pub struct ScaffoldSpec {
 pub struct RunTarget {
     /// 0-based line the declaration starts on — where the marker goes.
     pub line: usize,
+    /// Whether the marker launches a program or runs tests.
+    pub kind: RunKind,
     /// What a launch actually runs, in the toolchain's own notation — the
-    /// same string a [`RunSpec::entry_point`] carries.
+    /// same string a [`RunSpec::entry_point`] carries. For a
+    /// [`RunKind::Test`], the filter [`BuildToolHandle::test_command`] takes:
+    /// a class, or `class#method` for one test.
     pub entry_point: String,
     /// The short name to show the user; a tooltip reading `Run Main` beats
     /// one repeating `com.example.deep.package.Main`.
@@ -663,6 +676,12 @@ impl BuildToolHandle {
     /// tool does not support that task at all.
     pub fn command(&self, project_root: &Path, task: BuildTask) -> Option<CommandSpec> {
         self.extension.build_command(self.id, project_root, task)
+    }
+
+    /// The process that runs only the tests `filter` names (a [`RunKind::Test`]
+    /// target's entry point). `None` when the tool cannot narrow a test run.
+    pub fn test_command(&self, project_root: &Path, filter: &str) -> Option<CommandSpec> {
+        self.extension.test_command(self.id, project_root, filter)
     }
 
     /// The process that launches the project's own program. `None` when the

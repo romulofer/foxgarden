@@ -26,7 +26,7 @@ pub use diagnostics::syntax_errors;
 pub use document_parser::{IncrementalParser, byte_to_point, diff_edit};
 pub use folding::{FoldRange, foldable_ranges};
 pub use fg_extension::{
-    CodeGeneration, Counterpart, DocStub, FileDiagnostic, ProblemSeverity, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunTarget, Snippet, TypeDeclaration, TypeFields, TypeMember,
+    CodeGeneration, Counterpart, DocStub, FileDiagnostic, ProblemSeverity, HttpRoute, ImportCandidate, ImportEdit, MemberKind, MemberView, ReceiverType, RunKind, RunTarget, Snippet, TypeDeclaration, TypeFields, TypeMember,
 };
 pub use grammars::{GrammarError, install as install_grammars};
 pub use highlight::{Scope, highlight_spans, highlight_spans_in};

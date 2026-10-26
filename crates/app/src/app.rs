@@ -2952,7 +2952,13 @@ impl eframe::App for FoxGardenApp {
                             main_class: entry.target.entry_point.clone(),
                             ..fg_core::RunConfig::default()
                         };
-                        match self.build_state.start_run(&root, &tool, config) {
+                        let started = match entry.target.kind {
+                            syntax::RunKind::Main => self.build_state.start_run(&root, &tool, config),
+                            syntax::RunKind::Test => {
+                                self.build_state.start_filtered_test(&root, &tool, &entry.target.entry_point)
+                            }
+                        };
+                        match started {
                             Ok(()) => self.bottom_dock.open_tab(BottomTab::Build),
                             Err(err) => crate::errors::report(
                                 &mut self.last_error,
