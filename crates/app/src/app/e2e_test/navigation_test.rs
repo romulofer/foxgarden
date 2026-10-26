@@ -92,7 +92,8 @@ class UserController {
         app.shows(t().palettes.http_routes),
         "Ctrl+Shift+E opens the route map"
     );
-    assert!(app.shows_containing("/api/users"), "and lists the mapped path");
+    // The routes come from a background scan of the project's files.
+    assert!(app.wait_for_containing("/api/users"), "and lists the mapped path");
 
     app.click_containing("/api/users");
 

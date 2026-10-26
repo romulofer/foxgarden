@@ -90,6 +90,19 @@ fn classify_reports_unroutable_for_an_unknown_type() {
 /// `DapSession::connect`/`send_request`'s actual socket/thread/channel
 /// wiring, not just `classify`'s pure logic already covered above.
 fn fake_adapter_returning(body: &str) -> (DapSession, std::thread::JoinHandle<()>) {
+    fake_adapter(body, false)
+}
+
+/// Like [`fake_adapter_returning`] but replies only once the client has
+/// written something. A request is registered before it is written, so the
+/// reply then always finds it; replying at once loses that race (the reply to
+/// a not-yet-registered `seq` is dropped and the test's `recv` never returns).
+/// Only an event, which nothing awaits, can use the eager one.
+fn fake_adapter_answering(body: &str) -> (DapSession, std::thread::JoinHandle<()>) {
+    fake_adapter(body, true)
+}
+
+fn fake_adapter(body: &str, after_request: bool) -> (DapSession, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binding a loopback port always succeeds");
     let port = listener.local_addr().unwrap().port();
     let framed = {
@@ -99,6 +112,10 @@ fn fake_adapter_returning(body: &str) -> (DapSession, std::thread::JoinHandle<()
     };
     let handle = std::thread::spawn(move || {
         let (mut socket, _) = listener.accept().expect("the client connects");
+        if after_request {
+            let mut first_byte = [0u8; 1];
+            socket.read_exact(&mut first_byte).expect("the client writes its request");
+        }
         socket.write_all(&framed).expect("writing the canned reply");
         // Stays connected (discarding whatever the client writes)
         // rather than closing right after — the same real observed-flake
@@ -114,7 +131,7 @@ fn fake_adapter_returning(body: &str) -> (DapSession, std::thread::JoinHandle<()
 
 #[test]
 fn send_request_against_a_real_fake_adapter_receives_its_response() {
-    let (mut session, _handle) = fake_adapter_returning(
+    let (mut session, _handle) = fake_adapter_answering(
         r#"{"seq":1,"type":"response","request_seq":1,"success":true,"command":"initialize","body":{"supportsConfigurationDoneRequest":true}}"#,
     );
     let rx = session
@@ -129,7 +146,7 @@ fn send_request_against_a_real_fake_adapter_receives_its_response() {
 
 #[test]
 fn send_request_against_a_real_fake_adapter_receives_its_failure_message() {
-    let (mut session, _handle) = fake_adapter_returning(
+    let (mut session, _handle) = fake_adapter_answering(
         r#"{"seq":1,"type":"response","request_seq":1,"success":false,"command":"launch","message":"main class not found"}"#,
     );
     let rx = session.send_request("launch", serde_json::json!({})).unwrap();

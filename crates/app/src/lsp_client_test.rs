@@ -194,12 +194,34 @@ fn fake_server_returning(body: &str) -> LspSession {
         .expect("sh is always available")
 }
 
+/// A fake server that answers only once it has been sent something: a request
+/// is registered before it is written, so the reply then always finds its
+/// request. `fake_server_returning` replies at once, which loses the race for
+/// a test that sends a request (the reply to a not-yet-registered id is
+/// dropped and the test's `recv` never returns); only a notification, which
+/// nothing awaits, can use that one.
+fn fake_server_answering(body: &str) -> LspSession {
+    let script = format!(
+        "head -c 1 > /dev/null; printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
+        body.len()
+    );
+    LspSession::spawn(Path::new("sh"), &["-c".to_string(), script], None, Arc::new(|| {}))
+        .expect("sh is always available")
+}
+
 /// Same fake server, but spawned with a `Waker` that counts its calls —
 /// `wake_count` is what the wakeup tests assert on.
 fn fake_server_waking(body: &str) -> (LspSession, Arc<AtomicUsize>) {
+    fake_server_waking_after(body, false)
+}
+
+/// `after_request` holds the reply back until the client has written its
+/// request, for a body that answers one.
+fn fake_server_waking_after(body: &str, after_request: bool) -> (LspSession, Arc<AtomicUsize>) {
     let wakes = Arc::new(AtomicUsize::new(0));
+    let wait = if after_request { "head -c 1 > /dev/null; " } else { "" };
     let script = format!(
-        "printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
+        "{wait}printf 'Content-Length: %d\\r\\n\\r\\n%s' {} '{body}'; cat > /dev/null",
         body.len()
     );
     let for_thread = Arc::clone(&wakes);
@@ -236,7 +258,8 @@ fn an_unprompted_notification_wakes_the_event_loop() {
 
 #[test]
 fn a_response_wakes_the_event_loop() {
-    let (mut session, wakes) = fake_server_waking(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
+    let (mut session, wakes) =
+        fake_server_waking_after(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#, true);
     let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
     let _ = rx.recv().expect("the fake server's response arrives");
     // The reader thread delivers the response and wakes only after that, so
@@ -250,7 +273,7 @@ fn a_response_wakes_the_event_loop() {
 
 #[test]
 fn send_request_against_a_real_fake_server_process_receives_its_response() {
-    let mut session = fake_server_returning(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
+    let mut session = fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
     let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
     let result = rx.recv().expect("the fake server's response arrives");
     assert_eq!(result, Ok(serde_json::json!({"capabilities": {}})));
@@ -259,7 +282,7 @@ fn send_request_against_a_real_fake_server_process_receives_its_response() {
 #[test]
 fn send_request_against_a_real_fake_server_process_receives_its_error() {
     let mut session =
-        fake_server_returning(r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"method not found"}}"#);
+        fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"method not found"}}"#);
     let rx = session.send_request("bogusMethod", serde_json::json!({})).unwrap();
     let result = rx.recv().expect("the fake server's response arrives");
     assert_eq!(
@@ -298,7 +321,7 @@ fn initialize_sends_the_real_initialize_method_name() {
     // `lsp_types`-typed params actually serializing and reaching the
     // wire correctly, not just `send_request`'s generic path (already
     // covered above).
-    let mut session = fake_server_returning(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
+    let mut session = fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
     let params = lsp_types::InitializeParams::default();
     let rx = session.initialize(params).unwrap();
     assert!(rx.recv().expect("the fake server's response arrives").is_ok());

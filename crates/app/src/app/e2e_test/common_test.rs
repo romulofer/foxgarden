@@ -364,6 +364,25 @@ impl E2e {
         self.harness.query_all_by_label_contains(fragment).next().is_some()
     }
 
+    /// Runs frames until something on screen contains `fragment`, for a result
+    /// that lands from a background thread (a scan the UI shows once it is
+    /// done) and so can trail the frame that asked for it. Gives up after five
+    /// seconds and returns whether it showed up, so the caller's assertion
+    /// reports the miss.
+    pub(super) fn wait_for_containing(&mut self, fragment: &str) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            self.settle();
+            if self.shows_containing(fragment) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// Focuses the active tab's editor, puts the caret at `char_offset`, and
     /// types `text` — one real frame per character, the way real typing
     /// arrives.
