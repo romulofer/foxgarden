@@ -82,7 +82,7 @@ impl Extension for AlwaysOkExtension {
             args: Vec::new(),
             initialization_options: ctx.configured_binary.trim().contains("debug")
                 .then(|| r#"{"bundles":["/cache/java-debug-plugin.jar"]}"#.to_string()),
-            restart_key: ctx.java_release.map(|r| r.to_string()).unwrap_or_default(),
+            restart_key: ctx.runtime_release.map(|r| r.to_string()).unwrap_or_default(),
         }))
     }
 }
@@ -165,13 +165,13 @@ fn desired_config_carries_the_projects_declared_java_release_in_restart_key() {
     }
     .with_binary("jdtls", "jdtls");
 
-    let mut cache = JavaReleaseCache::default();
+    let mut cache = RuntimeReleaseCache::default();
     // The real registry, not this test's fake one: reading a release out of
     // a `pom.xml` is the spring extension's own job now.
-    let java_release = cache.release_for(dir.path(), test_support::languages());
+    let runtime_release = cache.release_for(dir.path(), test_support::languages());
     let ctx = ServerStartContext {
         configured_binary: "jdtls".to_string(),
-        java_release,
+        runtime_release,
         ..Default::default()
     };
     let server = test_server("jdtls", "java");
@@ -508,7 +508,7 @@ sys.stdin.buffer.read()
         )]),
         lang_to_server: HashMap::from([("java".to_string(), "jdtls".to_string())]),
         retiring: Vec::new(),
-        java_release: JavaReleaseCache::default(),
+        runtime_release: RuntimeReleaseCache::default(),
         virtual_documents: HashMap::new(),
     };
 

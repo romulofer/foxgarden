@@ -288,10 +288,10 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
         // What the project itself targets, which is a different question
         // from which runtime the server runs on: the server may need 21
         // while the code targets 8. `lsp_state` hands the server every
-        // installed JDK and marks this one its default, so diagnostics
+        // installed runtime and marks this one its default, so diagnostics
         // match the project's own compiler rather than the server's runtime.
         ui.horizontal(|ui| {
-            ui.label(t().lsp.project_java).on_hover_text(t().lsp.project_java_hover);
+            ui.label(t().lsp.project_release).on_hover_text(t().lsp.project_release_hover);
             match &state.project_release {
                 Some(release) => {
                     ui.label(format!(
@@ -300,7 +300,7 @@ fn show_server_section(ui: &mut egui::Ui, state: &mut LspServersState, settings:
                     ));
                 }
                 None => {
-                    ui.label(egui::RichText::new(t().lsp.project_java_undeclared).weak());
+                    ui.label(egui::RichText::new(t().lsp.project_release_undeclared).weak());
                 }
             }
         });

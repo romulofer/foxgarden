@@ -1,46 +1,4 @@
 use super::*;
-use std::path::PathBuf;
-
-#[test]
-fn profiler_command_matches_async_profilers_documented_attach_invocation() {
-    let command = profiler_command(
-        &PathBuf::from("/opt/async-profiler/bin/asprof"),
-        12345,
-        ProfileEvent::Cpu,
-        30,
-        &PathBuf::from("/tmp/profile.collapsed"),
-    );
-
-    assert_eq!(command.get_program(), "/opt/async-profiler/bin/asprof");
-    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-    assert_eq!(
-        args,
-        vec![
-            "-e",
-            "cpu",
-            "-d",
-            "30",
-            "-o",
-            "collapsed",
-            "-f",
-            "/tmp/profile.collapsed",
-            "12345"
-        ]
-    );
-}
-
-#[test]
-fn profiler_command_carries_the_selected_event_name() {
-    let command = profiler_command(
-        &PathBuf::from("asprof"),
-        7,
-        ProfileEvent::Alloc,
-        5,
-        &PathBuf::from("out"),
-    );
-    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-    assert_eq!(&args[0..2], &["-e", "alloc"]);
-}
 
 #[test]
 fn parse_collapsed_builds_an_inclusive_sample_tree() {

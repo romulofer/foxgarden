@@ -224,7 +224,7 @@ pub fn show_settings(
             ui.label(
                 egui::RichText::new(
                     "Install fetches a specific, verified-compatible release into a local cache — not necessarily \
-                 GitHub's newest (hover \"GitHub's latest\" below for why). Still needs a JVM already on PATH. \
+                 GitHub's newest (hover \"GitHub's latest\" below for why). The tool may still need its own runtime already on PATH. \
                  Or point the fields at a binary you've already installed yourself.",
                 )
                 .weak(),

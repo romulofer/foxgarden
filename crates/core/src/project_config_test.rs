@@ -2,8 +2,8 @@ use super::*;
 
 fn sample() -> ProjectConfig {
     ProjectConfig {
-        java_release: Some(17),
-        jdk_home: Some(PathBuf::from("/opt/jdk17")),
+        runtime_release: Some(17),
+        runtime_home: Some(PathBuf::from("/opt/jdk17")),
     }
 }
 
@@ -15,9 +15,9 @@ fn a_config_round_trips() {
 }
 
 #[test]
-fn no_jdk_home_round_trips_as_none() {
+fn no_runtime_home_round_trips_as_none() {
     let config = ProjectConfig {
-        jdk_home: None,
+        runtime_home: None,
         ..sample()
     };
     let serialized = serialize_project_config(&config);
@@ -33,14 +33,14 @@ fn empty_input_parses_to_the_default_config() {
 #[test]
 fn a_missing_field_defaults_rather_than_failing_the_whole_parse() {
     let config = parse_project_config(r#"{"java_release": 21}"#);
-    assert_eq!(config.java_release, Some(21));
-    assert_eq!(config.jdk_home, None);
+    assert_eq!(config.runtime_release, Some(21));
+    assert_eq!(config.runtime_home, None);
 }
 
 #[test]
 fn unrecognized_keys_are_skipped_rather_than_erroring() {
     let config = parse_project_config(r#"{"java_release": 21, "future_field": "something new"}"#);
-    assert_eq!(config.java_release, Some(21));
+    assert_eq!(config.runtime_release, Some(21));
 }
 
 #[test]
@@ -67,4 +67,13 @@ fn save_then_load_round_trips_through_the_filesystem() {
 
     assert_eq!(loaded, config);
     assert!(dir.path().join(".foxgarden").join("project.json").exists());
+}
+
+#[test]
+fn a_file_written_with_the_current_key_names_reads_back_and_the_old_names_still_do() {
+    let current = parse_project_config(r#"{"runtime_release": 17, "runtime_home": "/opt/rt"}"#);
+    assert_eq!((current.runtime_release, current.runtime_home), (Some(17), Some(PathBuf::from("/opt/rt"))));
+
+    let legacy = parse_project_config(r#"{"java_release": 11, "jdk_home": "/opt/jdk11"}"#);
+    assert_eq!((legacy.runtime_release, legacy.runtime_home), (Some(11), Some(PathBuf::from("/opt/jdk11"))));
 }

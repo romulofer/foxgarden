@@ -85,3 +85,21 @@ fn info_names_what_an_extension_contributes_by_display_name() {
     assert!(info.build_tools.is_empty());
     assert!(info.analyzers.is_empty());
 }
+
+#[test]
+fn a_scaffold_note_prefers_the_interface_language_and_falls_back_to_the_first() {
+    let mut scaffold = ScaffoldContribution {
+        build_tool_id: "anvil".to_string(),
+        language_id: "khuzdul".to_string(),
+        template_id: String::new(),
+        template_name: String::new(),
+        runtime_versions: Vec::new(),
+        notes: vec![LocalizedText::new("pt-BR", "sem wrapper"), LocalizedText::new("en-US", "no wrapper")],
+        runtime_label: Vec::new(),
+    };
+    assert_eq!(scaffold.note("en-US"), Some("no wrapper"));
+    assert_eq!(scaffold.note("de-DE"), Some("sem wrapper"), "an untranslated note beats none");
+    scaffold.notes.clear();
+    assert_eq!(scaffold.note("en-US"), None);
+    assert_eq!(scaffold.runtime_label("en-US"), None, "no label means the host's generic one");
+}

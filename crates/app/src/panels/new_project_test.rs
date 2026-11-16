@@ -95,7 +95,7 @@ fn create_and_open_scaffolds_saves_config_and_opens_the_project() {
         editor_state.project.as_ref().map(|p| p.root.clone()),
         Some(root.clone())
     );
-    assert_eq!(fg_core::load_project_config(&root).java_release, Some(17));
+    assert_eq!(fg_core::load_project_config(&root).runtime_release, Some(17));
 }
 
 #[test]
@@ -213,6 +213,8 @@ fn a_pair_lists_its_templates_naming_the_ordinary_one() {
         template_id: template_id.to_string(),
         template_name: template_name.to_string(),
         runtime_versions: Vec::new(),
+        note: None,
+        runtime_label: None,
     };
     let options = [option("kotlin", "", ""), option("java", "", ""), option("kotlin", "multiplatform", "Kotlin Multiplatform")];
     assert_eq!(
@@ -258,7 +260,7 @@ fn create_and_open_drops_a_runtime_version_the_target_does_not_offer() {
     create_and_open(&state, &mut editor_state).expect("scaffolds and opens");
 
     let root = dir.path().join("my-app");
-    assert_eq!(fg_core::load_project_config(&root).java_release, None);
+    assert_eq!(fg_core::load_project_config(&root).runtime_release, None);
     let pom = std::fs::read_to_string(root.join("pom.xml")).unwrap();
     assert!(!pom.contains(">0<"), "{pom}");
 }
@@ -324,4 +326,31 @@ fn the_registry_offers_the_ordinary_kotlin_project_first_and_multiplatform_besid
     );
     assert_eq!(templates_for(&options, "gradle", "java", "Standard").len(), 1);
     assert_eq!(templates_for(&options, "maven", "kotlin", "Standard").len(), 1);
+}
+
+#[test]
+fn a_gradle_target_shows_the_extensions_note_in_the_interface_language_and_a_maven_one_none() {
+    let options = scaffold_options(test_support::languages());
+    let note_of = |tool: &str, language: &str, template: &str| {
+        options
+            .iter()
+            .find(|o| o.build_tool_id == tool && o.language_id == language && o.template_id == template)
+            .and_then(|o| o.note.clone())
+    };
+    let expected = fg_i18n::lang();
+    let note = note_of("gradle", "java", "").expect("a Gradle project says no wrapper is generated");
+    assert!(note.contains("Gradle Wrapper"), "{note} ({})", expected.tag());
+    assert!(note_of("gradle", "kotlin", "multiplatform").is_some(), "the multiplatform template builds with Gradle too");
+    assert_eq!(note_of("maven", "java", ""), None);
+}
+
+#[test]
+fn the_runtime_picker_is_labelled_by_the_extension_and_a_target_without_one_gets_the_generic_label() {
+    let options = scaffold_options(test_support::languages());
+    let label = options
+        .iter()
+        .find(|o| o.build_tool_id == "maven" && o.language_id == "java")
+        .and_then(|o| o.runtime_label.clone());
+    assert!(label.is_some_and(|l| l.contains("Java")), "the JVM extension names its own picker");
+    assert!(options.iter().any(|o| o.runtime_label.is_none()), "the multiplatform template offers no version and no label");
 }

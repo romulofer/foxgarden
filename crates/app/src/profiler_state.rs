@@ -1,11 +1,11 @@
-//! Orchestrating one async-profiler capture (`PLAN.md` Track 26 Phase 1 —
-//! "Profiler integration"): spawn `asprof` against a live JVM's PID, wait for
-//! its fixed-duration sample to finish, then read the collapsed-stack file it
-//! wrote and fold it into a `fg_core::FlameNode` tree.
+//! Orchestrating one profiler capture (`PLAN.md` Track 26 Phase 1 —
+//! "Profiler integration"): run the contributed profiler against a live
+//! process's PID, wait for its fixed-duration sample to finish, then read the
+//! collapsed-stack file it wrote and fold it into a `fg_core::FlameNode` tree.
 //!
 //! Same background-thread-plus-`Receiver` shape every other long-running
 //! action in this app uses (`build_panel`'s own process streaming,
-//! `tool_manager`'s installs): `asprof -d N` blocks for the whole sample
+//! `tool_manager`'s installs): the profiler blocks for the whole sample
 //! duration, so running it on the UI thread would freeze the app for N
 //! seconds — instead one thread runs it to completion and sends the parsed
 //! result back, polled once a frame. The parsed `FlameNode` is what Track 26
@@ -15,7 +15,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use fg_core::{FlameNode, ProfileEvent, parse_collapsed, profiler_command};
+use fg_core::{FlameNode, parse_collapsed};
+use fg_extension::{ProfileEvent, ProfileRequest, ProfilerHandle};
 
 /// A finished capture's parsed profile, or the reason it failed.
 pub type CaptureResult = Result<FlameNode, String>;
@@ -26,12 +27,12 @@ pub type CaptureResult = Result<FlameNode, String>;
 /// ballpark; it's a plain constant rather than a setting for this phase.
 pub const DEFAULT_DURATION_SECS: u32 = 10;
 
-/// Reads the collapsed-stack file `asprof` wrote at `output_path` and folds it
+/// Reads the collapsed-stack file the profiler wrote at `output_path` and folds it
 /// into a `FlameNode` tree, erroring if the file is missing/unreadable or the
 /// profile came back empty (no samples — e.g. the target did nothing during
 /// the window, or the attach silently produced nothing). Split out of
 /// `start_capture`'s background thread so the read-and-parse step is testable
-/// against a real on-disk collapsed file without spawning `asprof`.
+/// against a real on-disk collapsed file without running a profiler.
 fn read_capture(output_path: &Path) -> CaptureResult {
     let text = std::fs::read_to_string(output_path)
         .map_err(|e| format!("couldn't read the profiler's output at {}: {e}", output_path.display()))?;
@@ -55,7 +56,7 @@ fn capture_output_path(pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("foxgarden-profile-{pid}-{nanos}.collapsed"))
 }
 
-/// Drives async-profiler: the installer plus at most one in-flight capture and
+/// Drives the contributed profiler: the installer plus at most one in-flight capture and
 /// the most recent result. `manager` is public so the UI can offer Install
 /// and poll it directly, the same way the External Tools dialog reaches
 /// `ToolManagerState`.
@@ -73,24 +74,26 @@ impl ProfilerState {
         self.capture.is_some()
     }
 
-    /// Spawns `asprof` against `pid` on a background thread, sampling `event`
-    /// for `duration_secs`, and arranges for its parsed result to arrive via
+    /// Runs `profiler`'s installed `launcher` against `pid` on a background
+    /// thread, sampling `event` for `duration_secs`, and arranges for its parsed result to arrive via
     /// `poll_capture`. A no-op if a capture's already in flight (the button
     /// that calls this is disabled meanwhile, but guard anyway).
-    pub fn start_capture(&mut self, asprof: PathBuf, pid: u32, event: ProfileEvent, duration_secs: u32) {
+    pub fn start_capture(&mut self, profiler: ProfilerHandle, launcher: PathBuf, pid: u32, event: ProfileEvent, duration_secs: u32) {
         if self.is_capturing() {
             return;
         }
         let output_path = capture_output_path(pid);
+        let request = ProfileRequest { pid, event, duration_secs, output_path: output_path.clone() };
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let mut command = profiler_command(&asprof, pid, event, duration_secs, &output_path);
-            let result = match command.status() {
-                Ok(status) if status.success() => read_capture(&output_path),
-                Ok(status) => Err(format!(
-                    "asprof exited with {status} — is the target a JVM this profiler can attach to?"
-                )),
-                Err(e) => Err(format!("couldn't launch asprof: {e}")),
+            let name = profiler.display_name().to_string();
+            let result = match profiler.command(&launcher, &request) {
+                None => Err(format!("{name} cannot profile this way")),
+                Some(spec) => match spec.to_command().status() {
+                    Ok(status) if status.success() => read_capture(&output_path),
+                    Ok(status) => Err(format!("{name} exited with {status} — is the target something it can attach to?")),
+                    Err(e) => Err(format!("couldn't launch {name}: {e}")),
+                },
             };
             // Best-effort cleanup: the parsed tree is what matters now, not
             // the raw file. A leftover temp file is harmless if this fails.

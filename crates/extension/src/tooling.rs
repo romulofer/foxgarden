@@ -276,6 +276,51 @@ pub struct ScaffoldContribution {
     /// Runtime versions a wizard offers for this target, in the order they
     /// should be listed. Empty means the target has no version to pick.
     pub runtime_versions: Vec<u32>,
+    /// A note the wizard shows while this target is selected ("no wrapper is
+    /// generated"), in as many languages as the extension translated it into.
+    /// Empty for no note.
+    pub notes: Vec<LocalizedText>,
+    /// What the wizard calls the runtime-version picker ("Java release"). Empty
+    /// means the host's generic label.
+    pub runtime_label: Vec<LocalizedText>,
+}
+
+impl ScaffoldContribution {
+    /// The note in `language_tag` (`"pt-BR"`), or the first one when the
+    /// extension has none in that language: an untranslated note beats none.
+    pub fn note(&self, language_tag: &str) -> Option<&str> {
+        LocalizedText::pick(&self.notes, language_tag)
+    }
+
+    /// The runtime-version picker's label in `language_tag`, chosen like
+    /// [`Self::note`].
+    pub fn runtime_label(&self, language_tag: &str) -> Option<&str> {
+        LocalizedText::pick(&self.runtime_label, language_tag)
+    }
+}
+
+/// Text an extension supplies for the interface, in one language. The host has
+/// no way to translate an extension's words, so the extension brings its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalizedText {
+    /// The language's tag, as `fg_i18n::Lang::tag` spells it: `"pt-BR"`, `"en-US"`.
+    pub language_tag: String,
+    pub text: String,
+}
+
+impl LocalizedText {
+    /// The text in `language_tag`, else the first one, else none.
+    pub fn pick<'a>(texts: &'a [LocalizedText], language_tag: &str) -> Option<&'a str> {
+        texts
+            .iter()
+            .find(|t| t.language_tag == language_tag)
+            .or_else(|| texts.first())
+            .map(|t| t.text.as_str())
+    }
+
+    pub fn new(language_tag: &str, text: &str) -> Self {
+        Self { language_tag: language_tag.to_string(), text: text.to_string() }
+    }
 }
 
 /// What a new project is being asked for. Deliberately not Maven's

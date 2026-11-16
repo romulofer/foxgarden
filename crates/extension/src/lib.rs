@@ -35,6 +35,7 @@ mod code_model;
 mod editing;
 mod imports;
 mod info;
+mod profilers;
 mod registry;
 mod runtimes;
 mod servers;
@@ -50,12 +51,13 @@ pub use code_model::{
 pub use editing::Snippet;
 pub use imports::{DocStub, ImportCandidate, ImportEdit};
 pub use info::ExtensionInfo;
+pub use profilers::{ProfileEvent, ProfileRequest, ProfilerContribution, ProfilerHandle, ProfilerInstall};
 pub use registry::{RegisterError, Registry};
 pub use runtimes::{RuntimeContribution, RuntimeHandle, RuntimeInstall};
 pub use servers::{ArchiveKind, LatestVersionSource, ServerInstall, ServerInstallHandle};
 pub use tooling::{
     AnalyzerHandle, BuildProblem, BuildTask, BuildToolContribution, BuildToolHandle, BuildToolId, CommandSpec, ConfigProperty,
-    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectTaskHandle, TaskTestResult, ProjectRelease, RunKind, RunTarget, ScaffoldContribution, ScaffoldSpec,
+    CoverageReport, Counterpart, ExtensionHandle, FileDiagnostic, HttpRoute, ProjectTask, ProjectTaskHandle, TaskTestResult, ProjectRelease, LocalizedText, RunKind, RunTarget, ScaffoldContribution, ScaffoldSpec,
     CoverageStatus, LineCoverage, ProblemSeverity, RunSpec, TestCase, TestFailureLocation, TestOutcome, TestSummary,
     summarize,
 };
@@ -302,12 +304,11 @@ pub struct HostRuntime {
     pub none_found: String,
 }
 
-/// One JDK installation, for extensions that need to communicate which JVMs
-/// are available on this machine. Named `JdkRuntime` rather than the
-/// jdt.ls-specific vocabulary (`java.configuration.runtimes`) to stay
-/// language-server-neutral.
+/// One installation of a language runtime, for extensions that need to tell a
+/// language server which runtimes are available on this machine. Kept neutral
+/// of any one server's vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JdkRuntime {
+pub struct InstalledRuntime {
     /// Eclipse execution environment name that jdt.ls uses to identify this
     /// release — e.g. `"JavaSE-21"`, `"JavaSE-1.8"`.
     pub name: String,
@@ -329,11 +330,11 @@ pub struct ServerStartContext {
     /// auto-detect). Only meaningful for servers that declare a
     /// `LanguageServerContribution::host_runtime`.
     pub runtime_home: String,
-    /// The Java release the current project declares, if any.
-    pub java_release: Option<u32>,
-    /// Every JDK found on this machine, for servers that need to tell the
+    /// The runtime release the current project declares, if any.
+    pub runtime_release: Option<u32>,
+    /// Every runtime found on this machine, for servers that need to tell the
     /// language server which runtimes are available.
-    pub jdk_runtimes: Vec<JdkRuntime>,
+    pub installed_runtimes: Vec<InstalledRuntime>,
     /// The open project's root, for a server that is found in, or configured
     /// from, the project itself (a Python virtual environment, say).
     pub project_root: Option<PathBuf>,
@@ -370,6 +371,8 @@ pub struct Contributions {
     pub build_tools: Vec<BuildToolContribution>,
     /// External static-analysis tools (`Extension::run_analyzer`).
     pub analyzers: Vec<AnalyzerContribution>,
+    /// Sampling profilers (`Extension::profiler_command`).
+    pub profilers: Vec<ProfilerContribution>,
     /// Kinds of runtime the user keeps an inventory of (Settings lists one
     /// entry per kind).
     pub runtimes: Vec<RuntimeContribution>,
@@ -474,7 +477,7 @@ pub trait Extension: Send + Sync {
     ///
     /// The default returns an empty list, correct for extensions that do
     /// not work with the JVM at all.
-    fn jdk_runtimes(&self) -> Vec<JdkRuntime> {
+    fn installed_runtimes(&self) -> Vec<InstalledRuntime> {
         Vec::new()
     }
 
@@ -784,6 +787,13 @@ pub trait Extension: Send + Sync {
     /// setter-only request over read-only fields), `None` when this
     /// extension does not generate code for `language_id`.
     fn generate_code(&self, _language_id: &str, _request: CodeGeneration<'_>, _indent_unit: &str) -> Option<String> {
+        None
+    }
+
+    /// The process that profiles `request.pid` with the installed `launcher` of
+    /// profiler `profiler_id`, writing collapsed stacks to `request.output_path`.
+    /// `None` when this extension does not own that profiler.
+    fn profiler_command(&self, _profiler_id: &str, _launcher: &Path, _request: &ProfileRequest) -> Option<CommandSpec> {
         None
     }
 

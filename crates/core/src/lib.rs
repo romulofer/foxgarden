@@ -44,7 +44,7 @@ pub use drafts::{Draft, discard_draft, pending_drafts, write_draft};
 pub use editor_state::{EditorState, TerminalTab};
 pub use file_history::{Snapshot, list_snapshots};
 pub use language::Language;
-pub use profiler::{FlameNode, ProfileEvent, parse_collapsed, profiler_command};
+pub use profiler::{FlameNode, parse_collapsed};
 pub use project::{FileKind, FileNode, Project};
 pub use project_config::{
     ProjectConfig, load_project_config, parse_project_config, save_project_config, serialize_project_config,

@@ -1165,6 +1165,8 @@ fn lsp_server_keys(server_id: &str) -> LspServerKeys {
     LspServerKeys {
         binary: format!("{stem}_binary"),
         installed_version: format!("{stem}_installed_version"),
+        // The key keeps the name it had when only a JVM server used it, so a
+        // stored setting still reads.
         runtime_home: format!("{stem}_java_home"),
     }
 }
@@ -1648,7 +1650,7 @@ impl FoxGardenApp {
             return;
         };
         let Some(tool) = self.state.languages.detect_build_tool(&root) else {
-            crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string());
+            crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages));
             return;
         };
         match self.build_state.start_task(&tool, task) {
@@ -1787,7 +1789,7 @@ impl FoxGardenApp {
                         return;
                     }
                     None => {
-                        crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string());
+                        crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages));
                         return;
                     }
                 }
@@ -2480,7 +2482,7 @@ impl eframe::App for FoxGardenApp {
                         crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
                     }
                 },
-                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
             }
         }
 
@@ -2505,7 +2507,7 @@ impl eframe::App for FoxGardenApp {
                     Ok(None) => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                     Err(err) => crate::errors::report(&mut self.last_error, msg::run_configs_unreadable(&err)),
                 },
-                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
             }
         }
 
@@ -2519,7 +2521,7 @@ impl eframe::App for FoxGardenApp {
                         crate::errors::report(&mut self.last_error, msg::failed_to_start_build(&err.to_string()))
                     }
                 },
-                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
             }
         }
 
@@ -2535,10 +2537,10 @@ impl eframe::App for FoxGardenApp {
                         }
                     }
                 }
-                Some(_) => {
-                    crate::errors::report(&mut self.last_error, t().errors.coverage_requires_maven.to_string())
+                Some(tool) => {
+                    crate::errors::report(&mut self.last_error, msg::coverage_unsupported(&tool.display_name))
                 }
-                None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
             }
         }
 
@@ -2603,40 +2605,46 @@ impl eframe::App for FoxGardenApp {
                         Ok(None) => crate::errors::report(&mut self.last_error, t().errors.no_run_config.to_string()),
                         Err(err) => crate::errors::report(&mut self.last_error, msg::run_configs_unreadable(&err)),
                     },
-                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                    None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
                 }
             }
         }
 
-        // Profile Running Process (`PLAN.md` Track 26 Phase 1): attach
-        // async-profiler to the launched `java` run's PID and capture a CPU
+        // Profile Running Process (`PLAN.md` Track 26 Phase 1): attach the
+        // contributed profiler to the launched run's PID and capture a CPU
         // profile. The menu entry is only enabled when a run has reached its
-        // launched stage, so `run_pid()` is expected to be `Some` here; if
-        // async-profiler isn't cached yet, kick off its download and tell the
-        // user to retry rather than blocking the UI on the fetch.
+        // launched stage, so `run_pid()` is expected to be `Some` here; if the
+        // profiler isn't cached yet, kick off its download and tell the user to
+        // retry rather than blocking the UI on the fetch.
         if menu_outcome.profile_request
             && let Some(pid) = self.build_state.run_pid()
         {
-            match crate::profiler_manager::installed_asprof() {
-                Some(asprof) => {
-                    let secs = crate::profiler_state::DEFAULT_DURATION_SECS;
-                    self.profiler_state
-                        .start_capture(asprof, pid, fg_core::ProfileEvent::Cpu, secs);
-                    self.toasts.push(msg::profiling_pid(pid, secs));
+            match self.state.languages.profilers().into_iter().next() {
+                None => crate::errors::report(&mut self.last_error, t().errors.no_profiler.to_string()),
+                Some(profiler) if profiler.contribution.install.is_none() => {
+                    crate::errors::report(&mut self.last_error, msg::profiler_unavailable(profiler.display_name()));
                 }
-                None => {
-                    if !self.profiler_state.manager.installing() {
-                        self.profiler_state.manager.install();
+                Some(profiler) => match crate::profiler_manager::installed_launcher(&profiler) {
+                    Some(launcher) => {
+                        let secs = crate::profiler_state::DEFAULT_DURATION_SECS;
+                        self.profiler_state
+                            .start_capture(profiler, launcher, pid, fg_extension::ProfileEvent::Cpu, secs);
+                        self.toasts.push(msg::profiling_pid(pid, secs));
                     }
-                    self.toasts.push(msg::profiler_installing());
-                }
+                    None => {
+                        self.toasts.push(msg::profiler_installing(profiler.display_name()));
+                        if !self.profiler_state.manager.installing() {
+                            self.profiler_state.manager.install(profiler);
+                        }
+                    }
+                },
             }
         }
 
-        // async-profiler's background install finishing (Track 26 Phase 1).
+        // The profiler's background install finishing (Track 26 Phase 1).
         if let Some(result) = self.profiler_state.manager.poll_install() {
             match result {
-                Ok(installed) => self.toasts.push(msg::profiler_installed(&installed.version)),
+                Ok(installed) => self.toasts.push(msg::profiler_installed(&installed.name, &installed.version)),
                 Err(err) => crate::errors::report(&mut self.last_error, err),
             }
         }
@@ -2968,7 +2976,7 @@ impl eframe::App for FoxGardenApp {
                             ),
                         }
                     }
-                    None => crate::errors::report(&mut self.last_error, t().errors.no_build_tool_detected.to_string()),
+                    None => crate::errors::report(&mut self.last_error, crate::errors::no_build_tool(&self.state.languages)),
                 },
                 None => crate::errors::report(&mut self.last_error, t().errors.no_project_open.to_string()),
             }

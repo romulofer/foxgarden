@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, CommandSpec, FilenamePattern,
     ArchiveKind, DebugAdapterContribution, DebugLaunch, LatestVersionSource, RunSpec, RuntimeContribution, RuntimeInstall, ServerInstall,
-    GrammarSource, InjectionContribution, LanguageContribution, NodeKinds, ProblemSeverity,
+    GrammarSource, InjectionContribution, LanguageContribution, NodeKinds, ProblemSeverity, ProfileEvent, ProfileRequest, ProfilerContribution,
 };
 
 /// A stand-in extension built entirely from its contribution set —
@@ -556,6 +556,8 @@ impl Extension for FakeForge {
                 template_id: String::new(),
                 template_name: String::new(),
                 runtime_versions: vec![2, 7],
+                notes: Vec::new(),
+                runtime_label: Vec::new(),
             }],
             ..Default::default()
         }
@@ -646,6 +648,8 @@ fn a_scaffold_for_an_unregistered_build_tool_is_refused() {
                     template_id: String::new(),
                     template_name: String::new(),
                     runtime_versions: Vec::new(),
+                    notes: Vec::new(),
+                    runtime_label: Vec::new(),
                 }],
                 ..Default::default()
             }
@@ -723,6 +727,8 @@ fn two_scaffolds_for_the_same_pair_are_refused() {
                     template_id: String::new(),
                     template_name: String::new(),
                     runtime_versions: Vec::new(),
+                    notes: Vec::new(),
+                    runtime_label: Vec::new(),
                 }],
                 ..Default::default()
             }
@@ -765,6 +771,8 @@ fn one_extension_cannot_scaffold_the_same_pair_twice() {
                 template_id: String::new(),
                 template_name: String::new(),
                 runtime_versions: Vec::new(),
+                notes: Vec::new(),
+                runtime_label: Vec::new(),
             };
             Contributions {
                 languages: vec![lang("elvish", &["elv"])],
@@ -809,6 +817,8 @@ fn one_pair_can_offer_several_templates_each_generating_its_own_files() {
                 template_id: template_id.to_string(),
                 template_name: template_id.to_string(),
                 runtime_versions: Vec::new(),
+                notes: Vec::new(),
+                runtime_label: Vec::new(),
             };
             Contributions {
                 languages: vec![lang("elvish", &["elv"])],
@@ -1473,4 +1483,74 @@ fn an_injection_for_a_language_nobody_registered_is_refused() {
         }))),
         Err(RegisterError::UnknownLanguage { language_id: "westron".to_string(), extension_id: "orphan".to_string() })
     );
+}
+
+struct FakeProfiler {
+    extension_id: &'static str,
+    capabilities: Vec<Capability>,
+}
+
+fn sampler(id: &str) -> ProfilerContribution {
+    ProfilerContribution {
+        id: id.to_string(),
+        display_name: id.to_uppercase(),
+        install: None,
+    }
+}
+
+impl Extension for FakeProfiler {
+    fn capabilities(&self) -> Vec<Capability> {
+        self.capabilities.clone()
+    }
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: self.extension_id.to_string(),
+            name: self.extension_id.to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            profilers: vec![sampler("sampler")],
+            ..Default::default()
+        }
+    }
+    fn profiler_command(&self, profiler_id: &str, launcher: &Path, request: &ProfileRequest) -> Option<CommandSpec> {
+        (profiler_id == "sampler").then(|| {
+            CommandSpec::new(launcher, "/tmp")
+                .arg(request.pid.to_string())
+                .arg(request.output_path.display().to_string())
+        })
+    }
+}
+
+#[test]
+fn a_profiler_is_asked_through_the_extension_that_contributes_it() {
+    let mut registry = Registry::new();
+    registry
+        .register(Box::new(FakeProfiler { extension_id: "prof", capabilities: vec![Capability::ProcessExec] }))
+        .unwrap();
+    let profilers = registry.profilers();
+    assert_eq!(profilers.len(), 1);
+    assert_eq!(profilers[0].display_name(), "SAMPLER");
+    let request = ProfileRequest { pid: 7, event: ProfileEvent::Cpu, duration_secs: 5, output_path: PathBuf::from("/out") };
+    let command = profilers[0].command(Path::new("/bin/prof"), &request).unwrap();
+    assert_eq!((command.program, command.args), (PathBuf::from("/bin/prof"), vec!["7".to_string(), "/out".to_string()]));
+}
+
+#[test]
+fn a_profiler_needs_process_exec_and_a_duplicate_id_is_refused() {
+    let mut registry = Registry::new();
+    let refused = registry.register(Box::new(FakeProfiler { extension_id: "prof", capabilities: vec![] }));
+    assert!(matches!(refused, Err(RegisterError::UndeclaredCapability { .. })), "{refused:?}");
+
+    registry
+        .register(Box::new(FakeProfiler { extension_id: "first", capabilities: vec![Capability::ProcessExec] }))
+        .unwrap();
+    assert_eq!(
+        registry.register(Box::new(FakeProfiler { extension_id: "second", capabilities: vec![Capability::ProcessExec] })),
+        Err(RegisterError::DuplicateProfiler { profiler_id: "sampler".to_string(), extension_id: "second".to_string() })
+    );
+    assert_eq!(registry.profilers().len(), 1);
 }

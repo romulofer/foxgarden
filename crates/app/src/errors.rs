@@ -15,6 +15,12 @@
 //! failure loop can't grow an unbounded string behind a modal nobody has
 //! dismissed yet.
 
+/// What to tell the user when no registered build tool recognizes the project
+/// root: names the marker files the registered tools look for.
+pub fn no_build_tool(languages: &fg_extension::Registry) -> String {
+    fg_i18n::msg::no_build_tool_detected(&languages.build_tool_marker_files().join(", "))
+}
+
 /// How many distinct messages one modal shows before further ones are
 /// dropped. Past a handful, an error dialog stops being readable — and the
 /// first failures are the ones that explain the rest.

@@ -11,7 +11,7 @@
 //! a network.
 
 use super::common_test::{E2e, MAIN_JAVA};
-use fg_i18n::{msg, t};
+use fg_i18n::msg;
 
 const WITH_MAIN: &str =
     "public class App {\n    public static void main(String[] args) {\n        System.out.println(\"hi\");\n    }\n}\n";
@@ -46,7 +46,7 @@ fn clicking_the_marker_reaches_the_real_run_path() {
     app.click(&msg::run_main_class("App"));
 
     assert!(
-        app.shows(t().errors.no_build_tool_detected),
+        app.shows(&crate::errors::no_build_tool(test_support::languages())),
         "the click must reach the same Run machinery the menu uses, which is what reports this"
     );
 }
@@ -71,7 +71,7 @@ fn clicking_a_test_marker_reaches_the_real_test_path() {
     app.click(&msg::run_test("adds"));
 
     assert!(
-        app.shows(t().errors.no_build_tool_detected),
+        app.shows(&crate::errors::no_build_tool(test_support::languages())),
         "the click must reach the build-tool lookup the test run starts from"
     );
 }
@@ -102,7 +102,7 @@ fn clicking_a_python_marker_outside_a_python_project_reports_no_build_tool() {
     app.click(&msg::run_main_class("tool.py"));
 
     assert!(
-        app.shows(t().errors.no_build_tool_detected),
+        app.shows(&crate::errors::no_build_tool(test_support::languages())),
         "a folder with no pyproject.toml, requirements.txt or main.py is not a Python project"
     );
 }

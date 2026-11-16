@@ -278,13 +278,13 @@ pub struct Lsp {
     /// Placeholder in the empty binary-path field — points at what to do
     /// when nothing is configured yet.
     pub binary_hint: &'static str,
-    /// Hover on the Java Home label — why it exists and what blank means.
+    /// Hover on the runtime home label — why it exists and what blank means.
     pub detect: &'static str,
     pub detect_hint: &'static str,
-    pub project_java: &'static str,
-    /// Hover on the "Project Java" label — where the release is read from.
-    pub project_java_hover: &'static str,
-    pub project_java_undeclared: &'static str,
+    pub project_release: &'static str,
+    /// Hover on the "Project release" label — where the release is read from.
+    pub project_release_hover: &'static str,
+    pub project_release_undeclared: &'static str,
 }
 
 /// A runtime kind's inventory dialog (`panels::runtimes`) — the machine-wide
@@ -341,7 +341,7 @@ pub struct NewProject {
     pub location: &'static str,
     pub location_hint: &'static str,
     pub browse: &'static str,
-    pub java_release: &'static str,
+    pub runtime_version: &'static str,
     pub build_tool: &'static str,
     pub language: &'static str,
     /// The label of the starting-point picker, shown when the build tool and
@@ -349,7 +349,6 @@ pub struct NewProject {
     pub template: &'static str,
     /// What an extension's unnamed (ordinary) template is called there.
     pub standard_template: &'static str,
-    pub gradle_no_wrapper_hint: &'static str,
     /// Create was asked for a build tool/language pair no registered
     /// extension generates.
     pub no_scaffold_for_target: &'static str,
@@ -441,12 +440,12 @@ pub struct Errors {
     pub override_needs_class: &'static str,
     pub override_no_tree: &'static str,
     pub no_compiled_classes: &'static str,
-    pub no_build_tool_detected: &'static str,
+    /// Profile was asked for but no extension contributes a profiler.
+    pub no_profiler: &'static str,
     /// The run gutter's ▶ clicked with no project open at all — there's no
     /// root to resolve a classpath against, so nothing to run.
     pub no_project_open: &'static str,
     pub no_run_config: &'static str,
-    pub coverage_requires_maven: &'static str,
     pub no_dockerfile_detected: &'static str,
     pub no_compose_file_detected: &'static str,
     pub rename_empty_name: &'static str,
@@ -728,11 +727,10 @@ pub const PT_BR: Strings = Strings {
         binary_hint: "caminho do executável, ou use Instalar",
         detect: "Detectar",
         detect_hint: "Procura nesta máquina uma instalação em que o servidor consiga rodar.",
-        project_java: "Java do Projeto",
-        project_java_hover: "Lido dos arquivos de build do projeto (pom.xml, build.gradle, .java-version). Fontes Java e \
-                             Kotlin são diagnosticadas neste release, usando o JDK correspondente da lista encontrada \
-                             nesta máquina.",
-        project_java_undeclared: "não declarado — o jdt.ls usa o release da própria JVM",
+        project_release: "Release do Projeto",
+        project_release_hover: "Lido dos arquivos de build do projeto. As fontes são diagnosticadas neste release, usando \
+                             o runtime correspondente da lista encontrada nesta máquina.",
+        project_release_undeclared: "não declarado — o servidor usa o release do próprio runtime",
     },
     external_tools: ExternalTools {
         heading: "Ferramentas Externas",
@@ -768,12 +766,11 @@ pub const PT_BR: Strings = Strings {
         location: "Local",
         location_hint: "~/projetos",
         browse: "Procurar…",
-        java_release: "Versão do Java",
+        runtime_version: "Versão",
         build_tool: "Ferramenta de Build",
         language: "Linguagem",
         template: "Modelo",
         standard_template: "Padrão",
-        gradle_no_wrapper_hint: "Nenhum Gradle Wrapper é gerado — use um Gradle já instalado na máquina.",
         no_scaffold_for_target: "nenhuma extensão gera esse tipo de projeto",
         create: "Criar",
     },
@@ -833,10 +830,9 @@ pub const PT_BR: Strings = Strings {
         override_unsupported: "Sobrescrever Método não está disponível para este tipo de arquivo.",
         override_needs_class: "Posicione o cursor dentro de uma classe para sobrescrever um método.",
         override_no_tree: "Não foi possível procurar métodos sobrescrevíveis: ainda não há árvore sintática.",
-        no_build_tool_detected: "Nenhum pom.xml ou build.gradle[.kts] encontrado na raiz do projeto.",
+        no_profiler: "Nenhuma extensão instalada oferece um profiler.",
         no_project_open: "Abra um projeto antes de executar — sem raiz não há classpath para resolver.",
         no_run_config: "Crie uma configuração de execução primeiro, em Executar > Editar Configurações…",
-        coverage_requires_maven: "Cobertura de código só é suportada em projetos Maven no momento.",
         no_dockerfile_detected: "Nenhum Dockerfile encontrado na raiz do projeto.",
         no_compose_file_detected: "Nenhum arquivo compose.yaml/docker-compose.yml encontrado na raiz do projeto.",
         no_compiled_classes: "Nenhuma classe compilada encontrada. Execute Executar > Compilar primeiro.",
@@ -1106,11 +1102,10 @@ pub const EN_US: Strings = Strings {
         binary_hint: "path to the executable, or use Install",
         detect: "Detect",
         detect_hint: "Scans this machine for an install the server can run on.",
-        project_java: "Project Java",
-        project_java_hover: "Read from the project's own build files (pom.xml, build.gradle, .java-version). Java and \
-                             Kotlin sources are diagnosed at this release, using the matching JDK from the list found \
-                             on this machine.",
-        project_java_undeclared: "not declared — jdt.ls uses its own JVM's release",
+        project_release: "Project release",
+        project_release_hover: "Read from the project's own build files. Sources are diagnosed at this release, using \
+                             the matching runtime from the list found on this machine.",
+        project_release_undeclared: "not declared — the server uses its own runtime's release",
     },
     external_tools: ExternalTools {
         heading: "External Tools",
@@ -1146,12 +1141,11 @@ pub const EN_US: Strings = Strings {
         location: "Location",
         location_hint: "~/projects",
         browse: "Browse…",
-        java_release: "Java release",
+        runtime_version: "Version",
         build_tool: "Build Tool",
         language: "Language",
         template: "Template",
         standard_template: "Standard",
-        gradle_no_wrapper_hint: "No Gradle Wrapper is generated — use a Gradle already installed on your machine.",
         no_scaffold_for_target: "no extension scaffolds that kind of project",
         create: "Create",
     },
@@ -1211,10 +1205,9 @@ pub const EN_US: Strings = Strings {
         override_unsupported: "Override Method isn't available for this file type.",
         override_needs_class: "Place the cursor inside a class to override a method.",
         override_no_tree: "Couldn't find overridable methods: no syntax tree available yet.",
-        no_build_tool_detected: "No pom.xml or build.gradle[.kts] found at the project root.",
+        no_profiler: "No installed extension offers a profiler.",
         no_project_open: "Open a project before running — with no root there is no classpath to resolve.",
         no_run_config: "Create a Run Configuration first, under Run > Edit Configurations…",
-        coverage_requires_maven: "Code coverage is only supported for Maven projects right now.",
         no_dockerfile_detected: "No Dockerfile found at the project root.",
         no_compose_file_detected: "No compose.yaml/docker-compose.yml found at the project root.",
         no_compiled_classes: "No compiled classes found. Run Run > Build first.",

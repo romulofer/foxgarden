@@ -3,9 +3,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::{
-    AnalyzerContribution, AnalyzerHandle, BuildToolContribution, DebugAdapterContribution, DebugLaunch, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
+    AnalyzerContribution, AnalyzerHandle, ProfilerContribution, ProfilerHandle, BuildToolContribution, DebugAdapterContribution, DebugLaunch, RuntimeContribution, RuntimeHandle, BuildToolHandle, Contributions, Extension,
     ExtensionHandle, ExtensionManifest,
-    GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
+    GrammarContribution, InstalledRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerInstallHandle, ServerStartContext,
     Capability, CURRENT_SCHEMA_VERSION, OLDEST_SUPPORTED_SCHEMA_VERSION,
 };
@@ -96,6 +96,11 @@ pub enum RegisterError {
         analyzer_id: String,
         extension_id: String,
     },
+    /// Two extensions claim the same profiler id.
+    DuplicateProfiler {
+        profiler_id: String,
+        extension_id: String,
+    },
     /// Two extensions claim the same runtime id.
     DuplicateRuntime {
         runtime_id: String,
@@ -183,6 +188,10 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "extension {extension_id} declares build tool {tool_id}, which is already registered"
             ),
+            Self::DuplicateProfiler { profiler_id, extension_id } => write!(
+                f,
+                "extension {extension_id} declares profiler {profiler_id}, which is already registered"
+            ),
             Self::DuplicateAnalyzer { analyzer_id, extension_id } => write!(
                 f,
                 "extension {extension_id} declares analyzer {analyzer_id}, which is already registered"
@@ -265,6 +274,7 @@ pub struct Registry {
     /// Analyzers in registration order — the order the UI lists them in —
     /// with the index of the extension that runs each.
     analyzers: Vec<(AnalyzerContribution, usize)>,
+    profilers: Vec<(ProfilerContribution, usize)>,
     /// Runtime kinds in registration order, with the index of the extension
     /// that recognizes their installs.
     runtimes: Vec<(RuntimeContribution, usize)>,
@@ -450,6 +460,17 @@ impl Registry {
             analyzers_seen.push(&analyzer.id);
         }
 
+        let mut profilers_seen: Vec<&str> = Vec::new();
+        for profiler in &contributions.profilers {
+            if self.profilers.iter().any(|(p, _)| p.id == profiler.id) || profilers_seen.contains(&profiler.id.as_str()) {
+                return Err(RegisterError::DuplicateProfiler {
+                    profiler_id: profiler.id.clone(),
+                    extension_id: manifest.id.clone(),
+                });
+            }
+            profilers_seen.push(&profiler.id);
+        }
+
         let mut runtimes_seen: Vec<&str> = Vec::new();
         for runtime in &contributions.runtimes {
             if self.runtimes.iter().any(|(r, _)| r.id == runtime.id) || runtimes_seen.contains(&runtime.id.as_str()) {
@@ -545,6 +566,9 @@ impl Registry {
         for analyzer in contributions.analyzers {
             self.analyzers.push((analyzer, extension_index));
         }
+        for profiler in contributions.profilers {
+            self.profilers.push((profiler, extension_index));
+        }
         for runtime in contributions.runtimes {
             self.runtimes.push((runtime, extension_index));
         }
@@ -585,8 +609,8 @@ impl Registry {
     }
 
     /// Every JDK found by any extension that scans for them.
-    pub fn jdk_runtimes(&self) -> Vec<JdkRuntime> {
-        self.extensions.iter().flat_map(|e| e.jdk_runtimes()).collect()
+    pub fn installed_runtimes(&self) -> Vec<InstalledRuntime> {
+        self.extensions.iter().flat_map(|e| e.installed_runtimes()).collect()
     }
 
     /// How to start `server_id`, as the owning extension sees fit — or, when
@@ -740,6 +764,14 @@ impl Registry {
             .collect()
     }
 
+    /// Every registered profiler, in registration order.
+    pub fn profilers(&self) -> Vec<ProfilerHandle> {
+        self.profilers
+            .iter()
+            .map(|(profiler, idx)| ProfilerHandle::new(profiler.clone(), self.extensions[*idx].clone()))
+            .collect()
+    }
+
     /// Every language server with an installer, in registration order — what
     /// Settings > Language Servers lists a section for.
     pub fn server_installs(&self) -> Vec<ServerInstallHandle> {
@@ -833,6 +865,20 @@ impl Registry {
                 BuildToolHandle::new(static_id, tool.display_name.clone(), self.extensions[*idx].clone())
             })
             .collect()
+    }
+
+    /// The marker files every registered build tool looks for, without repeats,
+    /// in registration order — what a "no build tool here" message names.
+    pub fn build_tool_marker_files(&self) -> Vec<&str> {
+        let mut markers: Vec<&str> = Vec::new();
+        for (tool, ..) in &self.build_tools {
+            for marker in &tool.marker_files {
+                if !markers.contains(&marker.as_str()) {
+                    markers.push(marker);
+                }
+            }
+        }
+        markers
     }
 
     pub fn build_tool(&self, tool_id: &str) -> Option<BuildToolHandle> {

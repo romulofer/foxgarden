@@ -129,7 +129,7 @@ pub struct LspState {
     /// Keyed by the server's registered id (e.g. `"jdtls"`).
     servers: HashMap<String, Slot>,
     retiring: Vec<RetiringSession>,
-    java_release: JavaReleaseCache,
+    runtime_release: RuntimeReleaseCache,
     /// Maps language id → server id, rebuilt each `sync` call.
     lang_to_server: HashMap<String, String>,
     /// URI scheme → the server that serves it, rebuilt each `sync` call.
@@ -176,16 +176,16 @@ impl LspState {
             .map(|lang| lang.id())
             .collect();
 
-        let jdk_runtimes = registry.jdk_runtimes();
+        let installed_runtimes = registry.installed_runtimes();
 
         for server in registry.language_servers() {
             let needed = server.language_ids.iter().any(|id| open_language_ids.contains(id.as_str()));
-            let java_release = project_root.and_then(|root| self.java_release.release_for(root, registry));
+            let runtime_release = project_root.and_then(|root| self.runtime_release.release_for(root, registry));
             let ctx = ServerStartContext {
                 configured_binary: settings.binary_for(&server.id).to_string(),
                 runtime_home: settings.runtime_home_for(&server.id).to_string(),
-                java_release,
-                jdk_runtimes: jdk_runtimes.clone(),
+                runtime_release,
+                installed_runtimes: installed_runtimes.clone(),
                 project_root: project_root.map(Path::to_path_buf),
             };
             let config = desired_config(server, settings, project_root, needed, registry, ctx);
@@ -593,13 +593,13 @@ impl Drop for LspState {
 /// new project root and otherwise at most once every `RECHECK_AFTER`,
 /// which picks up an edited `pom.xml` without stat-ing four paths per frame.
 #[derive(Default)]
-struct JavaReleaseCache {
+struct RuntimeReleaseCache {
     root: Option<PathBuf>,
     release: Option<u32>,
     checked: Option<Instant>,
 }
 
-impl JavaReleaseCache {
+impl RuntimeReleaseCache {
     const RECHECK_AFTER: Duration = Duration::from_secs(2);
 
     fn release_for(&mut self, root: &Path, registry: &Registry) -> Option<u32> {

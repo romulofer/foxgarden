@@ -55,6 +55,12 @@ pub fn required(contributions: &Contributions) -> Vec<(Capability, &'static str)
     if !contributions.debug_adapters.is_empty() {
         needed.push((Capability::ProcessExec, "a debug adapter"));
     }
+    if !contributions.profilers.is_empty() {
+        needed.push((Capability::ProcessExec, "a profiler"));
+    }
+    if contributions.profilers.iter().any(|p| p.install.is_some()) {
+        needed.push((Capability::DownloadFile, "a profiler install"));
+    }
     if contributions.analyzers.iter().any(|a| a.install.is_some()) {
         needed.push((Capability::DownloadFile, "an analyzer install"));
     }

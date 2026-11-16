@@ -12,28 +12,30 @@ use serde::{Deserialize, Serialize};
 /// simply has none of this — `#[serde(default)]` plus `load_project_config`
 /// returning the default on a missing file means "no `.foxgarden/
 /// project.json` at all" and "one that says nothing in particular" are the
-/// same case, and Track 29 Phase 2's own `java_release()`/jdt.ls-native-
-/// import logic is exactly the fallback that already handles it.
+/// same case, and the extension's own release detection is exactly the fallback
+/// that already handles it. Files written before the fields were renamed
+/// (`java_release`, `jdk_home`) still read.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
-    /// The release the project was scaffolded for — redundant with what
-    /// `pom.xml`/`build.gradle(.kts)` itself already states (Track 29 Phase
-    /// 2 reads that directly), kept here anyway as the wizard's own record
-    /// of intent, independent of a build file a user could hand-edit later.
-    pub java_release: Option<u32>,
-    /// The specific JDK (from the machine-wide JDK inventory, `PLAN.md`
-    /// Track 29 Phase 1) the wizard scaffolded this project against, if the
-    /// user picked one rather than leaving it to auto-detection.
-    #[serde(with = "jdk_home_as_string")]
-    pub jdk_home: Option<PathBuf>,
+    /// The runtime release the project was scaffolded for — redundant with
+    /// what the project's own build file already states, kept here anyway as
+    /// the wizard's own record of intent, independent of a build file a user
+    /// could hand-edit later.
+    #[serde(alias = "java_release")]
+    pub runtime_release: Option<u32>,
+    /// The specific runtime installation (from the machine-wide inventory) the
+    /// wizard scaffolded this project against, if the user picked one rather
+    /// than leaving it to auto-detection.
+    #[serde(with = "runtime_home_as_string", alias = "jdk_home")]
+    pub runtime_home: Option<PathBuf>,
 }
 
 /// Same "lossy but infallible" reasoning as `run_config.rs`'s own
-/// `working_dir_as_string`: a non-UTF-8 `jdk_home` (real, if rare, on Unix)
+/// `working_dir_as_string`: a non-UTF-8 `runtime_home` (real, if rare, on Unix)
 /// should never turn one field into a hard failure that loses the rest of
 /// the file.
-mod jdk_home_as_string {
+mod runtime_home_as_string {
     use std::path::PathBuf;
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

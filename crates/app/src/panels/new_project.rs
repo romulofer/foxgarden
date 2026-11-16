@@ -28,6 +28,10 @@ struct ScaffoldOption {
     template_id: String,
     template_name: String,
     runtime_versions: Vec<u32>,
+    /// The extension's note for this target in the interface language.
+    note: Option<String>,
+    /// What the extension calls the runtime-version picker.
+    runtime_label: Option<String>,
 }
 
 /// Every target any registered extension scaffolds. Built once per frame
@@ -53,6 +57,8 @@ fn scaffold_options(languages: &Registry) -> Vec<ScaffoldOption> {
             template_id: scaffold.template_id.clone(),
             template_name: scaffold.template_name.clone(),
             runtime_versions: scaffold.runtime_versions.clone(),
+            note: scaffold.note(fg_i18n::lang().tag()).map(str::to_string),
+            runtime_label: scaffold.runtime_label(fg_i18n::lang().tag()).map(str::to_string),
         })
         .collect()
 }
@@ -277,8 +283,13 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                 ui.end_row();
 
                 if !runtime_versions.is_empty() {
-                    ui.label(t().new_project.java_release);
-                    egui::ComboBox::new("new_project_java_release", "")
+                    let label = options
+                        .iter()
+                        .find(|o| o.build_tool_id == state.build_tool_id && o.language_id == state.language_id && o.template_id == state.template_id)
+                        .and_then(|o| o.runtime_label.as_deref())
+                        .unwrap_or(t().new_project.runtime_version);
+                    ui.label(label);
+                    egui::ComboBox::new("new_project_runtime_release", "")
                         .selected_text(state.runtime_version.to_string())
                         .show_ui(ui, |ui| {
                             for release in &runtime_versions {
@@ -328,11 +339,12 @@ pub fn show(ui: &egui::Ui, state: &mut NewProjectWizardState, editor_state: &mut
                 }
             });
 
-        // Still keyed by tool id: the hint is localized here, and an
-        // extension has no locale to supply its own notes in yet — a Phase B
-        // question (see `SPEC.md` §24 on deferring a UI contribution API).
-        if state.build_tool_id == "gradle" {
-            ui.label(egui::RichText::new(t().new_project.gradle_no_wrapper_hint).weak());
+        let note = options
+            .iter()
+            .find(|o| o.build_tool_id == state.build_tool_id && o.language_id == state.language_id && o.template_id == state.template_id)
+            .and_then(|o| o.note.as_deref());
+        if let Some(note) = note {
+            ui.label(egui::RichText::new(note).weak());
         }
 
         if !state.location.trim().is_empty() && !state.artifact_id.trim().is_empty() {
@@ -425,8 +437,8 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
     fg_core::write_scaffold(&root, &files).map_err(|e| msg::scaffold_failed(&e))?;
 
     let config = ProjectConfig {
-        java_release: runtime_version,
-        jdk_home: None,
+        runtime_release: runtime_version,
+        runtime_home: None,
     };
     fg_core::save_project_config(&root, &config)
         .map_err(|e| msg::scaffolded_but_config_save_failed(&root.display().to_string(), &e.to_string()))?;
@@ -437,13 +449,13 @@ fn create_and_open(state: &NewProjectWizardState, editor_state: &mut EditorState
 }
 
 /// Not wired into `show`'s own UI yet — `RuntimeInventory` only gains a real
-/// caller once the wizard offers targeting a specific registered JDK
-/// (`jdk_home` in `ProjectConfig`) rather than leaving it to auto-detection
+/// caller once the wizard offers targeting a specific registered runtime
+/// (`runtime_home` in `ProjectConfig`) rather than leaving it to auto-detection
 /// the way `create_and_open` does today. Kept and exported so the intent is
 /// visible in the panel's own signature rather than a silent gap.
 #[allow(dead_code)]
-pub fn registered_jdks_for(java_release: u32, registry: &RuntimeInventory) -> Option<PathBuf> {
-    registry.closest_for(java_release).map(|jdk| jdk.home.clone())
+pub fn registered_runtimes_for(release: u32, registry: &RuntimeInventory) -> Option<PathBuf> {
+    registry.closest_for(release).map(|runtime| runtime.home.clone())
 }
 
 #[cfg(test)]

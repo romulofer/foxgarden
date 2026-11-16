@@ -358,27 +358,53 @@ msg! {
     }
 }
 
-// --- Profiler (async-profiler, PLAN.md Track 26) ------------------------
-
 msg! {
-    /// Shown when Profile is triggered but async-profiler isn't cached yet:
-    /// its download was kicked off, and the user should retry once it lands.
-    profiler_installing() {
-        pt: "baixando o async-profiler… tente Analisar de novo quando terminar",
-        en: "downloading async-profiler… try Profile again once it finishes",
+    /// No registered build tool recognizes the project root. `markers` is the
+    /// files the registered tools look for, so the message says what would help.
+    no_build_tool_detected(markers: &str) {
+        pt: "Nenhum arquivo de build ({markers}) encontrado na raiz do projeto.",
+        en: "No build file ({markers}) found at the project root.",
     }
 }
 
 msg! {
-    /// async-profiler's background install finished.
-    profiler_installed(version: &str) {
-        pt: "async-profiler {version} instalado",
-        en: "async-profiler {version} installed",
+    /// The build tool the project uses has no coverage run.
+    coverage_unsupported(tool: &str) {
+        pt: "Cobertura de código não é suportada por {tool} no momento.",
+        en: "Code coverage is not supported for {tool} right now.",
+    }
+}
+
+// --- Profiler (PLAN.md Track 26) -----------------------------------------
+
+msg! {
+    /// Shown when Profile is triggered but the profiler isn't cached yet: its
+    /// download was kicked off, and the user should retry once it lands.
+    /// (`name` is the extension's name for it.)
+    profiler_installing(name: &str) {
+        pt: "baixando o {name}… tente Analisar de novo quando terminar",
+        en: "downloading {name}… try Profile again once it finishes",
     }
 }
 
 msg! {
-    /// A capture has begun against the launched run's JVM.
+    /// The profiler's background install finished.
+    profiler_installed(name: &str, version: &str) {
+        pt: "{name} {version} instalado",
+        en: "{name} {version} installed",
+    }
+}
+
+msg! {
+    /// Profile was asked for, but the profiler has no build for this platform.
+    profiler_unavailable(name: &str) {
+        pt: "{name} não tem versão para esta plataforma",
+        en: "{name} has no build for this platform",
+    }
+}
+
+msg! {
+    /// A capture has begun against the launched run's process.
     profiling_pid(pid: u32, secs: u32) {
         pt: "analisando o processo {pid} por {secs}s…",
         en: "profiling process {pid} for {secs}s…",

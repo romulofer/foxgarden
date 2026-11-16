@@ -1,109 +1,75 @@
-
 use super::*;
 
-#[test]
-fn download_url_matches_the_real_v4_5_asset_layout_verified_this_session() {
-    // Only the host platform's asset is knowable at compile time; assert
-    // whichever one this build targets against its real release URL.
-    let platform = current_platform().expect("this test host is a supported platform");
-    let url = platform.download_url();
-    assert!(
-        url.starts_with("https://github.com/async-profiler/async-profiler/releases/download/v4.5/"),
-        "{url}"
-    );
-    assert!(url.ends_with(&platform.asset_file_name()), "{url}");
-    assert!(url.contains("async-profiler-4.5-"), "{url}");
+fn install(archive: ArchiveKind) -> ProfilerInstall {
+    ProfilerInstall {
+        version: "1.0".to_string(),
+        download_url: "https://example.invalid/prof.tar.gz".to_string(),
+        sha256: String::new(),
+        archive,
+        dir_name: "prof-1.0".to_string(),
+        launcher: "bin/launch".to_string(),
+    }
 }
 
-#[test]
-fn extracted_dir_name_is_the_asset_name_without_its_extension() {
-    let platform = current_platform().expect("supported platform");
-    let asset = platform.asset_file_name();
-    let dir = platform.extracted_dir_name();
-    assert!(asset.starts_with(&dir), "asset {asset} should start with dir {dir}");
-    assert_eq!(&asset[dir.len()..], format!(".{}", platform.extension));
+fn tarball(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    {
+        let mut builder = tar::Builder::new(&mut gz);
+        for (path, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *data).unwrap();
+        }
+        builder.finish().unwrap();
+    }
+    gz.finish().unwrap()
 }
 
 #[test]
 fn verify_download_rejects_bytes_that_do_not_match() {
-    let platform = current_platform().expect("supported platform");
-    let error =
-        verify_download(&platform, b"not the real archive").expect_err("a substituted artifact must be refused");
-    assert!(error.contains("checksum"), "{error}");
+    let mut pinned = install(ArchiveKind::TarGz);
+    pinned.sha256 = sha256_hex(b"the real archive");
+    let error = verify_download("Prof", &pinned, b"not the real archive").expect_err("a substituted artifact must be refused");
+    assert!(error.contains("checksum") && error.starts_with("Prof"), "{error}");
+    assert!(verify_download("Prof", &pinned, b"the real archive").is_ok());
 }
 
 #[test]
 fn sha256_hex_matches_a_known_vector() {
-    assert_eq!(
-        sha256_hex(b"hello"),
-        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-    );
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[test]
-fn extract_and_locate_asprof_finds_the_launcher_in_a_real_shaped_tarball() {
-    // A minimal but real gzipped tar shaped exactly like async-profiler's
-    // own linux-x64 archive: a versioned top-level directory holding
-    // `bin/asprof`.
-    use std::io::Write;
-
-    let dir = test_support::tempdir();
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    {
-        let mut builder = tar::Builder::new(&mut gz);
-        let script = b"#!/bin/sh\necho fake asprof\n";
-        let mut header = tar::Header::new_gnu();
-        header.set_size(script.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, "async-profiler-4.5-linux-x64/bin/asprof", &script[..])
-            .unwrap();
-        builder.finish().unwrap();
-    }
-    let bytes = gz.finish().unwrap();
-    let _ = std::io::stdout().flush();
-
-    let platform = current_platform().unwrap();
-    let asprof = extract_and_locate_asprof(&platform, dir.path(), &bytes).expect("locates asprof");
-    assert_eq!(
-        asprof,
-        dir.path()
-            .join("async-profiler-4.5-linux-x64")
-            .join("bin")
-            .join("asprof")
-    );
-    assert!(asprof.exists());
+    assert_eq!(sha256_hex(b"hello"), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
 }
 
 #[test]
-fn extract_and_locate_asprof_errors_when_the_launcher_is_absent() {
+fn extract_and_locate_finds_the_launcher_the_extension_names() {
+    let dir = test_support::tempdir();
+    let bytes = tarball(&[("prof-1.0/bin/launch", b"#!/bin/sh\necho fake\n")]);
+
+    let launcher = extract_and_locate(&install(ArchiveKind::TarGz), dir.path(), &bytes).expect("locates the launcher");
+    assert_eq!(launcher, dir.path().join("prof-1.0").join("bin").join("launch"));
+    assert!(launcher.exists());
+}
+
+#[test]
+fn extract_and_locate_errors_when_the_launcher_is_absent() {
+    let dir = test_support::tempdir();
+    let bytes = tarball(&[("unrelated/file.txt", b"nothing useful")]);
+    assert!(extract_and_locate(&install(ArchiveKind::TarGz), dir.path(), &bytes).is_err());
+}
+
+#[test]
+fn extract_and_locate_reads_a_zip_when_the_extension_says_zip() {
     use std::io::Write;
 
     let dir = test_support::tempdir();
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    {
-        let mut builder = tar::Builder::new(&mut gz);
-        let data = b"nothing useful";
-        let mut header = tar::Header::new_gnu();
-        header.set_size(data.len() as u64);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, "unrelated/file.txt", &data[..])
-            .unwrap();
-        builder.finish().unwrap();
-    }
-    let bytes = gz.finish().unwrap();
-    let _ = std::io::stdout().flush();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("prof-1.0/bin/launch", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(b"#!/bin/sh\n").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
 
-    // Force the tar path regardless of host so the assertion is uniform.
-    let platform = Platform {
-        suffix: "linux-x64",
-        extension: "tar.gz",
-        sha256: "",
-    };
-    assert!(extract_and_locate_asprof(&platform, dir.path(), &bytes).is_err());
+    let launcher = extract_and_locate(&install(ArchiveKind::Zip), dir.path(), &bytes).expect("locates the launcher");
+    assert!(launcher.ends_with("prof-1.0/bin/launch"), "{launcher:?}");
 }
 
 #[test]
