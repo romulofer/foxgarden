@@ -2488,10 +2488,10 @@ pub fn show(
     if doc.extra_selections.is_empty()
         && let Some(primary_caret) = shell_out.caret
         && primary_caret.is_collapsed()
-        && let Some(tree) = parser.as_ref().and_then(|p| p.tree())
+        && let Some((tree, language)) = parser.as_ref().and_then(|p| p.tree().map(|t| (t, p.language())))
     {
         let cursor_byte = char_to_byte(&old_text, primary_caret.primary);
-        if let Some(pair) = syntax::bracket_match(tree, &old_text, cursor_byte) {
+        if let Some(pair) = syntax::bracket_match(tree, &old_text, language, cursor_byte) {
             paint_bracket_match(ui, &shell_out.base, &doc.buffer, pair);
         }
     }
@@ -2672,7 +2672,7 @@ pub fn show(
         let top_line = doc.buffer.char_to_line(top_char.min(doc.buffer.len_chars()));
         if top_line > 0 && line_count > 0 {
             let top_byte = doc.buffer.line_to_byte(top_line.min(line_count - 1));
-            let scope_lines: Vec<usize> = syntax::enclosing_scope_starts(tree, top_byte, language)
+            let scope_lines: Vec<usize> = syntax::enclosing_scope_starts_in(tree, &old_text, top_byte, language)
                 .into_iter()
                 .map(|byte| doc.buffer.byte_to_line(byte))
                 .collect();

@@ -7,8 +7,9 @@
 //! other language's query.
 //!
 //! The embedded parse is not incremental: it is redone for every embedded
-//! range that overlaps what is being painted, on each recompute. Only ranges in
-//! view are parsed, and an embedded script is small next to the file around it.
+//! range that overlaps what is being painted whose text changed (`parse_embedded`
+//! remembers the rest). Only ranges in view are parsed, and an embedded script is
+//! small next to the file around it.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -22,7 +23,7 @@ use crate::highlight::{Scope, host_spans};
 
 /// How deep embedded languages may nest. A language that injects itself would
 /// otherwise never finish.
-const MAX_DEPTH: usize = 3;
+pub(crate) const MAX_DEPTH: usize = 3;
 
 /// The compiled injection query of `language`, cached like the highlight query:
 /// it is compiled once, and a failure is remembered rather than retried each
@@ -74,6 +75,61 @@ fn embedded_ranges(tree: &Tree, source: &str, language: Language, byte_range: Ra
     ranges
 }
 
+/// How many embedded parses are kept. A file embeds a handful of ranges and the
+/// cache only has to span a few frames, so a small bound that is cleared when full
+/// is enough.
+const PARSE_CACHE_LIMIT: usize = 32;
+
+/// What makes two parses of an embedded range the same tree: the language, where
+/// the range sits (bytes and rows, since a fold reads the row) and its text.
+type ParseKey = (Language, usize, usize, (usize, usize), (usize, usize), u64);
+
+/// `source` parsed as `embedded`, looking at nothing but `range`. Remembered by
+/// the range's text, so a caret move or a scroll, which change nothing in it,
+/// parse nothing: bracket matching and sticky scroll ask on every frame.
+fn parse_embedded(source: &str, range: tree_sitter::Range, embedded: Language) -> Option<Tree> {
+    use std::hash::{Hash, Hasher};
+
+    static CACHE: OnceLock<Mutex<HashMap<ParseKey, Tree>>> = OnceLock::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.get(range.start_byte..range.end_byte)?.hash(&mut hasher);
+    let key = (
+        embedded,
+        range.start_byte,
+        range.end_byte,
+        (range.start_point.row, range.start_point.column),
+        (range.end_point.row, range.end_point.column),
+        hasher.finish(),
+    );
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(tree) = cache.lock().expect("embedded parse cache lock").get(&key) {
+        return Some(tree.clone());
+    }
+
+    let ts = ts_language(embedded)?;
+    let mut parser = Parser::new();
+    parser.set_language(&ts).ok()?;
+    parser.set_included_ranges(&[range]).ok()?;
+    let tree = parser.parse(source, None)?;
+    let mut cache = cache.lock().expect("embedded parse cache lock");
+    if cache.len() >= PARSE_CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(key, tree.clone());
+    Some(tree)
+}
+
+/// The parse of every embedded range of `source` inside `byte_range`, with the
+/// language it was parsed as. What folding, sticky scroll and bracket matching
+/// ask through, since the host tree sees an embedded script as one opaque node.
+/// Not incremental, like the highlighting parse: callers cache by content.
+pub(crate) fn embedded_trees(tree: &Tree, source: &str, language: Language, byte_range: Range<usize>) -> Vec<(Tree, Language)> {
+    embedded_ranges(tree, source, language, byte_range)
+        .into_iter()
+        .filter_map(|(range, embedded)| Some((parse_embedded(source, range, embedded)?, embedded)))
+        .collect()
+}
+
 /// `spans`, the host language's own highlights, with the embedded languages'
 /// highlights laid over the ranges they occupy.
 pub(crate) fn with_embedded(
@@ -88,12 +144,7 @@ pub(crate) fn with_embedded(
         return spans;
     }
     for (range, embedded) in embedded_ranges(tree, source, language, byte_range.clone()) {
-        let Some(ts) = ts_language(embedded) else { continue };
-        let mut parser = Parser::new();
-        if parser.set_language(&ts).is_err() || parser.set_included_ranges(&[range]).is_err() {
-            continue;
-        }
-        let Some(embedded_tree) = parser.parse(source, None) else { continue };
+        let Some(embedded_tree) = parse_embedded(source, range, embedded) else { continue };
         let content = range.start_byte..range.end_byte;
         let visible = content.start.max(byte_range.start)..content.end.min(byte_range.end);
         let inner = host_spans(&embedded_tree, source, embedded, visible, depth + 1);

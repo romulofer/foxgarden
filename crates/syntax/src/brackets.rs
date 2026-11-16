@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use fg_core::Language;
 use tree_sitter::{Node, Tree};
 
 const OPENERS: [&str; 3] = ["(", "{", "["];
@@ -50,8 +51,32 @@ fn bracket_pair_of(node: Node, source: &str) -> Option<(Range<usize>, Range<usiz
 /// Returns `None` if no such ancestor exists (unbalanced/incomplete code)
 /// or `byte_offset` never actually touches a bracket on the way up to the
 /// root.
-pub fn bracket_match(tree: &Tree, source: &str, byte_offset: usize) -> Option<(Range<usize>, Range<usize>)> {
+pub fn bracket_match(tree: &Tree, source: &str, language: Language, byte_offset: usize) -> Option<(Range<usize>, Range<usize>)> {
+    match_in(tree, source, language, byte_offset, 0)
+}
+
+/// `bracket_match` at embedding depth `depth`: a bracket inside text another
+/// language embeds (a Svelte `<script>`) is that language's tree's, and wins
+/// over whatever the host tree makes of the same bytes.
+fn match_in(tree: &Tree, source: &str, language: Language, byte_offset: usize, depth: usize) -> Option<(Range<usize>, Range<usize>)> {
     let byte_offset = byte_offset.min(source.len());
+    if depth < crate::injection::MAX_DEPTH {
+        // A bracket is touched at its start or end, so look one byte either side.
+        let window = byte_offset.saturating_sub(1)..(byte_offset + 1).min(source.len());
+        for (embedded_tree, embedded) in crate::injection::embedded_trees(tree, source, language, window) {
+            let root = embedded_tree.root_node();
+            if root.start_byte() <= byte_offset
+                && byte_offset <= root.end_byte()
+                && let Some(pair) = match_in(&embedded_tree, source, embedded, byte_offset, depth + 1)
+            {
+                return Some(pair);
+            }
+        }
+    }
+    host_match(tree, source, byte_offset)
+}
+
+fn host_match(tree: &Tree, source: &str, byte_offset: usize) -> Option<(Range<usize>, Range<usize>)> {
     let mut node = tree.root_node().descendant_for_byte_range(byte_offset, byte_offset)?;
 
     loop {

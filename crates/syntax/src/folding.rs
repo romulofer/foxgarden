@@ -39,14 +39,7 @@ pub struct FoldRange {
 /// carry one fold.
 pub fn foldable_ranges(tree: &Tree, source: &str, language: Language) -> Vec<FoldRange> {
     let mut ranges = Vec::new();
-
-    let kinds = foldable_kinds(language);
-    if !kinds.is_empty() {
-        collect(tree.root_node(), source, kinds, &mut ranges);
-    }
-    if let Some(import_kind) = import_kind(language) {
-        collect_import_blocks(tree.root_node(), source, import_kind, &mut ranges);
-    }
+    collect_ranges(tree, source, language, 0, &mut ranges);
 
     // Stable sort: for two ranges already pushed in outer-first order and
     // sharing a marker line (the pre-order DFS `collect` guarantees this for
@@ -56,6 +49,23 @@ pub fn foldable_ranges(tree: &Tree, source: &str, language: Language) -> Vec<Fol
     ranges.sort_by_key(|r| r.marker_line);
     ranges.dedup_by_key(|r| r.marker_line);
     ranges
+}
+
+/// `tree`'s own folds, then those of the languages it embeds (a Svelte
+/// `<script>`'s function bodies), to the same nesting cap highlighting uses.
+fn collect_ranges(tree: &Tree, source: &str, language: Language, depth: usize, ranges: &mut Vec<FoldRange>) {
+    let kinds = foldable_kinds(language);
+    if !kinds.is_empty() {
+        collect(tree.root_node(), source, kinds, ranges);
+    }
+    if let Some(import_kind) = import_kind(language) {
+        collect_import_blocks(tree.root_node(), source, import_kind, ranges);
+    }
+    if depth < crate::injection::MAX_DEPTH {
+        for (embedded_tree, embedded) in crate::injection::embedded_trees(tree, source, language, 0..source.len()) {
+            collect_ranges(&embedded_tree, source, embedded, depth + 1, ranges);
+        }
+    }
 }
 
 fn collect(node: Node, source: &str, kinds: &[&str], out: &mut Vec<FoldRange>) {

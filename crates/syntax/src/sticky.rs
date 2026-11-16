@@ -21,6 +21,37 @@ use crate::node_kinds::scope_kinds;
 /// encloses it (top-level code), or when the language has no scope vocabulary
 /// (anything but Java today).
 pub fn enclosing_scope_starts(tree: &Tree, byte_offset: usize, language: Language) -> Vec<usize> {
+    scope_starts(tree, None, byte_offset, language, 0)
+}
+
+/// `enclosing_scope_starts` at embedding depth `depth`. `source` is `None` at
+/// the top, where only the host tree is walked; a scope inside an embedded
+/// range needs the text to parse it, which the public signature does not carry,
+/// so that case is served by `enclosing_scope_starts_in`.
+fn scope_starts(tree: &Tree, source: Option<&str>, byte_offset: usize, language: Language, depth: usize) -> Vec<usize> {
+    let mut starts = host_scope_starts(tree, byte_offset, language);
+    if let Some(source) = source
+        && depth < crate::injection::MAX_DEPTH
+    {
+        let window = byte_offset..(byte_offset + 1).min(source.len());
+        for (embedded_tree, embedded) in crate::injection::embedded_trees(tree, source, language, window) {
+            let root = embedded_tree.root_node();
+            if root.start_byte() <= byte_offset && byte_offset <= root.end_byte() {
+                starts.extend(scope_starts(&embedded_tree, Some(source), byte_offset, embedded, depth + 1));
+            }
+        }
+    }
+    starts
+}
+
+/// Like `enclosing_scope_starts`, but also climbs through the languages
+/// `language` embeds: a function in a Svelte `<script>` pins as it would in a
+/// `.ts` file. Needs `source` to parse the embedded range.
+pub fn enclosing_scope_starts_in(tree: &Tree, source: &str, byte_offset: usize, language: Language) -> Vec<usize> {
+    scope_starts(tree, Some(source), byte_offset, language, 0)
+}
+
+fn host_scope_starts(tree: &Tree, byte_offset: usize, language: Language) -> Vec<usize> {
     let kinds = scope_kinds(language);
     if kinds.is_empty() {
         return Vec::new();

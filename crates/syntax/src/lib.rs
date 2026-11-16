@@ -36,5 +36,5 @@ pub use imports::{annotation_candidates, doc_stub, import_edit};
 pub use providers::install as install_extension_providers;
 pub use run_targets::{RunMarker, main_entries};
 pub use selection::expand_selection;
-pub use sticky::enclosing_scope_starts;
+pub use sticky::{enclosing_scope_starts, enclosing_scope_starts_in};
 pub use tree_sitter::{InputEdit, Point, Tree};

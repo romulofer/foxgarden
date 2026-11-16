@@ -537,3 +537,79 @@ fn only_embedded_text_in_the_requested_window_is_highlighted() {
     assert!(scopes_over(&spans, SVELTE_COMPONENT, "color").contains(&Scope::Property));
     assert!(spans.iter().all(|(range, _)| range.end > style_start), "a span from before the window: {spans:?}");
 }
+
+const SVELTE_WITH_FUNCTION: &str = "<script lang=\"ts\">\n  function bump(step: number) {\n    count += step;\n    log(count);\n  }\n</script>\n\n<p>{count}</p>\n";
+
+#[test]
+fn a_function_body_inside_a_svelte_script_folds() {
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(SVELTE_WITH_FUNCTION);
+    let folds = syntax::foldable_ranges(tree, SVELTE_WITH_FUNCTION, svelte);
+
+    // Line 1 is `function bump(...) {`; its body (lines 2-4) hides under it.
+    let fold = folds.iter().find(|fold| fold.marker_line == 1).unwrap_or_else(|| panic!("{folds:?}"));
+    let hidden = &SVELTE_WITH_FUNCTION[fold.start_byte..fold.end_byte];
+    assert!(hidden.contains("count += step;") && hidden.contains("log(count);"), "{hidden:?}");
+}
+
+#[test]
+fn a_bracket_inside_a_svelte_script_matches_its_partner() {
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(SVELTE_WITH_FUNCTION);
+    let open = SVELTE_WITH_FUNCTION.find("(step").unwrap();
+    let close = SVELTE_WITH_FUNCTION.find(") {").unwrap();
+
+    let (a, b) = syntax::bracket_match(tree, SVELTE_WITH_FUNCTION, svelte, open + 1).expect("a pair");
+    assert_eq!((a, b), (open..open + 1, close..close + 1));
+}
+
+#[test]
+fn a_svelte_scripts_function_pins_as_a_sticky_header() {
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(SVELTE_WITH_FUNCTION);
+    let inside = SVELTE_WITH_FUNCTION.find("log(").unwrap();
+
+    let starts = syntax::enclosing_scope_starts_in(tree, SVELTE_WITH_FUNCTION, inside, svelte);
+    assert_eq!(starts, vec![SVELTE_WITH_FUNCTION.find("function bump").unwrap()]);
+}
+
+#[test]
+fn css_in_a_styled_components_template_is_highlighted() {
+    let source = "const Button = styled.button`\n  color: red;\n`;\nconst a = css`margin: 0;`;\nconst Wrapped = styled(Button)`padding: 1px;`;\n";
+    for id in ["javascript", "typescript"] {
+        let language = Language::new(id);
+        let mut parser = parser(language);
+        let tree = parser.parse(source);
+        let spans = highlight_spans(tree, source, language);
+
+        for needle in ["color", "margin", "padding"] {
+            assert!(scopes_over(&spans, source, needle).contains(&Scope::Property), "{id} {needle}: {spans:?}");
+        }
+    }
+}
+
+#[test]
+fn css_in_a_jsx_style_element_and_html_in_an_html_template_are_highlighted() {
+    let source = "const a = <style>{`p { color: red; }`}</style>;\nconst b = html`<section>hi</section>`;\n";
+    let language = Language::new("typescriptreact");
+    let mut parser = parser(language);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, language);
+
+    assert!(scopes_over(&spans, source, "color").contains(&Scope::Property), "{spans:?}");
+    assert!(scopes_over(&spans, source, "section").contains(&Scope::Tag), "{spans:?}");
+}
+
+#[test]
+fn an_ordinary_template_literal_is_not_embedded() {
+    let source = "const a = `color: red`;\nconst b = tag`color: red`;\n";
+    let language = Language::new("typescript");
+    let mut parser = parser(language);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, language);
+
+    assert!(!scopes_over(&spans, source, "color").contains(&Scope::Property), "{spans:?}");
+}
