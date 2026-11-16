@@ -50,6 +50,7 @@ all wired into one fast UI. 🚀
 | 🔎 **Static analysis** | Checkstyle, PMD & SpotBugs — installable from inside the app |
 | ✂️ **Split-pane editing** | Two editor panes side by side over one project, each with its own tabs |
 | 🧩 **Extension-based** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; JavaScript / TypeScript / HTML / CSS; and Svelte are each an extension behind a small API — the editor core is language-agnostic |
+| 🎯 **Kotlin Multiplatform** | Source-set aware: an expect/actual marker in the gutter, **Go to expect/actual** (`Ctrl+Alt+B`), and "Run tests for this source set" from the command palette |
 | ⚡ **Fast by design** | Incremental parsing, per-tab galley cache, near-release-speed debug builds |
 
 <details>
@@ -110,7 +111,9 @@ compiled in today, as are `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgar
 holding an `extension.toml` under `~/.local/share/foxgarden/extensions/` (the
 platform's data directory on other systems). It can contribute languages,
 grammars, file icons, snippets, keywords, language servers the editor starts,
-and analyzers run by a program the extension ships. An extension that starts
+and analyzers run by a program the extension ships; an installed extension's own code
+runs out of process, its tasks show in the command palette with their test reports
+summarized, and the problems it finds in a file appear as diagnostics. An extension that starts
 processes or downloads files must declare the `process_exec` / `download_file`
 capability, or it is refused. Only install extensions you trust: a grammar is
 a native library and an extension's program runs with your permissions.
@@ -167,12 +170,26 @@ npm install --save-dev svelte-language-server typescript           # Svelte
 TypeScript 7 ships no `tsserver.js`, so `typescript-language-server` cannot run on
 it; a project on 7 only needs `typescript` installed.
 
+### 🗂️ Project layout
+
+| Crate | What it holds |
+|---|---|
+| `crates/core` | The editor model with no UI: documents, undo, diff and blame, git, drafts, Docker, project and session state |
+| `crates/syntax` | Incremental tree-sitter parsing, highlighting, folding, bracket matching and the code model |
+| `crates/extension` | `fg-extension`, the API an extension implements, and the registry that holds what extensions contribute |
+| `crates/languages` | Which extensions this build ships with (JVM, Kotlin Multiplatform, Python, web, Svelte) |
+| `crates/i18n` | UI strings in Portuguese and English; a missing translation is a compile error |
+| `crates/app` | The `egui` application: panes, tabs, menus, the terminal, the debugger and the palette |
+| `crates/test-support` | Temporary-directory fixtures shared by the tests |
+
 ### 📈 Status
 
-Actively developed on `main`. The editor core and the JVM tooling above are
-shipped and working. The language-agnostic extension seam is in place; ongoing
-work is moving the last JVM specifics out of the app crate and then loading
-extensions from outside the binary. Contributions and issues welcome. 🙌
+Actively developed on `main`. The editor core, the JVM tooling above and the
+extensions for Kotlin Multiplatform, Python, the web stack and Svelte are
+shipped and working. The language-agnostic extension seam is in place and
+extensions can be loaded from disk with their capabilities enforced; ongoing
+work is moving the last JVM specifics out of the app crate. Contributions and
+issues welcome. 🙌
 
 ### 📄 License
 
@@ -209,6 +226,7 @@ git e análise estática, tudo em uma UI rápida. 🚀
 | 🔎 **Análise estática** | Checkstyle, PMD & SpotBugs — instaláveis de dentro do app |
 | ✂️ **Edição em painéis** | Dois painéis lado a lado sobre um projeto, cada um com suas abas |
 | 🧩 **Baseado em extensões** | Java, Kotlin, Spring, Maven & Gradle; Kotlin Multiplatform; Python; JavaScript / TypeScript / HTML / CSS; e Svelte são, cada um, uma extensão atrás de uma API pequena — o núcleo do editor não depende de linguagem |
+| 🎯 **Kotlin Multiplatform** | Consciente de source sets: marcador expect/actual no gutter, **Ir para expect/actual** (`Ctrl+Alt+B`) e "Executar testes deste source set" pela paleta de comandos |
 | ⚡ **Rápido por projeto** | Parsing incremental, cache de galley por aba, builds de debug em velocidade quase-release |
 
 <details>
@@ -270,8 +288,10 @@ compilada junto por enquanto, assim como `kmp-foxgarden` (Kotlin Multiplatform),
 diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
 diretório de dados da plataforma em outros sistemas). Ele pode contribuir
 linguagens, gramáticas, ícones, snippets, palavras-chave, language servers que
-o editor inicia e analisadores executados por um programa que a extensão traz.
-Uma extensão que inicia processos ou baixa arquivos precisa declarar a
+o editor inicia e analisadores executados por um programa que a extensão traz; o código de uma
+extensão instalada roda fora do processo, as tarefas dela aparecem na paleta de
+comandos com os relatórios de teste resumidos, e os problemas que ela encontra
+em um arquivo viram diagnósticos. Uma extensão que inicia processos ou baixa arquivos precisa declarar a
 capacidade `process_exec` / `download_file`, senão é recusada. Instale só
 extensões confiáveis: uma gramática é uma biblioteca nativa e o programa de uma
 extensão roda com as suas permissões.
@@ -289,6 +309,7 @@ git clone https://github.com/legendaryredfox/spring-foxgarden.git
 git clone https://github.com/legendaryredfox/kmp-foxgarden.git
 git clone https://github.com/romulofer/python-foxgarden.git
 git clone https://github.com/romulofer/ts-foxgarden.git
+git clone https://github.com/romulofer/svelte-foxgarden.git
 cd foxgarden
 
 # executar (builds de debug rodam dependências em velocidade quase-release)
@@ -328,13 +349,26 @@ npm install --save-dev svelte-language-server typescript           # Svelte
 O TypeScript 7 não traz `tsserver.js`, então o `typescript-language-server` não
 roda nele; um projeto no 7 só precisa do `typescript` instalado.
 
+### 🗂️ Estrutura do projeto
+
+| Crate | O que contém |
+|---|---|
+| `crates/core` | O modelo do editor sem UI: documentos, desfazer, diff e blame, git, rascunhos, Docker, estado de projeto e sessão |
+| `crates/syntax` | Parsing incremental com tree-sitter, realce, dobramento, pares de parênteses e o modelo de código |
+| `crates/extension` | `fg-extension`, a API que uma extensão implementa, e o registro do que as extensões contribuem |
+| `crates/languages` | Quais extensões esta build traz (JVM, Kotlin Multiplatform, Python, web, Svelte) |
+| `crates/i18n` | Textos da interface em português e inglês; tradução faltando é erro de compilação |
+| `crates/app` | O aplicativo `egui`: painéis, abas, menus, terminal, depurador e paleta |
+| `crates/test-support` | Fixtures de diretório temporário compartilhadas pelos testes |
+
 ### 📈 Status
 
-Em desenvolvimento ativo na `main`. O núcleo do editor e o ferramental JVM acima
-já estão prontos e funcionando. A costura de extensões independente de linguagem
-está pronta; o trabalho atual move as últimas peças específicas da JVM para fora
-do crate do app e depois carrega extensões de fora do binário. Contribuições e
-issues são bem-vindas. 🙌
+Em desenvolvimento ativo na `main`. O núcleo do editor, o ferramental JVM acima e
+as extensões de Kotlin Multiplatform, Python, stack web e Svelte já estão prontos
+e funcionando. A costura de extensões independente de linguagem está pronta e as
+extensões podem ser carregadas do disco, com as capacidades verificadas; o
+trabalho atual move as últimas peças específicas da JVM para fora do crate do
+app. Contribuições e issues são bem-vindas. 🙌
 
 ### 📄 Licença
 
