@@ -418,4 +418,82 @@ file_extensions = ["toy"]
         let dir = install_lint(root.path(), &MANIFEST.replace("run.sh", "../run.sh"));
         assert!(InstalledExtension::load(&dir).err().unwrap().message.contains("inside the extension directory"));
     }
+
+    const BUILD_MANIFEST: &str = r#"
+id = "make-ext"
+name = "Make"
+version = "0.1.0"
+schema_version = 1
+capabilities = ["process_exec"]
+
+[process]
+command = "run.sh"
+
+[[build_tools]]
+id = "make"
+display_name = "Make"
+marker_files = ["Makefile"]
+"#;
+
+    /// Answers by method: a build command, no test command, and a run that fails.
+    const BUILD_SCRIPT: &str = r#"#!/bin/sh
+read line
+case "$line" in
+  *'"method":"build_command"'*) echo '{"result":{"program":"make","args":["all"],"env":[["CI","1"]]}}' ;;
+  *'"method":"test_command"'*) echo '{"result":null}' ;;
+  *'"method":"run_command"'*) echo '{"error":"no target named main"}' ;;
+esac
+"#;
+
+    fn install_build(root: &Path, manifest: &str) -> PathBuf {
+        let dir = install(root, "make-ext", manifest);
+        let program = dir.join("run.sh");
+        std::fs::write(&program, BUILD_SCRIPT).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_build_tool_is_declared_and_its_commands_come_from_the_process() {
+        let root = tempfile::tempdir().unwrap();
+        let extension = InstalledExtension::load(&install_build(root.path(), BUILD_MANIFEST)).unwrap();
+
+        let tool = &extension.contributions().build_tools[0];
+        assert_eq!((tool.id.as_str(), tool.marker_files.clone()), ("make", vec!["Makefile".to_string()]));
+
+        let project = Path::new("/p");
+        let build = extension.build_command("make", project, BuildTask::Compile).unwrap();
+        assert_eq!(build.program, PathBuf::from("make"));
+        assert_eq!(build.args, vec!["all".to_string()]);
+        assert_eq!(build.cwd, project, "the working directory defaults to the project root");
+        assert_eq!(build.env, vec![("CI".to_string(), "1".to_string())]);
+
+        assert_eq!(extension.test_command("make", project, "t"), None, "null is no command");
+        let run = extension.run_command("make", project, &RunSpec::default());
+        assert_eq!(run, Some(Err("no target named main".to_string())), "a failed run says why");
+    }
+
+    #[test]
+    fn a_build_tool_is_asked_only_for_its_own_tool_and_only_with_process_exec() {
+        let root = tempfile::tempdir().unwrap();
+        let extension = InstalledExtension::load(&install_build(root.path(), BUILD_MANIFEST)).unwrap();
+        assert_eq!(extension.build_command("maven", Path::new("/p"), BuildTask::Compile), None);
+
+        let other = tempfile::tempdir().unwrap();
+        let silent = install_build(other.path(), &BUILD_MANIFEST.replace("capabilities = [\"process_exec\"]", ""));
+        let extension = InstalledExtension::load(&silent).unwrap();
+        assert_eq!(extension.build_command("make", Path::new("/p"), BuildTask::Compile), None);
+
+        let mut registry = Registry::new();
+        let problems = crate::register_installed(&mut registry, other.path(), &[]);
+        assert!(problems.iter().any(|p| p.contains("a build tool")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_build_tool_without_a_process_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_build(root.path(), &BUILD_MANIFEST.replace("[process]\ncommand = \"run.sh\"\n", ""));
+        let error = InstalledExtension::load(&dir).err().unwrap();
+        assert!(error.message.contains("[process]"), "{error}");
+    }
 }

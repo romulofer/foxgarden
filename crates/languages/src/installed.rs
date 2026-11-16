@@ -17,13 +17,18 @@
 //! An analyzer needs the extension's own code to read the tool's report, so a
 //! manifest that declares one also names a `[process]`: a program inside the
 //! extension directory that the host starts once per question (see
-//! [`crate::process`]). Build tools are not parseable here yet.
+//! [`crate::process`]). A build tool is declared the same way (an id, a name
+//! and the marker files that say it builds a project) and the process answers
+//! the commands to run for a build, a test run and a program launch. Reading
+//! its output line by line (`parse_build_output_line`) stays out: a process
+//! per output line is the wrong price.
 
 use std::path::{Path, PathBuf};
 
 use fg_extension::{
-    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, Capability, ProblemSeverity, Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
-    InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, Snippet,
+    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, BuildToolContribution, Capability, CommandSpec, ProblemSeverity,
+    Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
+    InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, RunSpec, Snippet,
 };
 use serde::Deserialize;
 
@@ -76,6 +81,17 @@ struct Manifest {
     keywords: Vec<KeywordTable>,
     #[serde(default)]
     injections: Vec<InjectionTable>,
+    #[serde(default)]
+    build_tools: Vec<BuildToolTable>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildToolTable {
+    id: String,
+    display_name: String,
+    /// Any one of these at the project root means the tool builds the project.
+    marker_files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +218,7 @@ pub struct InstalledExtension {
     snippets: Vec<(String, Snippet)>,
     keywords: Vec<(String, Vec<String>)>,
     injections: Vec<InjectionContribution>,
+    build_tools: Vec<BuildToolContribution>,
 }
 
 impl InstalledExtension {
@@ -331,6 +348,18 @@ impl InstalledExtension {
         if !analyzers.is_empty() && process.is_none() {
             return Err(fail("analyzers need a [process] to run them".to_string()));
         }
+        let build_tools: Vec<_> = manifest
+            .build_tools
+            .into_iter()
+            .map(|t| BuildToolContribution {
+                id: t.id,
+                display_name: t.display_name,
+                marker_files: t.marker_files,
+            })
+            .collect();
+        if !build_tools.is_empty() && process.is_none() {
+            return Err(fail("build tools need a [process] to answer their commands".to_string()));
+        }
         let file_icons = manifest
             .file_icons
             .into_iter()
@@ -370,7 +399,43 @@ impl InstalledExtension {
                 .collect(),
             keywords: manifest.keywords.into_iter().map(|k| (k.language_id, k.words)).collect(),
             injections,
+            build_tools,
         })
+    }
+
+    /// The extension's process, when `tool_id` is a build tool this extension
+    /// declares and it may start programs. The registry asks every extension about
+    /// every tool, so an extension must not start a program for a tool that is not
+    /// its own.
+    fn process_for_tool(&self, tool_id: &str) -> Option<&ProcessCommand> {
+        if !self.capabilities.contains(&Capability::ProcessExec) || !self.build_tools.iter().any(|t| t.id == tool_id) {
+            return None;
+        }
+        self.process.as_ref()
+    }
+}
+
+/// A command as an extension's process spells it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandReply {
+    program: PathBuf,
+    #[serde(default)]
+    args: Vec<String>,
+    /// Defaults to the project root.
+    cwd: Option<PathBuf>,
+    #[serde(default)]
+    env: Vec<(String, String)>,
+}
+
+impl CommandReply {
+    fn into_spec(self, project_root: &Path) -> CommandSpec {
+        CommandSpec {
+            program: self.program,
+            args: self.args,
+            cwd: self.cwd.unwrap_or_else(|| project_root.to_path_buf()),
+            env: self.env,
+        }
     }
 }
 
@@ -426,6 +491,7 @@ impl Extension for InstalledExtension {
             analyzers: self.analyzers.clone(),
             file_icons: self.file_icons.clone(),
             injections: self.injections.clone(),
+            build_tools: self.build_tools.clone(),
             ..Default::default()
         }
     }
@@ -444,6 +510,51 @@ impl Extension for InstalledExtension {
         });
         let findings: Vec<FindingReply> = process.call("run_analyzer", &params)?;
         Ok(findings.into_iter().map(FindingReply::into_finding).collect())
+    }
+
+    /// A build tool's commands are asked only for its own tools. A command is a
+    /// question off the keystroke path (the user pressed Build, Test or Run), so a
+    /// process per question is fine. An extension that fails or answers nothing
+    /// offers no command, which the UI reports as the tool not supporting the task.
+    fn build_command(&self, tool_id: &str, project_root: &Path, task: BuildTask) -> Option<CommandSpec> {
+        let process = self.process_for_tool(tool_id)?;
+        let task = match task {
+            BuildTask::Compile => "compile",
+            BuildTask::Test => "test",
+            BuildTask::Coverage => "coverage",
+        };
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root, "task": task });
+        let reply: Option<CommandReply> = process.call("build_command", &params).ok().flatten();
+        reply.map(|command| command.into_spec(project_root))
+    }
+
+    fn test_command(&self, tool_id: &str, project_root: &Path, filter: &str) -> Option<CommandSpec> {
+        let process = self.process_for_tool(tool_id)?;
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root, "filter": filter });
+        let reply: Option<CommandReply> = process.call("test_command", &params).ok().flatten();
+        reply.map(|command| command.into_spec(project_root))
+    }
+
+    /// Unlike the two above, a failure here is the user's answer: a run that
+    /// could not be assembled says why instead of vanishing.
+    fn run_command(&self, tool_id: &str, project_root: &Path, run: &RunSpec) -> Option<Result<CommandSpec, String>> {
+        let process = self.process_for_tool(tool_id)?;
+        let params = serde_json::json!({
+            "tool": tool_id,
+            "project_root": project_root,
+            "run": {
+                "entry_point": run.entry_point,
+                "vm_args": run.vm_args,
+                "program_args": run.program_args,
+                "env": run.env,
+                "working_dir": run.working_dir,
+            },
+        });
+        match process.call::<_, Option<CommandReply>>("run_command", &params) {
+            Ok(Some(command)) => Some(Ok(command.into_spec(project_root))),
+            Ok(None) => None,
+            Err(message) => Some(Err(message)),
+        }
     }
 
     /// Asked of the extension's process only for a language it declares, and only
