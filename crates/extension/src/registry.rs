@@ -7,7 +7,7 @@ use crate::{
     ExtensionHandle, ExtensionManifest,
     GrammarContribution, JdkRuntime, LanguageId, LanguageIndex, LanguageServerContribution, ProjectRelease,
     RegisteredLanguage, ResolvedServerStart, ScaffoldContribution, ScaffoldSpec, ServerInstallHandle, ServerStartContext,
-    Capability, CURRENT_SCHEMA_VERSION,
+    Capability, CURRENT_SCHEMA_VERSION, OLDEST_SUPPORTED_SCHEMA_VERSION,
 };
 
 fn check_capabilities(
@@ -37,6 +37,9 @@ pub enum RegisterError {
     IncompatibleSchema {
         extension_id: String,
         found: u32,
+        /// The oldest version this build still loads.
+        oldest: u32,
+        /// The newest, and the one new extensions declare.
         expected: u32,
     },
     /// A contribution needs a capability the extension did not declare.
@@ -121,10 +124,11 @@ impl std::fmt::Display for RegisterError {
             Self::IncompatibleSchema {
                 extension_id,
                 found,
+                oldest,
                 expected,
             } => write!(
                 f,
-                "extension {extension_id} declares schema version {found}, but this build speaks {expected}"
+                "extension {extension_id} declares schema version {found}, but this build speaks {oldest} to {expected}"
             ),
             Self::UndeclaredCapability {
                 extension_id,
@@ -322,10 +326,11 @@ impl Registry {
         manifest: &ExtensionManifest,
         contributions: &Contributions,
     ) -> Result<(), RegisterError> {
-        if manifest.schema_version != CURRENT_SCHEMA_VERSION {
+        if !(OLDEST_SUPPORTED_SCHEMA_VERSION..=CURRENT_SCHEMA_VERSION).contains(&manifest.schema_version) {
             return Err(RegisterError::IncompatibleSchema {
                 extension_id: manifest.id.clone(),
                 found: manifest.schema_version,
+                oldest: OLDEST_SUPPORTED_SCHEMA_VERSION,
                 expected: CURRENT_SCHEMA_VERSION,
             });
         }

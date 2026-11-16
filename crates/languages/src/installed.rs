@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use fg_extension::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, Capability, ProblemSeverity, Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
-    LanguageContribution, LanguageServerContribution, NodeKinds, Snippet,
+    InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, Snippet,
 };
 use serde::Deserialize;
 
@@ -74,6 +74,17 @@ struct Manifest {
     snippets: Vec<SnippetTable>,
     #[serde(default)]
     keywords: Vec<KeywordTable>,
+    #[serde(default)]
+    injections: Vec<InjectionTable>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InjectionTable {
+    /// The host language: the one whose grammar the query is written against.
+    language_id: String,
+    /// The injection query, relative to the extension directory.
+    query: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +201,7 @@ pub struct InstalledExtension {
     capabilities: Vec<Capability>,
     snippets: Vec<(String, Snippet)>,
     keywords: Vec<(String, Vec<String>)>,
+    injections: Vec<InjectionContribution>,
 }
 
 impl InstalledExtension {
@@ -327,6 +339,16 @@ impl InstalledExtension {
                 glyph: i.glyph,
             })
             .collect();
+        let injections = manifest
+            .injections
+            .into_iter()
+            .map(|i| {
+                let path = inside(dir, &i.query).map_err(|e| fail(format!("injection {}: {e}", i.language_id)))?;
+                let query = std::fs::read_to_string(&path)
+                    .map_err(|e| fail(format!("injection {}: {}: {e}", i.language_id, path.display())))?;
+                Ok(InjectionContribution { language_id: i.language_id, query })
+            })
+            .collect::<Result<Vec<_>, LoadError>>()?;
         Ok(Self {
             manifest: ExtensionManifest {
                 id: manifest.id,
@@ -347,6 +369,7 @@ impl InstalledExtension {
                 .map(|s| (s.language_id, Snippet::new(&s.trigger, &s.body)))
                 .collect(),
             keywords: manifest.keywords.into_iter().map(|k| (k.language_id, k.words)).collect(),
+            injections,
         })
     }
 }
@@ -402,6 +425,7 @@ impl Extension for InstalledExtension {
             language_servers: self.language_servers.clone(),
             analyzers: self.analyzers.clone(),
             file_icons: self.file_icons.clone(),
+            injections: self.injections.clone(),
             ..Default::default()
         }
     }
@@ -420,6 +444,24 @@ impl Extension for InstalledExtension {
         });
         let findings: Vec<FindingReply> = process.call("run_analyzer", &params)?;
         Ok(findings.into_iter().map(FindingReply::into_finding).collect())
+    }
+
+    /// Asked of the extension's process only for a language it declares, and only
+    /// with `process_exec`: the registry asks every extension in turn, and none
+    /// should start a program for a language that is not its own.
+    fn new_file_template(&self, language_id: &str, project_root: &Path, file_path: &Path) -> Option<String> {
+        let process = self.process.as_ref()?;
+        if !self.capabilities.contains(&Capability::ProcessExec) || !self.languages.iter().any(|l| l.id.as_str() == language_id) {
+            return None;
+        }
+        let params = serde_json::json!({
+            "language": language_id,
+            "project_root": project_root,
+            "file": file_path,
+        });
+        // A template is a convenience: an extension that fails or answers
+        // nothing leaves the file empty, as no extension at all would.
+        process.call::<_, Option<String>>("new_file_template", &params).ok().flatten()
     }
 
     fn snippets(&self, language_id: &str) -> Vec<Snippet> {

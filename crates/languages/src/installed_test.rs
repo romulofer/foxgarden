@@ -5,7 +5,7 @@ const MINIMAL: &str = r#"
 id = "toml-lang"
 name = "TOML"
 version = "0.1.0"
-schema_version = 0
+schema_version = 1
 
 [[languages]]
 id = "toml"
@@ -106,6 +106,54 @@ fn a_missing_highlight_query_names_the_file() {
 }
 
 #[test]
+fn a_pre_freeze_manifest_still_registers_and_an_unknown_version_does_not() {
+    let root = tempfile::tempdir().unwrap();
+    let old = install(root.path(), "a-old", &MINIMAL.replace("schema_version = 1", "schema_version = 0"));
+    with_query(&old);
+    let future = install(root.path(), "b-future", &MINIMAL.replace("schema_version = 1", "schema_version = 99").replace("toml-lang", "toml-future").replace("\"toml\"", "\"toml2\"").replace("symbol = \"tree_sitter_toml2\"", "symbol = \"tree_sitter_toml\""));
+    with_query(&future);
+
+    let mut registry = Registry::new();
+    let problems = crate::register_installed(&mut registry, root.path(), &[]);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("schema version 99"), "{problems:?}");
+    assert!(registry.language("toml").is_some(), "the version 0 extension loads");
+}
+
+const WITH_INJECTION: &str = r#"
+[[injections]]
+language_id = "toml"
+query = "injections.scm"
+"#;
+
+#[test]
+fn an_injection_query_is_read_from_the_extension_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = install(root.path(), "toml-lang", &format!("{MINIMAL}{WITH_INJECTION}"));
+    with_query(&dir);
+    std::fs::write(dir.join("injections.scm"), "((comment) @injection.content)").unwrap();
+
+    let injections = InstalledExtension::load(&dir).unwrap().contributions().injections;
+    assert_eq!(injections.len(), 1);
+    assert_eq!((injections[0].language_id.as_str(), injections[0].query.as_str()), ("toml", "((comment) @injection.content)"));
+}
+
+#[test]
+fn a_missing_or_escaping_injection_query_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = install(root.path(), "toml-lang", &format!("{MINIMAL}{WITH_INJECTION}"));
+    with_query(&dir);
+    let error = InstalledExtension::load(&dir).err().expect("injections.scm was never written");
+    assert!(error.message.contains("injections.scm"), "{error}");
+
+    let escaping = format!("{MINIMAL}{}", WITH_INJECTION.replace("injections.scm", "../injections.scm"));
+    let dir = install(root.path(), "escaping", &escaping);
+    with_query(&dir);
+    let error = InstalledExtension::load(&dir).err().expect("a path outside the directory");
+    assert!(error.message.contains("inside the extension directory"), "{error}");
+}
+
+#[test]
 fn an_unknown_filename_match_kind_is_refused() {
     let root = tempfile::tempdir().unwrap();
     let dir = install(root.path(), "toml-lang", &MINIMAL.replace("with_affix", "fuzzy"));
@@ -203,7 +251,7 @@ fn with_server(extension_id: &str, capabilities: &str) -> String {
 id = "{extension_id}"
 name = "Taplo"
 version = "0.1.0"
-schema_version = 0
+schema_version = 1
 capabilities = [{capabilities}]
 
 [[languages]]
@@ -249,7 +297,7 @@ mod analyzers {
 id = "lint-ext"
 name = "Lint"
 version = "0.1.0"
-schema_version = 0
+schema_version = 1
 capabilities = ["process_exec"]
 
 [process]
@@ -297,6 +345,50 @@ config_label = "Rules"
         assert_eq!((findings[0].line, findings[0].column, findings[0].end), (3, Some(2), Some((3, 5))));
         assert_eq!(findings[0].severity, ProblemSeverity::Error);
         assert_eq!((findings[1].column, findings[1].severity), (None, ProblemSeverity::Warning), "an unknown severity is a warning");
+    }
+
+    const TEMPLATE_MANIFEST: &str = r#"
+id = "tpl-ext"
+name = "Template"
+version = "0.1.0"
+schema_version = 1
+capabilities = ["process_exec"]
+
+[process]
+command = "run.sh"
+
+[[languages]]
+id = "toy"
+display_name = "Toy"
+file_extensions = ["toy"]
+"#;
+
+    fn install_template(root: &Path, manifest: &str) -> PathBuf {
+        let dir = install(root, "tpl-ext", manifest);
+        let program = dir.join("run.sh");
+        std::fs::write(&program, "#!/bin/sh\nread line\necho '{\"result\":\"// new toy file\"}'\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_new_file_template_comes_from_the_extensions_process_for_its_own_language_only() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_template(root.path(), TEMPLATE_MANIFEST);
+        let extension = InstalledExtension::load(&dir).unwrap();
+
+        let template = extension.new_file_template("toy", Path::new("/p"), Path::new("/p/a.toy"));
+        assert_eq!(template.as_deref(), Some("// new toy file"));
+        assert_eq!(extension.new_file_template("java", Path::new("/p"), Path::new("/p/A.java")), None);
+    }
+
+    #[test]
+    fn a_new_file_template_is_not_asked_without_process_exec() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_template(root.path(), &TEMPLATE_MANIFEST.replace("capabilities = [\"process_exec\"]", ""));
+        let extension = InstalledExtension::load(&dir).unwrap();
+
+        assert_eq!(extension.new_file_template("toy", Path::new("/p"), Path::new("/p/a.toy")), None);
     }
 
     #[test]

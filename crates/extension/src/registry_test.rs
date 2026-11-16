@@ -221,10 +221,30 @@ fn an_extension_built_for_another_schema_version_is_refused() {
         Err(RegisterError::IncompatibleSchema {
             extension_id: "from-the-future".to_string(),
             found: CURRENT_SCHEMA_VERSION + 7,
+            oldest: OLDEST_SUPPORTED_SCHEMA_VERSION,
             expected: CURRENT_SCHEMA_VERSION,
         })
     );
     assert!(registry.language("elvish").is_none());
+}
+
+#[test]
+fn every_schema_version_from_the_oldest_supported_to_the_current_loads() {
+    for version in OLDEST_SUPPORTED_SCHEMA_VERSION..=CURRENT_SCHEMA_VERSION {
+        let mut registry = Registry::new();
+        let mut ext = FakeExtension::new("any-age", elvish);
+        ext.schema_version = version;
+
+        assert_eq!(registry.register(Box::new(ext)), Ok(()), "schema version {version}");
+        assert!(registry.language("elvish").is_some());
+    }
+}
+
+#[test]
+fn the_frozen_schema_version_is_one_and_zero_is_the_pre_freeze_format() {
+    // Changing either number is a compatibility decision (`CURRENT_SCHEMA_VERSION`'s
+    // doc comment says when), so a change must be made here on purpose.
+    assert_eq!((OLDEST_SUPPORTED_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION), (0, 1));
 }
 
 #[test]

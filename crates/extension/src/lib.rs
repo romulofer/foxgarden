@@ -69,13 +69,13 @@ pub type LanguageId = String;
 
 /// Identity and API-compatibility declaration for one extension.
 ///
-/// `schema_version` is what makes Phase B's stability promise
-/// enforceable: Phase A is explicitly allowed to churn this crate's API,
-/// and the version is what a host will eventually refuse to load against
-/// when an extension was built for an incompatible one. It is recorded
-/// from the start rather than added later because an extension format
-/// with no version field has no way to *become* versioned without
-/// breaking every extension that already exists.
+/// `schema_version` is the stability promise (`PLAN.md` Track 24 Phase B): an
+/// extension written for a schema version in
+/// `OLDEST_SUPPORTED_SCHEMA_VERSION..=CURRENT_SCHEMA_VERSION` keeps loading and
+/// behaving the same, and a host refuses one outside that range rather than
+/// guess. It was recorded from the start because an extension format with no
+/// version field has no way to *become* versioned without breaking every
+/// extension that already exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionManifest {
     pub id: String,
@@ -84,10 +84,31 @@ pub struct ExtensionManifest {
     pub schema_version: u32,
 }
 
-/// The `schema_version` this build understands. Phase A churns freely, so
-/// this stays 0 until Phase B freezes the API; a 0 here is a deliberate
-/// "no compatibility promised yet", not an unset field.
-pub const CURRENT_SCHEMA_VERSION: u32 = 0;
+/// The `schema_version` this build speaks, and the one a new extension declares.
+///
+/// Version 1 freezes what an extension can be today: the `extension.toml`
+/// tables (`languages`, `grammars`, `language_servers`, `analyzers`,
+/// `file_icons`, `snippets`, `keywords`, `injections`, `[process]`), the
+/// `process_exec`/`download_file` capabilities, and the process protocol
+/// (`process::PROTOCOL_VERSION`, with the methods `run_analyzer` and
+/// `new_file_template`). The rules that keep it frozen:
+///
+/// - Adding an optional table, field or process method does **not** bump it: an
+///   older extension never mentions it and a newer one on an older host is
+///   refused for the unknown key, as before.
+/// - Renaming or removing a key, changing what a value means, or changing a
+///   process request or reply shape **does** bump it, and the host keeps
+///   accepting the previous version for as long as it can answer the old shape.
+/// - Extensions compiled into this binary follow the constant, so the seam in
+///   `Extension` itself is free to change with the host.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// The oldest `schema_version` this build still loads. Version 0 is the
+/// pre-freeze format ("no compatibility promised"); every table it could
+/// declare means the same in version 1, so it is accepted rather than
+/// stranding an extension someone already installed. Raise this, never lower
+/// it, when an old shape can no longer be answered.
+pub const OLDEST_SUPPORTED_SCHEMA_VERSION: u32 = 0;
 
 /// Everything the core needs to recognize a file as belonging to a
 /// language, with no knowledge of which language it is.

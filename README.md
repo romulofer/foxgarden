@@ -110,7 +110,7 @@ SpotBugs are all one extension, [`spring-foxgarden`](https://github.com/legendar
 compiled in today, as are `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) and `ts-foxgarden` (JavaScript, TypeScript, HTML and CSS) and `svelte-foxgarden` (Svelte). Others load from outside the binary: put a directory
 holding an `extension.toml` under `~/.local/share/foxgarden/extensions/` (the
 platform's data directory on other systems). It can contribute languages,
-grammars, file icons, snippets, keywords, language servers the editor starts,
+grammars, file icons, snippets, keywords, language injections, language servers the editor starts,
 and analyzers run by a program the extension ships; an installed extension's own code
 runs out of process, its tasks show in the command palette with their test reports
 summarized, and the problems it finds in a file appear as diagnostics. An extension that starts
@@ -287,7 +287,7 @@ extensão, o [`spring-foxgarden`](https://github.com/legendaryredfox/spring-foxg
 compilada junto por enquanto, assim como `kmp-foxgarden` (Kotlin Multiplatform), `python-foxgarden` (Python) e `ts-foxgarden` (JavaScript, TypeScript, HTML e CSS) e `svelte-foxgarden` (Svelte). Outras carregam de fora do binário: coloque um
 diretório com um `extension.toml` em `~/.local/share/foxgarden/extensions/` (o
 diretório de dados da plataforma em outros sistemas). Ele pode contribuir
-linguagens, gramáticas, ícones, snippets, palavras-chave, language servers que
+linguagens, gramáticas, ícones, snippets, palavras-chave, injeções de linguagem, language servers que
 o editor inicia e analisadores executados por um programa que a extensão traz; o código de uma
 extensão instalada roda fora do processo, as tarefas dela aparecem na paleta de
 comandos com os relatórios de teste resumidos, e os problemas que ela encontra
