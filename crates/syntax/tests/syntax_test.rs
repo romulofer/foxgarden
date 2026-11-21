@@ -296,6 +296,27 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
 }
 
 #[test]
+fn kotlin_kdoc_is_a_doc_comment_and_a_plain_block_comment_is_not() {
+    let source = "/** Greets. */\nfun a() {}\n/* plain */\nfun b() {}\n";
+    let mut parser = parser(Language::Kotlin);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, Language::Kotlin);
+    let scopes_over = |needle: &str| {
+        let start = source.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .filter(|(range, _)| range.start <= start && range.end >= end)
+            .map(|(_, scope)| *scope)
+            .collect::<Vec<_>>()
+    };
+
+    assert!(scopes_over("/** Greets. */").contains(&Scope::DocComment));
+    assert!(scopes_over("/* plain */").contains(&Scope::Comment));
+    assert!(!scopes_over("/* plain */").contains(&Scope::DocComment));
+}
+
+#[test]
 fn valid_properties_has_no_syntax_errors() {
     let mut parser = parser(Language::Properties);
     let tree = parser.parse(VALID_PROPERTIES);
