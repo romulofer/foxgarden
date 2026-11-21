@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use fg_extension::{
     AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, BuildToolContribution, Capability, CommandSpec, ProblemSeverity,
     Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
-    InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, RunSpec, Snippet,
+    InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, RunSpec, Snippet, TestCase, TestOutcome,
 };
 use serde::Deserialize;
 
@@ -439,6 +439,34 @@ impl CommandReply {
     }
 }
 
+/// One test case as an extension's process spells it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestCaseReply {
+    classname: String,
+    name: String,
+    /// `"passed"`, `"failed"`, `"errored"` or `"skipped"`.
+    outcome: String,
+    /// Failure message and trace; read only for a failed or errored case.
+    detail: Option<String>,
+}
+
+impl TestCaseReply {
+    /// `None` for an outcome this version does not know, so one odd case is
+    /// dropped rather than reported as a pass or a failure it was not.
+    fn into_case(self) -> Option<TestCase> {
+        let outcome = match self.outcome.as_str() {
+            "passed" => TestOutcome::Passed,
+            "failed" => TestOutcome::Failed,
+            "errored" => TestOutcome::Errored,
+            "skipped" => TestOutcome::Skipped,
+            _ => return None,
+        };
+        let detail = matches!(outcome, TestOutcome::Failed | TestOutcome::Errored).then(|| self.detail.unwrap_or_default());
+        Some(TestCase { classname: self.classname, name: self.name, outcome, detail })
+    }
+}
+
 /// One finding as an extension's process spells it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -533,6 +561,27 @@ impl Extension for InstalledExtension {
         let params = serde_json::json!({ "tool": tool_id, "project_root": project_root, "filter": filter });
         let reply: Option<CommandReply> = process.call("test_command", &params).ok().flatten();
         reply.map(|command| command.into_spec(project_root))
+    }
+
+    /// Asked once per test run, after it ends, never per output line. A process
+    /// that fails or answers nothing reports no cases.
+    fn test_results(&self, tool_id: &str, project_root: &Path) -> Vec<TestCase> {
+        let Some(process) = self.process_for_tool(tool_id) else {
+            return Vec::new();
+        };
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root });
+        let reply: Vec<TestCaseReply> = process.call("test_results", &params).ok().flatten().unwrap_or_default();
+        reply.into_iter().filter_map(TestCaseReply::into_case).collect()
+    }
+
+    /// Relative paths are taken from the project root; one that leaves it is
+    /// refused, since the app reads compiled output from this directory.
+    fn classes_dir(&self, tool_id: &str, project_root: &Path) -> Option<PathBuf> {
+        let process = self.process_for_tool(tool_id)?;
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root });
+        let dir: PathBuf = process.call::<_, Option<PathBuf>>("classes_dir", &params).ok().flatten()?;
+        let dir = if dir.is_absolute() { dir } else { project_root.join(dir) };
+        dir.starts_with(project_root).then_some(dir).filter(|d| !d.components().any(|c| c == std::path::Component::ParentDir))
     }
 
     /// Unlike the two above, a failure here is the user's answer: a run that

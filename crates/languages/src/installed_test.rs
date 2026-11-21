@@ -442,6 +442,8 @@ case "$line" in
   *'"method":"build_command"'*) echo '{"result":{"program":"make","args":["all"],"env":[["CI","1"]]}}' ;;
   *'"method":"test_command"'*) echo '{"result":null}' ;;
   *'"method":"run_command"'*) echo '{"error":"no target named main"}' ;;
+  *'"method":"test_results"'*) echo '{"result":[{"classname":"a","name":"ok","outcome":"passed"},{"classname":"a","name":"bad","outcome":"failed","detail":"boom"},{"classname":"a","name":"odd","outcome":"flaky"}]}' ;;
+  *'"method":"classes_dir"'*) echo '{"result":"build/out"}' ;;
 esac
 "#;
 
@@ -471,6 +473,34 @@ esac
         assert_eq!(extension.test_command("make", project, "t"), None, "null is no command");
         let run = extension.run_command("make", project, &RunSpec::default());
         assert_eq!(run, Some(Err("no target named main".to_string())), "a failed run says why");
+    }
+
+    #[test]
+    fn test_results_and_classes_dir_come_from_the_process() {
+        let root = tempfile::tempdir().unwrap();
+        let extension = InstalledExtension::load(&install_build(root.path(), BUILD_MANIFEST)).unwrap();
+        let project = Path::new("/p");
+
+        let cases = extension.test_results("make", project);
+        let seen: Vec<_> = cases.iter().map(|c| (c.name.as_str(), c.outcome, c.detail.as_deref())).collect();
+        assert_eq!(
+            seen,
+            vec![("ok", TestOutcome::Passed, None), ("bad", TestOutcome::Failed, Some("boom"))],
+            "an unknown outcome drops the case instead of passing it"
+        );
+        assert_eq!(extension.classes_dir("make", project), Some(PathBuf::from("/p/build/out")));
+        assert!(extension.test_results("maven", project).is_empty());
+        assert_eq!(extension.classes_dir("maven", project), None);
+    }
+
+    #[test]
+    fn a_classes_dir_outside_the_project_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_build(root.path(), BUILD_MANIFEST);
+        let script = std::fs::read_to_string(dir.join("run.sh")).unwrap().replace("build/out", "../elsewhere");
+        std::fs::write(dir.join("run.sh"), script).unwrap();
+        let extension = InstalledExtension::load(&dir).unwrap();
+        assert_eq!(extension.classes_dir("make", Path::new("/p")), None);
     }
 
     #[test]
