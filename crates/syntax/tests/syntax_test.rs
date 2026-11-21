@@ -317,6 +317,32 @@ fn kotlin_kdoc_is_a_doc_comment_and_a_plain_block_comment_is_not() {
 }
 
 #[test]
+fn kotlin_parameters_operators_and_labels_have_their_own_scopes() {
+    let source = "class C(val size: Int)\nfun f(count: Int) {\n    var x = count + 1\n    x += 2\n    loop@ for (i in 0..x) { if (!true) break@loop }\n}\n";
+    let mut parser = parser(Language::Kotlin);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, Language::Kotlin);
+    let scopes_at = |needle: &str, nth: usize| {
+        let start = source.match_indices(needle).nth(nth).unwrap().0;
+        let end = start + needle.len();
+        spans
+            .iter()
+            .filter(|(range, _)| range.start <= start && range.end >= end)
+            .map(|(_, scope)| *scope)
+            .collect::<Vec<_>>()
+    };
+
+    assert!(scopes_at("count", 0).contains(&Scope::Parameter), "a function parameter");
+    assert!(scopes_at("size", 0).contains(&Scope::Parameter), "a class parameter");
+    assert!(!scopes_at("Int", 0).contains(&Scope::Parameter), "a parameter's type is not the parameter");
+    assert!(!scopes_at("count", 1).contains(&Scope::Parameter), "a use of it is not a declaration");
+    assert!(scopes_at("+", 0).contains(&Scope::Operator), "a binary operator");
+    assert!(scopes_at("+=", 0).contains(&Scope::Operator), "an assignment operator");
+    assert!(scopes_at("!", 0).contains(&Scope::Operator), "a unary operator");
+    assert!(scopes_at("loop@", 0).contains(&Scope::Label), "a label");
+}
+
+#[test]
 fn valid_properties_has_no_syntax_errors() {
     let mut parser = parser(Language::Properties);
     let tree = parser.parse(VALID_PROPERTIES);
