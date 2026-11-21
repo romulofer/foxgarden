@@ -574,6 +574,27 @@ impl Extension for InstalledExtension {
         reply.into_iter().filter_map(TestCaseReply::into_case).collect()
     }
 
+    /// Strict, like Run: a failure is the user's answer, so it says why.
+    fn runtime_classpath(&self, tool_id: &str, project_root: &Path) -> Option<Result<Vec<PathBuf>, String>> {
+        let process = self.process_for_tool(tool_id)?;
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root });
+        match process.call::<_, Option<Vec<PathBuf>>>("runtime_classpath", &params) {
+            Ok(Some(paths)) => Some(Ok(paths)),
+            Ok(None) => None,
+            Err(message) => Some(Err(message)),
+        }
+    }
+
+    /// Tolerant, like a background scan: a failure is silence, never an error
+    /// that could fail a user-initiated run.
+    fn analysis_classpath(&self, tool_id: &str, project_root: &Path) -> Vec<PathBuf> {
+        let Some(process) = self.process_for_tool(tool_id) else {
+            return Vec::new();
+        };
+        let params = serde_json::json!({ "tool": tool_id, "project_root": project_root });
+        process.call::<_, Option<Vec<PathBuf>>>("analysis_classpath", &params).ok().flatten().unwrap_or_default()
+    }
+
     /// Relative paths are taken from the project root; one that leaves it is
     /// refused, since the app reads compiled output from this directory.
     fn classes_dir(&self, tool_id: &str, project_root: &Path) -> Option<PathBuf> {

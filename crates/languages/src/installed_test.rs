@@ -443,6 +443,8 @@ case "$line" in
   *'"method":"test_command"'*) echo '{"result":null}' ;;
   *'"method":"run_command"'*) echo '{"error":"no target named main"}' ;;
   *'"method":"test_results"'*) echo '{"result":[{"classname":"a","name":"ok","outcome":"passed"},{"classname":"a","name":"bad","outcome":"failed","detail":"boom"},{"classname":"a","name":"odd","outcome":"flaky"}]}' ;;
+  *'"method":"runtime_classpath"'*) echo '{"error":"no jar for lib"}' ;;
+  *'"method":"analysis_classpath"'*) echo '{"result":["/a.jar","/b.jar"]}' ;;
   *'"method":"classes_dir"'*) echo '{"result":"build/out"}' ;;
 esac
 "#;
@@ -491,6 +493,18 @@ esac
         assert_eq!(extension.classes_dir("make", project), Some(PathBuf::from("/p/build/out")));
         assert!(extension.test_results("maven", project).is_empty());
         assert_eq!(extension.classes_dir("maven", project), None);
+    }
+
+    #[test]
+    fn classpaths_come_from_the_process_strict_for_run_and_tolerant_for_analysis() {
+        let root = tempfile::tempdir().unwrap();
+        let extension = InstalledExtension::load(&install_build(root.path(), BUILD_MANIFEST)).unwrap();
+        let project = Path::new("/p");
+
+        assert_eq!(extension.runtime_classpath("make", project), Some(Err("no jar for lib".to_string())));
+        assert_eq!(extension.analysis_classpath("make", project), vec![PathBuf::from("/a.jar"), PathBuf::from("/b.jar")]);
+        assert_eq!(extension.runtime_classpath("maven", project), None);
+        assert!(extension.analysis_classpath("maven", project).is_empty());
     }
 
     #[test]
