@@ -343,6 +343,24 @@ fn kotlin_parameters_operators_and_labels_have_their_own_scopes() {
 }
 
 #[test]
+fn kotlin_member_properties_are_properties_and_locals_are_not() {
+    let source = "class C {\n    val name: String = \"a\"\n    fun f() {\n        val local = 1\n    }\n}\n";
+    let mut parser = parser(Language::Kotlin);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, Language::Kotlin);
+    let has_property = |needle: &str| {
+        let start = source.find(needle).unwrap();
+        let end = start + needle.len();
+        spans
+            .iter()
+            .any(|(range, scope)| *scope == Scope::Property && range.start <= start && range.end >= end)
+    };
+
+    assert!(has_property("name"));
+    assert!(!has_property("local"));
+}
+
+#[test]
 fn valid_properties_has_no_syntax_errors() {
     let mut parser = parser(Language::Properties);
     let tree = parser.parse(VALID_PROPERTIES);
