@@ -178,6 +178,9 @@ pub struct BuildState {
     /// output but no build tool, and `Stage` would then need the field on
     /// every arm.
     output_tool: Option<BuildToolHandle>,
+    /// The project root the running task's tool was started for; a problem whose
+    /// file the tool printed relative is taken from it.
+    output_root: Option<PathBuf>,
 }
 
 /// Whether `case` is one a run narrowed to `filter` (`class` or
@@ -261,6 +264,7 @@ impl BuildState {
     pub fn start_task(&mut self, tool: &BuildToolHandle, task: &ProjectTaskHandle) -> std::io::Result<()> {
         self.reset();
         self.output_tool = Some(tool.clone());
+        self.output_root = Some(task.task.command.cwd.clone());
         self.spawn_process(task.task.command.to_command())?;
         self.stage = Some(if task.task.report_dirs.is_empty() {
             Stage::Build
@@ -287,6 +291,7 @@ impl BuildState {
                 .unwrap_or_else(|| Err(format!("{} cannot launch a program", tool.display_name)))
                 .map_err(std::io::Error::other)?;
             self.output_tool = Some(tool.clone());
+        self.output_root = Some(project_root.to_path_buf());
             self.spawn_process(spec.to_command())?;
             self.stage = Some(Stage::RunLaunched);
             return Ok(());
@@ -327,6 +332,7 @@ impl BuildState {
             .test_command(project_root, filter)
             .ok_or_else(|| std::io::Error::other(format!("{} cannot run a single test", tool.display_name)))?;
         self.output_tool = Some(tool.clone());
+        self.output_root = Some(project_root.to_path_buf());
         self.spawn_process(spec.to_command())?;
         self.stage = Some(Stage::Test {
             project_root: project_root.to_path_buf(),
@@ -436,6 +442,7 @@ impl BuildState {
         self.last_success = None;
         self.coverage_result = None;
         self.output_tool = None;
+        self.output_root = None;
     }
 
     /// Spawns `command` with both stdout and stderr piped, one reader
@@ -462,6 +469,7 @@ impl BuildState {
             std::io::Error::other(format!("{} does not support this task", tool.display_name))
         })?;
         self.output_tool = Some(tool.clone());
+        self.output_root = Some(project_root.to_path_buf());
         self.spawn_process(spec.to_command())
     }
 
@@ -586,7 +594,14 @@ impl BuildState {
         loop {
             match rx.try_recv() {
                 Ok(BuildEvent::Line(text)) => {
-                    let problem = self.output_tool.as_ref().and_then(|tool| tool.parse_output_line(&text));
+                    let problem = self.output_tool.as_ref().and_then(|tool| tool.parse_output_line(&text)).map(|mut problem| {
+                        if problem.path.is_relative()
+                            && let Some(root) = &self.output_root
+                        {
+                            problem.path = root.join(&problem.path);
+                        }
+                        problem
+                    });
                     self.rows.push(BuildRow { text, problem });
                 }
                 Ok(BuildEvent::Finished { success }) => {

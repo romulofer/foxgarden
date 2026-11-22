@@ -1227,6 +1227,7 @@ dependencies = [
  "foxgarden-spring",
  "foxgarden-svelte",
  "foxgarden-ts",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

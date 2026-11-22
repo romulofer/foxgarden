@@ -20,13 +20,15 @@
 //! [`crate::process`]). A build tool is declared the same way (an id, a name
 //! and the marker files that say it builds a project) and the process answers
 //! the commands to run for a build, a test run and a program launch. Reading
-//! its output line by line (`parse_build_output_line`) stays out: a process
-//! per output line is the wrong price.
+//! its output line by line (`parse_build_output_line`) is not the process's job:
+//! a process per output line is the wrong price. A tool declares an
+//! `output_pattern` instead, a regular expression with named groups the host
+//! matches itself (linear time, no process, no I/O).
 
 use std::path::{Path, PathBuf};
 
 use fg_extension::{
-    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildTask, BuildToolContribution, Capability, CommandSpec, ProblemSeverity,
+    AnalyzerContribution, AnalyzerFinding, AnalyzerInput, AnalyzerRun, BuildProblem, BuildTask, BuildToolContribution, Capability, CommandSpec, ProblemSeverity,
     Contributions, Extension, ExtensionManifest, FileIcon, FilenamePattern, GrammarContribution, GrammarSource,
     InjectionContribution, LanguageContribution, LanguageServerContribution, NodeKinds, RunSpec, Snippet, TestCase, TestOutcome,
 };
@@ -92,6 +94,12 @@ struct BuildToolTable {
     display_name: String,
     /// Any one of these at the project root means the tool builds the project.
     marker_files: Vec<String>,
+    /// A regular expression matched against each line of the tool's output to
+    /// find a problem. Named groups: `file`, `line` and `message` are required;
+    /// `column` and `severity` (`error`, `warning`; a word starting with `warn` is
+    /// a warning, anything else an error) are optional. A relative `file` is taken
+    /// from the project root.
+    output_pattern: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +227,8 @@ pub struct InstalledExtension {
     keywords: Vec<(String, Vec<String>)>,
     injections: Vec<InjectionContribution>,
     build_tools: Vec<BuildToolContribution>,
+    /// The compiled `output_pattern` of each build tool that declared one.
+    output_patterns: Vec<(String, regex::Regex)>,
 }
 
 impl InstalledExtension {
@@ -348,15 +358,24 @@ impl InstalledExtension {
         if !analyzers.is_empty() && process.is_none() {
             return Err(fail("analyzers need a [process] to run them".to_string()));
         }
-        let build_tools: Vec<_> = manifest
-            .build_tools
-            .into_iter()
-            .map(|t| BuildToolContribution {
+        let mut output_patterns = Vec::new();
+        let mut build_tools = Vec::new();
+        for t in manifest.build_tools {
+            if let Some(pattern) = &t.output_pattern {
+                let regex = regex::Regex::new(pattern)
+                    .map_err(|e| fail(format!("build tool {}: output_pattern: {e}", t.id)))?;
+                let names: Vec<&str> = regex.capture_names().flatten().collect();
+                if let Some(missing) = ["file", "line", "message"].iter().find(|n| !names.contains(n)) {
+                    return Err(fail(format!("build tool {}: output_pattern has no (?<{missing}>...) group", t.id)));
+                }
+                output_patterns.push((t.id.clone(), regex));
+            }
+            build_tools.push(BuildToolContribution {
                 id: t.id,
                 display_name: t.display_name,
                 marker_files: t.marker_files,
-            })
-            .collect();
+            });
+        }
         if !build_tools.is_empty() && process.is_none() {
             return Err(fail("build tools need a [process] to answer their commands".to_string()));
         }
@@ -400,6 +419,7 @@ impl InstalledExtension {
             keywords: manifest.keywords.into_iter().map(|k| (k.language_id, k.words)).collect(),
             injections,
             build_tools,
+            output_patterns,
         })
     }
 
@@ -538,6 +558,29 @@ impl Extension for InstalledExtension {
         });
         let findings: Vec<FindingReply> = process.call("run_analyzer", &params)?;
         Ok(findings.into_iter().map(FindingReply::into_finding).collect())
+    }
+
+    /// Matched by the host against the tool's own `output_pattern`, so no process
+    /// is started per line. A line that does not match, or whose line number or
+    /// message is empty, names no problem.
+    fn parse_build_output_line(&self, tool_id: &str, line: &str) -> Option<BuildProblem> {
+        let (_, regex) = self.output_patterns.iter().find(|(id, _)| id == tool_id)?;
+        let found = regex.captures(line)?;
+        let message = found.name("message")?.as_str().trim();
+        let file = found.name("file")?.as_str();
+        if message.is_empty() || file.is_empty() {
+            return None;
+        }
+        Some(BuildProblem {
+            path: PathBuf::from(file),
+            line: found.name("line")?.as_str().parse().ok()?,
+            column: found.name("column").and_then(|c| c.as_str().parse().ok()).unwrap_or(1),
+            severity: match found.name("severity") {
+                Some(word) if word.as_str().to_ascii_lowercase().starts_with("warn") => ProblemSeverity::Warning,
+                _ => ProblemSeverity::Error,
+            },
+            message: message.to_string(),
+        })
     }
 
     /// A build tool's commands are asked only for its own tools. A command is a

@@ -540,4 +540,51 @@ esac
         let error = InstalledExtension::load(&dir).err().unwrap();
         assert!(error.message.contains("[process]"), "{error}");
     }
+
+    const PATTERN: &str = r"^(?<file>[^:\s]+):(?<line>\d+):(?:(?<column>\d+):)? (?<severity>\w+): (?<message>.+)$";
+
+    fn with_pattern(pattern: &str) -> String {
+        format!("{BUILD_MANIFEST}output_pattern = '{pattern}'\n")
+    }
+
+    #[test]
+    fn a_build_tools_output_pattern_finds_a_problem_without_a_process() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = install_build(root.path(), &with_pattern(PATTERN));
+        // The process leaves a mark if it is ever started: the host matches the line itself.
+        let mark = dir.join("started");
+        std::fs::write(dir.join("run.sh"), format!("#!/bin/sh\ntouch '{}'\n", mark.display())).unwrap();
+        let extension = InstalledExtension::load(&dir).unwrap();
+
+        let error = extension.parse_build_output_line("make", "src/main.c:12:7: error: unknown name").unwrap();
+        assert_eq!(
+            (error.path, error.line, error.column, error.severity, error.message.as_str()),
+            (PathBuf::from("src/main.c"), 12, 7, ProblemSeverity::Error, "unknown name")
+        );
+        let warning = extension.parse_build_output_line("make", "a.c:3: Warning: unused").unwrap();
+        assert_eq!((warning.column, warning.severity), (1, ProblemSeverity::Warning));
+        assert!(!mark.exists(), "no process is started per output line");
+    }
+
+    #[test]
+    fn an_output_pattern_names_nothing_for_other_lines_and_other_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let extension = InstalledExtension::load(&install_build(root.path(), &with_pattern(PATTERN))).unwrap();
+        assert_eq!(extension.parse_build_output_line("make", "make: Entering directory"), None);
+        assert_eq!(extension.parse_build_output_line("make", "a.c:99999999999999999999: error: huge"), None);
+        assert_eq!(extension.parse_build_output_line("cargo", "a.c:1: error: x"), None);
+    }
+
+    #[test]
+    fn a_bad_output_pattern_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let error = InstalledExtension::load(&install_build(root.path(), &with_pattern("(unclosed"))).err().unwrap();
+        assert!(error.message.contains("output_pattern"), "{error}");
+
+        let root = tempfile::tempdir().unwrap();
+        let error = InstalledExtension::load(&install_build(root.path(), &with_pattern(r"^(?<file>\S+):(?<line>\d+)$")))
+            .err()
+            .unwrap();
+        assert!(error.message.contains("message"), "{error}");
+    }
 }
