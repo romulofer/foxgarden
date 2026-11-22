@@ -137,7 +137,7 @@ fn send_request_against_a_real_fake_adapter_receives_its_response() {
     let rx = session
         .send_request("initialize", serde_json::json!({"clientID": "foxgarden"}))
         .unwrap();
-    let result = rx.recv().expect("the fake adapter's response arrives");
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake adapter's response arrives");
     assert_eq!(
         result,
         Ok(serde_json::json!({"supportsConfigurationDoneRequest": true}))
@@ -150,7 +150,7 @@ fn send_request_against_a_real_fake_adapter_receives_its_failure_message() {
         r#"{"seq":1,"type":"response","request_seq":1,"success":false,"command":"launch","message":"main class not found"}"#,
     );
     let rx = session.send_request("launch", serde_json::json!({})).unwrap();
-    let result = rx.recv().expect("the fake adapter's response arrives");
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake adapter's response arrives");
     assert_eq!(result, Err("main class not found".to_string()));
 }
 

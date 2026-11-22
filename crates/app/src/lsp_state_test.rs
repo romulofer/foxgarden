@@ -516,7 +516,7 @@ sys.stdin.buffer.read()
         .request_completion(&mut doc, 0)
         .expect("a Ready Java session should accept the request");
     let value = rx
-        .recv()
+        .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the fake server's response arrives")
         .expect("the fake server replied successfully");
     assert_eq!(value[0]["label"], "add(E e) : boolean");

@@ -304,7 +304,7 @@ fn a_response_wakes_the_event_loop() {
     let (mut session, wakes) =
         fake_server_waking_after(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#, true);
     let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
-    let _ = rx.recv().expect("the fake server's response arrives");
+    let _ = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake server's response arrives");
     // The reader thread delivers the response and wakes only after that, so
     // the wake can trail `recv` returning.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -318,7 +318,7 @@ fn a_response_wakes_the_event_loop() {
 fn send_request_against_a_real_fake_server_process_receives_its_response() {
     let mut session = fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
     let rx = session.send_request("initialize", serde_json::json!({})).unwrap();
-    let result = rx.recv().expect("the fake server's response arrives");
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake server's response arrives");
     assert_eq!(result, Ok(serde_json::json!({"capabilities": {}})));
 }
 
@@ -327,7 +327,7 @@ fn send_request_against_a_real_fake_server_process_receives_its_error() {
     let mut session =
         fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"method not found"}}"#);
     let rx = session.send_request("bogusMethod", serde_json::json!({})).unwrap();
-    let result = rx.recv().expect("the fake server's response arrives");
+    let result = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake server's response arrives");
     assert_eq!(
         result,
         Err(ResponseError {
@@ -367,7 +367,7 @@ fn initialize_sends_the_real_initialize_method_name() {
     let mut session = fake_server_answering(r#"{"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}}"#);
     let params = lsp_types::InitializeParams::default();
     let rx = session.initialize(params).unwrap();
-    assert!(rx.recv().expect("the fake server's response arrives").is_ok());
+    assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the fake server's response arrives").is_ok());
 }
 
 /// A server whose stdout is gone will never answer. The waiting receiver
