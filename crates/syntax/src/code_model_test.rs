@@ -74,8 +74,8 @@ fn the_shipped_extension_supplies_snippets_and_keywords_per_language() {
     assert_eq!(sout(&java).as_deref(), Some("System.out.println(${cursor});"));
     assert_eq!(sout(&kotlin).as_deref(), Some("println(${cursor})"));
 
-    assert!(language_keywords(Language::Java).contains(&"synchronized".to_string()));
-    assert!(language_keywords(Language::Kotlin).contains(&"when".to_string()));
+    assert!(language_keywords(Language::Java).iter().any(|k| k == "synchronized"));
+    assert!(language_keywords(Language::Kotlin).iter().any(|k| k == "when"));
     assert!(language_snippets(Language::Yaml).is_empty());
     assert!(language_keywords(Language::Yaml).is_empty());
 }

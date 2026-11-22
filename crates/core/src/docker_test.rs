@@ -39,7 +39,7 @@ fn docker_build_command_tags_and_sets_the_build_context_to_the_project_root() {
     assert_eq!(command.get_program(), "docker");
     let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args[0], "build");
-    assert!(args.contains(&"-t".to_string()));
+    assert!(args.iter().any(|a| a == "-t"));
     assert_eq!(command.get_current_dir(), Some(dir.path()));
 }
 
@@ -73,7 +73,7 @@ fn docker_run_command_names_the_container_so_it_can_be_stopped_later() {
     let args: Vec<_> = run.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     let name = &args[args.iter().position(|a| a == "--name").expect("--name is passed") + 1];
     assert_eq!(name, "foxgarden-demo-123");
-    assert!(args.contains(&"--rm".to_string()), "still one-shot cleanup on exit");
+    assert!(args.iter().any(|a| a == "--rm"), "still one-shot cleanup on exit");
 }
 
 #[test]
