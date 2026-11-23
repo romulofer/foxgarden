@@ -203,3 +203,45 @@ fn a_python_test_runs_pytest_on_its_node_id_and_ends_with_the_summary_of_its_rep
     assert_eq!((problem.path.as_path(), problem.line), (source.as_path(), 7));
     assert_eq!(state.last_success, Some(true));
 }
+
+/// A JavaScript test marker runs the project's own test runner on the marker's
+/// file and group path, and asks it for a JUnit report beside its console
+/// output; the run ends with the summary of that report, a failing row jumping
+/// to the first stack frame in the project. The stand-in `vitest` writes one
+/// where it is asked to.
+#[cfg(unix)]
+#[test]
+fn a_javascript_test_ends_with_the_summary_of_the_report_its_runner_wrote() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = test_support::tempdir();
+    let root = dir.path().to_path_buf();
+    test_support::write_file(&root, "package.json", "{\"devDependencies\":{\"vitest\":\"^2\"}}\n");
+    let source = test_support::write_file(&root, "calc.test.js", "");
+    let vitest = test_support::write_file(&root, "node_modules/.bin/vitest", concat!(
+        "#!/bin/sh\n",
+        "for a in \"$@\"; do case \"$a\" in --outputFile.junit=*) report=\"${a#--outputFile.junit=}\";; esac; done\n",
+        "echo \"runner ran $@\"\n",
+        "printf '<testsuites><testsuite name=\"calc.test.js\"><testcase classname=\"calc.test.js\" name=\"Calc > adds\"/>",
+        "<testcase classname=\"calc.test.js\" name=\"Calc > bad\"><failure message=\"boom\">AssertionError: boom\\n \\xe2\\x9d\\xaf calc.test.js:7:11</failure></testcase></testsuite></testsuites>' > \"$report\"\n",
+    ));
+    std::fs::set_permissions(&vitest, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let registry = test_support::languages();
+    let tool = registry.detect_build_tool(&root).expect("a Node project");
+
+    let mut state = BuildState::default();
+    state.start_filtered_test(&root, &tool, "/p/calc.test.js::Calc::adds").unwrap();
+    while state.running() {
+        state.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    state.poll();
+
+    let texts: Vec<&str> = state.rows.iter().map(|r| r.text.as_str()).collect();
+    assert!(texts.iter().any(|t| t.starts_with("runner ran run /p/calc.test.js -t Calc adds --reporter=default --reporter=junit --outputFile.junit=")), "{texts:?}");
+    assert!(texts.contains(&"Tests: 2 total, 1 passed, 1 failed, 0 errored, 0 skipped"), "{texts:?}");
+    let failed = state.rows.iter().find(|r| r.text == "FAILED  calc.test.js.Calc > bad").expect("the failing test is listed");
+    let problem = failed.problem.as_ref().expect("and can be jumped to");
+    assert_eq!((problem.path.as_path(), problem.line), (source.as_path(), 7));
+}
