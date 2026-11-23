@@ -183,22 +183,6 @@ pub struct BuildState {
     output_root: Option<PathBuf>,
 }
 
-/// Whether `case` is one a run narrowed to `filter` (`class` or
-/// `class#method`) covers: the class itself or a nested one, and for a method
-/// the test of that name, with the argument list or index a parameterized or
-/// repeated test appends.
-fn matches_filter(case: &fg_core::TestCase, filter: &str) -> bool {
-    let (class, method) = match filter.split_once('#') {
-        Some((class, method)) => (class, Some(method)),
-        None => (filter, None),
-    };
-    let in_class = case.classname == class || case.classname.strip_prefix(class).is_some_and(|rest| rest.starts_with('$'));
-    in_class
-        && method.is_none_or(|method| {
-            case.name.strip_prefix(method).is_some_and(|rest| rest.is_empty() || rest.starts_with(['(', '[', ' ']))
-        })
-}
-
 impl BuildState {
     pub fn running(&self) -> bool {
         self.rx.is_some()
@@ -509,7 +493,7 @@ impl BuildState {
     fn append_test_summary(&mut self, project_root: &Path, tool: &BuildToolHandle, filter: Option<&str>) {
         let mut cases = tool.test_results(project_root);
         if let Some(filter) = filter {
-            cases.retain(|case| matches_filter(case, filter));
+            cases.retain(|case| tool.test_case_matches(case, filter));
         }
         // A run that left no report (pytest prints its own summary) has
         // nothing to add to its output.

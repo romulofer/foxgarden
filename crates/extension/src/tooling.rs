@@ -775,6 +775,11 @@ impl BuildToolHandle {
         self.extension.test_results(self.id, project_root)
     }
 
+    /// Whether `case` belongs to a run narrowed to `filter`.
+    pub fn test_case_matches(&self, case: &TestCase, filter: &str) -> bool {
+        self.extension.test_case_matches(self.id, case, filter)
+    }
+
     /// Where `case` lives, for click-to-jump. `None` is normal: a generated
     /// or nonstandard-layout test simply shows without a jump target.
     pub fn test_failure_location(&self, project_root: &Path, case: &TestCase) -> Option<TestFailureLocation> {

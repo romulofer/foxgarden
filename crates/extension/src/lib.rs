@@ -588,6 +588,15 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// Whether `case` is one a test run narrowed to `filter` (the string
+    /// [`Extension::test_command`] was given) covers. The report may hold
+    /// more than the run did (Maven keeps the reports of earlier runs), so
+    /// the tool that wrote it says which rows belong. Defaults to every case:
+    /// a report that holds only what ran needs no narrowing.
+    fn test_case_matches(&self, _tool_id: &str, _case: &TestCase, _filter: &str) -> bool {
+        true
+    }
+
     /// The files a new project of `spec`'s own kind needs, as `(path
     /// relative to the project root, contents)` pairs. Pure generation —
     /// writing them to disk is the core's job (`fg_core::write_scaffold`),

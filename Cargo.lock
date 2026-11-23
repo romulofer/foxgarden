@@ -1389,6 +1389,7 @@ name = "foxgarden-python"
 version = "0.1.0"
 dependencies = [
  "fg-extension",
+ "quick-xml",
  "serde_json",
  "tree-sitter",
  "tree-sitter-python",
