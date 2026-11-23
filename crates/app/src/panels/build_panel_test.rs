@@ -165,7 +165,7 @@ fn a_run_with_no_compile_step_launches_the_file_through_the_projects_interpreter
 
 /// A Python test marker runs pytest through the project's interpreter on the
 /// marker's node id and asks it for a JUnit report, which the run ends with the
-/// summary of. The stand-in interpreter writes one where it is asked to.
+/// summary of, a failing row jumping to its traceback's test frame. The stand-in interpreter writes one where it is asked to.
 #[cfg(unix)]
 #[test]
 fn a_python_test_runs_pytest_on_its_node_id_and_ends_with_the_summary_of_its_report() {
@@ -174,12 +174,13 @@ fn a_python_test_runs_pytest_on_its_node_id_and_ends_with_the_summary_of_its_rep
     let dir = test_support::tempdir();
     let root = dir.path().to_path_buf();
     test_support::write_file(&root, "pyproject.toml", "[project]\nname = \"demo\"\n");
+    let source = test_support::write_file(&root, "test_calc.py", "");
     let python = test_support::write_file(&root, ".venv/bin/python", concat!(
             "#!/bin/sh\n",
             "for a in \"$@\"; do case \"$a\" in --junitxml=*) report=\"${a#--junitxml=}\";; esac; done\n",
             "echo \"interpreter ran $@\"\n",
             "printf '<testsuite><testcase classname=\"test_calc.TestCalc\" name=\"test_adds\"/>",
-            "<testcase classname=\"test_calc.TestCalc\" name=\"test_bad\"><failure message=\"boom\"/></testcase></testsuite>' > \"$report\"\n",
+            "<testcase classname=\"test_calc.TestCalc\" name=\"test_bad\"><failure message=\"boom\">test_calc.py:7: AssertionError</failure></testcase></testsuite>' > \"$report\"\n",
         ));
     std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -197,5 +198,8 @@ fn a_python_test_runs_pytest_on_its_node_id_and_ends_with_the_summary_of_its_rep
     let texts: Vec<&str> = state.rows.iter().map(|r| r.text.as_str()).collect();
     assert!(texts.iter().any(|t| t.starts_with("interpreter ran -m pytest /p/test_calc.py::TestCalc::test_adds --junitxml=")), "{texts:?}");
     assert!(texts.contains(&"Tests: 2 total, 1 passed, 1 failed, 0 errored, 0 skipped"), "{texts:?}");
+    let failed = state.rows.iter().find(|r| r.text == "FAILED  test_calc.TestCalc.test_bad").expect("the failing test is listed");
+    let problem = failed.problem.as_ref().expect("and can be jumped to");
+    assert_eq!((problem.path.as_path(), problem.line), (source.as_path(), 7));
     assert_eq!(state.last_success, Some(true));
 }
