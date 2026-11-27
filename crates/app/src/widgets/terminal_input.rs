@@ -1,5 +1,4 @@
-//! Keyboard-to-terminal-byte-sequence translation (`PLAN.md` terminal-panel
-//! track, Phase 8; `SPEC.md` §8.5) — the piece both docs flag as needing its
+//! Keyboard-to-terminal-byte-sequence translation — the piece the terminal design flagged as needing its
 //! own dedicated budget rather than a one-line `match`: every key a real
 //! shell or full-screen program (`less`, `vim`, shell line-editing) actually
 //! depends on, not just plain printable characters (those arrive as
@@ -63,7 +62,7 @@ pub fn key_event_to_bytes(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
 /// as a single control byte (`Ctrl+A` -> `0x01`, ..., `Ctrl+Z` -> `0x1a`) —
 /// the standard terminal convention every shell relies on for at least
 /// `Ctrl+C` (interrupt, `0x03`), `Ctrl+D` (EOF, `0x04`), and `Ctrl+Z`
-/// (suspend, `0x1a`), `SPEC.md` §8.5's own explicitly named minimum.
+/// (suspend, `0x1a`), the terminal design's explicitly named minimum.
 fn ctrl_letter_byte(key: Key) -> Option<u8> {
     let letter = match key {
         Key::A => 1,

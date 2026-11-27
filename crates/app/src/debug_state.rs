@@ -25,7 +25,7 @@ use crate::dap_client::{DapResult, DapSession};
 use crate::lsp_client::ResponseError;
 use crate::lsp_state::LspState;
 
-/// What `poll`'s caller (a debug toolbar, eventually — `PLAN.md` Phase 2)
+/// What `poll`'s caller (the debug toolbar, `PLAN.md` Track 23)
 /// shows the user right now.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DebugStatus {

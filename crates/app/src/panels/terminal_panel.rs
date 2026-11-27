@@ -1,5 +1,4 @@
-//! The dockable bottom terminal panel (`SPEC.md` §8.2, `PLAN.md`'s
-//! terminal-panel track Phases 5-8) — its own small tab strip over
+//! The dockable bottom terminal panel — its own small tab strip over
 //! `state.terminal_tabs`, entirely independent of the file tab strip
 //! (`panels::tabs`): a terminal session's position is just its own index
 //! into `terminal_tabs`, never interleaved with a file tab's. Rendered only
@@ -49,14 +48,14 @@ pub struct TerminalPanelOutcome {
 }
 
 /// Draws the panel's own tab strip plus the active session's content area:
-/// `terminal_widget::show`'s real `vt100`-rendered grid (`PLAN.md` Phase 7)
+/// `terminal_widget::show`'s real `vt100`-rendered grid
 /// plus every keyboard event translated to real terminal bytes and written
 /// straight to the pty — plain text via `Event::Text`, paste via
 /// `Event::Paste`, everything else (arrows, Enter, Backspace, Ctrl+letter,
-/// ...) via `terminal_input::key_event_to_bytes` (`PLAN.md` Phase 8).
+/// ...) via `terminal_input::key_event_to_bytes`.
 /// `sessions` is index-aligned with `state.terminal_tabs`, kept in sync by
 /// the caller. `editor_font`/`font_size`/`dark_mode` are the same settings
-/// the file-tab editor uses (`SPEC.md` §8.4: "rather than a second,
+/// the file-tab editor uses ("rather than a second,
 /// separate terminal font setting"), threaded down from `app.rs`.
 pub fn show(
     ui: &mut egui::Ui,
@@ -164,7 +163,7 @@ pub fn show(
                             interacted = true;
                         }
                         // Paste writes the clipboard text's raw bytes the
-                        // same way typing does (`SPEC.md` §8.5) — no
+                        // same way typing does — no
                         // bracketed-paste-mode wrapping, which is out of
                         // this phase's scope (the byte-sequence table).
                         egui::Event::Paste(text) => {

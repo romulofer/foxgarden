@@ -1,4 +1,4 @@
-//! The virtualized editor's **interactive shell** (PLAN.md 2f + "shell"): the
+//! The virtualized editor's **interactive shell** (`PLAN.md` Track 19): the
 //! `show()` that reads egui's input queue and clipboard each frame, drives
 //! the pure caret/edit primitives in `input.rs` and the undo stack in
 //! `history.rs`, and paints caret/selection/IME-preedit on top of the
@@ -41,8 +41,8 @@ struct ShellState {
     /// (`PLAN.md` Track 7 Phase 1) — `None` outside of that mode. Mutually
     /// exclusive with `caret` having an active selection in practice (an
     /// Alt+drag never touches `caret`), though both fields simply coexist
-    /// rather than one being derived from the other, matching `SPEC.md`
-    /// §7's "its own mode" framing.
+    /// rather than one being derived from the other, since block selection is
+    /// its own mode.
     block_selection: Option<BlockSelection>,
     /// The char range currently occupied by an in-progress IME composition
     /// (so the next `Preedit`/`Commit` knows what to replace), or `None`
@@ -190,7 +190,7 @@ pub fn char_offset_for_pos(out: &TextAreaOutput, buffer: &Rope, pos: egui::Pos2)
 /// response to this frame's input. `text` is `buffer.to_string()` — the
 /// caller (`widget.rs`) already has this from its own pre-frame
 /// stringification, so it's threaded through here rather than re-derived
-/// (SPEC.md §2: avoids a second full-buffer allocation every frame). `read_
+/// (avoids a second full-buffer allocation every frame). `read_
 /// only` mirrors `doc.read_only` (strips every mutating event, same policy
 /// `widget.rs::strip_mutating_events` enforces for the `TextEdit` path today
 /// — navigation/selection/copy stay live). `spans` are this frame's syntax-
@@ -292,7 +292,7 @@ pub fn show(
     }
     let has_focus = had_focus_at_frame_start || pre.response.clicked() || pre.response.drag_started();
 
-    // PLAN.md Phase 5 / SPEC.md §7: built once here (from `text`, this
+    // Built once here (from `text`, this
     // frame's starting content) and kept in sync through `process_events`
     // below — rebuilt only when an event actually edits `current`, not on
     // every motion — so every `line_col`/`line_col_to_char`/`char_to_byte`
@@ -305,7 +305,7 @@ pub fn show(
     if let Some(pos) = pre.response.interact_pointer_pos() {
         let extend = ui.input(|i| i.modifiers.shift);
         let offset = char_offset_for_pos(&pre, buffer, pos);
-        // Alt+drag (`PLAN.md` Track 7 Phase 1 / `SPEC.md` §7): its own
+        // Alt+drag (`PLAN.md` Track 7): its own
         // selection mode, entirely separate from `caret` below — checked
         // first so a block drag never also moves the linear caret this same
         // frame. Plain Alt+Click (no drag) is deliberately *not* handled
@@ -398,7 +398,7 @@ pub fn show(
         None => (pre.clone(), buffer),
     };
 
-    // PLAN.md 3d: keyboard motion (`process_events`'s arrow/Home/End arms)
+    // Keyboard motion (`process_events`'s arrow/Home/End arms)
     // operates on the plain char/line model, with no idea a fold hid the
     // line it just landed on — click resolution never has this problem
     // (`char_offset_for_pos` only ever resolves against rows `layout_
@@ -564,7 +564,7 @@ fn paint_caret(
 /// rect at the *same* `cols()` char-column range on every row `block`
 /// spans, unlike `paint_caret`'s per-line clamp to that line's own length —
 /// that lack of clamping is exactly what makes this rectangular rather than
-/// per-line-linear (`SPEC.md` §7). A row shorter than `cols().end` still
+/// per-line-linear. A row shorter than `cols().end` still
 /// gets a rect stretching out to that column, past its own last character,
 /// same as every other block-select editor's own visual convention (VS
 /// Code, IntelliJ, Sublime).

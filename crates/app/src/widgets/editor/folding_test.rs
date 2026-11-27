@@ -115,7 +115,7 @@ fn expand_all_clears_the_set() {
 
 #[test]
 fn hidden_ranges_ignores_a_stale_marker_line_no_longer_present_in_folds() {
-    // Simulates PLAN.md 3e: `folded_lines` still has line 4 from before
+    // Simulates the fold-edit case: `folded_lines` still has line 4 from before
     // an edit, but the freshly recomputed `folds` no longer has a fold
     // opening there — it should just be silently dropped, not panic or
     // produce a bogus range.

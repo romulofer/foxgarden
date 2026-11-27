@@ -1,4 +1,4 @@
-//! The virtualized editor's **pure caret + edit model** (PLAN.md 2d/2e): the
+//! The virtualized editor's **pure caret + edit model** (`PLAN.md` Track 19): the
 //! motion and editing operations `egui::TextEdit` used to own privately,
 //! re-expressed as `(text, caret) + action -> (text, caret)` functions with no
 //! frame, no `egui::Context`, no input queue. This is the parity net — the
@@ -54,12 +54,10 @@ impl Caret {
     }
 }
 
-/// A rectangular (column) selection — `PLAN.md` Track 7 Phase 1, `SPEC.md`
-/// §7 — spanning every line between `anchor_line`/`primary_line` at the
+/// A rectangular (column) selection (`PLAN.md` Track 7) spanning every line between `anchor_line`/`primary_line` at the
 /// same `anchor_col`/`primary_col` char-columns, regardless of how long
 /// each individual line actually is. Orthogonal to `Caret`'s single linear
-/// range: `SPEC.md` §7 is explicit this is "its own mode, not a
-/// reinterpretation" of the existing single-range/multi-cursor models, so
+/// range: it is its own mode, not a reinterpretation of the existing single-range/multi-cursor models, so
 /// this never touches a `Caret`. Same `anchor`/`primary` shape as `Caret`
 /// (the fixed press point vs. the moving drag end) rather than pre-sorted
 /// bounds, so an in-progress drag that crosses back over its own start
@@ -255,7 +253,7 @@ pub fn block_paste(text: &str, index: &LineIndex, block: BlockSelection, clipboa
     (chars.into_iter().collect(), block.collapsed_at_col(new_col))
 }
 
-/// Line-start offsets (SPEC.md §7 / PLAN.md Phase 5): built once per actual
+/// Line-start offsets: built once per actual
 /// text change — not once per motion, see `shell.rs`'s `process_events`, the
 /// sole caller of every function below that takes one — so `move_*`/
 /// `replace_selection` stop re-scanning the whole buffer from char/byte 0 on
@@ -486,7 +484,7 @@ pub fn move_document_end(index: &LineIndex, caret: Caret, extend: bool) -> Caret
 
 /// If `char_off`'s line falls inside any of `hidden`'s line ranges, moves it
 /// to the nearest visible line in the direction it was travelling from
-/// `from` — the pure half of PLAN.md 3d's "caret clamp-into-marker" rule: a
+/// `from` — the pure half of the "caret clamp-into-marker" rule: a
 /// hidden line is never a valid resting place. Moving up (or not at all)
 /// lands at the end of the marker line just above the range, where the
 /// fold's own `⋯` affordance sits. Moving down skips past the fold to the

@@ -1,4 +1,4 @@
-//! Code folding (PLAN.md Phase 3): turns `syntax::foldable_ranges` plus a
+//! Code folding (`PLAN.md` Track 10): turns `syntax::foldable_ranges` plus a
 //! per-document `folded_lines` set (`fg_core::Document::folded_lines`,
 //! session-only membership — see that field's doc comment for why there's
 //! no separate reconciliation step) into the line-space hidden-range list
@@ -94,7 +94,7 @@ pub(super) fn show_fold_gutter(
     let painter = ui.painter();
     let color = theme::line_number(dark_mode);
     // Flattened from an O(folds) `iter().find` per visible row to a single
-    // O(folds) set build here plus O(1) per-row lookups below (SPEC.md §9)
+    // O(folds) set build here plus O(1) per-row lookups below
     // — folds is already recomputed fresh each frame (§5 caches that walk,
     // but the per-row lookup inside a single frame was still worth
     // flattening on its own).
@@ -182,7 +182,7 @@ pub(super) fn paint_collapsed_markers(
     let color = theme::structure(dark_mode);
     let marker_font = FontId::proportional((out.row_height * 0.8).max(8.0));
     // Same O(folds)-per-row -> O(1)-per-row flattening as `show_fold_gutter`
-    // above (SPEC.md §9).
+    // above.
     let marker_lines: HashSet<usize> = folds.iter().map(|f| f.marker_line).collect();
 
     for (i, (logical, galley)) in out.row_galleys.iter().enumerate() {

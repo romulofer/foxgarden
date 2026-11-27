@@ -79,13 +79,13 @@ all wired into one fast UI. 🚀
 
 **Look & feel**
 - Light/dark themes, selectable font, zen mode (`F11`), sticky scroll
-- Syntax highlighting for Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, Svelte, YAML, XML, `.properties`, Dockerfile
+- Syntax highlighting for Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, SCSS, Svelte, YAML, XML, `.properties`, Dockerfile
 - Bilingual UI (English / Português)
 
 **Beyond the JVM**
 - **Svelte**: highlighting (with `<script>`, `<style>` and `{...}` highlighted as the languages they hold), folding, `svelte-language-server`
 - **Python**: highlighting, folding, Jedi language server, run a file from its `if __name__ == "__main__":` marker and pytest tests, with the project's `.venv`
-- **JavaScript / TypeScript / TSX / HTML / CSS**: highlighting, folding, language servers (TypeScript 6 through `typescript-language-server`, TypeScript 7 through its own native `tsc --lsp`)
+- **JavaScript / TypeScript / TSX / HTML / CSS / SCSS**: highlighting, folding, language servers (TypeScript 6 through `typescript-language-server`, TypeScript 7 through its own native `tsc --lsp`)
 - Servers for these languages are not bundled: Settings ▸ Language Servers… shows where each was found, or that it was not
 
 </details>
@@ -186,10 +186,9 @@ it; a project on 7 only needs `typescript` installed.
 
 Actively developed on `main`. The editor core, the JVM tooling above and the
 extensions for Kotlin Multiplatform, Python, the web stack and Svelte are
-shipped and working. The language-agnostic extension seam is in place and
-extensions can be loaded from disk with their capabilities enforced; ongoing
-work is moving the last JVM specifics out of the app crate. Contributions and
-issues welcome. 🙌
+shipped and working. The editor core is language-agnostic: every language is an
+extension, and extensions can be loaded from disk with their capabilities
+enforced. Contributions and issues welcome. 🙌
 
 ### 📄 License
 
@@ -255,13 +254,13 @@ git e análise estática, tudo em uma UI rápida. 🚀
 
 **Aparência**
 - Temas claro/escuro, fonte selecionável, modo zen (`F11`), rolagem fixa
-- Realce de sintaxe para Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, Svelte, YAML, XML, `.properties`, Dockerfile
+- Realce de sintaxe para Java, Kotlin, Python, JavaScript, TypeScript, TSX, HTML, CSS, SCSS, Svelte, YAML, XML, `.properties`, Dockerfile
 - Interface bilíngue (English / Português)
 
 **Além da JVM**
 - **Svelte**: realce (com `<script>`, `<style>` e `{...}` realçados como a linguagem que contêm), dobramento, `svelte-language-server`
 - **Python**: realce, dobramento, language server Jedi, executar um arquivo pelo marcador de `if __name__ == "__main__":` e testes pytest, com o `.venv` do projeto
-- **JavaScript / TypeScript / TSX / HTML / CSS**: realce, dobramento, language servers (TypeScript 6 via `typescript-language-server`, TypeScript 7 pelo próprio `tsc --lsp` nativo)
+- **JavaScript / TypeScript / TSX / HTML / CSS / SCSS**: realce, dobramento, language servers (TypeScript 6 via `typescript-language-server`, TypeScript 7 pelo próprio `tsc --lsp` nativo)
 - Os servidores dessas linguagens não vêm embutidos: Configurações ▸ Language Servers… mostra onde cada um foi encontrado, ou que não foi
 
 </details>
@@ -365,10 +364,9 @@ roda nele; um projeto no 7 só precisa do `typescript` instalado.
 
 Em desenvolvimento ativo na `main`. O núcleo do editor, o ferramental JVM acima e
 as extensões de Kotlin Multiplatform, Python, stack web e Svelte já estão prontos
-e funcionando. A costura de extensões independente de linguagem está pronta e as
-extensões podem ser carregadas do disco, com as capacidades verificadas; o
-trabalho atual move as últimas peças específicas da JVM para fora do crate do
-app. Contribuições e issues são bem-vindas. 🙌
+e funcionando. O núcleo do editor não depende de linguagem: cada linguagem é uma
+extensão, e extensões podem ser carregadas do disco, com as capacidades
+verificadas. Contribuições e issues são bem-vindas. 🙌
 
 ### 📄 Licença
 

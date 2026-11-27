@@ -11,7 +11,7 @@ use crate::style::indent::IndentSettings;
 /// unchanged if it doesn't apply — called on every text-changing keystroke
 /// (`widget.rs`'s call site), not just Enter, so the overwhelmingly common
 /// case is this exact no-op, and it used to pay for an unconditional
-/// `text.to_string()` clone (SPEC.md §3) that the caller then immediately
+/// `text.to_string()` clone that the caller then immediately
 /// discarded whenever indentation wasn't actually inserted.
 pub(super) fn apply_auto_indent<'t>(
     old_text: &str,

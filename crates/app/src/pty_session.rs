@@ -5,7 +5,7 @@
 //! Lives in `crates/app`, not `fg-core`: `crates/core` is unit-testable
 //! headless with no process/thread dependency at all (`AGENTS.md`), which
 //! a live child process and its background reader thread can't be. The
-//! `vt100::Parser` this session feeds (`PLAN.md` Phase 7) is pure data with
+//! `vt100::Parser` this session feeds is pure data with
 //! no I/O of its own, but lives here rather than on `fg-core`'s
 //! `TerminalTab` anyway — every other piece of this session's runtime state
 //! already sits in this app-side, index-aligned-with-`terminal_tabs` type
@@ -23,18 +23,18 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 /// The pty's (and `vt100::Parser`'s) starting size, matching a common
 /// terminal-emulator default — immediately superseded by `terminal_widget::
 /// show`'s own first-frame `resize` call to whatever the panel's actual
-/// rect computes to (`PLAN.md` Phase 9), so this only matters for the
+/// rect computes to, so this only matters for the
 /// otherwise-blank instant between `spawn` returning and that first frame.
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 
 /// How many scrolled-off lines `vt100::Parser` keeps beyond the visible
 /// screen. This phase's widget only ever reads the *visible* `Screen`
-/// (`SPEC.md` §8.4 — no scrollback UI yet), but the parser needs a nonzero
+/// (no scrollback UI yet), but the parser needs a nonzero
 /// value up front since it can't be changed except via `set_scrollback`.
 const SCROLLBACK_LINES: usize = 1000;
 
-/// The command used to spawn the user's default shell (`SPEC.md` §8.3):
+/// The command used to spawn the user's default shell:
 /// `$SHELL` on Unix (falling back to `/bin/sh` if unset), `%COMSPEC%` on
 /// Windows (falling back to `cmd.exe`). `crates/app/src/terminal.rs`'s own
 /// external-terminal spawn never picks a shell itself — every candidate
@@ -73,7 +73,7 @@ fn shell_command() -> CommandBuilder {
 /// the background reader thread's output funneled through a channel.
 pub struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    /// Kept only for `resize` (`PLAN.md` Phase 9) — the reader/writer
+    /// Kept only for `resize` — the reader/writer
     /// halves below are independent handles cloned/taken from it up front,
     /// so this field's sole remaining job is `MasterPty::resize`'s own
     /// `&self` call telling the kernel (and thus the child) the window
@@ -93,7 +93,7 @@ impl PtySession {
     /// project's root, when there is one). The background reader thread
     /// calls `request_repaint` on `ctx` whenever new output arrives, since
     /// unlike the user's own typing, a long-running command's output has no
-    /// other event to trigger a repaint on (`SPEC.md` §8.3).
+    /// other event to trigger a repaint on.
     pub fn spawn(cwd: Option<&Path>, ctx: egui::Context) -> std::io::Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -143,8 +143,7 @@ impl PtySession {
     }
 
     /// Tells the kernel (and thus the shell, via `SIGWINCH`) and the
-    /// `vt100::Parser` that the session is now `rows`x`cols` (`PLAN.md`
-    /// Phase 9, `SPEC.md` §8.6) — called whenever `terminal_widget::show`'s
+    /// `vt100::Parser` that the session is now `rows`x`cols` — called whenever `terminal_widget::show`'s
     /// own per-frame size computation disagrees with the parser's current
     /// size. A no-op if they already match (the caller checks first, but
     /// this only ever runs on an actual change regardless). The pty
@@ -183,7 +182,7 @@ impl PtySession {
     /// Writes bytes straight to the shell — the caller (`panels::
     /// terminal_panel`) has already translated whatever typed/pasted/
     /// special-key input this came from into the real terminal byte
-    /// sequence (`PLAN.md` Phase 8, `widgets::terminal_input`); this is
+    /// sequence (`widgets::terminal_input`); this is
     /// just the raw pipe.
     pub fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.writer.write_all(bytes)
@@ -192,7 +191,7 @@ impl PtySession {
 
 impl Drop for PtySession {
     /// Closing a session kills its real child process — no "still running,
-    /// are you sure" confirmation (`SPEC.md` §8.3: a terminal has no
+    /// are you sure" confirmation (a terminal has no
     /// "unsaved" concept the way a dirty file tab does).
     fn drop(&mut self) {
         let _ = self.child.kill();

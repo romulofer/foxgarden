@@ -100,8 +100,8 @@ impl CodeActionGutter {
 
     /// Opens the picker popup for the caret line's own offers from the
     /// keyboard (Alt+Enter), the same popup clicking the lightbulb toggles
-    /// open — `SPEC.md` §15's "clicking it (or a keyboard shortcut with the
-    /// cursor on that line)". A no-op when the caret's line has no resolved
+    /// open ("clicking it, or a keyboard shortcut with the cursor on that
+    /// line"). A no-op when the caret's line has no resolved
     /// offer yet: nothing to show, exactly as the lightbulb simply isn't
     /// painted in that case. Only inspects offers already resolved as of an
     /// earlier frame, the same one-frame-behind lifecycle the

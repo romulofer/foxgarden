@@ -266,7 +266,7 @@ pub fn lightbulb(dark_mode: bool) -> Color32 {
 }
 
 /// `vt100`'s 16 indexed ANSI colors (0-7 normal, 8-15 bright), tinted per
-/// theme rather than the raw xterm RGB values (`SPEC.md` §8.4: "map onto the
+/// theme rather than the raw xterm RGB values ("map onto the
 /// current theme's own color table ... not the raw ANSI 16-color palette
 /// verbatim") — a colored shell prompt using stock ANSI red/green/etc. would
 /// otherwise clash with `color_for_scope`'s own muted palette right above it.
@@ -341,7 +341,7 @@ fn indexed_color(idx: u8, bold: bool, dark_mode: bool) -> Color32 {
     }
 }
 
-/// A terminal cell's foreground color (`SPEC.md` §8.4) — `vt100::Color::
+/// A terminal cell's foreground color — `vt100::Color::
 /// Default` falls back to `default_text` (the same color the editor itself
 /// uses for unhighlighted text), `Idx`/`Rgb` resolve via `indexed_color`/
 /// passthrough respectively.

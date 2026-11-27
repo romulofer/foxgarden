@@ -135,7 +135,7 @@ fn renders_highlighted_valid_file_without_panicking() {
 
 #[test]
 fn highlight_and_fold_caches_are_reused_across_an_idle_frame() {
-    // SPEC.md §4/§5, PLAN.md Phase 3: a second frame with no edit in
+    // A second frame with no edit in
     // between must hit the cache, not recompute. `Arc::ptr_eq` is the
     // direct proof — both caches' `if let Some(cached) = ... { return
     // cached.spans/folds; }` hit path returns the *same allocation*
@@ -334,7 +334,7 @@ fn occurrence_highlighting_does_not_panic_when_the_cursor_touches_a_word() {
 
 #[test]
 fn occurrence_highlight_cache_is_reused_across_an_idle_frame() {
-    // SPEC.md §6, PLAN.md Phase 4: same direct `Arc::ptr_eq` proof as
+    // Same direct `Arc::ptr_eq` proof as
     // `highlight_and_fold_caches_are_reused_across_an_idle_frame` — a
     // second frame with the cursor resting on the same word, no edit in
     // between, must hit the cache rather than re-scan the buffer for every

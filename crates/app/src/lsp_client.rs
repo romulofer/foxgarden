@@ -215,8 +215,8 @@ impl LspSession {
     /// language server and starts its background reader *and* writer
     /// threads. The server's own stderr is inherited (not piped) — `jdtls`/
     /// `kotlin-language-server` both log real diagnostics there, and this
-    /// phase has no UI to surface it through yet (`PLAN.md` Phase 1's own
-    /// "inspectable via logging" checkpoint wording), so letting it flow
+    /// phase has no UI to surface it through yet (`PLAN.md` Track 20 only asked for it to be
+    /// "inspectable via logging"), so letting it flow
     /// straight to this app's own stderr is the simplest way to actually
     /// inspect it.
     pub fn spawn(binary: &Path, args: &[String], cwd: Option<&Path>, wake: Waker) -> std::io::Result<Self> {

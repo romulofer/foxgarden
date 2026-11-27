@@ -442,7 +442,7 @@ pub fn show_generate_accessors_dialog(
 /// `stem` — how a type's simple name (`syntax::supertype`,
 /// `syntax::receiver_type`) becomes a file to read its members from, for
 /// "Override Method" and dot-completion's cross-project member lookup
-/// (`SPEC.md` §4) alike. Deliberately limited to files already in the
+/// alike. Deliberately limited to files already in the
 /// project's own (already-filtered, skip-list-applied) tree rather than a
 /// fresh filesystem walk — a library or standard-library type has no file
 /// in the project at all, so this correctly returns `None` for one rather

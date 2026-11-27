@@ -246,7 +246,7 @@ pub struct FoxGardenApp {
     /// here, not on a per-tab basis, since only the active tab's editor (and
     /// so only one context menu) is ever shown at a time.
     cached_clipboard_text: Option<String>,
-    /// The HTTP route map's jump-to-handler (`PLAN.md` Phase 4): a
+    /// The HTTP route map's jump-to-handler: a
     /// picked popup row's `(path, byte offset)`, set the frame the popup
     /// closes and resolved (converted to a char offset, then cleared) the
     /// next time `resolve_pending_navigation` runs, once `open_path` has
@@ -273,7 +273,7 @@ pub struct FoxGardenApp {
     /// `*_panel_visible` booleans those panels used to carry. Both halves
     /// are persisted across restarts, just like `side_panel_visible`: a
     /// dead shell process has no scrollback/state worth resuming
-    /// (`SPEC.md` §8's own non-goal), but *which panel was open* is itself
+    /// (a non-goal), but *which panel was open* is itself
     /// a preference worth remembering. `FoxGardenApp::new` spawns a fresh
     /// terminal session when the restored dock lands on the Terminal tab,
     /// the same "opening the terminal starts a shell" convention
@@ -583,8 +583,7 @@ fn close_terminal_session(state: &mut EditorState, sessions: &mut Vec<PtySession
     state.close_terminal_tab(index);
 }
 
-/// Resolves `pending_navigation` (the HTTP route map's jump-to-handler,
-/// `PLAN.md` Phase 4) once its target document is open: converts the byte
+/// Resolves `pending_navigation` (the HTTP route map's jump-to-handler) once its target document is open: converts the byte
 /// offset to a char offset via that document's buffer, clears the field, and
 /// returns `(path, char_offset)` for the caller to act on. `None` if there's
 /// nothing pending, or the target document isn't open yet — left pending for
@@ -1896,7 +1895,7 @@ impl eframe::App for FoxGardenApp {
         }
         // Gates every Ctrl+letter shortcut below (but not `Ctrl+\``/`F11`,
         // neither of which collides with a real terminal control byte):
-        // `PLAN.md`'s terminal-panel Phase 8 wires these same letters up as
+        // The terminal panel wires these same letters up as
         // real control bytes (`Ctrl+P` recalls shell history, `Ctrl+E`
         // moves to end-of-line, ...), so without this guard, typing one of
         // them into a focused terminal session would *also* fire the app's

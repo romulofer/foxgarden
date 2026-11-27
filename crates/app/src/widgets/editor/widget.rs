@@ -129,7 +129,7 @@ struct CachedHighlightSpans {
     spans: Arc<Vec<HighlightSpan>>,
 }
 
-/// Cache-checking wrapper (PLAN.md Phase 3 / SPEC.md §4) around
+/// Cache-checking wrapper around
 /// `compute_highlight_spans`, keyed on `(doc.buffer.revision(),
 /// dark_mode)` — spans are theme-dependent, so a dark/light toggle with no
 /// text change still needs a recompute. Mirrors `text_area/render.rs`'s
@@ -274,7 +274,7 @@ struct CachedFolds {
     folds: Arc<Vec<syntax::FoldRange>>,
 }
 
-/// Cache-checking wrapper (PLAN.md Phase 3 / SPEC.md §5) around
+/// Cache-checking wrapper around
 /// `syntax::foldable_ranges`, keyed on `hash_rope_content(&doc.buffer)`
 /// alone — folding isn't theme-dependent, unlike `highlight_spans_for`'s
 /// cache. Sits *upstream* of `folding::hidden_ranges`, which further narrows
@@ -403,7 +403,7 @@ struct CachedOccurrenceHighlights {
     occurrences: Arc<Vec<Range<usize>>>,
 }
 
-/// Cache-checking wrapper (PLAN.md Phase 4 / SPEC.md §6) around
+/// Cache-checking wrapper around
 /// `multi_cursor::find_all_occurrences`, keyed on `(word, hash_rope_content(
 /// &doc.buffer))` — a tighter, per-word key rather than the whole-buffer
 /// cache shape §4/§5 use, since the occurrence set only ever needs
@@ -523,7 +523,7 @@ fn strip_mutating_events(ui: &egui::Ui) {
 }
 
 /// Renders `doc`'s buffer as an editable text area, keeping `parser`'s
-/// incremental tree in sync with edits (SPEC.md sections 5.4 and 5.5).
+/// incremental tree in sync with edits.
 /// `parser` is `None` for files with no recognized language (anything other
 /// than `.java`/`.kt`) — such files still open and edit normally, they just
 /// get plain rendering and no diagnostics; auto-pair/auto-indent/multi-cursor
@@ -641,7 +641,7 @@ pub fn show(
     // `response.changed()` diff) sees the post-wrap text as its baseline
     // rather than redoing (or fighting with) the edit egui would otherwise
     // apply on its own. Every interception below that produces a new text
-    // reassigns this same binding (never a separate copy — SPEC.md §2 found
+    // reassigns this same binding (never a separate copy — a review found
     // two `String`s kept in permanent lockstep here, one of them dead
     // weight), so it's always this frame's current buffer content by the
     // time anything downstream reads it.
@@ -677,7 +677,7 @@ pub fn show(
     let mut manual_caret: Option<Caret> = None;
 
     // `Ctrl+Space` force-opens word-completion regardless of how many
-    // identifier characters are already typed (`SPEC.md` §1) — for
+    // identifier characters are already typed — for
     // suggestions after just one character, or after moving the cursor back
     // into an existing word. Anchored at `word_before_cursor`'s *start*,
     // not the raw cursor position, so whatever's already been typed of the
@@ -694,7 +694,7 @@ pub fn show(
         }
     }
 
-    // Completion popup lifecycle (`SPEC.md` §0): while open, Enter/Tab/
+    // Completion popup lifecycle: while open, Enter/Tab/
     // ArrowUp/ArrowDown/Escape must be consumed here, before `text_area::
     // show_interactive` runs (and before every other Tab-consuming block
     // below it, in particular the live-template interception at
@@ -713,8 +713,8 @@ pub fn show(
         // than let anything below try to read `old_text[anchor..cursor]`
         // with `cursor < anchor`. A cursor that's moved *forward* off the
         // anchor's line entirely (e.g. an unrelated click) is a known,
-        // narrow gap this simple check doesn't catch — see `SPEC.md` §0's
-        // own "moved off the thing being edited" close rule, which this
+        // narrow gap this simple check doesn't catch — see the
+        // "moved off the thing being edited" close rule, which this
         // approximates rather than fully implements.
         let closed_by_anchor_or_escape = cursor_byte < state.anchor_byte()
             || take_event(ui, |e| {
@@ -786,7 +786,7 @@ pub fn show(
                         // `templates::expand` directly, exactly like the
                         // Tab-trigger path below, since that function
                         // already handles multi-line bodies and the
-                        // `${cursor}` marker (`SPEC.md` §1/§5). A trigger
+                        // `${cursor}` marker. A trigger
                         // whose body has since disappeared (a custom
                         // template edited away mid-session) is a silent
                         // no-op rather than an error.
@@ -1400,7 +1400,7 @@ pub fn show(
         }
     }
 
-    // Code folding (PLAN.md Phase 3): recomputed fresh every frame from the
+    // Code folding (`PLAN.md` Track 10): recomputed fresh every frame from the
     // live tree — cheap, and it means an edit that changes the tree's shape
     // needs no separate reconciliation pass, see `Document::folded_lines`'s
     // doc comment — then narrowed to just the currently-collapsed ones as
@@ -1554,8 +1554,8 @@ pub fn show(
     // the gutter's left edge to right-align digits against. Both live
     // inside the *same* `ScrollArea` call site (`panels::tabs::show`), so
     // they scroll together as one unit rather than independently.
-    // Quick-fix keyboard trigger (`SPEC.md` §15's "clicking it (or a
-    // keyboard shortcut with the cursor on that line)"): Alt+Enter opens the
+    // Quick-fix keyboard trigger ("clicking it, or a keyboard shortcut
+    // with the cursor on that line"): Alt+Enter opens the
     // same picker the gutter lightbulb does — IntelliJ's own intention-action
     // key. The Enter event is pulled out of this frame's queue here, *before*
     // `text_area::show_interactive` below would otherwise insert a newline
@@ -1606,7 +1606,7 @@ pub fn show(
     // The bounding rect of the whole gutter+text row, captured before
     // `shell_out` is destructured further below — used to redraw the
     // focus-aware border `egui::TextEdit` painted around itself for free,
-    // lost when this widget replaced it (PLAN.md 2g/2h) with the
+    // lost when this widget replaced it (`PLAN.md` Track 19) with the
     // virtualized `text_area::show_interactive` shell, which paints only
     // rows/caret and never a frame.
     let editor_rect = horizontal_response.response.rect;
@@ -1677,7 +1677,7 @@ pub fn show(
         }
     }
 
-    // Word-completion's own trigger (`SPEC.md` §1b): once a just-typed
+    // Word-completion's own trigger: once a just-typed
     // identifier character extends the run ending at the cursor to 2+
     // characters, open the popup with the real candidate source
     // (`word_completion_candidates`) — `Ctrl+Space` above covers the
@@ -1727,7 +1727,7 @@ pub fn show(
     // part of the same run, and a `.properties` key's dots specifically
     // must stay part of one filterable prefix (`server.po` should match
     // `server.port`), which only this dedicated path's own anchor choice —
-    // whole-line for `.properties`, single-segment for `.yml` (`SPEC.md`'s
+    // whole-line for `.properties`, single-segment for `.yml` (the
     // hierarchical-drill-down design, see `config_completion`'s own
     // module doc) — gets right.
     if !multi_cursor_active_at_start
@@ -1787,7 +1787,7 @@ pub fn show(
         }
     }
 
-    // Dot-completion's own trigger (`SPEC.md` §3): typing `.` right after a
+    // Dot-completion's own trigger: typing `.` right after a
     // non-empty identifier run opens the popup anchored at the cursor
     // (right after the dot — nothing typed yet, so every resolved member
     // shows unfiltered), same "checked after this frame's edit lands"
@@ -1804,7 +1804,7 @@ pub fn show(
     // above). Only when neither source is available at all (LSP off/not
     // `Ready`, non-Java/Kotlin, *and* no local candidates) does the popup
     // stay closed, same "degrade gracefully" fallback to word-completion's
-    // own trigger above `SPEC.md` §3 already documents.
+    // own trigger above already documents.
     if !multi_cursor_active_at_start && !doc.read_only && completion.is_none() && text_changed_this_frame {
         let typed_dot = ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(s) if s == ".")));
         if typed_dot
@@ -2251,7 +2251,7 @@ pub fn show(
         }
     }
 
-    // Completion popup: post-frame close check + render (`SPEC.md` §0).
+    // Completion popup: post-frame close check + render.
     // Reads `shell_out.caret`/`old_text` — the cursor and buffer as they
     // stand *after* this frame's own typing/edits landed, the same timing
     // the occurrence highlight below reads them at — so a keystroke that
@@ -2299,7 +2299,7 @@ pub fn show(
     // `hover::HoverState::update`'s own doc comment). Skipped entirely
     // while the completion popup is open — the two would otherwise
     // visually collide over the same screen area for no useful combination,
-    // the same reasoning `SPEC.md` never has both a completion popup and a
+    // the same reasoning that never has both a completion popup and a
     // hover tooltip open at once for any real editor. `hover_pos()` (not
     // `interact_pointer_pos()`) is what egui's own tooltips key off too:
     // `None` while a drag (a text selection) is in progress, which is
@@ -2727,7 +2727,7 @@ pub fn show(
 
 /// Overrides the persisted caret for the document at `path` to `char_offset`
 /// and gives its widget keyboard focus — the HTTP route map's
-/// jump-to-handler (PLAN.md Phase 4), and the one place outside this module
+/// jump-to-handler, and the one place outside this module
 /// needs to reach into `text_area`'s otherwise-internal caret storage. Wraps
 /// `text_area::set_caret`/`Caret::at` and the exact same `Id::new`
 /// computation `show`'s own `widget_id` uses, so a caller (`app.rs`) never
@@ -2770,7 +2770,7 @@ fn language_template_tables(
     }
 }
 
-/// Word-completion's real candidate source (`SPEC.md` §1b/§1c), fed into
+/// Word-completion's real candidate source, fed into
 /// `CompletionState::open` by both the `Ctrl+Space` and just-typed-character
 /// triggers above: every distinct identifier-shaped token already in `text`
 /// (`templates::identifiers_in`, excluding `current_run` — the word

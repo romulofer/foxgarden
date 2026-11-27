@@ -1,7 +1,7 @@
 //! The bottom dock: one docked strip along the bottom edge with a tab per
 //! bottom panel (Terminal, Build Output, Profiler), replacing the three
 //! independent `*_panel_visible` booleans those panels each used to carry
-//! (`FEATURES.md`'s own "Tab-controlled bottom panels" request).
+//! (the "Tab-controlled bottom panels" request).
 //!
 //! The old shape let all three stack on top of each other — three separate
 //! `egui::Panel::bottom`s, three separate View-menu checkboxes, three

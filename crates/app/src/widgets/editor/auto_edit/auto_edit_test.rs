@@ -42,7 +42,7 @@ fn enter_on_unindented_line_with_no_brace_is_a_no_op() {
     let (corrected, new_cursor) = apply_auto_indent(old, new, Some(cursor_char), IndentSettings::default());
     assert_eq!(corrected, new);
     assert_eq!(new_cursor, None);
-    // SPEC.md §3: a no-op returns a borrow of `new`, not a fresh clone.
+    // A no-op returns a borrow of `new`, not a fresh clone.
     assert!(matches!(corrected, Cow::Borrowed(_)));
 }
 
@@ -57,7 +57,7 @@ fn non_newline_insertion_is_left_to_auto_pair() {
 #[test]
 fn a_byte_length_delta_outside_a_single_chars_range_bails_without_char_counting() {
     // Deletion (`new` shorter than `old`): the O(1) byte-length
-    // pre-filter (SPEC.md §3) rules this out before any `.chars()` pass
+    // pre-filter rules this out before any `.chars()` pass
     // — asserting `Cow::Borrowed` here is the observable proof that no
     // owned copy was made, the same guarantee the no-op tests above
     // check for the in-range-but-not-Enter cases.

@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 /// project) are the opposite, deliberately *not* meant to travel with the
 /// project.
 ///
-/// Storage/editing only for now — actually *running* one needs process
-/// management this project doesn't have yet (see `FEATURES.md`'s "Build/
-/// run/test integration").
+/// Run by the build tool's run path (`PLAN.md` Track 22).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RunConfig {

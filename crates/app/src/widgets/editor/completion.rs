@@ -13,7 +13,7 @@ use super::text_offset::{byte_to_char, char_to_byte};
 use crate::lsp_client::ResponseError;
 
 /// What kind of thing a `CompletionItem` represents — drives both its icon
-/// (once rendered) and how `insert_completion` (`SPEC.md` §5) applies it.
+/// (once rendered) and how `insert_completion` applies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {
     Word,
@@ -105,8 +105,7 @@ impl CompletionState {
 
     /// Non-blocking poll of `pending_lsp`, called once a frame. A real
     /// response gets decoded and merged into `candidates` (deduped by
-    /// exact label against what's already there — `SPEC.md` §20's own "no
-    /// visible duplication" ask). A request error or a disconnected
+    /// exact label against what's already there, so nothing shows twice). A request error or a disconnected
     /// channel (the server exited mid-request) just clears `pending_lsp`
     /// silently — this is a best-effort second source; whatever local
     /// candidates already opened the popup with (possibly none) are a
@@ -150,11 +149,11 @@ impl CompletionState {
     }
 
     /// This frame's candidate list: `self.candidates` narrowed and ordered
-    /// by `filter_and_rank` (`SPEC.md` §2) against the buffer slice from
+    /// by `filter_and_rank` against the buffer slice from
     /// `anchor_byte` to `cursor_byte`. Recomputed fresh on every call
     /// rather than cached — a single already-open buffer's pass over its
     /// own candidate list is cheap, the same "only runs while the popup is
-    /// open" reasoning `SPEC.md` §0 gives for not caching this across
+    /// open" reasoning that keeps this from being cached across
     /// keystrokes.
     pub(super) fn visible<'a>(&'a self, text: &str, cursor_byte: usize) -> Vec<&'a CompletionItem> {
         let prefix = text.get(self.anchor_byte..cursor_byte).unwrap_or_default();
@@ -262,7 +261,7 @@ fn row_text(item: &CompletionItem, ui: &egui::Ui) -> egui::text::LayoutJob {
     job
 }
 
-/// Case-insensitive prefix filter over `candidates` (`SPEC.md` §2), ordered
+/// Case-insensitive prefix filter over `candidates`, ordered
 /// by: exact-case prefix match before a case-insensitive-only match, then
 /// shorter labels before longer ones, then alphabetical — a stable,
 /// predictable order with no frequency/recency scoring.

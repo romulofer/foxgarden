@@ -1,4 +1,4 @@
-//! Read-only virtualized render path (PLAN.md Phase 2b): given a buffer and a
+//! Read-only virtualized render path (`PLAN.md` Track 19): given a buffer and a
 //! font, allocate a content-sized rect so the enclosing `ScrollArea`'s
 //! scrollbar is correct, then shape and paint **only the rows the viewport
 //! actually touches**. No caret, selection, or input yet — those are 2d–2f;
@@ -83,7 +83,7 @@ impl TextAreaOutput {
         let line = buffer.char_to_line(clamped);
         let col = clamped - buffer.line_to_char(line);
         // `row_galleys` is always kept in ascending-line order (see its own
-        // doc comment), so a binary search (SPEC.md §8) finds the same entry
+        // doc comment), so a binary search finds the same entry
         // a linear `position` scan would, in O(log rows) instead of O(rows)
         // — called several times per frame (diagnostics, occurrence/bracket
         // highlights, caret, IME range), each over however many rows are
@@ -249,7 +249,7 @@ pub(super) fn paint_rows(ui: &egui::Ui, out: &TextAreaOutput, text_color: Color3
 /// no matching spans at all (plain text, or a language-less file) still
 /// shapes exactly as it did before highlighting existed: one placeholder-
 /// colored section, resolved to the caller's fallback color at paint time.
-/// `wrap_width` is `f32::INFINITY` for the no-wrap path (PLAN.md Phase 2/3),
+/// `wrap_width` is `f32::INFINITY` for the no-wrap path,
 /// or the viewport width for Phase 4's word-wrap — `egui::Galley` already
 /// lays a wrapped job out as several internal rows on its own, which is
 /// what makes `galley.rows.len()` (`line_row_count`) and `galley.pos_from_
@@ -305,7 +305,7 @@ fn shape_line(
     ui.fonts_mut(|f| f.layout_job(job))
 }
 
-/// PLAN.md Phase 4: word-wrap's own `layout_visible` — same contract
+/// Word-wrap's own `layout_visible` — same contract
 /// (allocate once, shape only what's currently visible, don't paint), but
 /// working in *logical line* space via `text_area::{prefix_rows,
 /// visible_lines}` instead of a flat visual-row count, since a wrapped line

@@ -1,6 +1,6 @@
 //! Hand-built **virtualized** text editor widget — replaces
 //! `egui::TextEdit::multiline`, laying out and painting only the *visible*
-//! line range instead of the whole buffer every frame (PLAN.md Phase 2). This
+//! line range instead of the whole buffer every frame (`PLAN.md` Track 19). This
 //! is what fixes large-file layout cost and gives code folding (Phase 3) a
 //! place to hide rows, which `egui::TextEdit`'s single-blob model structurally
 //! couldn't. `widget.rs` drives this as the live editor (since the PLAN 2h
@@ -24,7 +24,7 @@ mod shell;
 
 #[expect(
     unused_imports,
-    reason = "PLAN.md Phase 0 prerequisite; no widget.rs-side cache needs a hidden-ranges key yet"
+    reason = "no widget.rs-side cache needs a hidden-ranges key yet"
 )]
 pub(super) use cache::hash_hidden;
 pub(super) use input::Caret;
@@ -71,7 +71,7 @@ pub(super) fn row_at_y(y: f32, content_top: f32, row_height: f32, total_rows: us
     row.min(total_rows - 1)
 }
 
-/// PLAN.md Phase 4 — word-wrap's geometry core: the same virtualization
+/// Word-wrap's geometry core: the same virtualization
 /// `visible_rows`/`content_height` give the no-wrap case, generalized to
 /// lines that can each occupy more than one visual row. `row_counts[i]` is
 /// how many visual rows logical line `i` occupies this frame (`0` for a

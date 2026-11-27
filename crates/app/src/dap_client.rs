@@ -1,7 +1,6 @@
 //! `PLAN.md` Track 23 Phase 1: the DAP (Debug Adapter Protocol) client core.
 //!
-//! DAP is a real *second* protocol, not a thin skin over LSP (`SPEC.md`
-//! §23) — its own message shape (`type`: `request`/`response`/`event`,
+//! DAP is a real *second* protocol, not a thin skin over LSP — its own message shape (`type`: `request`/`response`/`event`,
 //! correlated by `seq`/`request_seq` rather than JSON-RPC's `method`/`id`),
 //! so `classify`/`IncomingMessage` here are new, not reused from
 //! `lsp_client`. What genuinely *is* shared: the wire framing itself — DAP
@@ -18,8 +17,7 @@
 //! (`lsp_state`) is what actually starts its DAP server and hands back the
 //! TCP port to connect to — verified concretely against the real
 //! `vscode-java-debug` extension's own bundled client code (`extension.js`'s
-//! `startDebugSession`/`DebugAdapterServer`, not assumed), per `SPEC.md`
-//! §23's own explicit caution not to assume protocol details unverified.
+//! `startDebugSession`/`DebugAdapterServer`, not assumed), since protocol details are never assumed unverified.
 //! `DapSession::connect` therefore takes a `port`, not a `binary`+`args`.
 #![allow(dead_code)]
 

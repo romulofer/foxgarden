@@ -421,7 +421,7 @@ fn action_targets_is_the_whole_selection_once_more_than_one_node_is_selected() {
 
 #[test]
 fn action_targets_uses_the_whole_selection_even_if_a_different_node_was_right_clicked() {
-    // Matches `SPEC.md` §1's plain wording ("Delete... over a set"): the
+    // "Delete... over a set" means the whole selection: the
     // right-clicked node needn't itself be one of the selected ones.
     let panel = SidePanelState {
         selected: [PathBuf::from("a"), PathBuf::from("b")].into_iter().collect(),

@@ -1,8 +1,7 @@
 //! `PLAN.md` Track 18: a reusable, read-only diff-rendering widget — a
 //! shared prerequisite for whatever full-diff view `Git diff gutter` (§9)
 //! ever grows beyond its own gutter-marks-only scope, and for `Local file
-//! history` (§4)'s own snapshot-vs-live comparison, per `SPEC.md` §18's own
-//! reasoning for building this once rather than each of those two features
+//! history` (`PLAN.md` Track 4)'s snapshot-vs-live comparison, built once rather than each of those two features
 //! growing a bespoke diff renderer. Line-level diffing only (no word-level
 //! highlighting within a changed line, for a first pass) and no inline
 //! *editing* through the diff view — a `Replace` op's old/new lines are
@@ -48,7 +47,7 @@ pub enum DiffLineOp {
 /// of `DiffLineOp`s, via the `similar` crate — actively maintained and
 /// current on crates.io as of this session (verified before pinning a
 /// version, per this project's own discipline for external dependencies,
-/// rather than assuming `SPEC.md`'s own naming stayed accurate).
+/// rather than assuming a design doc's naming stayed accurate).
 pub fn diff_line_ops(old: &str, new: &str) -> Vec<DiffLineOp> {
     let diff = similar::TextDiff::from_lines(old, new);
     diff.ops()
@@ -227,8 +226,7 @@ pub enum InlineRow<'a> {
 
 /// Flattens `ops` into one `InlineRow` per line, unified-diff order — a
 /// `Replace`'s old lines (all `Deleted`) immediately followed by its new
-/// lines (all `Inserted`), per `SPEC.md` §18's own "a paired red/green row
-/// for a replace" — collapsing the middle of any `Equal` run longer than
+/// lines (all `Inserted`), a paired red/green row for a replace — collapsing the middle of any `Equal` run longer than
 /// `2 * context` lines down to a single `Collapsed` marker. Pure/no I/O,
 /// directly testable against known ops.
 pub fn inline_rows<'a>(

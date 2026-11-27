@@ -39,7 +39,7 @@ fn the_terminal_panel_can_also_be_toggled_from_the_view_menu() {
     assert!(!app.app().bottom_dock.is_open());
 }
 
-/// The dock's whole point (`FEATURES.md`'s "Tab-controlled bottom panels"):
+/// The dock's whole point (the "Tab-controlled bottom panels" request):
 /// asking for a second bottom panel *replaces* what's showing rather than
 /// stacking a second one under it, and the strip stays open on the newly
 /// picked tab.

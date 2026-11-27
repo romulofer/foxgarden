@@ -1,4 +1,4 @@
-//! Shared cache-key hashing (PLAN.md Phase 0). Pulled out of `render.rs` so
+//! Shared cache-key hashing. Pulled out of `render.rs` so
 //! `widget.rs`'s own per-frame caches (highlight spans, fold ranges, …) can
 //! key on the same buffer/hidden-range hashes `render.rs`'s `cached_row_
 //! counts` already computes, instead of each call site rolling its own.

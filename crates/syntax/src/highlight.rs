@@ -7,7 +7,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::grammars::{highlights_query_source, ts_language};
 
-/// The checkpoint-1 fixed color theme (SPEC.md §5.4), extended with
+/// The checkpoint-1 fixed color theme, extended with
 /// `Property` and `Tag` for the markup/config languages added afterward:
 /// Java/Kotlin's original five scopes have nothing that fits a YAML/
 /// properties mapping key or an XML tag name, and those are the single
@@ -28,9 +28,9 @@ use crate::grammars::{highlights_query_source, ts_language};
 /// grouping.
 ///
 /// `Parameter`/`Operator`/`Label`/`DocComment` are `PLAN.md` Track 2's own
-/// "richer Java/Kotlin syntax highlighting" additions (`SPEC.md` §2).
+/// "richer Java/Kotlin syntax highlighting" additions.
 /// `Parameter` is a dedicated variant rather than reusing `Property`
-/// (`SPEC.md`'s own "a real design call to make at implementation time"):
+/// (a design call made at implementation time):
 /// a method parameter and a field are different enough lexical roles to
 /// tell apart at a glance, even with a visually related (not identical)
 /// color — see `theme.rs`'s own color choice for the reasoning there.

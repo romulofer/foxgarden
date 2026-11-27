@@ -1,4 +1,4 @@
-//! Whole-project scan for the HTTP route map (`SPEC.md` §4) — reads and
+//! Whole-project scan for the HTTP route map — reads and
 //! throwaway-parses every file some extension finds routes in, and collects
 //! whatever `syntax::http_routes` reports for it. Which files those are is
 //! the registry's answer (`Registry::has_http_routes`), so this scan names
@@ -29,8 +29,8 @@ pub(crate) struct CachedFileScan {
 /// Carried across popup opens (owned by `panels::http_routes::
 /// HttpRoutesState`, not reset on `toggle()`) so a re-open only
 /// re-reads + re-parses files that actually changed since the last scan —
-/// SPEC.md §4's original "no caching in this first pass" call, revisited
-/// per that same entry's own escape hatch ("only if a real large project
+/// the original "no caching in this first pass" call, revisited per its
+/// own escape hatch ("only if a real large project
 /// open feels slow and is actually measured") once exactly that happened on
 /// a real project.
 pub type RouteCache = HashMap<PathBuf, CachedFileScan>;

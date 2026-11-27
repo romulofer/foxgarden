@@ -36,7 +36,7 @@ fn walk_errors(node: Node, out: &mut Vec<Diagnostic>) {
 }
 
 /// Walks `tree` for `ERROR`/`MISSING` nodes, converting each into a
-/// `Diagnostic` with the node's byte range, per SPEC.md §5.5.
+/// `Diagnostic` with the node's byte range.
 pub fn syntax_errors(tree: &Tree) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     walk_errors(tree.root_node(), &mut out);

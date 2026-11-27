@@ -1,4 +1,4 @@
-//! The virtualized editor's **undo/redo stack** (PLAN.md 2e) — state the
+//! The virtualized editor's **undo/redo stack** (`PLAN.md` Track 19) — state the
 //! private `egui::TextEdit` used to own, now ours (which also simplifies the
 //! Ctrl+Z/menu-item plumbing: undo is a direct call, no synthesized key event).
 //! Pure and frame-free, so the coalescing rule is table-tested.
@@ -34,7 +34,7 @@ pub enum EditKind {
 
 #[derive(Clone)]
 pub struct History {
-    // `Arc`-wrapped (PLAN.md Phase 1 / SPEC.md §1 — `Arc` rather than `Rc`
+    // `Arc`-wrapped (`Arc` rather than `Rc`
     // since `egui`'s `ctx.data` temp storage requires `Send + Sync`, even
     // though a single egui frame never actually crosses a thread) so the
     // per-frame `ShellState::clone()` every focused/idle frame pays for —

@@ -336,7 +336,7 @@ fn char_rect_locates_visible_chars_and_skips_offscreen_ones() {
                 on_screen_has_rect = out.char_rect(&buffer, char0).is_some();
             }
             // ...and so does one on the *last* shaped row — `char_rect`'s
-            // binary search (SPEC.md §8) over `row_galleys` needs to
+            // binary search over `row_galleys` needs to
             // resolve correctly at both ends of the visible range, not
             // just index 0 (which a broken search could satisfy by
             // accident).

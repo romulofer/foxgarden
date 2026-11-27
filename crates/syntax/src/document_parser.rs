@@ -53,7 +53,7 @@ impl IncrementalParser {
 
     /// Applies `edit` to the previous tree, then reparses `source`
     /// incrementally against it (tree-sitter's `edit()` + `parse()` reusing
-    /// the old tree, per SPEC.md §5.4).
+    /// the old tree).
     pub fn reparse(&mut self, source: &str, edit: InputEdit) -> &Tree {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(&edit);

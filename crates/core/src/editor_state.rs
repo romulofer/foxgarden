@@ -12,9 +12,8 @@ use crate::project::Project;
 /// life of the process every time a tab is closed.
 const MAX_CLOSED_TABS: usize = 20;
 
-/// One terminal session in the terminal panel (`PLAN.md`'s terminal-panel
-/// track). Deliberately **not** part of `open_tabs`/`active_tab` at all:
-/// `SPEC.md` §8.2 puts the terminal in its own dockable bottom panel (the
+/// One terminal session in the terminal panel. Deliberately **not** part of `open_tabs`/`active_tab` at all:
+/// The terminal lives in its own dockable bottom panel (the
 /// VSCode shape), not the file tab strip, so a session never shares a
 /// namespace or an index with a file tab.
 ///
@@ -35,8 +34,8 @@ pub struct TerminalTab {
     pub last_interaction: f64,
 }
 
-/// A two-pane editor split (`PLAN.md` Track 11 / `SPEC.md` §11, which
-/// recommends split-in-two before any multi-window work). Both panes draw
+/// A two-pane editor split (`PLAN.md` Track 11: split-in-two before any
+/// multi-window work). Both panes draw
 /// from the shared `EditorState::open_tabs` pool, so the app-side `parsers`
 /// stay index-aligned for whichever pane renders a given tab.
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +82,7 @@ pub struct EditorState {
     /// `active_tab` read then behaves exactly as it always has. `Some`
     /// splits the editor area into two side-by-side panes over the same
     /// `open_tabs` pool; the side panel and terminal stay shared chrome
-    /// (`SPEC.md` §11 non-goal), so only the editor's own focus is per-pane.
+    /// (a non-goal), so only the editor's own focus is per-pane.
     /// Public only so the pub `EditorState` stays constructible by struct
     /// literal across crates (its tests do `EditorState { .., ..default() }`);
     /// `Split`'s own fields are private, so the mirror invariant can still
@@ -307,7 +306,7 @@ impl EditorState {
     /// previous one if it was last" shape `close_tab` already uses for file
     /// tabs. Still a no-op beyond that for now: no process to kill until
     /// Phase 6 wires one up. Never touches `closed_tabs`: a closed terminal
-    /// session has nothing meaningful to reopen (`SPEC.md` §8's own
+    /// session has nothing meaningful to reopen (a
     /// non-goal).
     pub fn close_terminal_tab(&mut self, index: usize) {
         self.terminal_tabs.remove(index);

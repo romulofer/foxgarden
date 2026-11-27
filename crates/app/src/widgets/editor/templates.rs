@@ -41,7 +41,7 @@ impl UserTemplates {
     }
 }
 
-/// Every distinct identifier-shaped token in `text` (`SPEC.md` §1) — the
+/// Every distinct identifier-shaped token in `text` — the
 /// word-completion candidate source, first-seen order, deduplicated. Same
 /// character class `word_before_cursor` already uses (letters, digits,
 /// underscore), so a candidate here is always something that run could

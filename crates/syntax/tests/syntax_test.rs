@@ -181,7 +181,7 @@ fn highlight_spans_cover_expected_keyword_string_comment_ranges() {
     assert!(has_scope_over("Hearts", Scope::Constant));
     assert!(has_scope_over("Spades", Scope::Constant));
 
-    // PLAN.md Track 2 / SPEC.md §2: parameters, operators, labels, and doc
+    // PLAN.md Track 2: parameters, operators, labels, and doc
     // comments each get their own Scope. `formatLength`'s own `length`
     // parameter — its first occurrence in the file is the declaration site
     // itself, not one of its later plain reads in the method body, which
@@ -268,13 +268,13 @@ fn kotlin_highlight_query_compiles_and_covers_expected_ranges() {
     // covers the same token.
     assert!(has_scope_over("reified", Scope::Keyword));
 
-    // PLAN.md Track 2 / SPEC.md §2's "richer modifier-keyword coverage"
+    // PLAN.md Track 2's "richer modifier-keyword coverage"
     // candidate turned out to already be complete: every modifier
     // grammar.js actually defines (`suspend`, `inline`, `tailrec`,
     // `crossinline`, `noinline`, `vararg`, `lateinit`, `expect`, `actual`,
     // ...) was already in this file's own keyword list before this pass —
     // verified by diffing grammar.js's modifier rules against it directly,
-    // not assumed from SPEC.md's own (stale) framing. `suspend` here is
+    // not assumed from the plan's (stale) framing. `suspend` here is
     // regression coverage for that finding, not a new addition.
     assert!(has_scope_over("suspend", Scope::Keyword));
 

@@ -29,8 +29,8 @@ type ScanResult = (RouteCache, Vec<(PathBuf, HttpRoute)>);
 /// project — both measured, not assumed. Spawning the scan onto its own
 /// thread and polling `scan_rx` from `show` keeps the UI responsive and
 /// takes typing in the query box while the popup's own "Scanning…" state
-/// shows, the same background-thread-plus-channel shape `SPEC.md` §8.3
-/// already calls for the terminal-tabs track's own pty reads.
+/// shows, the same background-thread-plus-channel shape the terminal's
+/// pty reads use.
 #[derive(Default)]
 pub struct HttpRoutesState {
     open: bool,

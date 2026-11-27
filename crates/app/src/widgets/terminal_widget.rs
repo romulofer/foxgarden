@@ -7,7 +7,7 @@
 //! paint the whole galley in one `painter.galley()` call" precedent rather
 //! than a slower per-glyph `painter.text()` loop. Before painting, also
 //! recomputes rows/cols from the available rect and resizes the session to
-//! match (`grid_size`, `SPEC.md` §8.6) — so a font-size change, side-panel
+//! match (`grid_size`) — so a font-size change, side-panel
 //! drag, or window resize all keep the pty (and the shell/full-screen
 //! program running inside it) in sync with what's actually on screen.
 
@@ -125,7 +125,7 @@ pub fn show(
     // a resize event, since there's no single "the panel resized" signal
     // available here: a font-size change, a side-panel drag, or a window
     // resize all end up changing `ui.available_size()` without a distinct
-    // event of their own to hook (`PLAN.md` Phase 9, `SPEC.md` §8.6).
+    // event of their own to hook.
     // `session.resize` itself is a no-op-if-unchanged check away (see its
     // own doc comment), so this costs nothing on the common case where
     // nothing actually changed since last frame.
@@ -224,8 +224,7 @@ pub fn show(
 /// The rows/cols a `(width, height)` rect fits at the given glyph metrics —
 /// pure arithmetic, no `egui::Ui` dependency, so it's headlessly testable
 /// against a known rect/font-metric pair rather than "eyeballing a live
-/// resize" (`PLAN.md` Phase 9, `SPEC.md` §8.6's own explicit "treat a
-/// resize as a real, testable event" requirement). Floors rather than
+/// resize": a resize is a real, testable event. Floors rather than
 /// rounds — a partial row/column can't actually fit a full cell — and
 /// floors to at least 1 each, since a session can never legitimately have
 /// zero rows or columns.

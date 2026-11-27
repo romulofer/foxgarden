@@ -245,7 +245,7 @@ fn clamp_out_of_hidden_handles_an_empty_hidden_set() {
     assert_eq!(clamp_out_of_hidden(&idx(GRID), 5, 0, &[]), 5);
 }
 
-// ---- LineIndex parity (SPEC.md §7 / PLAN.md 5b): the indexed lookups must
+// ---- LineIndex parity: the indexed lookups must
 // agree with what a plain linear scan over the same text would find, across
 // every offset in a multi-line fixture — the same "prove the new path
 // matches the old one" discipline word-wrap's Phase 4 used before switching

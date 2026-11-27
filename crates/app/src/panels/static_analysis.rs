@@ -35,7 +35,7 @@ pub struct AnalyzerSettings {
 }
 
 /// Settings > External Tools — the binary/config paths for every analyzer,
-/// keyed by analyzer id (`SPEC.md` §5). Grouped into one struct, the same
+/// keyed by analyzer id. Grouped into one struct, the same
 /// "travels together through persistence as one unit" shape
 /// `IndentSettings`/`ViewSettings` already use, rather than a growing list
 /// of flat `menu_bar::show` parameters.

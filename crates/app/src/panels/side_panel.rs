@@ -504,8 +504,7 @@ fn create_file_with_parents(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Applies one tree-node click's selection effect — the "anchor + shift-
-/// extends" model most tree/list widgets use (`SPEC.md` §1, `PLAN.md`
-/// Track 1). `visible_order` is this frame's own flattened, currently-
+/// extends" model most tree/list widgets use (`PLAN.md` Track 1). `visible_order` is this frame's own flattened, currently-
 /// visible node order, needed to resolve what falls "between" `panel.
 /// last_selected` and `clicked` for a Shift+Click. `Modifiers::command`
 /// (this codebase's existing cross-platform "primary modifier" — Ctrl on
@@ -542,8 +541,8 @@ fn apply_selection_click(
 /// The real target set for a Delete/Copy/Cut invoked from `path`'s own
 /// context menu (`PLAN.md` Track 1 Phase 2): the *whole* current
 /// multi-selection whenever one is active (more than one node selected),
-/// regardless of which specific node's menu was actually opened — matching
-/// `SPEC.md` §1's plain wording ("Delete... over a set"), not a narrower
+/// regardless of which specific node's menu was actually opened — "Delete...
+/// over a set" taken plainly, not a narrower
 /// "only if `path` itself is one of the selected nodes" rule. Falls back to
 /// just `path` alone the rest of the time (nothing selected, or only `path`
 /// itself), so every single-node context-menu action keeps working exactly
@@ -958,7 +957,7 @@ fn render_node(
             }
 
             // New File/Rename are inherently single-target operations
-            // (`SPEC.md` §1) — disabled, not hidden, whenever a multi-
+            // — disabled, not hidden, whenever a multi-
             // selection is active, so they read as "not applicable right
             // now" rather than silently disappearing.
             let single_target = selected.len() <= 1;
@@ -1020,8 +1019,8 @@ fn render_node(
                 actions.select_click = Some((node.path.clone(), modifiers));
                 // A plain click still opens the file, unchanged from before
                 // this feature existed — Cmd/Ctrl/Shift-click are the new,
-                // explicit multi-select gestures layered on top (`SPEC.md`
-                // §1: "multi-select is an explicit gesture, never the
+                // explicit multi-select gestures layered on top ("multi-select is an
+                // explicit gesture, never the
                 // default"), so they select without also opening.
                 if !modifiers.command && !modifiers.shift {
                     actions.open = Some(node.path.clone());

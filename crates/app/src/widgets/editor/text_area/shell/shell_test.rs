@@ -1,4 +1,4 @@
-//! Smoke tests for the interactive shell ([`super`]) — PLAN.md 2f/"shell" is
+//! Smoke tests for the interactive shell ([`super`]) — the shell is
 //! explicitly frame-driven, "only smoke-testable" code, so these drive real
 //! `egui::Context::run_ui` frames (following `widget/tests.rs`'s own
 //! `focused_frame` pattern: request focus, then call `show` with a queue of
@@ -499,8 +499,7 @@ fn pointer_frame(
 /// click — same distinction a real mouse gesture has — then a further move
 /// two rows down and well to the right) must produce a `BlockSelection`
 /// spanning every row the drag crossed, with real column width, and must
-/// leave the ordinary linear `Caret` completely untouched (`SPEC.md` §7:
-/// block selection is its own mode, not a reinterpretation of the existing
+/// leave the ordinary linear `Caret` completely untouched (block selection is its own mode, not a reinterpretation of the existing
 /// one).
 #[test]
 fn alt_drag_produces_a_rectangular_block_selection_spanning_multiple_rows() {

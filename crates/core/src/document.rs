@@ -101,7 +101,7 @@ pub struct Document {
     /// marker line an edit has since made non-foldable (or moved) simply
     /// stops matching anything in that fresh list and quietly falls out of
     /// the collapsed set, rather than needing an explicit reconciliation
-    /// pass (PLAN.md Phase 3e's "first cut").
+    /// pass (a deliberate first cut).
     pub folded_lines: HashSet<usize>,
     /// Per-line coverage from the last "Run with Coverage" (`PLAN.md`
     /// Track 13 Phase 1, Maven-only) — sparse, one entry per line JaCoCo
