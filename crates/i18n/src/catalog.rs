@@ -222,6 +222,7 @@ pub struct Tabs {
     pub close_to_the_right: &'static str,
     pub copy_path: &'static str,
     pub reveal_in_tree: &'static str,
+    pub run_file_tests: &'static str,
     /// Overflow indicator on the tab bar: how many tabs are scrolled out of
     /// view, e.g. "4 mais".
     pub more_tabs: &'static str,
@@ -687,6 +688,7 @@ pub const PT_BR: Strings = Strings {
         close_to_the_right: "Fechar as da Direita",
         copy_path: "Copiar Caminho",
         reveal_in_tree: "Mostrar na Árvore",
+        run_file_tests: "Executar Testes do Arquivo",
         more_tabs: "mais",
         more_tabs_hint: "Abas fora da vista — role a barra ou use Ctrl+E",
         save_all: "Salvar Todos",
@@ -1062,6 +1064,7 @@ pub const EN_US: Strings = Strings {
         close_to_the_right: "Close to the Right",
         copy_path: "Copy Path",
         reveal_in_tree: "Reveal in Tree",
+        run_file_tests: "Run Tests in File",
         more_tabs: "more",
         more_tabs_hint: "Tabs scrolled out of view — scroll the bar, or use Ctrl+E",
         save_all: "Save All",

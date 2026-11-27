@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use fg_core::Language;
-use fg_extension::RunTarget;
+use fg_extension::{RunKind, RunTarget};
 use tree_sitter::Tree;
 
 /// One entry point plus the extension that reported it. The entry point is
@@ -52,6 +52,27 @@ pub fn main_entries(tree: &Tree, source: &str, language: Language, file: &std::p
                 })
         })
         .collect()
+}
+
+/// A marker that runs every test in `file`, for a tab's "Run Tests in File":
+/// the first extension whose markers in the file it can cover with one filter
+/// (`Extension::file_test_filter`). `None` when the file has no tests.
+///
+/// Walks the tree like [`main_entries`], so it is asked when the menu is
+/// opened, never per frame.
+pub fn file_test_marker(tree: &Tree, source: &str, language: Language, file: &std::path::Path) -> Option<RunMarker> {
+    crate::providers::providers().extensions.iter().find_map(|extension| {
+        let targets = extension.run_targets(language.id(), tree, source, file);
+        if !targets.iter().any(|target| target.kind != RunKind::Main) {
+            return None;
+        }
+        let filter = extension.file_test_filter(file, &targets)?;
+        let label = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        Some(RunMarker {
+            extension_id: extension.id.clone(),
+            target: RunTarget { line: 0, kind: RunKind::Test, entry_point: filter, label },
+        })
+    })
 }
 
 #[cfg(test)]

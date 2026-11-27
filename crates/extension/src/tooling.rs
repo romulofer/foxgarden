@@ -570,6 +570,11 @@ impl ExtensionHandle {
         self.extension.run_targets(language_id, tree, source, file)
     }
 
+    /// The filter that runs every test in `file`, whose markers are `targets`.
+    pub fn file_test_filter(&self, file: &Path, targets: &[RunTarget]) -> Option<String> {
+        self.extension.file_test_filter(file, targets)
+    }
+
     /// Every HTTP route declared in an already-parsed file.
     pub fn http_routes(&self, language_id: &str, tree: &tree_sitter::Tree, source: &str) -> Vec<HttpRoute> {
         self.extension.http_routes(language_id, tree, source)

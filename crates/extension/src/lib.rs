@@ -721,6 +721,15 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
+    /// The test filter (in the notation of this extension's
+    /// `BuildToolHandle::test_command`) that runs every test in `file`, whose
+    /// markers this extension reported as `targets` — what a tab's "Run Tests
+    /// in File" runs. `None` when the file has no tests, or when no one filter
+    /// covers them all.
+    fn file_test_filter(&self, _file: &Path, _targets: &[RunTarget]) -> Option<String> {
+        None
+    }
+
     /// Every HTTP route declared in `source`, whose parse `tree` the editor
     /// built, in source order. Asked only for the languages this extension
     /// listed in `Contributions::http_route_languages`.

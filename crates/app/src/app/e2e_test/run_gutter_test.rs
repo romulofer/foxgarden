@@ -11,7 +11,7 @@
 //! a network.
 
 use super::common_test::{E2e, MAIN_JAVA};
-use fg_i18n::msg;
+use fg_i18n::{msg, t};
 
 const WITH_MAIN: &str =
     "public class App {\n    public static void main(String[] args) {\n        System.out.println(\"hi\");\n    }\n}\n";
@@ -74,6 +74,31 @@ fn clicking_a_test_marker_reaches_the_real_test_path() {
         app.shows(&crate::errors::no_build_tool(test_support::languages())),
         "the click must reach the build-tool lookup the test run starts from"
     );
+}
+
+#[test]
+fn a_test_files_tab_runs_all_its_tests_through_the_real_test_path() {
+    let mut app = E2e::launch(&[("CalcTest.java", WITH_TESTS)]);
+    app.click_tree("CalcTest.java");
+
+    app.click_tab_secondary("CalcTest.java");
+    app.click(t().tabs.run_file_tests);
+
+    assert!(
+        app.shows(&crate::errors::no_build_tool(test_support::languages())),
+        "the menu item must reach the same test run the class marker starts"
+    );
+}
+
+#[test]
+fn a_tab_without_tests_offers_no_test_run() {
+    let mut app = E2e::launch(&[("App.java", WITH_MAIN)]);
+    app.click_tree("App.java");
+
+    app.click_tab_secondary("App.java");
+
+    assert!(app.shows(t().tabs.reveal_in_tree), "the menu is open");
+    assert!(!app.shows(t().tabs.run_file_tests), "a file with only a main has no tests to run");
 }
 
 const PYTHON_SCRIPT: &str = "def main():\n    print(\"hi\")\n\n\nif __name__ == \"__main__\":\n    main()\n";

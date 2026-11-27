@@ -124,3 +124,71 @@ fn installing_the_same_extensions_twice_reports_each_entry_point_once() {
 
     assert_eq!(main_entries(&tree, source, Language::Java, Path::new("App.java")).len(), 1);
 }
+
+/// Reports one test per top-level node of its invented language and covers a
+/// file's tests with the file's stem, but only while the file has at most two.
+struct FakeTests;
+
+impl Extension for FakeTests {
+    fn manifest(&self) -> ExtensionManifest {
+        ExtensionManifest {
+            id: "tests".to_string(),
+            name: "tests".to_string(),
+            version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }
+    }
+
+    fn contributions(&self) -> Contributions {
+        Contributions {
+            languages: vec![LanguageContribution {
+                id: "quiz".to_string(),
+                display_name: "Quiz".to_string(),
+                file_extensions: vec!["quiz".to_string()],
+                filename_patterns: Vec::new(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn run_targets(&self, language_id: &str, tree: &tree_sitter::Tree, _source: &str, _file: &Path) -> Vec<RunTarget> {
+        if language_id != "quiz" {
+            return Vec::new();
+        }
+        let mut cursor = tree.root_node().walk();
+        tree.root_node()
+            .children(&mut cursor)
+            .map(|node| RunTarget {
+                line: node.start_position().row,
+                kind: RunKind::SingleTest,
+                entry_point: format!("t{}", node.start_position().row),
+                label: "t".to_string(),
+            })
+            .collect()
+    }
+
+    fn file_test_filter(&self, file: &Path, targets: &[RunTarget]) -> Option<String> {
+        (targets.len() <= 2).then(|| file.file_stem().unwrap().to_string_lossy().into_owned())
+    }
+}
+
+#[test]
+fn a_files_tests_run_through_the_filter_its_extension_gives() {
+    let mut registry = Registry::new();
+    registry.register(Box::new(FakeTests)).expect("fixture must register");
+    install(&registry);
+    let one = "class A {}\n";
+    let marker = super::file_test_marker(&java_tree(one), one, Language::new("quiz"), Path::new("/p/calc.quiz")).unwrap();
+    assert_eq!(&*marker.extension_id, "tests");
+    assert_eq!(marker.target, RunTarget { line: 0, kind: RunKind::Test, entry_point: "calc".to_string(), label: "calc.quiz".to_string() });
+
+    let three = "class A {}\nclass B {}\nclass C {}\n";
+    assert_eq!(super::file_test_marker(&java_tree(three), three, Language::new("quiz"), Path::new("/p/calc.quiz")), None, "no one filter covers them");
+}
+
+#[test]
+fn a_file_with_only_a_main_has_no_tests_to_run() {
+    install(&registry_with_fake_runner());
+    let source = "class A {}\n";
+    assert_eq!(super::file_test_marker(&java_tree(source), source, Language::new("forge"), Path::new("/p/A.forge")), None);
+}

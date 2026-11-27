@@ -269,6 +269,18 @@ pub fn show(
                                         reveal_request = Some(doc.path().to_path_buf());
                                         ui.close();
                                     }
+                                    // Asked only while the menu is open: it walks the
+                                    // tab's tree, which a per-frame tab bar must not.
+                                    let file_tests = parsers.get(index).and_then(Option::as_ref).and_then(|parser| {
+                                        let tree = parser.tree()?;
+                                        syntax::file_test_marker(tree, &doc.buffer.to_string(), parser.language(), doc.path())
+                                    });
+                                    if let Some(marker) = file_tests
+                                        && ui.button(t().tabs.run_file_tests).clicked()
+                                    {
+                                        *run_request = Some(marker);
+                                        ui.close();
+                                    }
                                     ui.separator();
                                     let toggle_label = if doc.read_only {
                                         t().tabs.allow_editing
