@@ -6,7 +6,7 @@ fn every_shipped_extension_registers_without_conflicting() {
     let registry = builtin_registry();
     let ids: Vec<&str> = registry.extensions().iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, vec!["spring", "kmp", "python", "ts", "svelte", "file-types"]);
-    assert_eq!(registry.languages().count(), 13);
+    assert_eq!(registry.languages().count(), 14);
 }
 
 /// The six languages the closed `fg_core::Language` enum used to hardcode,

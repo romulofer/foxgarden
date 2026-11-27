@@ -567,6 +567,33 @@ fn a_svelte_scripts_typescript_and_styles_css_are_highlighted_as_such() {
 }
 
 #[test]
+fn a_svelte_style_with_lang_scss_is_highlighted_as_scss() {
+    let source = "<p>hi</p>\n\n<style lang=\"scss\">\n  $accent: red;\n  p {\n    @include card;\n    color: $accent;\n  }\n</style>\n";
+    let svelte = Language::new("svelte");
+    let mut parser = parser(svelte);
+    let tree = parser.parse(source);
+    let spans = highlight_spans(tree, source, svelte);
+
+    // `@include` is SCSS's own keyword, which CSS's grammar does not know.
+    assert!(scopes_over(&spans, source, "@include").contains(&Scope::Keyword), "{spans:?}");
+    assert!(scopes_over(&spans, source, "color").contains(&Scope::Property), "{spans:?}");
+}
+
+#[test]
+fn an_scss_file_highlights_its_mixins_and_nested_rules() {
+    let source = "@mixin card($pad) {\n  padding: $pad;\n}\n\n.card {\n  @include card(4px);\n  &:hover {\n    color: blue;\n  }\n}\n";
+    let scss = Language::new("scss");
+    let mut parser = parser(scss);
+    let tree = parser.parse(source);
+    assert!(syntax::syntax_errors(tree).is_empty(), "nesting and mixins are valid SCSS");
+    let spans = highlight_spans(tree, source, scss);
+
+    assert!(scopes_over(&spans, source, "@mixin").contains(&Scope::Keyword), "{spans:?}");
+    assert!(scopes_over(&spans, source, "padding").contains(&Scope::Property), "{spans:?}");
+    assert!(scopes_over(&spans, source, "color").contains(&Scope::Property), "{spans:?}");
+}
+
+#[test]
 fn a_script_without_a_lang_attribute_is_javascript_and_a_svelte_expression_too() {
     let source = "<script>\n  const total = 1;\n</script>\n\n<p>{items.map((item) => item.name)}</p>\n";
     let svelte = Language::new("svelte");
